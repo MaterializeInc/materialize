@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -78,7 +76,7 @@
 use mz_sqllogictest::ast::{Location, Record};
 use mz_sqllogictest::parser;
 
-#[test]
+#[mz_ore::test]
 fn test_parser() {
     struct TestCase {
         input: &'static str,

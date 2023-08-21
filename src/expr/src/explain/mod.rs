@@ -10,17 +10,21 @@
 //! `EXPLAIN` support for structures defined in this crate.
 
 use std::collections::BTreeMap;
+use std::fmt::Formatter;
 use std::time::Duration;
 
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::{separated, Indent};
+use mz_repr::explain::text::DisplayText;
+use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
 
-use crate::{
-    visit::Visit, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
-};
+use crate::interpret::{Interpreter, MfpEval, Trace};
+use crate::visit::Visit;
+use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 
 mod json;
 mod text;
@@ -46,6 +50,61 @@ pub struct ExplainSinglePlan<'a, T> {
     pub plan: AnnotatedPlan<'a, T>,
 }
 
+/// Carries metadata about the possibility of MFP pushdown for a source.
+/// (Likely to change, and only emitted when a context flag is enabled.)
+#[allow(missing_debug_implementations)]
+pub struct PushdownInfo<'a> {
+    /// Pushdown-able filters in the source, by index.
+    pub pushdown: Vec<&'a MirScalarExpr>,
+}
+
+impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'_> {
+    fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
+        let Self { pushdown } = self;
+
+        if !pushdown.is_empty() {
+            let separated = separated(" AND ", pushdown);
+            writeln!(f, "{}pushdown=({})", ctx.as_mut(), separated)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[allow(missing_debug_implementations)]
+pub struct ExplainSource<'a> {
+    pub id: String,
+    pub op: &'a MapFilterProject,
+    pub pushdown_info: Option<PushdownInfo<'a>>,
+}
+
+impl<'a> ExplainSource<'a> {
+    pub fn new(
+        id: String,
+        op: &'a MapFilterProject,
+        context: &ExplainContext<'a>,
+    ) -> ExplainSource<'a> {
+        let pushdown_info = if context.config.filter_pushdown {
+            let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
+            let pushdown = op
+                .predicates
+                .iter()
+                .filter(|(_, e)| mfp_mapped.expr(e))
+                .map(|(_, e)| e)
+                .collect();
+            Some(PushdownInfo { pushdown })
+        } else {
+            None
+        };
+
+        ExplainSource {
+            id,
+            op,
+            pushdown_info,
+        }
+    }
+}
+
 /// A structure produced by the `explain_$format` methods in
 /// [`mz_repr::explain::Explain`] implementations at points
 /// in the optimization pipeline identified with a
@@ -55,7 +114,7 @@ pub struct ExplainMultiPlan<'a, T> {
     pub context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    pub sources: Vec<(String, &'a MapFilterProject)>,
+    pub sources: Vec<ExplainSource<'a>>,
     // elements of the vector are in topological order
     pub plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }
@@ -105,8 +164,14 @@ impl<'a> MirRelationExpr {
 ///
 /// If these blocks are subsequently pulled up by `NormalizeLets`,
 /// the rendered version of the resulting tree will only have linear chains.
-pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
+pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainError> {
     use MirRelationExpr::{Constant, Get, Join, Union};
+
+    if expr.is_recursive() {
+        // `linear_chains` is not implemented for WMR, see
+        // https://github.com/MaterializeInc/materialize/issues/19012
+        return Err(LinearChainsPlusRecursive);
+    }
 
     // helper struct: a generator of fresh local ids
     let mut id_gen = id_gen(expr)?.peekable();

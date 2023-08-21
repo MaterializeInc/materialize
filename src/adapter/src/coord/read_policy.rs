@@ -20,26 +20,32 @@
 //! `mz_ore` wrapper either.
 #![allow(clippy::disallowed_types)]
 
-use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-
+use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use mz_compute_client::controller::ComputeInstanceId;
-
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::controller::ReadPolicy;
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::util::ResultExt;
 
+/// The value to round all `since` frontiers to.
+/// We pick 1s somewhat arbitrarily, but matching historical practice.
+// TODO[btv] If we want to further reduce capability chatter, we can implement the design in
+// `20230322_metrics_since_granularity.md`, making it configurable.
+pub(crate) const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
+
 /// Information about the read capability requirements of a collection.
 ///
 /// This type tracks both a default policy, as well as various holds that may
 /// be expressed, as by transactions to ensure collections remain readable.
+#[derive(Debug)]
 pub(crate) struct ReadCapability<T = mz_repr::Timestamp>
 where
     T: timely::progress::Timestamp,
@@ -71,7 +77,7 @@ impl<T: timely::progress::Timestamp> ReadCapability<T> {
 }
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ReadHolds<T> {
     holds: HashMap<Antichain<T>, CollectionIdBundle>,
 }
@@ -168,15 +174,6 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
                     id_bundle.compute_ids.remove(compute_instance);
                 }
             }
-        }
-        self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
-    }
-
-    /// If the read hold contains a compute instance equal `compute_instance`, removes it from
-    /// the read hold and drops it.
-    pub fn remove_compute_instance(&mut self, compute_instance: &ComputeInstanceId) {
-        for (_, id_bundle) in &mut self.holds {
-            id_bundle.compute_ids.remove(compute_instance);
         }
         self.holds.retain(|_, id_bundle| !id_bundle.is_empty());
     }
@@ -310,7 +307,7 @@ impl crate::coord::Coordinator {
         compaction_window_ms: Option<Timestamp>,
     ) -> ReadCapability<Timestamp> {
         let policy = match compaction_window_ms {
-            Some(time) => ReadPolicy::lag_writes_by(time),
+            Some(time) => ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY),
             None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
         };
         policy.into()
@@ -332,21 +329,39 @@ impl crate::coord::Coordinator {
         self.controller.storage.set_read_policy(policies)
     }
 
+    pub(crate) fn update_compute_base_read_policies(
+        &mut self,
+        mut base_policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
+    ) {
+        base_policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
+        for (cluster_id, group) in &base_policies
+            .into_iter()
+            .group_by(|&(cluster_id, _, _)| cluster_id)
+        {
+            let group = group
+                .map(|(_, id, base_policy)| {
+                    let capability = self
+                        .compute_read_capabilities
+                        .get_mut(&id)
+                        .expect("coord out of sync");
+                    capability.base_policy = base_policy;
+                    (id, capability.policy())
+                })
+                .collect::<Vec<_>>();
+            self.controller
+                .active_compute()
+                .set_read_policy(cluster_id, group)
+                .unwrap_or_terminate("cannot fail to set read policy");
+        }
+    }
+
     pub(crate) fn update_compute_base_read_policy(
         &mut self,
         compute_instance: ComputeInstanceId,
         id: GlobalId,
         base_policy: ReadPolicy<mz_repr::Timestamp>,
     ) {
-        let capability = self
-            .compute_read_capabilities
-            .get_mut(&id)
-            .expect("coord out of sync");
-        capability.base_policy = base_policy;
-        self.controller
-            .active_compute()
-            .set_read_policy(compute_instance, vec![(id, capability.policy())])
-            .unwrap_or_terminate("cannot fail to set read policy");
+        self.update_compute_base_read_policies(vec![(compute_instance, id, base_policy)])
     }
 
     /// Drop read policy in STORAGE for `id`.

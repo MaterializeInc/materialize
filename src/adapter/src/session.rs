@@ -14,111 +14,79 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_ore::now::EpochMillis;
+use mz_pgrepr::Format;
+use mz_repr::role_id::RoleId;
+use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
+use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
+use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
+use mz_sql::session::user::{
+    ExternalUserMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+};
+pub use mz_sql::session::vars::{
+    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+};
+use mz_sql::session::vars::{IsolationLevel, VarInput};
+use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_storage_client::types::sources::Timeline;
+use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
-use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use mz_pgrepr::Format;
-use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
-use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
-use mz_sql::names::RoleId;
-use mz_sql::plan::{Params, PlanContext, StatementDesc};
-use mz_sql_parser::ast::TransactionIsolationLevel;
-use mz_storage_client::types::sources::Timeline;
-
-use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, RecordFirstRowStream};
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::statement_logging::PreparedStatementLoggingInfo;
+use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
-use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
 
-pub use self::vars::{
-    ClientSeverity, SessionVars, Var, VarInput, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
-    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
-};
+const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
+const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
-pub(crate) mod vars;
-
-const DUMMY_CONNECTION_ID: ConnectionId = 0;
-
-/// Identifies a user.
+/// Metadata about a Session's role.
 #[derive(Debug, Clone)]
-pub struct User {
-    /// The name of the user within the system.
-    ///
-    /// When possible prefer using some [`RoleId`] over this field.
-    pub name: String,
-    /// Metadata about this user in an external system.
-    pub external_metadata: Option<ExternalUserMetadata>,
-}
-
-/// Metadata about a [`User`] in an external system.
-#[derive(Debug, Clone)]
-pub struct ExternalUserMetadata {
-    /// The ID of the user in the external system.
-    pub user_id: Uuid,
-    /// The ID of the user's active group in the external system.
-    pub group_id: Uuid,
-    /// Indicates if the user is an admin in the external system.
-    pub admin: bool,
-}
-
-impl PartialEq for User {
-    fn eq(&self, other: &User) -> bool {
-        self.name == other.name
-    }
-}
-
-impl User {
-    /// Returns whether this is an internal user.
-    pub fn is_internal(&self) -> bool {
-        INTERNAL_USER_NAMES.contains(&self.name)
-    }
-
-    /// Returns whether this user is an admin in an external system.
-    pub fn is_external_admin(&self) -> bool {
-        self.external_metadata
-            .as_ref()
-            .map(|metadata| metadata.admin)
-            .clone()
-            .unwrap_or(false)
-    }
-
-    /// Returns whether this user is a superuser.
-    pub fn is_superuser(&self) -> bool {
-        self.is_external_admin() || self.name == SYSTEM_USER.name
-    }
+struct RoleMetadata {
+    /// The role of the current execution context.
+    current_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    session_role: RoleId,
 }
 
 /// A session holds per-connection state.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
     conn_id: ConnectionId,
+    /// A globally unique identifier for the session. Not to be confused
+    /// with `conn_id`, which may be reused.
+    uuid: Uuid,
+    /// The time when the session's connection was initiated.
+    connect_time: EpochMillis,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    user: User,
-    /// The role ID of the current user.
+    /// The role metadata of the current session.
     ///
-    /// Invariant: role_id must be `Some` after the user has
+    /// Invariant: role_metadata must be `Some` after the user has
     /// successfully connected to and authenticated with Materialize.
     ///
     /// Prefer using this value over [`Self.user.name`].
     //
     // It would be better for this not to be an Option, but the
     // `Session` is initialized before the user has connected to
-    // Materialize and is able to look up the `RoleId`. The `Session`
+    // Materialize and is able to look up the `RoleMetadata`. The `Session`
     // is also used to return an error when no role exists and
-    // therefore there is no valid `RoleId`.
-    role_id: Option<RoleId>,
+    // therefore there is no valid `RoleMetadata`.
+    role_metadata: Option<RoleMetadata>,
     vars: SessionVars,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
@@ -126,6 +94,19 @@ pub struct Session<T = mz_repr::Timestamp> {
     secret_key: u32,
     external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
     external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
+    // Token allowing us to access `Arc<QCell<StatementLogging>>`
+    // metadata. We want these to be reference-counted, because the same
+    // statement might be referenced from multiple portals simultaneously.
+    //
+    // However, they can't be `Rc<RefCell<StatementLogging>>`, because
+    // the `Session` is sent around to different threads.
+    //
+    // On the other hand, they don't need to be
+    // `Arc<Mutex<StatementLogging>>`, because they will always be
+    // accessed from the same thread that the `Session` is currently
+    // on. We express this by gating access with this token.
+    #[derivative(Debug = "ignore")]
+    qcell_owner: QCellOwner,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -134,9 +115,45 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
+        connect_time: EpochMillis,
     ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(build_info, conn_id, user)
+        Self::new_internal(build_info, conn_id, user, connect_time)
+    }
+
+    /// Creates new statement logging metadata for a one-off
+    /// statement.
+    // Normally, such logging information would be created as part of
+    // allocating a new prepared statement, and a refcounted handle
+    // would be copied from that prepared statement to portals during
+    // binding. However, we also support (via `Command::declare`)
+    // binding a statement directly to a portal without creating an
+    // intermediate prepared statement. Thus, for those cases, a
+    // mechanism for generating the logging metadata directly is needed.
+    pub(crate) fn mint_logging(&self, sql: String) -> Arc<QCell<PreparedStatementLoggingInfo>> {
+        Arc::new(QCell::new(
+            &self.qcell_owner,
+            PreparedStatementLoggingInfo::StillToLog {
+                sql,
+                session_id: self.uuid,
+                prepared_at: Utc::now()
+                    .timestamp_millis()
+                    .try_into()
+                    .expect("sane system time"),
+                name: "".to_string(),
+                accounted: false,
+            },
+        ))
+    }
+
+    pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
+        self.qcell_owner.rw(&*cell)
+    }
+
+    /// Returns a unique ID for the session.
+    /// Not to be confused with `connection_id`, which can be reused.
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
     }
 
     /// Creates a new dummy session.
@@ -144,9 +161,13 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        let mut dummy =
-            Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone());
-        dummy.set_role_id(RoleId::User(0));
+        let mut dummy = Self::new_internal(
+            &DUMMY_BUILD_INFO,
+            DUMMY_CONNECTION_ID,
+            SYSTEM_USER.clone(),
+            DUMMY_CONNECT_TIME,
+        );
+        dummy.initialize_role_metadata(RoleId::User(0));
         dummy
     }
 
@@ -154,22 +175,24 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
+        connect_time: EpochMillis,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
-        let mut vars = SessionVars::new(build_info);
-        vars.set_superuser(user.is_superuser());
-        if INTERNAL_USER_NAMES.contains(&user.name) {
-            vars.set_cluster(user.name.clone());
+        let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
+        let mut vars = SessionVars::new(build_info, user);
+        if let Some(default_cluster) = default_cluster {
+            vars.set_cluster(default_cluster.clone());
         }
         Session {
             conn_id,
+            uuid: Uuid::new_v4(),
+            connect_time,
             transaction: TransactionStatus::Default,
             pcx: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
-            user,
-            role_id: None,
+            role_metadata: None,
             vars,
             notices_tx,
             notices_rx,
@@ -177,16 +200,22 @@ impl<T: TimestampManipulation> Session<T> {
             secret_key: rand::thread_rng().gen(),
             external_metadata_tx,
             external_metadata_rx,
+            qcell_owner: QCellOwner::new(),
         }
     }
 
     /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    /// Returns the time at which the session connected to Materialize.
+    pub fn connect_time(&self) -> EpochMillis {
+        self.connect_time
     }
 
     /// Returns the secret key associated with the session.
-    pub fn secret_key(&self) -> ConnectionId {
+    pub fn secret_key(&self) -> u32 {
         self.secret_key
     }
 
@@ -203,11 +232,11 @@ impl<T: TimestampManipulation> Session<T> {
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
     pub fn start_transaction(
-        mut self,
+        &mut self,
         wall_time: DateTime<Utc>,
         access: Option<TransactionAccessMode>,
         isolation_level: Option<TransactionIsolationLevel>,
-    ) -> (Self, Result<(), AdapterError>) {
+    ) -> Result<(), AdapterError> {
         // Check that current transaction state is compatible with new `access`
         if let Some(txn) = self.transaction.inner() {
             // `READ WRITE` prohibited if:
@@ -217,15 +246,17 @@ impl<T: TimestampManipulation> Session<T> {
                 TransactionOps::Peeks(_) | TransactionOps::Subscribe => {
                     txn.access == Some(TransactionAccessMode::ReadOnly)
                 }
-                TransactionOps::None | TransactionOps::Writes(_) => false,
+                TransactionOps::None
+                | TransactionOps::Writes(_)
+                | TransactionOps::SingleStatement { .. } => false,
             };
 
             if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
-                return (self, Err(AdapterError::ReadWriteUnavailable));
+                return Err(AdapterError::ReadWriteUnavailable);
             }
         }
 
-        match self.transaction {
+        match std::mem::take(&mut self.transaction) {
             TransactionStatus::Default => {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
@@ -250,16 +281,16 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set("transaction_isolation", VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
+                .set(None, mz_sql::session::vars::TRANSACTION_ISOLATION_VAR_NAME.as_str(), VarInput::Flat(IsolationLevel::from(isolation_level).as_str()), true)
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
 
-        (self, Ok(()))
+        Ok(())
     }
 
     /// Starts either a single statement or implicit transaction based on the
     /// number of statements, but only if no transaction has been started already.
-    pub fn start_transaction_implicit(mut self, wall_time: DateTime<Utc>, stmts: usize) -> Self {
+    pub fn start_transaction_implicit(&mut self, wall_time: DateTime<Utc>, stmts: usize) {
         if let TransactionStatus::Default = self.transaction {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
@@ -276,7 +307,11 @@ impl<T: TimestampManipulation> Session<T> {
                 _ => {}
             }
         }
-        self
+    }
+
+    /// Starts a single statement transaction, but only if no transaction has been started already.
+    pub fn start_transaction_single_stmt(&mut self, wall_time: DateTime<Utc>) {
+        self.start_transaction_implicit(wall_time, 1);
     }
 
     /// Clears a transaction, setting its state to Default and destroying all
@@ -314,6 +349,11 @@ impl<T: TimestampManipulation> Session<T> {
         &self.transaction
     }
 
+    /// Returns the current transaction status.
+    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<T> {
+        &mut self.transaction
+    }
+
     /// Returns the session's transaction code.
     pub fn transaction_code(&self) -> TransactionCode {
         self.transaction().into()
@@ -323,80 +363,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
-        match &mut self.transaction {
-            TransactionStatus::Started(Transaction { ops, access, .. })
-            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
-            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
-                match ops {
-                    TransactionOps::None => {
-                        if matches!(access, Some(TransactionAccessMode::ReadOnly))
-                            && matches!(add_ops, TransactionOps::Writes(_))
-                        {
-                            return Err(AdapterError::ReadOnlyTransaction);
-                        }
-                        *ops = add_ops;
-                    }
-                    TransactionOps::Peeks(txn_timestamp_context) => match add_ops {
-                        TransactionOps::Peeks(add_timestamp_context) => {
-                            match (&txn_timestamp_context, add_timestamp_context) {
-                                (
-                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
-                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
-                                ) => {
-                                    assert_eq!(*txn_timeline, add_timeline);
-                                    assert_eq!(*txn_ts, add_ts);
-                                }
-                                (TimestampContext::NoTimestamp, add_timestamp_context) => {
-                                    *txn_timestamp_context = add_timestamp_context
-                                }
-                                (_, TimestampContext::NoTimestamp) => {}
-                            };
-                        }
-                        // Iff peeks thus far do not have a timestamp (i.e.
-                        // they are constant), we can switch to a write
-                        // transaction.
-                        writes @ TransactionOps::Writes(..)
-                            if !txn_timestamp_context.contains_timestamp() =>
-                        {
-                            *ops = writes;
-                        }
-                        _ => return Err(AdapterError::ReadOnlyTransaction),
-                    },
-                    TransactionOps::Subscribe => {
-                        return Err(AdapterError::SubscribeOnlyTransaction)
-                    }
-                    TransactionOps::Writes(txn_writes) => match add_ops {
-                        TransactionOps::Writes(mut add_writes) => {
-                            // We should have already checked the access above, but make sure we don't miss
-                            // it anyway.
-                            assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
-                            txn_writes.append(&mut add_writes);
-
-                            if txn_writes
-                                .iter()
-                                .map(|op| op.id)
-                                .collect::<BTreeSet<_>>()
-                                .len()
-                                > 1
-                            {
-                                return Err(AdapterError::MultiTableWriteTransaction);
-                            }
-                        }
-                        // Iff peeks do not have a timestamp (i.e. they are
-                        // constant), we can permit them.
-                        TransactionOps::Peeks(timestamp_context)
-                            if !timestamp_context.contains_timestamp() => {}
-                        _ => {
-                            return Err(AdapterError::WriteOnlyTransaction);
-                        }
-                    },
-                }
-            }
-            TransactionStatus::Default | TransactionStatus::Failed(_) => {
-                unreachable!()
-            }
-        }
-        Ok(())
+        self.transaction.add_ops(add_ops)
     }
 
     /// Returns a channel on which to send notices to the session.
@@ -405,8 +372,15 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Adds a notice to the session.
-    pub fn add_notice(&mut self, notice: AdapterNotice) {
-        let _ = self.notices_tx.send(notice);
+    pub fn add_notice(&self, notice: AdapterNotice) {
+        self.add_notices([notice])
+    }
+
+    /// Adds multiple notices to the session.
+    pub fn add_notices(&self, notices: impl IntoIterator<Item = AdapterNotice>) {
+        for notice in notices {
+            let _ = self.notices_tx.send(notice);
+        }
     }
 
     /// Awaits a possible notice.
@@ -465,7 +439,11 @@ impl<T: TimestampManipulation> Session<T> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks(_) = ops {
                 let ops = std::mem::take(ops);
-                Some(ops.timestamp_context().expect("checked above"))
+                Some(
+                    ops.timestamp_determination()
+                        .expect("checked above")
+                        .timestamp_context,
+                )
             } else {
                 None
             }
@@ -474,19 +452,19 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the transaction's read timestamp context, if set.
+    /// Returns the transaction's read timestamp determination, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_context(&self) -> Option<TimestampContext<T>> {
+    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination<T>> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(timestamp_context),
+                ops: TransactionOps::Peeks(determination),
                 write_lock_guard: _,
                 access: _,
                 id: _,
-            }) => Some(timestamp_context.clone()),
+            }) => Some(determination.clone()),
             _ => None,
         }
     }
@@ -497,7 +475,10 @@ impl<T: TimestampManipulation> Session<T> {
             self.transaction.inner(),
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(TimestampContext::TimelineTimestamp(_, _)),
+                ops: TransactionOps::Peeks(TimestampDetermination {
+                    timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                    ..
+                }),
                 write_lock_guard: _,
                 access: _,
                 id: _,
@@ -506,7 +487,30 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Registers the prepared statement under `name`.
-    pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
+    pub fn set_prepared_statement(
+        &mut self,
+        name: String,
+        stmt: Option<Statement<Raw>>,
+        sql: String,
+        desc: StatementDesc,
+        catalog_revision: u64,
+        now: EpochMillis,
+    ) {
+        let statement = PreparedStatement {
+            stmt,
+            desc,
+            catalog_revision,
+            logging: Arc::new(QCell::new(
+                &self.qcell_owner,
+                PreparedStatementLoggingInfo::StillToLog {
+                    sql,
+                    name: name.clone(),
+                    prepared_at: now,
+                    session_id: self.uuid,
+                    accounted: false,
+                },
+            )),
+        };
         self.prepared_statements.insert(name, statement);
     }
 
@@ -560,6 +564,7 @@ impl<T: TimestampManipulation> Session<T> {
         portal_name: String,
         desc: StatementDesc,
         stmt: Option<Statement<Raw>>,
+        logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<mz_pgrepr::Format>,
         catalog_revision: u64,
@@ -580,6 +585,7 @@ impl<T: TimestampManipulation> Session<T> {
                 },
                 result_formats: result_formats.into_iter().map(Into::into).collect(),
                 state: PortalState::NotStarted,
+                logging,
             },
         );
         Ok(())
@@ -610,6 +616,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn create_new_portal(
         &mut self,
         stmt: Option<Statement<Raw>>,
+        logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
@@ -629,6 +636,7 @@ impl<T: TimestampManipulation> Session<T> {
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
+                        logging,
                     });
                     return Ok(name);
                 }
@@ -643,13 +651,19 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info());
-        self.vars.set_superuser(self.is_superuser());
+        self.vars = SessionVars::new(self.vars.build_info(), self.vars.user().clone());
     }
 
     /// Returns the user who owns this session.
     pub fn user(&self) -> &User {
-        &self.user
+        self.vars.user()
+    }
+
+    /// Returns the [application_name] that created this session.
+    ///
+    /// [application_name]: (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
+    pub fn application_name(&self) -> &str {
+        self.vars.application_name()
     }
 
     /// Returns a reference to the variables in this session.
@@ -682,7 +696,7 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Returns whether the current session is a superuser.
     pub fn is_superuser(&self) -> bool {
-        self.user.is_superuser()
+        self.vars.is_superuser()
     }
 
     /// Returns a channel on which to send external metadata to the session.
@@ -694,58 +708,71 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
-        while let Ok(external_user_metadata) = self.external_metadata_rx.try_recv() {
-            self.user.external_metadata = Some(external_user_metadata);
+        while let Ok(metadata) = self.external_metadata_rx.try_recv() {
+            self.vars.set_external_user_metadata(metadata);
         }
-        self.vars.set_superuser(self.is_superuser());
     }
 
-    /// Initializes the session's role ID.
-    pub fn set_role_id(&mut self, role_id: RoleId) {
-        self.role_id = Some(role_id);
+    /// Initializes the session's role metadata.
+    pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
+        self.role_metadata = Some(RoleMetadata {
+            current_role: role_id,
+            session_role: role_id,
+        });
     }
 
-    /// Returns the session's role ID.
+    /// Returns the session's current role ID.
     ///
     /// # Panics
     /// If the session has not connected successfully.
-    pub fn role_id(&self) -> &RoleId {
-        self.role_id.as_ref().expect("role_id invariant violated")
+    pub fn current_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .current_role
+    }
+
+    /// Returns the session's session role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn session_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .session_role
     }
 }
 
 /// A prepared statement.
-#[derive(Debug, Clone)]
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct PreparedStatement {
-    sql: Option<Statement<Raw>>,
+    stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
     pub catalog_revision: u64,
+    #[derivative(Debug = "ignore")]
+    logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
 
 impl PreparedStatement {
-    /// Constructs a new prepared statement.
-    pub fn new(
-        sql: Option<Statement<Raw>>,
-        desc: StatementDesc,
-        catalog_revision: u64,
-    ) -> PreparedStatement {
-        PreparedStatement {
-            sql,
-            desc,
-            catalog_revision,
-        }
-    }
-
-    /// Returns the raw SQL string associated with this prepared statement,
+    /// Returns the AST associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&Statement<Raw>> {
-        self.sql.as_ref()
+    pub fn stmt(&self) -> Option<&Statement<Raw>> {
+        self.stmt.as_ref()
     }
 
     /// Returns the description of the prepared statement.
     pub fn desc(&self) -> &StatementDesc {
         &self.desc
+    }
+
+    /// Returns a handle to the metadata for statement logging.
+    pub fn logging(&self) -> &Arc<QCell<PreparedStatementLoggingInfo>> {
+        &self.logging
     }
 }
 
@@ -763,6 +790,9 @@ pub struct Portal {
     pub parameters: Params,
     /// The desired output format for each column in the result set.
     pub result_formats: Vec<mz_pgrepr::Format>,
+    /// A handle to metadata needed for statement logging.
+    #[derivative(Debug = "ignore")]
+    pub logging: Arc<QCell<PreparedStatementLoggingInfo>>,
     /// The execution state of the portal.
     #[derivative(Debug = "ignore")]
     pub state: PortalState,
@@ -786,12 +816,12 @@ pub struct InProgressRows {
     /// The current batch of rows.
     pub current: Option<Vec<Row>>,
     /// A stream from which to fetch more row batches.
-    pub remaining: RowBatchStream,
+    pub remaining: RecordFirstRowStream,
 }
 
 impl InProgressRows {
     /// Creates a new InProgressRows from a batch stream.
-    pub fn new(remaining: RowBatchStream) -> Self {
+    pub fn new(remaining: RecordFirstRowStream) -> Self {
         Self {
             current: None,
             remaining,
@@ -828,7 +858,7 @@ pub enum TransactionStatus<T> {
     Failed(Transaction<T>),
 }
 
-impl<T> TransactionStatus<T> {
+impl<T: TimestampManipulation> TransactionStatus<T> {
     /// Extracts the inner transaction ops and write lock guard if not failed.
     pub fn into_ops_and_lock_guard(
         self,
@@ -888,6 +918,11 @@ impl<T> TransactionStatus<T> {
         }
     }
 
+    /// Whether the transaction is in a multi-statement, immediate transaction.
+    pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
+        self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
+    }
+
     /// Grants the write lock to the inner transaction.
     ///
     /// # Panics
@@ -913,6 +948,100 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::InTransactionImplicit(txn)
             | TransactionStatus::Failed(txn) => txn.timeline(),
         }
+    }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    pub fn contains_ops(&self) -> bool {
+        match self.inner() {
+            Some(txn) => txn.contains_ops(),
+            None => false,
+        }
+    }
+
+    /// Adds operations to the current transaction. An error is produced if
+    /// they cannot be merged (i.e., a timestamp-dependent read cannot be
+    /// merged to an insert).
+    pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+        match self {
+            TransactionStatus::Started(Transaction { ops, access, .. })
+            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                match ops {
+                    TransactionOps::None => {
+                        if matches!(access, Some(TransactionAccessMode::ReadOnly))
+                            && matches!(add_ops, TransactionOps::Writes(_))
+                        {
+                            return Err(AdapterError::ReadOnlyTransaction);
+                        }
+                        *ops = add_ops;
+                    }
+                    TransactionOps::Peeks(determination) => match add_ops {
+                        TransactionOps::Peeks(add_timestamp_determination) => {
+                            match (
+                                &determination.timestamp_context,
+                                &add_timestamp_determination.timestamp_context,
+                            ) {
+                                (
+                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
+                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
+                                ) => {
+                                    assert_eq!(txn_timeline, add_timeline);
+                                    assert_eq!(txn_ts, add_ts);
+                                }
+                                (TimestampContext::NoTimestamp, _) => {
+                                    *determination = add_timestamp_determination
+                                }
+                                (_, TimestampContext::NoTimestamp) => {}
+                            };
+                        }
+                        // Iff peeks thus far do not have a timestamp (i.e.
+                        // they are constant), we can switch to a write
+                        // transaction.
+                        writes @ TransactionOps::Writes(..)
+                            if !determination.timestamp_context.contains_timestamp() =>
+                        {
+                            *ops = writes;
+                        }
+                        _ => return Err(AdapterError::ReadOnlyTransaction),
+                    },
+                    TransactionOps::Subscribe => {
+                        return Err(AdapterError::SubscribeOnlyTransaction)
+                    }
+                    TransactionOps::Writes(txn_writes) => match add_ops {
+                        TransactionOps::Writes(mut add_writes) => {
+                            // We should have already checked the access above, but make sure we don't miss
+                            // it anyway.
+                            assert!(!matches!(access, Some(TransactionAccessMode::ReadOnly)));
+                            txn_writes.append(&mut add_writes);
+
+                            if txn_writes
+                                .iter()
+                                .map(|op| op.id)
+                                .collect::<BTreeSet<_>>()
+                                .len()
+                                > 1
+                            {
+                                return Err(AdapterError::MultiTableWriteTransaction);
+                            }
+                        }
+                        // Iff peeks do not have a timestamp (i.e. they are
+                        // constant), we can permit them.
+                        TransactionOps::Peeks(determination)
+                            if !determination.timestamp_context.contains_timestamp() => {}
+                        _ => {
+                            return Err(AdapterError::WriteOnlyTransaction);
+                        }
+                    },
+                    TransactionOps::SingleStatement { .. } => {
+                        return Err(AdapterError::SingleStatementTransaction)
+                    }
+                }
+            }
+            TransactionStatus::Default | TransactionStatus::Failed(_) => {
+                unreachable!()
+            }
+        }
+        Ok(())
     }
 }
 
@@ -952,14 +1081,21 @@ impl<T> Transaction<T> {
     /// The timeline of the transaction, if one exists.
     fn timeline(&self) -> Option<Timeline> {
         match &self.ops {
-            TransactionOps::Peeks(TimestampContext::TimelineTimestamp(timeline, _)) => {
-                Some(timeline.clone())
-            }
+            TransactionOps::Peeks(TimestampDetermination {
+                timestamp_context: TimestampContext::TimelineTimestamp(timeline, _),
+                ..
+            }) => Some(timeline.clone()),
             TransactionOps::Peeks(_)
             | TransactionOps::None
             | TransactionOps::Subscribe
-            | TransactionOps::Writes(_) => None,
+            | TransactionOps::Writes(_)
+            | TransactionOps::SingleStatement { .. } => None,
         }
+    }
+
+    /// Reports whether any operations have been executed as part of this transaction
+    fn contains_ops(&self) -> bool {
+        !matches!(self.ops, TransactionOps::None)
     }
 }
 
@@ -1008,7 +1144,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
@@ -1017,19 +1153,29 @@ pub enum TransactionOps<T> {
     /// is has a timestamp, it must only do other peeks. However, if it doesn't
     /// have a timestamp (i.e. the values are constants), the transaction can still
     /// perform writes.
-    Peeks(TimestampContext<T>),
+    Peeks(TimestampDetermination<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),
+    /// This transaction has a prospective statement that will execute during commit.
+    SingleStatement {
+        /// The prospective statement.
+        stmt: Statement<Raw>,
+        /// The statement params.
+        params: mz_sql::plan::Params,
+    },
 }
 
 impl<T> TransactionOps<T> {
-    fn timestamp_context(self) -> Option<TimestampContext<T>> {
+    fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
         match self {
-            TransactionOps::Peeks(timestamp_context) => Some(timestamp_context),
-            TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
+            TransactionOps::Peeks(determination) => Some(determination),
+            TransactionOps::None
+            | TransactionOps::Subscribe
+            | TransactionOps::Writes(_)
+            | TransactionOps::SingleStatement { .. } => None,
         }
     }
 }
@@ -1047,13 +1193,4 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
-}
-
-/// The action to take during end_transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndTransactionAction {
-    /// Commit the transaction.
-    Commit,
-    /// Rollback the transaction.
-    Rollback,
 }

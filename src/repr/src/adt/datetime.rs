@@ -18,6 +18,7 @@ use std::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
+use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -25,8 +26,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 use crate::chrono::{any_fixed_offset, any_timezone};
-
-use mz_lowertest::MzReflect;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.datetime.rs"));
 
@@ -193,6 +192,49 @@ impl RustType<ProtoDateTimeUnits> for DateTimeUnits {
             Kind::TimezoneHour(_) => DateTimeUnits::TimezoneHour,
             Kind::TimezoneMinute(_) => DateTimeUnits::TimezoneMinute,
         })
+    }
+}
+
+/// Order of definition is important for PartialOrd and Ord to be derived correctly
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum DateTimePart {
+    Microseconds,
+    Milliseconds,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+    Decade,
+    Century,
+    Millennium,
+}
+
+impl FromStr for DateTimePart {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let units: DateTimeUnits = s.parse()?;
+
+        match units {
+            DateTimeUnits::Microseconds => Ok(DateTimePart::Microseconds),
+            DateTimeUnits::Milliseconds => Ok(DateTimePart::Milliseconds),
+            DateTimeUnits::Second => Ok(DateTimePart::Second),
+            DateTimeUnits::Minute => Ok(DateTimePart::Minute),
+            DateTimeUnits::Hour => Ok(DateTimePart::Hour),
+            DateTimeUnits::Day => Ok(DateTimePart::Day),
+            DateTimeUnits::Week => Ok(DateTimePart::Week),
+            DateTimeUnits::Month => Ok(DateTimePart::Month),
+            DateTimeUnits::Quarter => Ok(DateTimePart::Quarter),
+            DateTimeUnits::Year => Ok(DateTimePart::Year),
+            DateTimeUnits::Decade => Ok(DateTimePart::Decade),
+            DateTimeUnits::Century => Ok(DateTimePart::Century),
+            DateTimeUnits::Millennium => Ok(DateTimePart::Millennium),
+            _ => Err(s.to_string()),
+        }
     }
 }
 
@@ -436,8 +478,11 @@ impl RustType<ProtoTimezone> for Timezone {
 // We need to implement Serialize and Deserialize traits to include Timezone in the UnaryFunc enum.
 // FixedOffset doesn't implement these, even with the "serde" feature enabled.
 mod fixed_offset_serde {
+    use serde::de::Error;
+    use serde::{Deserializer, Serializer};
+
     use super::*;
-    use serde::{de::Error, Deserializer, Serializer};
+
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<FixedOffset, D::Error> {
@@ -2201,10 +2246,11 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
 
-    #[test]
+    use super::*;
+
+    #[mz_ore::test]
     fn iterate_datetimefield() {
         use DateTimeField::*;
         assert_eq!(
@@ -2224,7 +2270,7 @@ mod tests {
         )
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_expected_dur_like_tokens() {
         use DateTimeField::*;
         use TimeStrToken::*;
@@ -2242,7 +2288,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_expected_sql_standard_interval_tokens() {
         use DateTimeField::*;
         use TimeStrToken::*;
@@ -2260,7 +2306,7 @@ mod tests {
             vec![Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1), Dot, Nanos(0)]
         );
     }
-    #[test]
+    #[mz_ore::test]
     fn test_trim_and_return_sign() {
         let test_cases = [
             ("-2", -1, "2"),
@@ -2278,7 +2324,7 @@ mod tests {
             assert_eq!(s.front(), tokenize_time_str(test.2).unwrap().front());
         }
     }
-    #[test]
+    #[mz_ore::test]
     fn test_determine_format_w_datetimefield() {
         use DateTimeField::*;
         use TimePartFormat::*;
@@ -2320,7 +2366,7 @@ mod tests {
             }
         }
     }
-    #[test]
+    #[mz_ore::test]
     fn test_determine_format_w_datetimefield_and_leading_time() {
         use DateTimeField::*;
         use TimePartFormat::*;
@@ -2346,7 +2392,7 @@ mod tests {
             Some(SqlStandard(Hour))
         );
     }
-    #[test]
+    #[mz_ore::test]
     fn test_determine_format_w_datetimefield_error() {
         let test_cases = [
             ("1+2", "Cannot determine format of all parts"),
@@ -2366,7 +2412,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_fill_pdt_from_tokens() {
         use DateTimeField::*;
         let test_cases = [
@@ -2538,7 +2584,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_fill_pdt_from_tokens_errors() {
         use DateTimeField::*;
         let test_cases = [
@@ -2562,7 +2608,7 @@ mod tests {
             };
         }
     }
-    #[test]
+    #[mz_ore::test]
     #[should_panic(expected = "Cannot get smaller DateTimeField than MICROSECONDS")]
     fn test_fill_pdt_from_tokens_panic() {
         use DateTimeField::*;
@@ -2585,7 +2631,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_fill_pdt_interval_pg() {
         use DateTimeField::*;
         let test_cases = [
@@ -2751,7 +2797,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn fill_pdt_interval_pg_errors() {
         use DateTimeField::*;
         let test_cases = [
@@ -2782,7 +2828,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_fill_pdt_interval_sql() {
         use DateTimeField::*;
         let test_cases = [
@@ -2912,7 +2958,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_fill_pdt_interval_sql_errors() {
         use DateTimeField::*;
         let test_cases = [
@@ -2943,7 +2989,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_parsed_datetime_time() {
         run_test_build_parsed_datetime_time(
             "3:4:5.6",
@@ -2995,7 +3041,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_parsed_datetime_timestamp() {
         run_test_build_parsed_datetime_timestamp(
             "2000-01-02",
@@ -3054,7 +3100,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_parsed_datetime_interval() {
         use DateTimeField::*;
         let test_cases = [
@@ -3566,7 +3612,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_build_parsed_datetime_interval_errors() {
         use DateTimeField::*;
         let test_cases = [
@@ -3702,7 +3748,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_split_timestamp_string() {
         let test_cases = [
             (
@@ -3790,7 +3836,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_parse_timezone_offset_second() {
         use Timezone::{FixedOffset as F, Tz as T};
         let test_cases = [
@@ -3879,7 +3925,8 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow, large amount of memory
         fn datetimeunits_serialization_roundtrip(expect in any::<DateTimeUnits>() ) {
             let actual = protobuf_roundtrip::<_, ProtoDateTimeUnits>(&expect);
             assert!(actual.is_ok());
@@ -3888,7 +3935,7 @@ mod tests {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parseddatetime_add_field() {
     use DateTimeField::*;
     let pdt_unit = ParsedDateTime {
@@ -4128,7 +4175,7 @@ fn test_parseddatetime_add_field() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_parseddatetime_compute_interval() {
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {

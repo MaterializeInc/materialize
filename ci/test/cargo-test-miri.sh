@@ -16,14 +16,11 @@ set -euo pipefail
 
 # miri artifacts are thoroughly incompatible with normal build artifacts,
 # so keep them away from the `target` directory.
-export CARGO_TARGET_DIR=miri-target
+export CARGO_TARGET_DIR="$PWD/miri-target"
+export MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-strict-provenance"
 
-# At the moment only ore and repr have tests meant to be run under miri.
-pkgs=(
-    repr
-    ore
-)
+PARTITION=$((${BUILDKITE_PARALLEL_JOB:-0}+1))
+TOTAL=${BUILDKITE_PARALLEL_JOB_COUNT:-1}
 
-for pkg in "${pkgs[@]}"; do
-    (cd src/"$pkg" && cargo miri test miri --all-features)
-done
+# exclude network-based and more complex tests which run out of memory
+cargo miri nextest run -j"$(nproc)" --partition "count:$PARTITION/$TOTAL" --no-fail-fast --workspace --exclude 'mz-environmentd*' --exclude 'mz-compute-client*' --exclude 'mz-ssh-util*' --exclude 'mz-rocksdb*'

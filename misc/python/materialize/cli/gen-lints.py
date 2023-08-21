@@ -121,9 +121,6 @@ WARN_LINTS = [
     "clippy::unnecessary_mut_passed",
     # Purely redundant tokens; probably a mistake.
     "clippy::wildcard_in_or_patterns",
-    # Semantically wrong level of nesting.
-    "clippy::collapsible_if",
-    "clippy::collapsible_else_if",
     # Transmuting between T and T* seems 99% likely to be buggy code.
     "clippy::crosspointer_transmute",
     # Confusing and likely buggy.

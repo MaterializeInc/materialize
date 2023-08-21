@@ -23,7 +23,7 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_databases_ind
 
 Used Indexes:
-  - mz_internal.mz_show_databases_ind
+  - mz_internal.mz_show_databases_ind (*** full scan ***)
 
 EOF
 
@@ -32,11 +32,11 @@ EXPLAIN SHOW SCHEMAS
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter ((#0) IS NULL OR (1 = bigint_to_numeric(#0)))
+    Filter ((#0) IS NULL OR (#0 = "u1"))
       ReadExistingIndex mz_internal.mz_show_schemas_ind
 
 Used Indexes:
-  - mz_internal.mz_show_schemas_ind
+  - mz_internal.mz_show_schemas_ind (*** full scan ***)
 
 EOF
 
@@ -45,11 +45,10 @@ EXPLAIN SHOW CONNECTIONS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_connections_ind
+    ReadExistingIndex mz_internal.mz_show_connections_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_connections_ind
+  - mz_internal.mz_show_connections_ind (lookup)
 
 EOF
 
@@ -58,11 +57,10 @@ EXPLAIN SHOW TABLES
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_tables_ind
+    ReadExistingIndex mz_internal.mz_show_tables_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_tables_ind
+  - mz_internal.mz_show_tables_ind (lookup)
 
 EOF
 
@@ -71,11 +69,10 @@ EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_sources_ind
+    ReadExistingIndex mz_internal.mz_show_sources_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind
+  - mz_internal.mz_show_sources_ind (lookup)
 
 EOF
 
@@ -84,11 +81,10 @@ EXPLAIN SHOW VIEWS
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_views_ind
+    ReadExistingIndex mz_internal.mz_show_views_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_views_ind
+  - mz_internal.mz_show_views_ind (lookup)
 
 EOF
 
@@ -97,11 +93,11 @@ EXPLAIN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
   Project (#2, #3)
-    Filter (3 = bigint_to_numeric(#0))
+    Filter (#0 = "u3")
       ReadExistingIndex mz_internal.mz_show_materialized_views_ind
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind
+  - mz_internal.mz_show_materialized_views_ind (*** full scan ***)
 
 EOF
 
@@ -110,11 +106,11 @@ EXPLAIN SHOW INDEXES
 ----
 Explained Query (fast path):
   Project (#3..=#6)
-    Filter NOT("s%" ~~(#0)) AND (3 = bigint_to_numeric(#1))
+    Filter NOT(like["s%"](#0)) AND (#1 = "u3")
       ReadExistingIndex mz_internal.mz_show_indexes_ind
 
 Used Indexes:
-  - mz_internal.mz_show_indexes_ind
+  - mz_internal.mz_show_indexes_ind (*** full scan ***)
 
 EOF
 
@@ -123,11 +119,10 @@ EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_sinks_ind
+    ReadExistingIndex mz_internal.mz_show_sinks_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_sinks_ind
+  - mz_internal.mz_show_sinks_ind (lookup)
 
 EOF
 
@@ -136,11 +131,10 @@ EXPLAIN SHOW TYPES
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_types_ind
+    ReadExistingIndex mz_internal.mz_show_types_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_types_ind
+  - mz_internal.mz_show_types_ind (lookup)
 
 EOF
 
@@ -149,11 +143,10 @@ EXPLAIN SHOW OBJECTS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_all_objects_ind
+    ReadExistingIndex mz_internal.mz_show_all_objects_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_all_objects_ind
+  - mz_internal.mz_show_all_objects_ind (lookup)
 
 EOF
 
@@ -168,21 +161,32 @@ Explained Query (fast path):
     ReadExistingIndex mz_internal.mz_show_columns_ind lookup_value=("u1")
 
 Used Indexes:
-  - mz_internal.mz_show_columns_ind
+  - mz_internal.mz_show_columns_ind (lookup)
 
 EOF
 
-query T multiline
-EXPLAIN SHOW CLUSTERS
-----
-Explained Query (fast path):
-  Project (#0)
-    ReadExistingIndex mz_internal.mz_show_clusters_ind
-
-Used Indexes:
-  - mz_internal.mz_show_clusters_ind
-
-EOF
+# TODO[btv] - We should probably someday
+# optimize `SELECT name FROM (SHOW CLUSTERS)`
+# to do the same thing as `SELECT name FROM mz_clusters`;
+# i.e., just read out of the index we have on the latter table.
+# However, today we cannot do that. It's probably fine in practice
+# as there won't be more than a few dozen clusters/replicas in any
+# real world deployment, so spinning up a dataflow with joins
+# etc. is only mildly bad.
+#
+# See discussion here: https://materializeinc.slack.com/archives/C02PPB50ZHS/p1691531471306959
+#
+# query T multiline
+# EXPLAIN SELECT name FROM (SHOW CLUSTERS)
+# ----
+# Explained Query (fast path):
+#   Project (#0)
+#     ReadExistingIndex mz_internal.mz_show_clusters_ind
+#
+# Used Indexes:
+#   - mz_internal.mz_show_clusters_ind
+#
+# EOF
 
 query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS
@@ -191,7 +195,7 @@ Explained Query (fast path):
   ReadExistingIndex mz_internal.mz_show_cluster_replicas_ind
 
 Used Indexes:
-  - mz_internal.mz_show_cluster_replicas_ind
+  - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
 
 EOF
 
@@ -199,11 +203,168 @@ query T multiline
 EXPLAIN SHOW SECRETS
 ----
 Explained Query (fast path):
-  Project (#2)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_secrets_ind
+  Project (#3)
+    ReadExistingIndex mz_internal.mz_show_secrets_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_secrets_ind
+  - mz_internal.mz_show_secrets_ind (lookup)
 
 EOF
+
+# Following are used in the UI
+
+query T multiline
+EXPLAIN SELECT r.id,
+  r.name as replica_name,
+  r.cluster_id,
+  r.size,
+  c.name as cluster_name,
+  u.memory_percent
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
+ORDER BY r.id;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
+    Project (#0..=#3, #5, #14)
+      Join on=(#0 = #13 AND #2 = #4) type=differential
+        ArrangeBy keys=[[#2]]
+          Project (#0..=#3)
+            Get mz_catalog.mz_cluster_replicas
+        ArrangeBy keys=[[#0]]
+          Get mz_catalog.mz_clusters
+        ArrangeBy keys=[[#0]]
+          Project (#0, #19)
+            Filter (#3) IS NOT NULL
+              Map (((uint8_to_double(#17) / uint8_to_double(#11)) * 100))
+                Join on=(#0 = #14 AND #3 = #7) type=differential
+                  ArrangeBy keys=[[#0]]
+                    Get mz_catalog.mz_cluster_replicas
+                  ArrangeBy keys=[[#0]]
+                    Get mz_internal.mz_cluster_replica_sizes
+                  ArrangeBy keys=[[#0]]
+                    Get mz_internal.mz_cluster_replica_metrics
+
+Used Indexes:
+  - mz_internal.mz_clusters_ind (differential join)
+  - mz_internal.mz_cluster_replicas_ind (*** full scan ***, differential join)
+  - mz_internal.mz_cluster_replica_sizes_ind (differential join)
+  - mz_internal.mz_cluster_replica_metrics_ind (differential join)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT s.id, s.oid, s.name, s.type, s.size, st.status, st.error
+FROM mz_sources s
+LEFT OUTER JOIN mz_internal.mz_source_statuses st
+ON st.id = s.id
+WHERE s.id LIKE 'u%';
+----
+Explained Query:
+  Return
+    Union
+      Map (null, null)
+        Union
+          Negate
+            Project (#0..=#4)
+              Join on=(#0 = #5) type=differential
+                Get l1
+                ArrangeBy keys=[[#0]]
+                  Distinct group_by=[#0]
+                    Project (#0)
+                      Get l2
+          Get l0
+      Get l2
+  With
+    cte l2 =
+      Project (#0..=#4, #9, #10)
+        Filter like["u%"](#0)
+          Join on=(#0 = #5) type=differential
+            Get l1
+            ArrangeBy keys=[[#0]]
+              Get mz_internal.mz_source_statuses
+    cte l1 =
+      ArrangeBy keys=[[#0]]
+        Get l0
+    cte l0 =
+      Project (#0, #1, #3, #4, #6)
+        Filter like["u%"](#0)
+          Get mz_catalog.mz_sources
+
+Used Indexes:
+  - mz_internal.mz_show_sources_ind (*** full scan ***)
+  - mz_internal.mz_source_statuses_ind (differential join)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
+FROM mz_internal.mz_source_status_history h
+WHERE source_id = 'u6'
+AND error IS NOT NULL
+AND h.occurred_at BETWEEN 0 AND 100
+GROUP BY h.error
+ORDER BY last_occurred DESC
+LIMIT 10;
+----
+Explained Query:
+  Finish order_by=[#0 desc nulls_first] limit=10 output=[#0..=#2]
+    Project (#1, #0, #2)
+      Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000)), count(*)]
+        Project (#0, #3)
+          Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
+            Map (timestamp_tz_to_mz_timestamp(#0))
+              ReadExistingIndex mz_internal.mz_source_status_history lookup_value=("u6")
+
+Used Indexes:
+  - mz_internal.mz_source_status_history_ind (lookup)
+
+EOF
+
+# Querying user objects should not be allowed from the introspection cluster.
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'));
+
+statement ok
+SET CLUSTER TO foo;
+
+statement ok
+CREATE TABLE bar ( key text, val bigint );
+
+statement ok
+SET CLUSTER TO mz_introspection;
+
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+SELECT key FROM bar;
+
+# But inspecting those objects, e.g. checking what indexes exist, should be allowed.
+statement ok
+SHOW INDEXES on bar;
+
+statement ok
+SET CLUSTER TO mz_introspection;
+
+statement ok
+DROP CLUSTER foo CASCADE;
+
+# Creating views with the mz_introspection cluster active should be allowed though.
+statement ok
+CREATE VIEW keys AS ( SELECT key FROM bar );
+
+# But creating objects that install resources, should not be allowed.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE CLUSTER REPLICA mz_introspection.backup SIZE '1';
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE INDEX i_keys ON bar (key);

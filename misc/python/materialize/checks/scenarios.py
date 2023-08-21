@@ -12,7 +12,9 @@ from typing import List, Optional, Type
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
+from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import Executor
+from materialize.checks.mzcompose_actions import ConfigureMz
 from materialize.checks.mzcompose_actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
@@ -46,6 +48,11 @@ class Scenario:
         self.executor = executor
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
+        # Use base_version() here instead of _base_version so that overwriting
+        # upgrade scenarios can specify another base version.
+        self.check_objects = [
+            check_class(self.base_version(), self.rng) for check_class in self.checks()
+        ]
 
     def checks(self) -> List[Type[Check]]:
         if self.rng:
@@ -59,8 +66,21 @@ class Scenario:
         return self._base_version
 
     def run(self) -> None:
-        for action in self.actions():
+        actions = self.actions()
+        # Configure implicitly for cloud scenarios
+        if not isinstance(actions[0], StartMz):
+            actions.insert(0, ConfigureMz(self))
+
+        for index, action in enumerate(actions):
+            # Implicitly call configure to raise version-dependent limits
+            if isinstance(action, StartMz) or isinstance(
+                action, ReplaceEnvironmentdStatefulSet
+            ):
+                actions.insert(index + 1, ConfigureMz(self))
+
+        for action in actions:
             action.execute(self.executor)
+            action.join(self.executor)
 
 
 class NoRestartNoUpgrade(Scenario):
@@ -141,6 +161,9 @@ class RestartEnvironmentdClusterdStorage(Scenario):
             Manipulate(self, phase=2),
             KillMz(),
             StartMz(),
+            Validate(self),
+            # Validate again so that introducing non-idempotent validate()s
+            # will cause the CI to fail.
             Validate(self),
         ]
 

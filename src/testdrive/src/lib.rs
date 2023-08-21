@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -85,14 +83,11 @@ use std::path::Path;
 
 use action::Run;
 use anyhow::{anyhow, Context};
-use itertools::Itertools;
+use mz_ore::error::ErrorExt;
 
-use mz_ore::display::DisplayExt;
-
-use self::action::ControlFlow;
-use self::error::{ErrorLocation, PosError};
-use self::parser::LineReader;
-use self::parser::{BuiltinCommand, Command};
+use crate::action::ControlFlow;
+use crate::error::{ErrorLocation, PosError};
+use crate::parser::{BuiltinCommand, Command, LineReader};
 
 mod action;
 mod error;
@@ -100,8 +95,8 @@ mod format;
 mod parser;
 mod util;
 
-pub use self::action::Config;
-pub use self::error::Error;
+pub use crate::action::Config;
+pub use crate::error::Error;
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &Path) -> Result<(), Error> {
@@ -160,7 +155,7 @@ pub(crate) async fn run_line_reader(
     let has_kafka_cmd = cmds.iter().any(|cmd| {
         matches!(
             &cmd.command,
-            Command::Builtin(BuiltinCommand { name, .. }) if name.starts_with("kafka-"),
+            Command::Builtin(BuiltinCommand { name, .. }, _) if name.starts_with("kafka-"),
         )
     });
 
@@ -197,43 +192,9 @@ pub(crate) async fn run_line_reader(
     }
 
     if config.reset {
-        // Clean up AWS state at the end of the run. Unlike Materialize and
-        // Kafka state, leaving around AWS resources costs real money. We
-        // intentionally don't stop at the first error because we don't want
-        // to e.g. skip cleaning up SQS resources because we failed to clean up
-        // S3 resources.
-
-        let mut reset_errors = vec![];
-
-        if let Err(e) = state.reset_s3().await {
-            reset_errors.push(e);
-        }
-
-        if let Err(e) = state.reset_sqs().await {
-            reset_errors.push(e);
-        }
-
-        if let Err(e) = state.reset_kinesis().await {
-            reset_errors.push(e);
-        }
-
         drop(state);
         if let Err(e) = state_cleanup.await {
-            reset_errors.push(e);
-        }
-
-        if !reset_errors.is_empty() {
-            errors.push(
-                anyhow!(
-                    "cleanup failed: {} errors: {}",
-                    reset_errors.len(),
-                    reset_errors
-                        .into_iter()
-                        .map(|e| e.to_string_alt())
-                        .join("\n"),
-                )
-                .into(),
-            );
+            errors.push(anyhow!("cleanup failed: error: {}", e.to_string_with_causes()).into());
         }
     }
 

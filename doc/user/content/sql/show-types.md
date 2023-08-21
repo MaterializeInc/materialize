@@ -1,14 +1,12 @@
 ---
 title: "SHOW TYPES"
-description: "`SHOW TYPES` returns a list of the data types in your Materialize instance."
+description: "`SHOW TYPES` returns a list of the data types in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
-`SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned.
+`SHOW TYPES` returns a list of the data types in Materialize. By default, only custom types are returned.
 
 ## Syntax
 
@@ -16,7 +14,7 @@ menu:
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show types from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show types from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 
 ## Examples

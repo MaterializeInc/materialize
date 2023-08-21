@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -80,7 +78,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod avro;
-mod confluent;
+pub mod confluent;
 pub mod encode;
 pub mod envelopes;
 pub mod json;

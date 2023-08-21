@@ -15,14 +15,22 @@
 //! with the underlying client, it will reconnect the client and replay the
 //! command stream.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
+use mz_build_info::BuildInfo;
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_ore::retry::Retry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_persist_types::Codec64;
+use mz_repr::GlobalId;
+use mz_service::client::{GenericClient, Partitioned};
+use mz_service::params::GrpcClientParameters;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
@@ -31,20 +39,10 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
-use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
-use mz_ore::retry::Retry;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::Codec64;
-use mz_repr::GlobalId;
-use mz_service::client::{GenericClient, Partitioned};
-
 use crate::client::{
-    CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
-use crate::controller::ResumptionFrontierCalculator;
 use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 
@@ -69,9 +67,9 @@ where
     /// a storage replica.
     pub fn new(
         build_info: &'static BuildInfo,
-        persist: Arc<PersistClientCache>,
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
+        grpc_client_params: GrpcClientParameters,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -82,11 +80,12 @@ where
             sources: BTreeMap::new(),
             sinks: BTreeMap::new(),
             uppers: BTreeMap::new(),
+            sinces: BTreeMap::new(),
             initialized: false,
             current_epoch: ClusterStartupEpoch::new(envd_epoch, 0),
             config: Default::default(),
-            persist,
             metrics,
+            grpc_client_params,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -100,6 +99,13 @@ where
     pub fn connect(&mut self, location: ClusterReplicaLocation) {
         self.command_tx
             .send(RehydrationCommand::Connect { location })
+            .expect("rehydration task should not drop first");
+    }
+
+    /// Reset the connection.
+    pub fn reset(&mut self) {
+        self.command_tx
+            .send(RehydrationCommand::Reset)
             .expect("rehydration task should not drop first");
     }
 
@@ -125,6 +131,9 @@ enum RehydrationCommand<T> {
     },
     /// Send the contained storage command to the replica.
     Send(StorageCommand<T>),
+    /// Reset the task to it's beginning state, as if
+    /// no `Connect` command has ever been received.
+    Reset,
 }
 
 /// A task that manages rehydration.
@@ -137,11 +146,13 @@ struct RehydrationTask<T> {
     /// A channel upon which responses from the storage replica are delivered.
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The sources that have been observed.
-    sources: BTreeMap<GlobalId, CreateSourceCommand<T>>,
+    sources: BTreeMap<GlobalId, RunIngestionCommand>,
     /// The exports that have been observed.
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
     uppers: BTreeMap<GlobalId, Antichain<T>>,
+    /// The since frontiers that have been observed.
+    sinces: BTreeMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
@@ -149,10 +160,10 @@ struct RehydrationTask<T> {
     current_epoch: ClusterStartupEpoch,
     /// Storage configuration that has been observed.
     config: StorageParameters,
-    /// A handle to Persist
-    persist: Arc<PersistClientCache>,
     /// Prometheus metrics
     metrics: RehydratingStorageClientMetrics,
+    /// gRPC client parameters.
+    grpc_client_params: GrpcClientParameters,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -205,6 +216,7 @@ where
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
                 }
+                Some(RehydrationCommand::Reset) => {}
             }
         }
     }
@@ -233,6 +245,7 @@ where
                     Ok(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
                     }
+                    Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
                     Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
                     Err(TryRecvError::Empty) => break,
                 }
@@ -257,7 +270,9 @@ where
                 .map(|addr| (addr, self.metrics.clone()))
                 .collect();
             let version = self.build_info.semver_version();
-            let client = StorageGrpcClient::connect_partitioned(dests, version).await;
+            let client =
+                StorageGrpcClient::connect_partitioned(dests, version, &self.grpc_client_params)
+                    .await;
 
             let client = match client {
                 Ok(client) => client,
@@ -293,21 +308,18 @@ where
             break (client, timely_command);
         };
 
-        for ingest in self.sources.values_mut() {
-            let mut state = ingest.description.initialize_state(&self.persist).await;
-            let resume_upper = ingest
-                .description
-                .calculate_resumption_frontier(&mut state)
-                .await;
-            ingest.resume_upper = resume_upper;
-        }
-
         // Rehydrate all commands.
         let mut commands = vec![
             timely_command,
             StorageCommand::UpdateConfiguration(self.config.clone()),
-            StorageCommand::CreateSources(self.sources.values().cloned().collect()),
+            StorageCommand::RunIngestions(self.sources.values().cloned().collect()),
             StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
+            StorageCommand::AllowCompaction(
+                self.sinces
+                    .iter()
+                    .map(|(id, since)| (*id, since.clone()))
+                    .collect(),
+            ),
         ];
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
@@ -328,6 +340,9 @@ where
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
                     self.send_commands(location, client, vec![command]).await
+                }
+                Some(RehydrationCommand::Reset) => {
+                    RehydrationTaskState::AwaitAddress
                 }
             },
             // Response from storage cluster to forward to controller.
@@ -396,12 +411,23 @@ where
             StorageCommand::UpdateConfiguration(params) => {
                 self.config.update(params.clone());
             }
-            StorageCommand::CreateSources(ingestions) => {
+            StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
-                    self.sources.insert(ingestion.id, ingestion.clone());
-                    // Initialize the uppers we are tracking
+                    let prev = self.sources.insert(ingestion.id, ingestion.clone());
+                    assert!(
+                        prev.is_some() == ingestion.update,
+                        "can only and must update source if RunIngestion is update"
+                    );
+
                     for id in ingestion.description.subsource_ids() {
-                        self.uppers.insert(id, Antichain::from_elem(T::minimum()));
+                        match self.uppers.entry(id) {
+                            Entry::Occupied(_) => {
+                                assert!(ingestion.update, "tried to re-insert frontier for {}", id)
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(Antichain::from_elem(T::minimum()));
+                            }
+                        };
                     }
                 }
             }
@@ -414,6 +440,9 @@ where
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {
+                // Remember for rehydration!
+                self.sinces.extend(frontiers.iter().cloned());
+
                 for (id, frontier) in frontiers {
                     match self.sinks.get_mut(id) {
                         Some(export) => {
@@ -449,10 +478,13 @@ where
                 }
             }
             StorageResponse::DroppedIds(dropped_ids) => {
+                tracing::debug!("dropped IDs: {:?}", dropped_ids);
+
                 for id in dropped_ids.iter() {
                     self.sources.remove(id);
                     self.sinks.remove(id);
                     self.uppers.remove(id);
+                    self.sinces.remove(id);
                 }
                 Some(StorageResponse::DroppedIds(dropped_ids))
             }

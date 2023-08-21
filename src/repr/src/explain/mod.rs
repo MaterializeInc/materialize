@@ -30,11 +30,19 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fmt::Formatter;
 
-use mz_ore::{stack::RecursionLimitError, str::Indent};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
+use mz_proto::{RustType, TryFromProtoError};
 
+use crate::explain::dot::{dot_string, DisplayDot};
+use crate::explain::json::{json_string, DisplayJson};
+use crate::explain::text::{text_string, DisplayText};
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
@@ -43,11 +51,10 @@ pub mod text;
 #[cfg(feature = "tracing_")]
 pub mod tracing;
 
-use self::dot::{dot_string, DisplayDot};
-use self::json::{json_string, DisplayJson};
-use self::text::{text_string, DisplayText};
 #[cfg(feature = "tracing_")]
-pub use self::tracing::trace_plan;
+pub use crate::explain::tracing::trace_plan;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.explain.rs"));
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -82,6 +89,7 @@ pub enum ExplainError {
     AnyhowError(anyhow::Error),
     RecursionLimitError(RecursionLimitError),
     SerdeJsonError(serde_json::Error),
+    LinearChainsPlusRecursive,
     UnknownError(String),
 }
 
@@ -103,6 +111,14 @@ impl fmt::Display for ExplainError {
             }
             ExplainError::SerdeJsonError(error) => {
                 write!(f, "{}", error)
+            }
+            ExplainError::LinearChainsPlusRecursive => {
+                write!(
+                    f,
+                    "The linear_chains option is not supported with WITH MUTUALLY RECURSIVE. \
+                If you would like to see added support, then please comment at \
+                https://github.com/MaterializeInc/materialize/issues/19012."
+                )
             }
             ExplainError::UnknownError(error) => {
                 write!(f, "{}", error)
@@ -161,6 +177,10 @@ pub struct ExplainConfig {
     pub timing: bool,
     /// Show the `type` attribute in the explanation.
     pub types: bool,
+    /// Show MFP pushdown information.
+    pub filter_pushdown: bool,
+    /// Show cardinality information.
+    pub cardinality: bool,
 }
 
 impl Default for ExplainConfig {
@@ -177,13 +197,20 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
+            filter_pushdown: false,
+            cardinality: false,
         }
     }
 }
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size || self.non_negative || self.arity || self.types || self.keys
+        self.subtree_size
+            || self.non_negative
+            || self.arity
+            || self.types
+            || self.keys
+            || self.cardinality
     }
 }
 
@@ -208,6 +235,8 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
+            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
+            cardinality: flags.remove("cardinality"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -218,7 +247,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 }
 
 /// The type of object to be explained
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Explainee {
     /// An object that will be served using a dataflow
     Dataflow(GlobalId),
@@ -469,6 +498,7 @@ pub struct Attributes {
     pub arity: Option<usize>,
     pub types: Option<String>,
     pub keys: Option<String>,
+    pub cardinality: Option<String>,
 }
 
 impl fmt::Display for Attributes {
@@ -489,21 +519,129 @@ impl fmt::Display for Attributes {
         if let Some(keys) = &self.keys {
             builder.field("keys", keys);
         }
+        if let Some(cardinality) = &self.cardinality {
+            builder.field("cardinality", cardinality);
+        }
         builder.finish()
     }
 }
 
 /// A set of indexes that are used in the explained plan.
 #[derive(Debug)]
-pub struct UsedIndexes(Vec<GlobalId>);
+pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
 
 impl UsedIndexes {
-    pub fn new(values: Vec<GlobalId>) -> UsedIndexes {
+    pub fn new(values: Vec<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
         UsedIndexes(values)
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl Default for UsedIndexes {
+    fn default() -> Self {
+        UsedIndexes(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub enum IndexUsageType {
+    /// Read the entire index.
+    FullScan,
+    /// Differential join. The work is proportional to the number of matches.
+    DifferentialJoin,
+    /// Delta join; the bool indicates whether it's the first input of the join.
+    /// In a snapshot, the first input is scanned, the others only get lookups.
+    /// When later input batches are arriving, all inputs are fully read.
+    DeltaJoin(bool),
+    /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
+    Lookup,
+    /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
+    /// situation that I know of when it occurs is if one index is used to build another index
+    /// without any transformations (but possibly with a different key). Note that we won't be able
+    /// to actually observe this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or
+    /// `EXPLAIN CREATE INDEX`. (`export_index` is what inserts this `ArrangeBy`.)
+    PlanRoot,
+    /// The index is used for directly writing to a sink. Can happen with a SUBSCRIBE to an indexed
+    /// view.
+    SinkExport,
+    /// The index is used for creating a new index. Currently, a `PlanRoot` usage will always
+    /// additionally be present together with an `IndexExport` usage.
+    IndexExport,
+    /// We saw a dangling `ArrangeBy`, i.e., where we have no idea what the arrangement will be used
+    /// for. This is an internal error. Can be a bug either in `CollectIndexRequests`, or some
+    /// other transform that messed up the plan. It's also possible that somebody is trying to add
+    /// an `ArrangeBy` marking for some operator other than a `Join`. (Which is fine, but please
+    /// update `CollectIndexRequests`.)
+    DanglingArrangeBy,
+    /// Internal error in `CollectIndexRequests`.
+    Unknown,
+}
+
+impl std::fmt::Display for IndexUsageType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                IndexUsageType::FullScan => "*** full scan ***",
+                IndexUsageType::Lookup => "lookup",
+                IndexUsageType::DifferentialJoin => "differential join",
+                IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
+                // Technically, this is a lookup only for a snapshot. For later update batches, all
+                // records are read. However, I wrote lookup here, because in most cases the
+                // lookup/scan distinction matters only for a snapshot. This is because for arriving
+                // update records, something in the system will always do work proportional to the
+                // number of records anyway. In other words, something is always scanning new
+                // updates, but we can avoid scanning records again and again in snapshots.
+                IndexUsageType::DeltaJoin(false) => "delta join lookup",
+                IndexUsageType::PlanRoot => "plan root",
+                IndexUsageType::SinkExport => "sink export",
+                IndexUsageType::IndexExport => "index export",
+                IndexUsageType::DanglingArrangeBy => "*** INTERNAL ERROR (dangling ArrangeBy) ***",
+                IndexUsageType::Unknown => "*** INTERNAL ERROR (unknown usage) ***",
+            }
+        )
+    }
+}
+
+impl RustType<ProtoIndexUsageType> for IndexUsageType {
+    fn into_proto(&self) -> ProtoIndexUsageType {
+        use crate::explain::proto_index_usage_type::Kind::*;
+        ProtoIndexUsageType {
+            kind: Some(match self {
+                IndexUsageType::FullScan => FullScan(()),
+                IndexUsageType::Lookup => Lookup(()),
+                IndexUsageType::DifferentialJoin => DifferentialJoin(()),
+                IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
+                IndexUsageType::PlanRoot => PlanRoot(()),
+                IndexUsageType::SinkExport => SinkExport(()),
+                IndexUsageType::IndexExport => IndexExport(()),
+                IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
+                IndexUsageType::Unknown => Unknown(()),
+            }),
+        }
+    }
+    fn from_proto(proto: ProtoIndexUsageType) -> Result<Self, TryFromProtoError> {
+        use crate::explain::proto_index_usage_type::Kind::*;
+
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIndexUsageType::Kind"))?;
+
+        match kind {
+            FullScan(()) => Ok(IndexUsageType::FullScan),
+            Lookup(()) => Ok(IndexUsageType::Lookup),
+            DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
+            DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
+            PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
+            SinkExport(()) => Ok(IndexUsageType::SinkExport),
+            IndexExport(()) => Ok(IndexUsageType::IndexExport),
+            DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),
+            Unknown(()) => Ok(IndexUsageType::Unknown),
+        }
     }
 }
 
@@ -606,6 +744,8 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
+            filter_pushdown: false,
+            cardinality: false,
         };
         let context = ExplainContext {
             env,
@@ -616,7 +756,7 @@ mod tests {
         expr.explain(&format, &context)
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_mutable_context() {
         let mut env = Environment::default();
         let frontiers = Frontiers::<u64>::new(3, 7);

@@ -13,11 +13,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::fs::{self, OpenOptions};
-use tokio::io::AsyncWriteExt;
-
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsController, SecretsReader};
+use tokio::fs::{self, OpenOptions};
+use tokio::io::AsyncWriteExt;
 
 use crate::ProcessOrchestrator;
 

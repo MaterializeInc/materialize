@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -24,13 +26,25 @@ pub struct Auth {
 }
 
 /// Configuration for a `Client`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ClientConfig {
-    url: Url,
+    url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
     auth: Option<Auth>,
     dns_overrides: BTreeMap<String, Vec<SocketAddr>>,
+}
+
+impl fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("url", &"...")
+            .field("root_certs", &self.root_certs)
+            .field("identity", &self.identity)
+            .field("auth", &self.auth)
+            .field("dns_overrides", &self.dns_overrides)
+            .finish()
+    }
 }
 
 impl ClientConfig {
@@ -38,7 +52,7 @@ impl ClientConfig {
     /// the specified URL.
     pub fn new(url: Url) -> ClientConfig {
         ClientConfig {
-            url,
+            url: Arc::new(move || url.clone()),
             root_certs: Vec::new(),
             identity: None,
             auth: None,
@@ -76,11 +90,15 @@ impl ClientConfig {
         self
     }
 
-    /// Overrides the url.
-    ///
-    /// Useful for certain kinds of tunneling.
-    pub fn override_url(mut self, url: Url) -> ClientConfig {
-        self.url = url;
+    /// Sets a callback that will be used to dynamically override the url
+    /// the client uses.
+    // Note this this doesn't use native `reqwest` `Proxy`s because not all schema
+    // registry implementations support them.
+    pub fn dynamic_url<F: Fn() -> Url + Send + Sync + 'static>(
+        mut self,
+        callback: F,
+    ) -> ClientConfig {
+        self.url = Arc::new(callback);
         self
     }
 

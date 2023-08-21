@@ -25,6 +25,132 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg2.connect(dsn)
 ```
 
+## Create tables
+
+Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
+
+To create a table named `countries` in Materialize:
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("CREATE TABLE IF NOT EXISTS countries (code CHAR(2), name TEXT);")
+
+with conn.cursor() as cur:
+    cur.execute("SHOW TABLES")
+    print(cur.fetchone())
+```
+
+## Insert data into tables
+
+**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize.
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+
+cur = conn.cursor()
+cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('United States', 'US'))
+cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('Canada', 'CA'))
+cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('Mexico', 'MX'))
+cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('Germany', 'DE'))
+conn.commit()
+cur.close()
+
+with conn.cursor() as cur:
+    cur.execute("SELECT COUNT(*) FROM countries;")
+    print(cur.fetchone())
+
+conn.close()
+```
+
+## Query
+
+Querying Materialize is identical to querying a PostgreSQL database: Python executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+
+To query the `countries` table using a `SELECT` statement:
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("SELECT * FROM countries;")
+    for row in cur:
+        print(row)
+```
+
+For more details, see the [Psycopg](https://www.psycopg.org/docs/usage.html) documentation.
+
+## Manage sources, views, and indexes
+
+Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a Python app to execute common DDL statements.
+
+### Create a source from Python
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+conn.autocommit = True
+
+with conn.cursor() as cur:
+    cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall');")
+
+with conn.cursor() as cur:
+    cur.execute("SHOW SOURCES")
+    print(cur.fetchone())
+```
+
+For more information, see [`CREATE SOURCE`](/sql/create-source/).
+
+### Create a view from Python
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+conn.autocommit = True
+
+with conn.cursor() as cur:
+    cur.execute("CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS " \
+            "SELECT sum(counter)" \
+            "FROM counter;")
+
+with conn.cursor() as cur:
+    cur.execute("SHOW VIEWS")
+    print(cur.fetchone())
+```
+
+For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
+
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
@@ -41,7 +167,7 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE my_view")
+    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE counter_sum")
     while True:
         cur.execute("FETCH ALL c")
         for row in cur:
@@ -77,116 +203,19 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg.connect(dsn)
 
 with conn.cursor() as cur:
-    for row in cur.stream("SUBSCRIBE t"):
+    for row in cur.stream("SUBSCRIBE counter_sum"):
         print(row)
 ```
 
-## Query
+## Clean up
 
-Querying Materialize is identical to querying a PostgreSQL database: Python executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
-Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
-
-To query a view `my_view` with a `SELECT` statement:
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg2.connect(dsn)
-
-with conn.cursor() as cur:
-    cur.execute("SELECT * FROM my_view;")
-    for row in cur:
-        print(row)
+```sql
+DROP MATERIALIZED VIEW IF EXISTS counter_sum;
+DROP SOURCE IF EXISTS counter;
+DROP TABLE IF EXISTS countries;
 ```
-
-For more details, see the [Psycopg](https://www.psycopg.org/docs/usage.html) documentation.
-
-## Insert data into tables
-
-Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
-
-**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize.
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg2.connect(dsn)
-
-cur = conn.cursor()
-cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('United States', 'US'))
-cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('Canada', 'CA'))
-cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('Mexico', 'MX'))
-cur.execute("INSERT INTO countries (name, code) VALUES (%s, %s)", ('Germany', 'DE'))
-conn.commit()
-cur.close()
-
-with conn.cursor() as cur:
-    cur.execute("SELECT COUNT(*) FROM countries;")
-    print(cur.fetchone())
-
-conn.close()
-```
-
-## Manage sources, views, and indexes
-
-Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a Python app to execute common DDL statements.
-
-### Create a source from Python
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg2.connect(dsn)
-conn.autocommit = True
-
-with conn.cursor() as cur:
-    cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;")
-
-with conn.cursor() as cur:
-    cur.execute("SHOW SOURCES")
-    print(cur.fetchone())
-```
-
-For more information, see [`CREATE SOURCE`](/sql/create-source/).
-
-### Create a view from Python
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg2.connect(dsn)
-conn.autocommit = True
-
-with conn.cursor() as cur:
-    cur.execute("CREATE VIEW market_orders_2 AS " \
-            "SELECT " \
-                "val->>'symbol' AS symbol, " \
-                "(val->'bid_price')::float AS bid_price " \
-            "FROM (SELECT text::jsonb AS val FROM market_orders_raw_2)")
-
-with conn.cursor() as cur:
-    cur.execute("SHOW VIEWS")
-    print(cur.fetchone())
-```
-
-For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## Python ORMs
 

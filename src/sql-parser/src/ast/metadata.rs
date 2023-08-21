@@ -19,7 +19,8 @@ use std::hash::Hash;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::{
-    Ident, Statement, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName,
+    Ident, Statement, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName,
 };
 
 /// This represents the metadata that lives next to an AST, as we take it through
@@ -40,8 +41,9 @@ use crate::ast::{
 pub trait AstInfo: Clone {
     /// The type used for nested statements.
     type NestedStatement: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type used for table references.
-    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    /// The type used for item references. Items are the subset of objects that are namespaced by a
+    /// database and schema.
+    type ItemName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for schema names.
     type SchemaName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for database names.
@@ -54,6 +56,8 @@ pub trait AstInfo: Clone {
     type CteId: Clone + Hash + Debug + Eq + Ord;
     /// The type used for role references.
     type RoleName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    /// They type used for any object names. Objects are the superset of all objects in Materialize.
+    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -61,42 +65,43 @@ pub struct Raw;
 
 impl AstInfo for Raw {
     type NestedStatement = Statement<Raw>;
-    type ObjectName = RawObjectName;
+    type ItemName = RawItemName;
     type SchemaName = UnresolvedSchemaName;
     type DatabaseName = UnresolvedDatabaseName;
     type ClusterName = RawClusterName;
     type DataType = RawDataType;
     type CteId = ();
     type RoleName = Ident;
+    type ObjectName = UnresolvedObjectName;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
-pub enum RawObjectName {
-    Name(UnresolvedObjectName),
-    Id(String, UnresolvedObjectName),
+pub enum RawItemName {
+    Name(UnresolvedItemName),
+    Id(String, UnresolvedItemName),
 }
 
-impl RawObjectName {
-    pub fn name(&self) -> &UnresolvedObjectName {
+impl RawItemName {
+    pub fn name(&self) -> &UnresolvedItemName {
         match self {
-            RawObjectName::Name(name) => name,
-            RawObjectName::Id(_, name) => name,
+            RawItemName::Name(name) => name,
+            RawItemName::Id(_, name) => name,
         }
     }
 
-    pub fn name_mut(&mut self) -> &mut UnresolvedObjectName {
+    pub fn name_mut(&mut self) -> &mut UnresolvedItemName {
         match self {
-            RawObjectName::Name(name) => name,
-            RawObjectName::Id(_, name) => name,
+            RawItemName::Name(name) => name,
+            RawItemName::Id(_, name) => name,
         }
     }
 }
 
-impl AstDisplay for RawObjectName {
+impl AstDisplay for RawItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            RawObjectName::Name(o) => f.write_node(o),
-            RawObjectName::Id(id, o) => {
+            RawItemName::Name(o) => f.write_node(o),
+            RawItemName::Id(id, o) => {
                 f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
                 f.write_str("]");
@@ -104,19 +109,19 @@ impl AstDisplay for RawObjectName {
         }
     }
 }
-impl_display!(RawObjectName);
+impl_display!(RawItemName);
 
-impl<T> FoldNode<Raw, T> for RawObjectName
+impl<T> FoldNode<Raw, T> for RawItemName
 where
     T: AstInfo,
 {
-    type Folded = T::ObjectName;
+    type Folded = T::ItemName;
 
     fn fold<F>(self, f: &mut F) -> Self::Folded
     where
         F: Fold<Raw, T>,
     {
-        f.fold_object_name(self)
+        f.fold_item_name(self)
     }
 }
 
@@ -166,7 +171,7 @@ pub enum RawDataType {
     },
     /// Types who don't embed other types, e.g. INT
     Other {
-        name: RawObjectName,
+        name: RawItemName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
         typ_mod: Vec<i64>,
     },

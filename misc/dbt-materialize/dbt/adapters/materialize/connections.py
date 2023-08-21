@@ -23,7 +23,7 @@ from dbt.events import AdapterLogger
 from dbt.semver import versions_compatible
 
 # If you bump this version, bump it in README.md too.
-SUPPORTED_MATERIALIZE_VERSIONS = ">=0.28.0"
+SUPPORTED_MATERIALIZE_VERSIONS = ">=0.49.0"
 
 logger = AdapterLogger("Materialize")
 
@@ -64,23 +64,49 @@ class MaterializeConnectionManager(PostgresConnectionManager):
 
         cursor = connection.handle.cursor()
 
-        # Upon connection, dbt performs introspection queries that should run in
-        # the mz_introspection cluster for optimal performance. Each materialization
-        # should then handle falling back to the default connection cluster if no
-        # cluster configuration is specified at the model level.
-        mz_introspection_cluster = "mz_introspection"
-        logger.debug("Switching to cluster '{}'".format(mz_introspection_cluster))
-        cursor.execute("SET cluster = %s" % mz_introspection_cluster)
-
-        cursor.execute("SELECT mz_version()")
+        # Check for the current DB version using the "mz_introspection" cluster in case "default"
+        # doesn't exist.
+        cursor.execute("SHOW mz_version")
         mz_version = cursor.fetchone()[0].split()[0].strip("v")
+
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
 
+        # Make sure 'auto_route_introspection_queries' is enabled.
+        var_name = "auto_route_introspection_queries"
+        logger.debug(f"Enabling {var_name}")
+        cursor.execute(f"SET {var_name} = true")
+
         return connection
+
+    def cancel(self, connection):
+        # The PostgreSQL implementation calls `pg_terminate_backend` from a new
+        # connection to terminate `connection`. At the time of writing,
+        # Materialize doesn't support `pg_terminate_backend`, so we implement
+        # cancellation by calling `close` on the connection.
+        #
+        # NOTE(benesch): I'm not entirely sure why the PostgreSQL implementation
+        # uses `pg_terminate_backend`. I suspect that disconnecting the network
+        # connection by calling `connection.handle.close()` is not immediately
+        # noticed by the PostgreSQL server, and so the queries running on that
+        # connection may continue executing to completion. Materialize, however,
+        # will quickly notice if the network socket disconnects and cancel any
+        # queries that were initiated by that connection.
+
+        connection_name = connection.name
+        try:
+            logger.debug("Closing connection '{}' to force cancellation")
+            connection.handle.close()
+        except psycopg2.InterfaceError as exc:
+            # if the connection is already closed, not much to cancel!
+            if "already closed" in str(exc):
+                logger.debug(f"Connection {connection_name} was already closed")
+                return
+            # probably bad, re-raise it
+            raise
 
     # Disable transactions. Materialize transactions do not support arbitrary
     # queries in transactions and therefore many of dbt's internal macros

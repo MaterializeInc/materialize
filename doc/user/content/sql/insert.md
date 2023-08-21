@@ -31,6 +31,12 @@ _query_ | A [`SELECT`](../select) statements whose returned rows you want to wri
 
 The optional `RETURNING` clause causes `INSERT` to return values based on each inserted row.
 
+### Known limitations
+
+* `INSERT ... SELECT` can reference [user-created tables](../create-table) but not [sources](../create-source) _(or views, materialized views, and indexes that depend on sources)_.
+* **Low performance.** While processing an `INSERT ... SELECT` statement,
+  Materialize cannot process other `INSERT`, `UPDATE`, or `DELETE` statements.
+
 ## Examples
 
 To insert data into a table, execute an `INSERT` statement where the `VALUES` clause
@@ -86,6 +92,18 @@ SELECT * FROM t;
    | c
  1 | a
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `INSERT` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 

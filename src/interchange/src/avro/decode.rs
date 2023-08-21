@@ -7,36 +7,34 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::Context;
-use mz_repr::adt::date::Date;
-use mz_repr::adt::timestamp::CheckedTimestamp;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::ops::Deref;
 use std::rc::Rc;
 
-use ordered_float::OrderedFloat;
-use tracing::trace;
-use uuid::Uuid;
-
+use anyhow::Context;
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
     define_unexpected, give_value, AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess,
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
-use mz_ore::result::ResultExt;
+use mz_ore::error::ErrorExt;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, RowPacker};
+use ordered_float::OrderedFloat;
+use tracing::trace;
+use uuid::Uuid;
 
 use crate::avro::ConfluentAvroResolver;
 
 /// Manages decoding of Avro-encoded bytes.
 #[derive(Debug)]
-pub struct Decoder<C> {
-    csr_avro: ConfluentAvroResolver<C>,
+pub struct Decoder {
+    csr_avro: ConfluentAvroResolver,
     debug_name: String,
     buf1: Vec<u8>,
     row_buf: Row,
@@ -48,15 +46,14 @@ mod tests {
 
     use crate::avro::Decoder;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_error_followed_by_success() {
         let schema = r#"{
 "type": "record",
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder =
-            Decoder::<Box<mz_ccsr::Client>>::new(schema, None, "Test".to_string(), false).unwrap();
+        let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert!(decoder.decode(&mut bad_bytes).await.is_err());
@@ -70,7 +67,7 @@ mod tests {
     }
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> Decoder<C> {
+impl Decoder {
     /// Creates a new `Decoder`
     ///
     /// The provided schema is called the "reader schema", which is the schema
@@ -78,10 +75,10 @@ impl<C: Deref<Target = mz_ccsr::Client>> Decoder<C> {
     /// that they are encoded with a different schema; as long as those.
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<C>,
+        ccsr_client: Option<mz_ccsr::Client>,
         debug_name: String,
         confluent_wire_format: bool,
-    ) -> anyhow::Result<Decoder<C>> {
+    ) -> anyhow::Result<Decoder> {
         let csr_avro =
             ConfluentAvroResolver::new(reader_schema, ccsr_client, confluent_wire_format)?;
 
@@ -383,7 +380,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
         })?;
 
         let n = numeric::twos_complement_be_to_numeric(&mut buf, scale)
-            .map_err_to_string()
+            .map_err(|e| e.to_string_with_causes())
             .map_err(DecodeError::Custom)?;
 
         if n.is_special()
@@ -445,16 +442,28 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             ValueOrReader::Value(val) => {
                 JsonbPacker::new(self.packer)
                     .pack_serde_json(val.clone())
-                    .map_err_to_string()
-                    .map_err(DecodeError::Custom)?;
+                    .map_err(|e| {
+                        // Technically, these are not the original bytes;
+                        // they've gone through a deserialize-serialize
+                        // round trip. Hopefully they will be close enough to still
+                        // be useful for debugging.
+                        let bytes = val.to_string().into_bytes();
+
+                        DecodeError::BadJson {
+                            category: e.classify(),
+                            bytes,
+                        }
+                    })?;
             }
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(self.buf)?;
                 JsonbPacker::new(self.packer)
                     .pack_slice(self.buf)
-                    .map_err_to_string()
-                    .map_err(DecodeError::Custom)?;
+                    .map_err(|e| DecodeError::BadJson {
+                        category: e.classify(),
+                        bytes: self.buf.to_owned(),
+                    })?;
             }
         }
         Ok(())

@@ -11,7 +11,7 @@ menu:
 
 ## Conceptual framework
 
-Where [clusters](/overview/key-concepts#clusters) represent the logical set of
+Where [clusters](/get-started/key-concepts#clusters) represent the logical set of
 dataflows you want to maintain, cluster replicas are their physical
 counterparts. Cluster replicas are where Materialize actually creates and
 maintains dataflows.
@@ -47,12 +47,19 @@ _replica_name_ | A name for this replica.
 
 {{% replica-options %}}
 
+{{< note >}}
+If you do not specify an availability zone, Materialize will assign the replica
+to an arbitrary availability zone. For details on how replicas are assigned
+between availability zones, see [Availability zone assignment](/sql/create-cluster/#availability-zone-assignment).
+{{< /note >}}
+
 ## Details
 
 ### Sizes
 
 Valid `size` options are:
 
+- `3xsmall`
 - `2xsmall`
 - `xsmall`
 - `small`
@@ -92,12 +99,16 @@ with a backlog of work. If all of the faster machines become unreachable, the
 system might experience delays in replying to requests while the slower machines
 catch up to the last known time that the faster machines had computed.
 
-
-
 ## Example
 
 ```sql
 CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of `cluster_name`.
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

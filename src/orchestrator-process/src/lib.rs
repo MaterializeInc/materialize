@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -98,28 +96,27 @@ use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
-use scopeguard::defer;
-use serde::Serialize;
-use sha1::{Digest, Sha1};
-use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
-use tokio::fs;
-use tokio::io;
-use tokio::net::{TcpListener, UnixStream};
-use tokio::process::{Child, Command};
-use tokio::select;
-use tokio::sync::broadcast::{self, Sender};
-use tokio::time::{self, Duration};
-use tracing::{debug, error, info, warn};
-
 use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
+use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_pid_file::PidFile;
+use scopeguard::defer;
+use serde::Serialize;
+use sha1::{Digest, Sha1};
+use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use tokio::fs::remove_dir_all;
+use tokio::net::{TcpListener, UnixStream};
+use tokio::process::{Child, Command};
+use tokio::sync::broadcast::{self, Sender};
+use tokio::time::{self, Duration};
+use tokio::{fs, io, select};
+use tracing::{debug, error, info, warn};
 
 pub mod secrets;
 
@@ -150,6 +147,8 @@ pub struct ProcessOrchestratorConfig {
     /// that do not support Unix domain sockets (e.g., Prometheus, web
     /// browsers).
     pub tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
+    /// A scratch directory that orchestrated processes can use for ephemeral storage.
+    pub scratch_directory: PathBuf,
 }
 
 /// Configures the TCP proxy for a [`ProcessOrchestrator`].
@@ -190,6 +189,7 @@ pub struct ProcessOrchestrator {
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
+    scratch_directory: PathBuf,
 }
 
 impl ProcessOrchestrator {
@@ -203,6 +203,7 @@ impl ProcessOrchestrator {
             command_wrapper,
             propagate_crashes,
             tcp_proxy,
+            scratch_directory,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         let metadata_dir = env::temp_dir().join(format!("environmentd-{environment_id}"));
@@ -233,6 +234,7 @@ impl ProcessOrchestrator {
             command_wrapper,
             propagate_crashes,
             tcp_proxy,
+            scratch_directory,
         })
     }
 }
@@ -246,7 +248,6 @@ impl Orchestrator for ProcessOrchestrator {
                 namespace: namespace.into(),
                 image_dir: self.image_dir.clone(),
                 suppress_output: self.suppress_output,
-                secrets_dir: self.secrets_dir.clone(),
                 metadata_dir: self.metadata_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
                 services: Arc::new(Mutex::new(BTreeMap::new())),
@@ -254,6 +255,7 @@ impl Orchestrator for ProcessOrchestrator {
                 system: Mutex::new(System::new()),
                 propagate_crashes: self.propagate_crashes,
                 tcp_proxy: self.tcp_proxy.clone(),
+                scratch_directory: self.scratch_directory.clone(),
             })
         }))
     }
@@ -264,7 +266,6 @@ struct NamespacedProcessOrchestrator {
     namespace: String,
     image_dir: PathBuf,
     suppress_output: bool,
-    secrets_dir: PathBuf,
     metadata_dir: PathBuf,
     command_wrapper: Vec<String>,
     services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
@@ -272,6 +273,7 @@ struct NamespacedProcessOrchestrator {
     system: Mutex<System>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
+    scratch_directory: PathBuf,
 }
 
 #[async_trait]
@@ -319,6 +321,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             metrics.push(ServiceProcessMetrics {
                 cpu_nano_cores,
                 memory_bytes,
+                // Process orchestrator does not support this right now.
+                disk_usage_bytes: None,
             });
         }
         Ok(metrics)
@@ -336,8 +340,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             cpu_limit: _,
             scale,
             labels,
-            availability_zone: _,
-            anti_affinity: _,
+            // Scheduling constraints are entirely ignored by the process orchestrator.
+            availability_zones: _,
+            other_replicas_selector: _,
+            replicas_selector: _,
+            disk,
+            disk_limit: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
@@ -346,6 +354,15 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         fs::create_dir_all(&run_dir)
             .await
             .context("creating run directory")?;
+        let scratch_dir = if disk {
+            let scratch_dir = self.scratch_directory.join(&full_id);
+            fs::create_dir_all(&scratch_dir)
+                .await
+                .context("creating scratch directory")?;
+            Some(fs::canonicalize(&scratch_dir).await?)
+        } else {
+            None
+        };
 
         {
             let mut services = self.services.lock().expect("lock poisoned");
@@ -385,10 +402,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     self.supervise_service_process(ServiceProcessConfig {
                         id: id.to_string(),
                         run_dir: run_dir.clone(),
+                        scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
                         args,
                         ports,
+                        disk,
                     }),
                 );
 
@@ -451,6 +470,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             }
         })
     }
+
+    fn update_scheduling_config(
+        &self,
+        _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+    ) {
+        // This orchestrator ignores scheduling constraints.
+    }
 }
 
 impl NamespacedProcessOrchestrator {
@@ -459,10 +485,12 @@ impl NamespacedProcessOrchestrator {
         ServiceProcessConfig {
             id,
             run_dir,
+            scratch_dir,
             i,
             image,
             args,
             ports,
+            disk,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
         let suppress_output = self.suppress_output;
@@ -489,11 +517,17 @@ impl NamespacedProcessOrchestrator {
             .collect();
         let mut args = args(&listen_addrs);
         args.push(format!("--pid-file-location={}", pid_file.display()));
-        args.push("--secrets-reader=process".into());
-        args.push(format!(
-            "--secrets-reader-process-dir={}",
-            self.secrets_dir.display()
-        ));
+
+        let scratch_directory = if disk {
+            if let Some(scratch) = &scratch_dir {
+                args.push(format!("--scratch-directory={}", scratch.display()));
+            } else {
+                panic!("internal error: service requested disk but no scratch directory was configured");
+            }
+            scratch_dir
+        } else {
+            None
+        };
 
         async move {
             let mut proxy_handles = vec![];
@@ -516,17 +550,27 @@ impl NamespacedProcessOrchestrator {
                 }
             }
 
+            // Clean up scratch directory when the service is terminated.
+            // This is best effort as a development and testing convenience.
+            // Because the process orchestrator is not used in production, we
+            // don't need to be perfectly robust with the cleanup.
+            let _guard = scopeguard::guard((), |_| {
+                if let Some(scratch) = scratch_directory {
+                    info!(scratch_dir = %scratch.display(), "cleaning up scratch directory");
+                    task::spawn(|| "clean_cluster_scratch_directory", async {
+                        if let Err(e) = remove_dir_all(scratch).await {
+                            warn!(
+                                "Error cleaning up scratch directory: {}",
+                                e.display_with_causes()
+                            );
+                        }
+                    });
+                }
+            });
+
             supervise_existing_process(&state_updater, &pid_file).await;
 
             loop {
-                for path in listen_addrs.values() {
-                    if let Err(e) = fs::remove_file(path).await {
-                        if e.kind() != io::ErrorKind::NotFound {
-                            warn!("unable to remove {path} while launching {full_id}-{i}: {e}")
-                        }
-                    }
-                }
-
                 let mut cmd = if command_wrapper.is_empty() {
                     let mut cmd = Command::new(&image);
                     cmd.args(&args);
@@ -543,7 +587,8 @@ impl NamespacedProcessOrchestrator {
                     cmd
                 };
                 info!(
-                    "launching {full_id}-{i} via {}...",
+                    "launching {full_id}-{i} via {} {}...",
+                    cmd.as_std().get_program().to_string_lossy(),
                     cmd.as_std()
                         .get_args()
                         .map(|arg| arg.to_string_lossy())
@@ -553,7 +598,7 @@ impl NamespacedProcessOrchestrator {
                     cmd.stdout(Stdio::null());
                     cmd.stderr(Stdio::null());
                 }
-                match spawn_process(&state_updater, cmd).await {
+                match spawn_process(&state_updater, cmd, !command_wrapper.is_empty()).await {
                     Ok(status) => {
                         if propagate_crashes && did_process_crash(status) {
                             panic!("{full_id}-{i} crashed; aborting because propagate_crashes is enabled");
@@ -609,8 +654,9 @@ impl NamespacedProcessOrchestrator {
         let contents = serde_json::to_vec_pretty(&static_configs).expect("valid json");
         if let Err(e) = fs::write(&path, &contents).await {
             warn!(
-                "{}: failed to write prometheus service discovery file: {e:#}",
-                self.namespace
+                "{}: failed to write prometheus service discovery file: {}",
+                self.namespace,
+                e.display_with_causes()
             );
         }
     }
@@ -619,10 +665,12 @@ impl NamespacedProcessOrchestrator {
 struct ServiceProcessConfig<'a> {
     id: String,
     run_dir: PathBuf,
+    scratch_dir: Option<PathBuf>,
     i: usize,
     image: String,
     args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
     ports: Vec<ServiceProcessPort>,
+    disk: bool,
 }
 
 struct ServiceProcessPort {
@@ -688,16 +736,25 @@ fn interpolate_command(
 async fn spawn_process(
     state_updater: &ProcessStateUpdater,
     mut cmd: Command,
+    send_sigterm: bool,
 ) -> Result<ExitStatus, anyhow::Error> {
-    struct KillOnDropChild(Child);
+    struct KillOnDropChild(Child, bool);
 
     impl Drop for KillOnDropChild {
         fn drop(&mut self) {
+            if let (Some(pid), true) = (self.0.id().and_then(|id| i32::try_from(id).ok()), self.1) {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+                // Give the process a bit of time to react to the signal
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(500)));
+            }
             let _ = self.0.start_kill();
         }
     }
 
-    let mut child = KillOnDropChild(cmd.spawn()?);
+    let mut child = KillOnDropChild(cmd.spawn()?, send_sigterm);
     state_updater.update_state(ProcessStatus::Ready {
         pid: Pid::from_u32(child.0.id().unwrap()),
     });
@@ -746,7 +803,7 @@ async fn tcp_proxy(
             }
             res = conns.try_next() => {
                 if let Err(e) = res {
-                    warn!("{name}: tcp proxy connection failed: {e:#}");
+                    warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
                 }
             }
         }
@@ -809,7 +866,7 @@ enum ProcessStatus {
 impl From<ProcessStatus> for ServiceStatus {
     fn from(status: ProcessStatus) -> ServiceStatus {
         match status {
-            ProcessStatus::NotReady => ServiceStatus::NotReady,
+            ProcessStatus::NotReady => ServiceStatus::NotReady(None),
             ProcessStatus::Ready { .. } => ServiceStatus::Ready,
         }
     }

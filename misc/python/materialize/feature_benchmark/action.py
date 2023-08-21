@@ -41,7 +41,7 @@ class LambdaAction(Action):
         self,
         executor: Optional[Executor] = None,
     ) -> None:
-        e = executor if executor else self._executor
+        e = executor or self._executor
         assert e is not None
         e.Lambda(self._lambda)
         return None
@@ -57,9 +57,9 @@ class Kgen(Action):
         self,
         executor: Optional[Executor] = None,
     ) -> None:
-        getattr((executor if executor else self._executor), "Kgen")(
-            topic=self._topic, args=self._args
-        )
+        executor = executor or self._executor
+        assert executor
+        executor.Kgen(topic=self._topic, args=self._args)
 
 
 class TdAction(Action):
@@ -73,7 +73,14 @@ class TdAction(Action):
         self,
         executor: Optional[Executor] = None,
     ) -> None:
-        getattr((executor if executor else self._executor), "Td")(self._td_str)
+        executor = executor or self._executor
+        assert executor
+        # Print each query once so that it is easier to reproduce regressions
+        # based on just the logs from CI
+        if executor.add_known_fragment(self._td_str):
+            print(self._td_str)
+
+        executor.Td(self._td_str)
 
 
 class DummyAction(Action):

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,8 +79,7 @@ use askama::Template;
 use axum::http::status::StatusCode;
 use axum::http::HeaderValue;
 use axum::response::{Html, IntoResponse};
-use axum::Json;
-use axum::TypedHeader;
+use axum::{Json, TypedHeader};
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
@@ -90,7 +87,7 @@ use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::AllowOrigin;
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::EnvFilter;
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -190,10 +187,10 @@ pub struct DynamicFilterTarget {
 #[allow(clippy::unused_async)]
 pub async fn handle_reload_tracing_filter(
     handle: &TracingHandle,
-    reload: fn(&TracingHandle, Targets) -> Result<(), anyhow::Error>,
+    reload: fn(&TracingHandle, EnvFilter) -> Result<(), anyhow::Error>,
     Json(cfg): Json<DynamicFilterTarget>,
 ) -> impl IntoResponse {
-    match cfg.targets.parse::<Targets>() {
+    match cfg.targets.parse::<EnvFilter>() {
         Ok(targets) => match reload(handle, targets) {
             Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
             Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
@@ -247,7 +244,7 @@ mod tests {
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn test_cors() {
         async fn test_request(cors: &CorsLayer, origin: &HeaderValue) -> Option<HeaderValue> {
             let mut service = ServiceBuilder::new()

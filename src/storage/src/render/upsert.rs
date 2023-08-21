@@ -8,916 +8,686 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
-use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::convert::AsRef;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
-use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Capability, Concat, InputCapability, OkErr, Operator};
-use timely::dataflow::{Scope, Stream};
-use timely::order::PartialOrder;
-use timely::progress::frontier::AntichainRef;
-use timely::progress::{Antichain, ChangeBatch};
-use tracing::{error, info};
-
-use mz_expr::{EvalError, MirScalarExpr};
-use mz_ore::permutations::inverse_argsort;
-use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
-use mz_storage_client::types::errors::{
-    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
+use futures::future::FutureExt;
+use itertools::Itertools;
+use mz_ore::error::ErrorExt;
+use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_storage_client::metrics::BackpressureMetrics;
+use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_client::types::sources::UpsertEnvelope;
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
 };
-use mz_storage_client::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
-use mz_timely_util::operator::StreamExt;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::{Antichain, Timestamp};
 
-use crate::source::types::DecodeResult;
+use crate::render::sources::OutputIndex;
+use crate::render::upsert::types::{
+    upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
+    UpsertStateBackend,
+};
+use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
+use crate::storage_state::StorageInstanceContext;
 
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
-struct UpsertSourceData {
-    /// The actual value
-    value: Option<Result<Row, DataflowError>>,
-    /// The source's reported position for this record
-    position: MzOffset,
-    /// The time that the upstream source believes that the message was created
-    /// Currently only applies to Kafka
-    upstream_time_millis: Option<i64>,
-    /// Metadata for this row
-    metadata: Row,
+mod rocksdb;
+mod types;
+
+pub type UpsertValue = Result<Row, UpsertError>;
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct UpsertKey([u8; 32]);
+
+impl AsRef<[u8]> for UpsertKey {
+    #[inline(always)]
+    // Note we do 1 `multi_get` and 1 `multi_put` while processing a _batch of updates_. Within the
+    // batch, we effectively consolidate each key, before persisting that consolidated value.
+    // Easy!!
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
 }
 
-/// Entrypoint to the upsert-specific transformations involved
-/// in rendering a stream that came from an upsert source.
-/// Upsert-specific operators are different from the rest of
-/// the rendering pipeline in that their input is a stream
-/// with two components instead of one, and the second component
-/// can be null or empty.
-pub(crate) fn upsert<G>(
-    stream: &Stream<G, DecodeResult>,
-    as_of_frontier: Antichain<Timestamp>,
+thread_local! {
+    /// A thread-local datum cache used to calculate hashes
+    pub static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+}
+
+/// The hash function used to map upsert keys. It is important that this hash is a cryptographic
+/// hash so that there is no risk of collisions. Collisions on SHA256 have a probability of 2^128
+/// which is many orders of magnitude smaller than many other events that we don't even think about
+/// (e.g bit flips). In short, we can safely assume that sha256(a) == sha256(b) iff a == b.
+type KeyHash = Sha256;
+
+impl UpsertKey {
+    pub fn from_key(key: Result<&Row, &UpsertError>) -> Self {
+        Self::from_iter(key.map(|r| r.iter()))
+    }
+
+    pub fn from_value(value: Result<&Row, &UpsertError>, mut key_indices: &[usize]) -> Self {
+        Self::from_iter(value.map(|value| {
+            value.iter().enumerate().flat_map(move |(idx, datum)| {
+                let key_idx = key_indices.get(0)?;
+                if idx == *key_idx {
+                    key_indices = &key_indices[1..];
+                    Some(datum)
+                } else {
+                    None
+                }
+            })
+        }))
+    }
+
+    pub fn from_iter<'a, 'b>(
+        key: Result<impl Iterator<Item = Datum<'a>> + 'b, &UpsertError>,
+    ) -> Self {
+        KEY_DATUMS.with(|key_datums| {
+            let mut key_datums = key_datums.borrow_mut();
+            // Borrowing the DatumVec gives us a temporary buffer to store datums in that will be
+            // automatically cleared on Drop. See the DatumVec docs for more details.
+            let mut key_datums = key_datums.borrow();
+            let key: Result<&[Datum], Datum> = match key {
+                Ok(key) => {
+                    for datum in key {
+                        key_datums.push(datum);
+                    }
+                    Ok(&*key_datums)
+                }
+                Err(UpsertError::Value(err)) => {
+                    key_datums.extend(err.for_key.iter());
+                    Ok(&*key_datums)
+                }
+                Err(UpsertError::KeyDecode(err)) => Err(Datum::Bytes(&err.raw)),
+                Err(UpsertError::NullKey(_)) => Err(Datum::Null),
+            };
+            let mut hasher = DigestHasher(KeyHash::new());
+            key.hash(&mut hasher);
+            Self(hasher.0.finalize().into())
+        })
+    }
+}
+
+struct DigestHasher<H: Digest>(H);
+
+impl<H: Digest> Hasher for DigestHasher<H> {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        panic!("digest wrapper used to produce a hash");
+    }
+}
+
+use std::convert::Infallible;
+use timely::dataflow::channels::pact::Pipeline;
+
+/// This leaf operator drops `token` after the input reaches the `resume_upper`.
+/// This is useful to take coordinated actions across all workers, after the `upsert`
+/// operator has rehydrated.
+pub fn rehydration_finished<G, T>(
+    scope: G,
+    source_config: &crate::source::RawSourceCreationConfig,
+    // A token that we can drop to signal we are finished rehydrating.
+    token: impl std::any::Any + 'static,
+    resume_upper: Antichain<T>,
+    input: &Stream<G, Infallible>,
+) where
+    G: Scope<Timestamp = T>,
+    T: Timestamp,
+{
+    let worker_id = source_config.worker_id;
+    let id = source_config.id;
+    let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
+    let mut input = builder.new_input(input, Pipeline);
+
+    builder.build(move |_capabilities| async move {
+        loop {
+            match input.next().await {
+                Some(AsyncEvent::Progress(frontier)) => {
+                    if PartialOrder::less_equal(&resume_upper, &frontier) {
+                        tracing::info!(
+                        "timely-{} upsert source {} has downgraded past the resume upper ({:?}) across all workers",
+                        worker_id,
+                        id,
+                        resume_upper
+                    );
+                        drop(token);
+                        break;
+                    }
+                }
+                None => {
+                    // Shutdown has been triggered or the shard is closed, so we shutdown.
+                    // Note that we will likely get a `Progress([])` event before this,
+                    // but we cover it for an abundance of caution.
+                    drop(token);
+                    break;
+                }
+                _ => {
+                    // we don't expect data
+                }
+            }
+        }
+    });
+}
+
+/// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
+/// and the collection of the previous output of this operator.
+/// Returns a tuple of
+/// - A collection of the computed upsert operator and,
+/// - A health update stream to propagate errors
+pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
+    input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     upsert_envelope: UpsertEnvelope,
-    previous: Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    resume_upper: Antichain<G::Timestamp>,
+    previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
+    source_config: crate::source::RawSourceCreationConfig,
+    instance_context: &StorageInstanceContext,
+    dataflow_paramters: &crate::internal_control::DataflowParameters,
+    backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Rc<dyn Any>,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
+    G::Timestamp: TotalOrder,
 {
-    if as_of_frontier != Antichain::from_elem(timely::progress::Timestamp::minimum()) {
-        info!("upsert resuming from time {as_of_frontier:?}");
-    }
-    // Currently, the upsert-specific transformations run in the
-    // following order:
-    // 1. Applies `as_of` frontier compaction. The compaction is important as
-    // downstream upsert preparation can compact away updates for the same keys
-    // at the same times, and by advancing times we make more of them the same.
-    // 2. compact away updates for the same keys at the same times
-    // 3. decoding records
-    // 4. prepending the key to the value so that the stream becomes
-    //        of the format (key, <entire record>)
-    // We may want to consider switching the order of the transformations to
-    // optimize performance trade-offs. In the current order, by running
-    // deduplicating before decoding/linear operators, we're reducing compute at the
-    // cost of requiring more memory.
-    //
-    // In the future, we may want to have optimization hints that enable people
-    // to specify that they believe that they have a large number of unique
-    // keys, at which point materialize may be more performant if it runs
-    // decoding/linear operators before deduplicating.
-    //
-    // The method also takes in `operators` which describes predicates that can
-    // be applied and columns of the data that can be blanked out. We can apply
-    // these operations but must be careful: for example, we can apply predicates
-    // before staging the records, but we need to present filtered results as a
-    // `None` value to ensure that it prompts dropping any held values with the
-    // same key. If the predicates produce errors, we should notice these as well
-    // and retract them if non-erroring records overwrite them.
+    let upsert_metrics = UpsertMetrics::new(
+        &source_config.base_metrics,
+        source_config.id,
+        source_config.worker_id,
+        backpressure_metrics,
+    );
 
-    // TODO: We could move the decoding before the staging grounds, which would
-    // allow us to stage potentially less data. The motivation for the current
-    // design is to support bulk deduplication without decoding, but we expect
-    // this is most likely to happen in the loading of data; consequently, we
-    // could use this implementation until `as_of_frontier` is reached, and then
-    // switch over to eager decoding. A work-in-progress idea that needs thought.
+    // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
+    // this, to prevent unnecessary work.
+    let wait_for_input_resumption = dataflow_paramters.delay_sources_past_rehydration;
 
-    // Extract predicates, and "dummy column" information.
-    // Predicates are distinguished into temporal and non-temporal,
-    // as the non-temporal determine if a record is retained at all,
-    // and the temporal indicate how we should transform its timestamps
-    // when it is transmitted.
-    let temporal = Vec::new();
-    let predicates = Vec::new();
-    let position_or = (0..upsert_envelope.source_arity)
-        .map(Some)
-        .collect::<Vec<_>>();
-    let temporal_plan = if !temporal.is_empty() {
-        let temporal_mfp =
-            mz_expr::MapFilterProject::new(upsert_envelope.source_arity).filter(temporal);
-        Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
+    if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
+        let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
+
+        let allow_auto_spill = dataflow_paramters.auto_spill_config.allow_spilling_to_disk;
+        let spill_threshold = dataflow_paramters
+            .auto_spill_config
+            .spill_to_disk_threshold_bytes;
+
+        tracing::info!(
+            ?tuning,
+            ?dataflow_paramters.auto_spill_config,
+            "timely-{} rendering {} with rocksdb-backed upsert state",
+            source_config.worker_id,
+            source_config.id
+        );
+        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+        let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+        let rocksdb_dir = scratch_directory
+            .join(source_config.id.to_string())
+            .join(source_config.worker_id.to_string());
+
+        let env = instance_context.rocksdb_env.clone();
+
+        let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
+
+        if allow_auto_spill {
+            upsert_inner(
+                input,
+                upsert_envelope.key_indices,
+                resume_upper,
+                previous,
+                previous_token,
+                upsert_metrics,
+                source_config,
+                move || async move {
+                    AutoSpillBackend::new(
+                        RocksDBParams {
+                            instance_path: rocksdb_dir,
+                            env,
+                            tuning_config: tuning,
+                            shared_metrics: rocksdb_shared_metrics,
+                            instance_metrics: rocksdb_instance_metrics,
+                        },
+                        spill_threshold,
+                        rocksdb_in_use_metric,
+                    )
+                },
+                wait_for_input_resumption,
+            )
+        } else {
+            upsert_inner(
+                input,
+                upsert_envelope.key_indices,
+                resume_upper,
+                previous,
+                previous_token,
+                upsert_metrics,
+                source_config,
+                move || async move {
+                    rocksdb::RocksDB::new(
+                        mz_rocksdb::RocksDBInstance::new(
+                            &rocksdb_dir,
+                            mz_rocksdb::InstanceOptions::defaults_with_env(env),
+                            tuning,
+                            rocksdb_shared_metrics,
+                            rocksdb_instance_metrics,
+                            // For now, just use the same config as the one used for
+                            // merging snapshots.
+                            upsert_bincode_opts(),
+                        )
+                        .await
+                        .unwrap(),
+                    )
+                },
+                wait_for_input_resumption,
+            )
+        }
     } else {
-        None
-    };
-
-    // Break `previous` into:
-    // On the one hand, "Ok" and "Err(UpsertError)", which we know how to deal with, and,
-    // On the other hand, "Err(everything eles)", which we don't.
-    let (previous, mut errs) = previous.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((Ok(row), t, r)),
-        Err(DataflowError::EnvelopeError(err)) => match *err {
-            EnvelopeError::Upsert(e) => Ok((Err(e), t, r)),
-            err => Err((err.into(), t, r)),
-        },
-        Err(err) => Err((err, t, r)),
-    });
-
-    let upsert_output = upsert_core(
-        stream,
-        predicates,
-        position_or,
-        as_of_frontier,
-        upsert_envelope,
-        previous.as_collection(),
-        previous_token,
-    );
-    let (mut oks, errs2) = upsert_output.ok_err(|(data, time, diff)| match data {
-        Ok(data) => Ok((data, time, diff)),
-        Err(err) => Err((err, time, diff)),
-    });
-    errs = errs.concat(&errs2);
-
-    // If we have temporal predicates do the thing they have to do.
-    if let Some(plan) = temporal_plan {
-        let (oks2, errs2) = oks.flat_map_fallible("UpsertTemporalOperators", {
-            let mut datum_vec = mz_repr::DatumVec::new();
-            let mut row_builder = Row::default();
-            move |(row, time, diff)| {
-                let arena = mz_repr::RowArena::new();
-                let mut datums_local = datum_vec.borrow_with(&row);
-                plan.evaluate(
-                    &mut datums_local,
-                    &arena,
-                    time,
-                    diff,
-                    |_time| true,
-                    &mut row_builder,
-                )
-            }
-        });
-
-        oks = oks2;
-        errs = errs.concat(&errs2);
+        tracing::info!(
+            "timely-{} rendering {} with memory-backed upsert state",
+            source_config.worker_id,
+            source_config.id
+        );
+        upsert_inner(
+            input,
+            upsert_envelope.key_indices,
+            resume_upper,
+            previous,
+            previous_token,
+            upsert_metrics,
+            source_config,
+            || async { InMemoryHashMap::default() },
+            wait_for_input_resumption,
+        )
     }
-
-    (oks, errs)
 }
 
-/// Evaluates predicates and dummy column information.
-///
-/// This method takes decoded datums and prepares as output
-/// a row which contains only those positions of `position_or`.
-/// If any predicate is failed, no row is produced, and if an
-/// error is encountered it is returned instead.
-fn evaluate(
-    datums: &[Datum],
-    predicates: &[MirScalarExpr],
-    position_or: &[Option<usize>],
-    row_buf: &mut Row,
-) -> Result<Option<Row>, EvalError> {
-    let arena = RowArena::new();
-    // Each predicate is tested in order.
-    for predicate in predicates.iter() {
-        if predicate.eval(datums, &arena)? != Datum::True {
-            return Ok(None);
-        }
-    }
-
-    // We pack dummy values in locations that do not reference
-    // specific columns.
-    let mut row_packer = row_buf.packer();
-    row_packer.extend(position_or.iter().map(|x| match x {
-        Some(column) => datums[*column],
-        None => Datum::Dummy,
-    }));
-    Ok(Some(row_buf.clone()))
-}
-
-/// Given a stream of rows and a description of the columns that form their key,
-/// produce a stream of keys and thinned values.
-fn extract_kv<G: Scope>(
-    records: Collection<G, Result<Row, UpsertError>, Diff>,
-    key_indices_sorted: Vec<usize>,
-    key_indices: &[usize],
-) -> Collection<G, (Result<Row, DecodeError>, Result<Row, DataflowError>), Diff> {
-    debug_assert!({
-        let mut verified_sorted = key_indices.to_vec();
-        verified_sorted.sort_unstable();
-        key_indices_sorted == verified_sorted
-    });
-    let key_cols_are_sorted = &key_indices_sorted == key_indices;
-
-    let mut row_buf = Row::default();
-    // If the key columns are in order, we can pack them directly
-    // into `key_row_buf` while scanning the original row.
-    //
-    // Otherwise, we need to put them into `key_dv` and then invert the permutation
-    // before packing.
-    let mut key_row_buf = Row::default();
-    let mut key_dv = DatumVec::default();
-    let key_unsort_permutation = inverse_argsort(key_indices);
-    records.map(move |result| {
-        match result {
-            Ok(row) => {
-                let mut row_packer = row_buf.packer();
-                let mut key_row_packer = key_row_buf.packer();
-                let values = &mut row.iter();
-                let mut next_idx = 0;
-                let mut key_dv = key_dv.borrow();
-                for &key_idx in key_indices_sorted.iter() {
-                    // First, push the datums that are before `key_idx`
-                    row_packer.extend(values.take(key_idx - next_idx));
-                    // Then, add the key field to whichever buffer we're using for the key
-                    let key_datum = values.next().unwrap();
-                    if key_cols_are_sorted {
-                        key_row_packer.push(key_datum);
-                    } else {
-                        key_dv.push(key_datum);
-                    }
-                    next_idx = key_idx + 1;
-                }
-                // Finally, push any columns after the last key index
-                row_packer.extend(values);
-
-                if !key_cols_are_sorted {
-                    for &i in key_unsort_permutation.iter() {
-                        key_row_packer.push(key_dv[i])
-                    }
-                }
-                (Ok(key_row_buf.clone()), Ok(row_buf.clone()))
-            }
-            Err(UpsertError::KeyDecode(err)) => (
-                Err(err.clone()),
-                Err(DataflowError::from(EnvelopeError::Upsert(
-                    UpsertError::KeyDecode(err),
-                ))),
-            ),
-            Err(UpsertError::Value(UpsertValueError { inner, for_key })) => (
-                Ok(for_key.clone()),
-                Err(DataflowError::from(EnvelopeError::Upsert(
-                    UpsertError::Value(UpsertValueError { inner, for_key }),
-                ))),
-            ),
-        }
-    })
-}
-
-/// Internal core upsert logic.
-fn upsert_core<G>(
-    stream: &Stream<G, DecodeResult>,
-    predicates: Vec<MirScalarExpr>,
-    position_or: Vec<Option<usize>>,
-    as_of_frontier: Antichain<Timestamp>,
-    upsert_envelope: UpsertEnvelope,
-    previous: Collection<G, Result<Row, UpsertError>, Diff>,
-    mut previous_token: Option<Rc<dyn Any>>,
-) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
-where
-    G: Scope<Timestamp = Timestamp>,
+/// Helper method for `upsert_inner` used to stage `data` updates
+/// from the input timely edge.
+fn stage_input<T, O>(
+    stash: &mut Vec<(T, UpsertKey, Reverse<O>, Option<UpsertValue>)>,
+    data: &mut Vec<((UpsertKey, Option<UpsertValue>, O), T, Diff)>,
+    input_upper: &Antichain<T>,
+    resume_upper: &Antichain<T>,
+) where
+    T: PartialOrder,
+    O: Ord,
 {
-    // Prepare sorted and structured `key_indices` required
-    // by the upsert operator, and a `DatumVec` used to avoid
-    // an allocation.
-    let mut key_indices_sorted = upsert_envelope.key_indices.clone();
-    key_indices_sorted.sort_unstable();
+    if PartialOrder::less_equal(input_upper, resume_upper) {
+        data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
+    }
 
-    let previous_ok = extract_kv(
-        previous,
-        key_indices_sorted.clone(),
-        &upsert_envelope.key_indices,
+    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+        assert!(diff > 0, "invalid upsert input");
+        (time, key, Reverse(order), value)
+    }));
+}
+
+fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
+    input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
+    mut key_indices: Vec<usize>,
+    resume_upper: Antichain<G::Timestamp>,
+    previous: Collection<G, Result<Row, DataflowError>, Diff>,
+    previous_token: Option<Rc<dyn Any>>,
+    upsert_metrics: UpsertMetrics,
+    source_config: crate::source::RawSourceCreationConfig,
+    state: F,
+    // Whether or not to wait for the `input` to reach the `resumption_frontier`
+    // before we finalize `rehydration`.
+    wait_for_input_resumption: bool,
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Rc<dyn Any>,
+)
+where
+    G::Timestamp: TotalOrder,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = US>,
+    US: UpsertStateBackend,
+{
+    // Sort key indices to ensure we can construct the key by iterating over the datums of the row
+    key_indices.sort_unstable();
+
+    let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
+
+    let mut input = builder.new_input(
+        &input.inner,
+        Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
     );
 
-    // It's very important to hash the right thing. We have nested `Option` and
-    // `Result` here. And, for example, `Some(key).hashed()` is not the same as
-    // `key.hashed()`.
-    //
-    // We make sure  to hash the same thing for both previous updates and new
-    // updates.
-    //
-    // Also: this problem was only showing up when trying to use upsert-style
-    // sources with multiple clusterd workers.
-    let result_stream = stream.binary_frontier(
-        &previous_ok.inner,
-        Exchange::new(move |DecodeResult { key, .. }| {
-            // N.B. We make the expected type explicit here to make sure it
-            // cannot change by accident.
-            let key: &Option<Result<Row, DecodeError>> = key;
-            // Another N.B. we use `as_ref()` here so that we're hashing a
-            // `Option<&Result<Row, DecodeError>`, like we do below. We don't
-            // stricly need it because the result is the same without but with
-            // this we are extra future safe.
-            key.as_ref().hashed()
-        }),
-        Exchange::new(|((key, _v), _t, _r)| {
-            // N.B.  We make the expected type explicit here to make sure it
-            // cannot change by accident.
-            let key: &Result<Row, DecodeError> = key;
-            Some(key).hashed()
-        }),
-        "Upsert",
-        move |_cap, _info| {
-            // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
-            //
-            // This is a BTreeMap because we want to ensure that if we receive (key1, value1, time
-            // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
-            // value2, time 7)
-            let mut pending_values =
-                BTreeMap::<Timestamp, (Capability<Timestamp>, BTreeMap<_, UpsertSourceData>)>::new(
-                );
-            // Intermediate structures re-used to limit allocations
-            let mut scratch_vector = Vec::new();
-            let mut repop_scratch_vector = Vec::new();
-            let mut row_packer = mz_repr::Row::default();
-            let mut dv = DatumVec::new();
+    // We only care about UpsertValueError since this is the only error that we can retract
+    let previous = previous.flat_map(move |result| {
+        let value = match result {
+            Ok(ok) => Ok(ok),
+            Err(DataflowError::EnvelopeError(err)) => match *err {
+                EnvelopeError::Upsert(err) => Err(err),
+                _ => return None,
+            },
+            Err(_) => return None,
+        };
+        Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
+    });
+    let mut previous = builder.new_input(
+        &previous.inner,
+        Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
+    );
+    let (mut output_handle, output) = builder.new_output();
+    let (mut health_output, health_stream) = builder.new_output();
 
-            let key_indices_map = upsert_envelope
-                .key_indices
-                .iter()
-                .enumerate()
-                .map(|(idx, value_idx)| (*value_idx, idx))
-                .collect();
-            let mut kdv = DatumVec::new();
-            // this is a map of (decoded key) -> (decoded_value). We store the
-            // latest value for a given key that way we know what to retract if
-            // a new value with the same key comes along.
-            //
-            // If `previous_token` is true, we need to rehydrate this from the last good input,
-            // so set it to `None` for now.
-            let mut current_values = if previous_token.is_some() {
-                None
-            } else {
-                Some(BTreeMap::default())
+    let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
+    let shutdown_button = builder.build(move |caps| async move {
+        let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
+
+        let mut state = UpsertState::new(
+            state().await,
+            upsert_shared_metrics,
+            upsert_metrics,
+            source_config.source_statistics,
+        );
+        let mut events = vec![];
+        let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
+
+        let mut stash = vec![];
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
+            || (wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
+        {
+            let previous_event = tokio::select! {
+                // Note that these are both cancel-safe. The reason we drain the `input` is to
+                // ensure the `output_frontier` (and therefore flow control on `previous`) make
+                // progress.
+                previous_event = previous.next_mut(), if !PartialOrder::less_equal(&resume_upper, &snapshot_upper) => {
+                    previous_event
+                }
+                input_event = input.next_mut() => {
+                    match input_event {
+                        Some(AsyncEvent::Data(_cap, data)) => {
+                            stage_input(&mut stash, data, &input_upper, &resume_upper);
+                        }
+                        Some(AsyncEvent::Progress(upper)) => {
+                            input_upper = upper;
+                        }
+                        None => {
+                            input_upper = Antichain::new();
+                        }
+                    }
+                    continue;
+                }
             };
+            match previous_event {
+                Some(AsyncEvent::Data(_cap, data)) => {
+                    events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                        if !resume_upper.less_equal(&ts) {
+                            Some((key, value, diff))
+                        } else {
+                            None
+                        }
+                    }))
+                }
+                Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
+                None => snapshot_upper = Antichain::new(),
+            };
+            while let Some(event) = previous.next_mut().now_or_never() {
+                match event {
+                    Some(AsyncEvent::Data(_cap, data)) => {
+                        events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                            if !resume_upper.less_equal(&ts) {
+                                Some((key, value, diff))
+                            } else {
+                                None
+                            }
+                        }))
+                    }
+                    Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
+                    None => {
+                        snapshot_upper = Antichain::new();
+                        break;
+                    }
+                }
+            }
 
-            let mut initial_values_multiset = ChangeBatch::default();
-            move |data_input, previous_input, output| {
-                if previous_token.is_some() {
-                    assert!(current_values.is_none());
-                    // Hydrate the `current_values` map from the previous state of the collection.
-                    // We can't just insert things into the `current_values` map directly, since
-                    // we might in general have non-one multiplicities due to Persist being behind on compaction.
-                    // Thus, we use `initial_values_multiset` to keep track of how many of each record we've seen.
-                    //
-                    // At the end of reading the entire previous input, `initial_values_multiset` must have exactly one of each record,
-                    // and furthermore, each key must be unique. We validate this property for sanity's sake, and build `current_values`.
-                    //
-                    // TODO[btv] This algorithm has the potential to use unbounded space if we can't make any assumptions
-                    // about Persist's level of compaction or the order in which it returns updates.
-                    // See the detailed discussion [here](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1659063332027139).
-                    // This is thought to be fine for our current purposes, but we will need to rethink it once the Persist team has
-                    // thought harder about what guarantees/APIs they want to offer relating to bounded-memory consolidation.
-                    // Tracked here: https://github.com/MaterializeInc/materialize/issues/14086
-                    previous_input.for_each(|_cap, data| {
-                        data.swap(&mut repop_scratch_vector);
-                        initial_values_multiset.extend(
-                            repop_scratch_vector
-                                .drain(..)
-                                // filter out records at or past when we are resuming this operator from
-                                .filter(|(_d, t, _r)| !as_of_frontier.less_equal(t))
-                                .map(|(d, _t, r)| (d, r)),
-                        );
+            match state
+                .merge_snapshot_chunk(
+                    events.drain(..),
+                    PartialOrder::less_equal(&resume_upper, &snapshot_upper),
+                )
+                .await
+            {
+                Ok(_) => {
+                    if let Some(ts) = snapshot_upper.clone().into_option() {
+                        // As we shutdown, we could ostensibly get data from later than the
+                        // `resume_upper`, which we ignore above. We don't want our output capability to make
+                        // it further than the `resume_upper`.
+                        if !resume_upper.less_equal(&ts) {
+                            output_cap.downgrade(&ts);
+                        }
+                    }
+                }
+                Err(e) => {
+                    process_upsert_state_error::<G>(
+                        "Failed to rehydrate state".to_string(),
+                        e,
+                        &mut health_output,
+                        &health_cap,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        drop(events);
+
+        drop(previous_token);
+        // Exchaust the previous input. It is expected to immediately reach the empty
+        // antichain since we have dropped its token.
+        //
+        // Note that we do not need to also process the `input` during this, as the dropped token
+        // will shutdown the `backpressure` operator
+        while let Some(_event) = previous.next().await {}
+
+        // After snapshotting, our output frontier is exactly the `resume_upper`
+        if let Some(ts) = resume_upper.as_option() {
+            output_cap.downgrade(ts);
+        }
+
+        tracing::info!(
+            "timely-{} upsert source {} finished rehydration",
+            source_config.worker_id,
+            source_config.id
+        );
+
+        // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
+        // and have a consistent iteration order.
+        let mut commands_state: indexmap::IndexMap<_, types::UpsertValueAndSize> =
+            indexmap::IndexMap::new();
+        let mut multi_get_scratch = Vec::new();
+
+        // Now can can resume consuming the collection
+        let mut output_updates = vec![];
+        let mut post_snapshot = true;
+        while let Some(event) = {
+            // Synthesize a `Progress` event that allows us to drain the `stash` of values
+            // obtained during snapshotting.
+            if post_snapshot {
+                post_snapshot = false;
+                Some(AsyncEvent::Progress(input_upper.clone()))
+            } else {
+                input.next_mut().await
+            }
+        } {
+            match event {
+                AsyncEvent::Data(_cap, data) => {
+                    stage_input(&mut stash, data, &input_upper, &resume_upper);
+                }
+                AsyncEvent::Progress(upper) => {
+                    // Ignore progress updates before the `resume_upper`, which is our initial
+                    // capability post-snapshotting.
+                    if PartialOrder::less_than(&upper, &resume_upper) {
+                        continue;
+                    }
+                    stash.sort_unstable();
+
+                    // Find the prefix that we can emit
+                    let idx = stash.partition_point(|(ts, _, _, _)| !upper.less_equal(ts));
+
+                    // Read the previous values _per key_ out of `state`, recording it
+                    // along with the value with the _latest timestamp for that key_.
+                    commands_state.clear();
+                    for (_, key, _, _) in stash.iter().take(idx) {
+                        commands_state.entry(*key).or_default();
+                    }
+
+                    // These iterators iterate in the same order because `commands_state`
+                    // is an `IndexMap`.
+                    multi_get_scratch.clear();
+                    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
+                    match state
+                        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            process_upsert_state_error::<G>(
+                                "Failed to fetch records from state".to_string(),
+                                e,
+                                &mut health_output,
+                                &health_cap,
+                            )
+                            .await;
+                        }
+                    }
+
+                    // From the prefix that can be emitted we can deduplicate based on (ts, key) in
+                    // order to only process the command with the maximum order within the (ts,
+                    // key) group. This is achieved by wrapping order in `Reverse(order)` above.
+                    let mut commands = stash.drain(..idx).dedup_by(|a, b| {
+                        let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
+                        a_ts == b_ts && a_key == b_key
                     });
-                    if PartialOrder::less_equal(
-                        &AntichainRef::new(&as_of_frontier),
-                        &previous_input.frontier().frontier(),
-                    ) {
-                        // Prevent the persist source from continuing to operate.
-                        // Without this, we will re-download everything we upload, wasting tons of bandwidth.
-                        previous_token = None;
 
-                        let mut new_current_values = BTreeMap::new();
-                        for ((k, v), r) in initial_values_multiset.drain() {
-                            assert!(
-                                r == 1,
-                                "The upsert state should have exactly one value per key"
-                            );
-                            match new_current_values.entry(k) {
-                                Entry::Occupied(_oe) => {
-                                    panic!("The upsert state should have exactly one value per key")
+                    let bincode_opts = types::upsert_bincode_opts();
+                    // Upsert the values into `commands_state`, by recording the latest
+                    // value (or deletion). These will be synced at the end to the `state`.
+                    //
+                    // Note that we are effectively doing "mini-upsert" here, using
+                    // `command_state`. This "mini-upsert" is seeded with data from `state`, using
+                    // a single `multi_get` above, and the final state is written out into
+                    // `state` using a single `multi_put`. This simplifies `UpsertStateBackend`
+                    // implementations, and reduces the number of reads and write we need to do.
+                    //
+                    // This "mini-upsert" technique is actually useful in `UpsertState`'s
+                    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
+                    // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
+                    while let Some((ts, key, _, value)) = commands.next() {
+                        let command_state = commands_state
+                            .get_mut(&key)
+                            .expect("key missing from commands_state");
+
+                        if let Some(cs) = command_state.value.as_mut() {
+                            cs.ensure_decoded(bincode_opts);
+                        }
+
+                        match value {
+                            Some(value) => {
+                                if let Some(old_value) =
+                                    command_state.value.replace(value.clone().into())
+                                {
+                                    output_updates.push((old_value.to_decoded(), ts.clone(), -1));
                                 }
-                                Entry::Vacant(ve) => {
-                                    ve.insert(v);
+                                output_updates.push((value, ts, 1));
+                            }
+                            None => {
+                                if let Some(old_value) = command_state.value.take() {
+                                    output_updates.push((old_value.to_decoded(), ts, -1));
                                 }
                             }
                         }
-                        current_values = Some(new_current_values);
                     }
-                }
 
-                // Digest each input, reduce by presented timestamp.
-                data_input.for_each(|cap, data| {
-                    data.swap(&mut scratch_vector);
-                    process_new_data(
-                        &mut scratch_vector,
-                        &mut pending_values,
-                        &cap,
-                        &as_of_frontier,
-                    );
-                });
-
-                // Don't try to do anything if we aren't done building the `current_values` map.
-                // Any new data that comes in as we rehydrate `current_values` is just stored in
-                // memory in `pending_values` until we are ready to merge it into `current_values`.
-                let current_values = match &mut current_values {
-                    None => return,
-                    Some(x) => x,
-                };
-
-                let mut removed_times = Vec::new();
-                for (time, (cap, map)) in pending_values.iter_mut() {
-                    if data_input.frontier.less_equal(time) {
-                        // because this is a BTreeMap, the rest of the times in
-                        // the map will be greater than this time. So if the
-                        // input_frontier is less than or equal to this time,
-                        // it will be less than the times in the rest of the map
-                        break;
-                    }
-                    process_pending_values_batch(
-                        time,
-                        cap,
-                        map,
-                        current_values,
-                        &mut row_packer,
-                        &mut dv,
-                        &upsert_envelope,
-                        &key_indices_sorted,
-                        &key_indices_map,
-                        &mut kdv,
-                        &predicates,
-                        &position_or,
-                        &mut removed_times,
-                        output,
-                    )
-                }
-                // Discard entries, capabilities for complete times.
-                for time in removed_times {
-                    pending_values.remove(&time);
-                }
-            }
-        },
-    );
-
-    result_stream
-}
-
-/// This function fills `pending_values` with new data
-/// from the timely operator input.
-fn process_new_data(
-    new_data: &mut Vec<DecodeResult>,
-    pending_values: &mut BTreeMap<
-        Timestamp,
-        (
-            Capability<Timestamp>,
-            BTreeMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
-        ),
-    >,
-    cap: &InputCapability<Timestamp>,
-    as_of_frontier: &Antichain<Timestamp>,
-) {
-    for DecodeResult {
-        key,
-        value: new_value,
-        position: new_position,
-        upstream_time_millis: _,
-        partition: _,
-        metadata,
-    } in new_data.drain(..)
-    {
-        let mut time = cap.time().clone();
-        time.advance_by(as_of_frontier.borrow());
-        if key.is_none() {
-            error!(?new_value, "Encountered empty key for value");
-            continue;
-        }
-
-        let entry = pending_values
-            .entry(time)
-            .or_insert_with(|| (cap.delayed(&time), BTreeMap::new()))
-            .1
-            .entry(key);
-
-        let new_entry = UpsertSourceData {
-            value: new_value.map(|res| {
-                res.map(|(v, diff)| match diff {
-                    1 => v,
-                    _ => unreachable!(
-                        "Upsert should only be used with sources \
-                                        with no explicit diff"
-                    ),
-                })
-                .map_err(Into::into)
-            }),
-            position: new_position,
-            // upsert sources don't have a column for this, so setting it to
-            // `None` is fine.
-            upstream_time_millis: None,
-            metadata,
-        };
-
-        match entry {
-            Entry::Occupied(mut e) => {
-                // If the time is equal, toss out the row with the
-                // lower offset
-                if e.get().position < new_position {
-                    e.insert(new_entry);
-                }
-            }
-            Entry::Vacant(e) => {
-                e.insert(new_entry);
-            }
-        }
-    }
-}
-
-/// This function processes a batch of ready (i.e. whose time is below the current
-/// input frontier) values and evaluate them against the intermediate upsert
-/// data (`current_values`) and output issues and retractions for the output timely
-/// stream. It is used exclusively by `upsert_core`
-fn process_pending_values_batch(
-    // The time, capability, and map of data at that time we
-    // are processing in this call.
-    time: &Timestamp,
-    cap: &mut Capability<Timestamp>,
-    map: &mut BTreeMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
-    // The current map of values we use to perform the upsert comparision
-    current_values: &mut BTreeMap<Result<Row, DecodeError>, Result<Row, DataflowError>>,
-    // A shared row used to pack new rows for evaluation and output
-    row_packer: &mut Row,
-    // A shared row used to build a Vec<Datum<'_>> for evaluation
-    dv: &mut DatumVec,
-    // Additional source properties used to correctly manage key-value pairs
-    upsert_envelope: &UpsertEnvelope,
-    // `key_indices` in `upsert_envelope`, but sorted
-    key_indices_sorted: &[usize],
-    // `key_indices` in `upsert_envelope`, but turned into a value index to
-    // key index map
-    key_indices_map: &BTreeMap<usize, usize>,
-    // A shared row used to build a Vec<Datum<'_>> for key thinning
-    kdv: &mut DatumVec,
-    // Additional information used to pre-evaluate predicates that reduces the output
-    // stream size
-    predicates: &[MirScalarExpr],
-    position_or: &[Option<usize>],
-    // An out parameter of times that must be removed from the `to_send` map
-    // as we are done processing them.
-    removed_times: &mut Vec<Timestamp>,
-    // The output handle to output processed values into the output timely stream.
-    output: &mut timely::dataflow::operators::generic::OutputHandle<
-        '_,
-        Timestamp,
-        (Result<Row, DataflowError>, Timestamp, Diff),
-        timely::dataflow::channels::pushers::tee::Tee<
-            Timestamp,
-            (Result<Row, DataflowError>, Timestamp, Diff),
-        >,
-    >,
-) {
-    let mut session = output.session(cap);
-    removed_times.push(time.clone());
-    for (key, data) in std::mem::take(map) {
-        // decode key and value, and apply predicates/projections to they combined key/value
-        if let Some(decoded_key) = key {
-            let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
-                match (decoded_key, data.value) {
-                    (Err(key_decode_error), Some(_)) => {
-                        let err = DataflowError::from(EnvelopeError::Upsert(
-                            UpsertError::KeyDecode(key_decode_error.clone()),
-                        ));
-                        (Err(key_decode_error), Err(err))
-                    }
-                    (Err(key_decode_error), None) => (Err(key_decode_error), Ok(None)),
-                    (Ok(decoded_key), None) => (Ok(decoded_key), Ok(None)),
-                    (Ok(decoded_key), Some(value)) => {
-                        let decoded_value = value
-                            .and_then(|row| {
-                                build_datum_vec_for_evaluation(
-                                    dv,
-                                    &upsert_envelope.style,
-                                    &row,
-                                    &decoded_key,
-                                )
-                                .map_or(Ok(None), |mut datums| {
-                                    datums.extend(data.metadata.iter());
-                                    evaluate(&datums, predicates, position_or, row_packer)
-                                        .map_err(Into::into)
-                                })
-                            })
-                            .map_err(|err| {
-                                DataflowError::from(EnvelopeError::Upsert(UpsertError::Value(
-                                    UpsertValueError {
-                                        inner: Box::new(err),
-                                        for_key: decoded_key.clone(),
-                                    },
-                                )))
-                            });
-                        (Ok(decoded_key), decoded_value)
-                    }
-                };
-
-            // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
-            // We store errors as well as non-None values, so that they can be
-            // retracted if new rows show up for the same key.
-            let new_value = decoded_value.transpose();
-
-            let old_value = if let Some(new_value) = &new_value {
-                // Thin out the row to not contain a copy of the
-                // key columns, cloning when need-be
-                let thinned_value = new_value
-                    .as_ref()
-                    .map(|full_row| thin(key_indices_sorted, full_row, row_packer))
-                    .map_err(|e| e.clone());
-                current_values
-                    .insert(decoded_key.clone(), thinned_value)
-                    .map(|res| {
-                        res.map(|v| {
-                            rehydrate(
-                                key_indices_map,
-                                // The value is never `Ok`
-                                // unless the key is also
-                                decoded_key.as_ref().unwrap(),
-                                &v,
-                                row_packer,
-                                kdv,
+                    match state
+                        .multi_put(commands_state.drain(..).map(|(k, cv)| {
+                            (
+                                k,
+                                types::PutValue {
+                                    value: cv.value.map(|cv| cv.to_decoded()),
+                                    previous_persisted_size: cv
+                                        .size
+                                        .map(|v| v.try_into().expect("less than i64 size")),
+                                },
                             )
-                        })
-                    })
-            } else {
-                current_values.remove(&decoded_key).map(|res| {
-                    res.map(|v| {
-                        rehydrate(
-                            key_indices_map,
-                            // The value is never `Ok`
-                            // unless the key is also
-                            decoded_key.as_ref().unwrap(),
-                            &v,
-                            row_packer,
-                            kdv,
-                        )
-                    })
-                })
-            };
+                        }))
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            process_upsert_state_error::<G>(
+                                "Failed to update records in state".to_string(),
+                                e,
+                                &mut health_output,
+                                &health_cap,
+                            )
+                            .await;
+                        }
+                    }
 
-            if let Some(old_value) = old_value {
-                // retract old value
-                session.give((old_value, cap.time().clone(), -1));
-            }
-            if let Some(new_value) = new_value {
-                // give new value
-                session.give((new_value, cap.time().clone(), 1));
+                    // Emit the _consolidated_ changes to the output.
+                    output_handle
+                        .give_container(&output_cap, &mut output_updates)
+                        .await;
+                    if let Some(ts) = upper.as_option() {
+                        output_cap.downgrade(ts);
+                    }
+                    input_upper = upper;
+                }
             }
         }
-    }
+    });
+
+    (
+        output.as_collection().map(|result| match result {
+            Ok(ok) => Ok(ok),
+            Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
+        }),
+        health_stream,
+        Rc::new(shutdown_button.press_on_drop()),
+    )
 }
 
-fn build_datum_vec_for_evaluation<'row>(
-    dv: &'row mut DatumVec,
-    upsert_style: &UpsertStyle,
-    row: &'row Row,
-    key: &'row Row,
-) -> Option<DatumVecBorrow<'row>> {
-    let mut datums = dv.borrow();
-    match upsert_style {
-        UpsertStyle::Debezium { after_idx } => match row.iter().nth(*after_idx).unwrap() {
-            Datum::List(after) => {
-                datums.extend(after.iter());
-                Some(datums)
-            }
-            Datum::Null => None,
-            d => panic!("type error: expected record, found {:?}", d),
+/// Emit the given error, and stall till the dataflow is restarted.
+async fn process_upsert_state_error<G: Scope>(
+    context: String,
+    e: anyhow::Error,
+    health_output: &mut AsyncOutputHandle<
+        <G as ScopeParent>::Timestamp,
+        Vec<(OutputIndex, HealthStatusUpdate)>,
+        TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
+    >,
+    health_cap: &Capability<<G as ScopeParent>::Timestamp>,
+) {
+    let update = HealthStatusUpdate {
+        update: HealthStatus::StalledWithError {
+            error: e.context(context).to_string_with_causes(),
+            hint: None,
         },
-        UpsertStyle::Default(_) => {
-            datums.extend(key.iter());
-            datums.extend(row.iter());
-            Some(datums)
-        }
-    }
-}
-
-/// `thin` uses information from the source description to find which indices in the row
-/// are keys and skip them. It requires that `key_indices` is sorted.
-fn thin(key_indices_sorted: &[usize], value: &Row, row_buf: &mut Row) -> Row {
-    let mut row_packer = row_buf.packer();
-    let values = &mut value.iter();
-    let mut next_idx = 0;
-    for &key_idx in key_indices_sorted {
-        // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(key_idx - next_idx));
-        // Then, skip this key datum
-        values.next().unwrap();
-        next_idx = key_idx + 1;
-    }
-    // Finally, push any columns after the last key index
-    row_packer.extend(values);
-
-    row_buf.clone()
-}
-
-/// `rehydrate` uses information from the source description to find which indices in the row
-/// are keys and add them back in in the right places. `key_indices` is a map
-/// from the each key-part's index in the value to its index in the key.
-fn rehydrate(
-    key_indices_map: &BTreeMap<usize, usize>,
-    key: &Row,
-    thinned_value: &Row,
-    row_buf: &mut Row,
-    kdv: &mut DatumVec,
-) -> Row {
-    let mut row_packer = row_buf.packer();
-    let values = &mut thinned_value.iter();
-
-    let mut key_datums = kdv.borrow();
-    key_datums.extend(key.iter());
-
-    let mut next_idx = 0;
-    let mut key_indices_iter = key_indices_map.iter().peekable();
-
-    while let Some((value_idx, key_idx)) = key_indices_iter.next() {
-        // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(*value_idx - next_idx));
-        // Then, push this key datum
-        row_packer.push(key_datums[*key_idx]);
-        next_idx = *value_idx + 1;
-    }
-    // Finally, push any columns after the last key index
-    row_packer.extend(values);
-    row_buf.clone()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_rehydrate_thin_first() {
-        let mut packer = Row::default();
-        let mut kdv = DatumVec::new();
-
-        let key_indices = vec![0];
-        let mut key_indices_sorted = key_indices.clone();
-        key_indices_sorted.sort_unstable();
-        let key_indices_map = key_indices
-            .iter()
-            .enumerate()
-            .map(|(idx, value_idx)| (*value_idx, idx))
-            .collect();
-        let key = Row::pack([Datum::String("key")]);
-
-        let thinned = Row::pack([Datum::String("two")]);
-
-        let rehydrated = rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv);
-
-        assert_eq!(
-            rehydrated,
-            Row::pack([Datum::String("key"), Datum::String("two"),])
-        );
-
-        assert_eq!(thin(&key_indices_sorted, &rehydrated, &mut packer), thinned);
-    }
-
-    #[test]
-    fn test_rehydrate_thin_middle() {
-        let mut packer = Row::default();
-        let mut kdv = DatumVec::new();
-
-        let key_indices = vec![2];
-        let mut key_indices_sorted = key_indices.clone();
-        key_indices_sorted.sort_unstable();
-        let key_indices_map = key_indices
-            .iter()
-            .enumerate()
-            .map(|(idx, value_idx)| (*value_idx, idx))
-            .collect();
-        let key = Row::pack([Datum::String("key")]);
-
-        let thinned = Row::pack([
-            Datum::String("one"),
-            Datum::String("two"),
-            Datum::String("four"),
-        ]);
-
-        let rehydrated = rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv);
-
-        assert_eq!(
-            rehydrated,
-            Row::pack([
-                Datum::String("one"),
-                Datum::String("two"),
-                Datum::String("key"),
-                Datum::String("four"),
-            ])
-        );
-
-        assert_eq!(thin(&key_indices_sorted, &rehydrated, &mut packer), thinned);
-    }
-
-    #[test]
-    fn test_rehydrate_thin_multiple() {
-        let mut packer = Row::default();
-        let mut kdv = DatumVec::new();
-
-        let key_indices = vec![2, 4];
-        let mut key_indices_sorted = key_indices.clone();
-        key_indices_sorted.sort_unstable();
-        let key_indices_map = key_indices
-            .iter()
-            .enumerate()
-            .map(|(idx, value_idx)| (*value_idx, idx))
-            .collect();
-        let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
-
-        let thinned = Row::pack([
-            Datum::String("one"),
-            Datum::String("two"),
-            Datum::String("four"),
-            Datum::String("six"),
-        ]);
-
-        let rehydrated = rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv);
-
-        assert_eq!(
-            rehydrated,
-            Row::pack([
-                Datum::String("one"),
-                Datum::String("two"),
-                Datum::String("key1"),
-                Datum::String("four"),
-                Datum::String("key2"),
-                Datum::String("six"),
-            ])
-        );
-
-        assert_eq!(thin(&key_indices_sorted, &rehydrated, &mut packer), thinned);
-    }
-
-    #[test]
-    fn test_rehydrate_thin_unordered() {
-        let mut packer = Row::default();
-        let mut kdv = DatumVec::new();
-
-        // Note these are unordered
-        let key_indices = vec![4, 2];
-        let mut key_indices_sorted = key_indices.clone();
-        key_indices_sorted.sort_unstable();
-        let key_indices_map = key_indices
-            .iter()
-            .enumerate()
-            .map(|(idx, value_idx)| (*value_idx, idx))
-            .collect();
-
-        let key = Row::pack([Datum::String("key2"), Datum::String("key1")]);
-
-        let thinned = Row::pack([
-            Datum::String("one"),
-            Datum::String("two"),
-            Datum::String("four"),
-            Datum::String("six"),
-        ]);
-        let full = Row::pack([
-            Datum::String("one"),
-            Datum::String("two"),
-            Datum::String("key1"),
-            Datum::String("four"),
-            Datum::String("key2"),
-            Datum::String("six"),
-        ]);
-
-        assert_eq!(thin(&key_indices_sorted, &full, &mut packer), thinned);
-
-        assert_eq!(
-            rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv),
-            full
-        );
-    }
-
-    #[test]
-    fn test_thin_end() {
-        let mut packer = Row::default();
-
-        let key_indices = vec![2];
-
-        assert_eq!(
-            thin(
-                &key_indices,
-                &Row::pack([
-                    Datum::String("one"),
-                    Datum::String("two"),
-                    Datum::String("key"),
-                ]),
-                &mut packer
-            ),
-            Row::pack([Datum::String("one"), Datum::String("two")]),
-        );
-    }
+        should_halt: true,
+    };
+    health_output.give(health_cap, (0, update)).await;
+    std::future::pending::<()>().await;
+    unreachable!("pending future never returns");
 }

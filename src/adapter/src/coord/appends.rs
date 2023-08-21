@@ -14,23 +14,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-use tokio::sync::OwnedMutexGuard;
-use tracing::warn;
-
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_storage_client::client::Update;
+use tokio::sync::OwnedMutexGuard;
+use tracing::{warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::{Coordinator, Message, PendingTxn};
+use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::session::{Session, WriteOp};
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
-use crate::ExecuteResponse;
+use crate::util::{CompletedClientTransmitter, ResultExt};
+use crate::ExecuteContext;
 
 /// An operation that is deferred while waiting for a lock.
+#[derive(Debug)]
 pub(crate) enum Deferred {
     Plan(DeferredPlan),
     GroupCommit,
@@ -42,13 +42,13 @@ pub(crate) enum Deferred {
 #[derivative(Debug)]
 pub(crate) struct DeferredPlan {
     #[derivative(Debug = "ignore")]
-    pub tx: ClientTransmitter<ExecuteResponse>,
-    pub session: Session,
+    pub ctx: ExecuteContext,
     pub plan: Plan,
+    pub validity: PlanValidity,
 }
 
 /// Describes what action triggered an update to a builtin table.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum BuiltinTableUpdateSource {
     /// Update was triggered by some DDL.
     DDL,
@@ -57,6 +57,7 @@ pub(crate) enum BuiltinTableUpdateSource {
 }
 
 /// A pending write transaction that will be committing during the next group commit.
+#[derive(Debug)]
 pub(crate) enum PendingWriteTxn {
     /// Write to a user table.
     User {
@@ -116,13 +117,21 @@ impl PendingWriteTxn {
 /// deferring work.
 #[macro_export]
 macro_rules! guard_write_critical_section {
-    ($coord:expr, $tx:expr, $session:expr, $plan_to_defer: expr) => {
-        if !$session.has_write_lock() {
-            if $coord.try_grant_session_write_lock(&mut $session).is_err() {
+    ($coord:expr, $ctx:expr, $plan_to_defer:expr, $dependency_ids:expr) => {
+        if !$ctx.session().has_write_lock() {
+            if $coord
+                .try_grant_session_write_lock($ctx.session_mut())
+                .is_err()
+            {
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
-                    tx: $tx,
-                    session: $session,
+                    ctx: $ctx,
                     plan: $plan_to_defer,
+                    validity: PlanValidity {
+                        transient_revision: $coord.catalog().transient_revision(),
+                        dependency_ids: $dependency_ids,
+                        cluster_id: None,
+                        replica_id: None,
+                    },
                 }));
                 return;
             }
@@ -131,6 +140,17 @@ macro_rules! guard_write_critical_section {
 }
 
 impl Coordinator {
+    /// Send a message to the Coordinate to start a group commit.
+    pub(crate) fn trigger_group_commit(&mut self) {
+        self.internal_cmd_tx
+            .send(Message::GroupCommitInitiate(Span::current()))
+            .expect("sending to self.internal_cmd_tx cannot fail");
+        // Avoid excessive `Message::GroupCommitInitiate` by resetting the periodic table
+        // advancement. The group commit triggered by the message above will already advance all
+        // tables.
+        self.advance_timelines_interval.reset();
+    }
+
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
@@ -138,7 +158,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn try_group_commit(&mut self) {
         let timestamp = self.peek_local_write_ts();
-        let now = Timestamp::from((self.catalog.config().now)());
+        let now = Timestamp::from((self.catalog().config().now)());
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
@@ -146,14 +166,19 @@ impl Coordinator {
             // what it was.
             let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000.into());
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "group_commit_initiate", async move {
-                tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
-                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::GroupCommitInitiate);
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            task::spawn(
+                || "group_commit_initiate",
+                async move {
+                    tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
+                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+                    let result =
+                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current()));
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
                 }
-            });
+                .instrument(Span::current()),
+            );
         } else {
             self.group_commit_initiate(None).await;
         }
@@ -240,9 +265,8 @@ impl Coordinator {
                     write_lock_guard: _,
                     pending_txn:
                         PendingTxn {
-                            client_transmitter,
+                            ctx,
                             response,
-                            session,
                             action,
                         },
                 } => {
@@ -252,16 +276,11 @@ impl Coordinator {
                         // client that the write was successful. This is only possible if the write
                         // and the delete were concurrent. Therefore, we are free to order the
                         // write before the delete without violating any consistency guarantees.
-                        if self.catalog.try_get_entry(&id).is_some() {
+                        if self.catalog().try_get_entry(&id).is_some() {
                             appends.entry(id).or_default().extend(rows);
                         }
                     }
-                    responses.push(CompletedClientTransmitter::new(
-                        client_transmitter,
-                        response,
-                        session,
-                        action,
-                    ));
+                    responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
                 PendingWriteTxn::System { updates, .. } => {
                     for update in updates {
@@ -278,7 +297,7 @@ impl Coordinator {
             differential_dataflow::consolidation::consolidate(updates);
         }
         // Add table advancements for all tables.
-        for table in self.catalog.entries().filter(|entry| entry.is_table()) {
+        for table in self.catalog().entries().filter(|entry| entry.is_table()) {
             appends.entry(table.id()).or_default();
         }
         let appends = appends
@@ -299,7 +318,7 @@ impl Coordinator {
         let append_fut = self
             .controller
             .storage
-            .append(appends)
+            .append_table(appends)
             .expect("invalid updates");
         if should_block {
             // We may panic here if the storage controller has shut down, because we cannot
@@ -313,20 +332,24 @@ impl Coordinator {
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "group_commit_apply", async move {
-                if let Ok(response) = append_fut.await {
-                    response.unwrap_or_terminate("cannot fail to apply appends");
-                    if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
-                        timestamp,
-                        responses,
-                        write_lock_guard,
-                    )) {
-                        warn!("Server closed with non-responded writes, {e}");
+            task::spawn(
+                || "group_commit_apply",
+                async move {
+                    if let Ok(response) = append_fut.await {
+                        response.unwrap_or_terminate("cannot fail to apply appends");
+                        if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
+                            timestamp,
+                            responses,
+                            write_lock_guard,
+                        )) {
+                            warn!("Server closed with non-responded writes, {e}");
+                        }
+                    } else {
+                        warn!("Writer terminated with writes in indefinite state");
                     }
-                } else {
-                    warn!("Writer terminated with writes in indefinite state");
                 }
-            });
+                .instrument(Span::current()),
+            );
         }
     }
 
@@ -344,12 +367,13 @@ impl Coordinator {
     pub(crate) async fn group_commit_apply(
         &mut self,
         timestamp: Timestamp,
-        responses: Vec<CompletedClientTransmitter<ExecuteResponse>>,
+        responses: Vec<CompletedClientTransmitter>,
         _write_lock_guard: Option<OwnedMutexGuard<()>>,
     ) {
         self.apply_local_write(timestamp).await;
         for response in responses {
-            response.send();
+            let (ctx, result) = response.finalize();
+            ctx.retire(result);
         }
 
         // Advancing timelines will update all timeline read holds, and update the read timestamps
@@ -364,29 +388,44 @@ impl Coordinator {
             .expect("sending to self.internal_cmd_tx cannot fail");
     }
 
-    /// Submit a write to be executed during the next group commit.
+    /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        self.internal_cmd_tx
-            .send(Message::GroupCommitInitiate)
-            .expect("sending to self.internal_cmd_tx cannot fail");
         self.pending_writes.push(pending_write_txn);
+        self.trigger_group_commit();
     }
 
+    /// Submit a write to a system table be executed during the next group commit. This method does
+    /// not trigger a group commit.
+    ///
+    /// This is useful for non-critical writes like metric updates because it allows us to piggy
+    /// back off the next group commit instead of triggering a potentially expensive group commit.
+    ///
+    /// DO NOT call this for DDL which needs the system tables updated immediately.
     #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
-    pub(crate) async fn send_builtin_table_updates(
-        &mut self,
-        updates: Vec<BuiltinTableUpdate>,
-        source: BuiltinTableUpdateSource,
-    ) {
+    pub(crate) fn buffer_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Background,
+        });
+    }
+
+    /// Submit a write to a system table. This method will block until the write has been applied.
+    #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
+    pub(crate) async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes do not wait for a group commit, they explicitly trigger one. There is a
         // possibility that if a user is executing DDL at a rate faster than 1 query per
         // millisecond, then the global timeline will unboundedly advance past the system clock.
         // This can cause future queries to block, but will not affect correctness. Since this
         // rate of DDL is unlikely, we allow DDL to explicitly trigger group commit.
-        self.pending_writes
-            .push(PendingWriteTxn::System { updates, source });
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::DDL,
+        });
         self.group_commit_initiate(None).await;
+        // Avoid excessive group commits by resetting the periodic table advancement timer. The
+        // group commit triggered by above will already advance all tables.
+        self.advance_timelines_interval.reset();
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting
@@ -394,7 +433,7 @@ impl Coordinator {
     /// return after calling it.
     pub(crate) fn defer_write(&mut self, deferred: Deferred) {
         let id = match &deferred {
-            Deferred::Plan(plan) => plan.session.conn_id().to_string(),
+            Deferred::Plan(plan) => plan.ctx.session().conn_id().to_string(),
             Deferred::GroupCommit => "group_commit".to_string(),
         };
         self.write_lock_wait_group.push_back(deferred);

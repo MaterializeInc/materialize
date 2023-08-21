@@ -11,10 +11,10 @@
 
 use std::sync::Arc;
 
-use timely::worker::Worker as TimelyWorker;
-
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use timely::worker::Worker as TimelyWorker;
 
 /// A trait for letting specific server implementations hook
 /// into handling of `CreateTimely` commands. Usually implemented by
@@ -30,7 +30,7 @@ pub trait AsRunnableWorker<C, R> {
 
     /// Build and continuously run a worker. Called on each timely
     /// thread.
-    fn build_and_run<A: timely::communication::Allocate>(
+    fn build_and_run<A: timely::communication::Allocate + 'static>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
@@ -39,6 +39,7 @@ pub trait AsRunnableWorker<C, R> {
             crossbeam_channel::Sender<Self::Activatable>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     );
 }
 

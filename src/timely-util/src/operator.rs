@@ -10,23 +10,27 @@
 //! Common operator transformations on timely streams and differential collections.
 
 use std::future::Future;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
-use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::{
-    operator::{self, Operator},
-    InputHandle, OperatorInfo, OutputHandle, OutputWrapper,
-};
+use timely::dataflow::operators::generic::operator::{self, Operator};
+use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::Data;
+use timely::{Data, ExchangeData};
 
 use crate::buffer::ConsolidateBuffer;
-use crate::builder_async::{AsyncInputHandle, OperatorBuilder as OperatorBuilderAsync};
+use crate::builder_async::{
+    AsyncInputHandle, AsyncOutputHandle, OperatorBuilder as OperatorBuilderAsync,
+};
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>
@@ -75,7 +79,7 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
@@ -99,7 +103,7 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
         P1: ParallelizationContract<G::Timestamp, D1>,
@@ -141,6 +145,16 @@ where
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
     fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
+
+    /// Wraps the stream with an operator that passes through all received inputs as long as the
+    /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
+    /// into the operator is dropped.
+    fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
+
+    /// Distributes the data of the stream to all workers in a round-robin fashion.
+    fn distribute(&self) -> Stream<G, D1>
+    where
+        D1: ExchangeData;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -195,6 +209,31 @@ where
         <R2 as Multiply<R>>::Output: Data + Semigroup,
         L: FnMut(D1) -> (D2, R2) + 'static,
         G::Timestamp: Lattice;
+
+    /// Partitions the input into a monotonic collection and
+    /// non-monotone exceptions, with respect to differences.
+    ///
+    /// The exceptions are transformed by `into_err`.
+    fn ensure_monotonic<E, IE>(&self, into_err: IE) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    where
+        E: Data,
+        IE: Fn(D1, R) -> (E, R) + 'static,
+        R: num_traits::sign::Signed;
+
+    /// Wraps the collection with an operator that passes through all received inputs as long as
+    /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
+    /// flowing into the operator is dropped.
+    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
+
+    /// Consolidates the collection if `must_consolidate` is `true` and leaves it
+    /// untouched otherwise.
+    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hash,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -253,7 +292,7 @@ where
             Capability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
@@ -289,7 +328,7 @@ where
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
-            OutputWrapper<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+            AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
         P1: ParallelizationContract<G::Timestamp, D1>,
@@ -378,6 +417,35 @@ where
             }
         })
     }
+
+    fn with_token(&self, token: Weak<()>) -> Stream<G, D1> {
+        self.unary(Pipeline, "WithToken", move |_cap, _info| {
+            let mut vector = Default::default();
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    if token.upgrade().is_some() {
+                        data.swap(&mut vector);
+                        output.session(&cap).give_container(&mut vector);
+                    }
+                });
+            }
+        })
+    }
+
+    fn distribute(&self) -> Stream<G, D1>
+    where
+        D1: ExchangeData,
+    {
+        let mut vector = Vec::new();
+        self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
+            move |input, output| {
+                input.for_each(|time, data| {
+                    data.swap(&mut vector);
+                    output.session(&time).give_vec(&mut vector);
+                });
+            }
+        })
+    }
 }
 
 impl<G, D1, R> CollectionExt<G, D1, R> for Collection<G, D1, R>
@@ -438,6 +506,86 @@ where
             })
             .as_collection()
     }
+
+    fn ensure_monotonic<E, IE>(&self, into_err: IE) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    where
+        E: Data,
+        IE: Fn(D1, R) -> (E, R) + 'static,
+        R: num_traits::sign::Signed,
+    {
+        let mut buffer = Vec::new();
+        let (oks, errs) = self
+            .inner
+            .unary_fallible(Pipeline, "EnsureMonotonic", move |_, _| {
+                Box::new(move |input, ok_output, err_output| {
+                    input.for_each(|time, data| {
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        data.swap(&mut buffer);
+                        for (x, t, d) in buffer.drain(..) {
+                            if d.is_positive() {
+                                ok_session.give((x, t, d))
+                            } else {
+                                let (e, d2) = into_err(x, d);
+                                err_session.give((e, t, d2))
+                            }
+                        }
+                    })
+                })
+            });
+        (oks.as_collection(), errs.as_collection())
+    }
+
+    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
+        self.inner.with_token(token).as_collection()
+    }
+
+    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hash,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice + Ord,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch,
+    {
+        if must_consolidate {
+            // We employ AHash below instead of the default hasher in DD to obtain
+            // a better distribution of data to workers. AHash claims empirically
+            // both speed and high quality, according to
+            // https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md.
+            // TODO(vmarcos): Consider here if it is worth it to spend the time to
+            // implement twisted tabulation hashing as proposed in Mihai Patrascu,
+            // Mikkel Thorup: Twisted Tabulation Hashing. SODA 2013: 209-228, available
+            // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
+            // would provide good bounds for balls-into-bins problems when the number of
+            // bins is small (as is our case), so we'd have a theoretical guarantee.
+            // NOTE: We fix the seeds of a RandomState instance explicity with the same
+            // seeds that would be given by `AHash` via ahash::AHasher::default() so as
+            // to avoid a different selection due to compile-time features being differently
+            // selected in other dependencies using `AHash` vis-à-vis cargo's strategy
+            // of unioning features.
+            // NOTE: Depending on target features, we may end up employing the fallback
+            // hasher of `AHash`, but it should be sufficient for our needs.
+            let random_state = ahash::RandomState::with_seeds(
+                0x243f_6a88_85a3_08d3,
+                0x1319_8a2e_0370_7344,
+                0xa409_3822_299f_31d0,
+                0x082e_fa98_ec4e_6c89,
+            );
+            let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
+                let data = &(update.0).0;
+                let mut h = random_state.build_hasher();
+                data.hash(&mut h);
+                h.finish()
+            });
+            // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
+            #[allow(clippy::disallowed_methods)]
+            self.arrange_core::<_, Tr>(exchange, name)
+                .as_collection(|k, _v| k.clone())
+        } else {
+            self
+        }
+    }
 }
 
 /// Creates a new async data stream source for a scope.
@@ -451,7 +599,7 @@ where
     B: FnOnce(
         Capability<G::Timestamp>,
         OperatorInfo,
-        OutputWrapper<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
+        AsyncOutputHandle<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
     ) -> BFut,
     BFut: Future + 'static,
 {

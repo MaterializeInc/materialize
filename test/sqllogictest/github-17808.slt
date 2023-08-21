@@ -38,17 +38,12 @@ Explained Query:
   Return
     Threshold
       Union
-        Get l1
+        Get materialize.public.foo
         Negate
           Get l0
   With Mutually Recursive
     cte l1 =
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          Constant
-            - ()
-        ArrangeBy keys=[[]]
-          Get materialize.public.foo
+      Get materialize.public.foo
     cte l0 =
       Get l1
 

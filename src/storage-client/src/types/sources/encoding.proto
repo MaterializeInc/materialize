@@ -38,6 +38,7 @@ message ProtoDataEncodingInner {
         google.protobuf.Empty bytes = 5;
         google.protobuf.Empty text = 6;
         mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 7;
+        google.protobuf.Empty json = 8;
     }
 }
 

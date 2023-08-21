@@ -10,6 +10,7 @@
 syntax = "proto3";
 
 import "expr/src/scalar.proto";
+import "expr/src/id.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 
@@ -23,6 +24,7 @@ message ProtoDecodeError {
 message ProtoDecodeErrorKind {
     oneof kind {
         string text = 1;
+        string bytes = 2;
     }
 }
 
@@ -45,10 +47,15 @@ message ProtoUpsertValueError {
     mz_repr.row.ProtoRow for_key = 2;
 }
 
+message ProtoUpsertNullKeyError {
+    mz_expr.id.ProtoPartitionId partition_id = 1;
+}
+
 message ProtoUpsertError {
     oneof kind {
         ProtoDecodeError key_decode = 1;
         ProtoUpsertValueError value = 2;
+        ProtoUpsertNullKeyError null_key = 3;
     }
 }
 

@@ -4,7 +4,7 @@ description: "How to get support for Materialize"
 menu:
   main:
     parent: 'about'
-    weight: 30
+    weight: 10
 ---
 
 ## Getting help

@@ -12,6 +12,9 @@
 # they do not test that the analysis doesn't have false positives on
 # non-monotonic sources.
 
+# TODO: Once we have support for more "LOAD GENERATOR"-based monotonic
+# sources these tests can be migrated to `monotonic.slt`.
+
 $ set non-dbz-schema={
     "type": "record",
     "name": "cpx",
@@ -84,7 +87,7 @@ materialize.public.v2:
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
 Used Indexes:
-  - materialize.public.i1_primary_idx
+  - materialize.public.i1_primary_idx (*** full scan ***)
 
 > CREATE SOURCE non_dbz_data_indexed
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -108,7 +111,7 @@ materialize.public.v3:
         arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
 
 Used Indexes:
-  - materialize.public.non_dbz_data_indexed_primary_idx
+  - materialize.public.non_dbz_data_indexed_primary_idx (*** full scan ***)
 
 > CREATE VIEW i4 AS SELECT b+1 as c FROM i1;
 > CREATE DEFAULT INDEX ON i4;
@@ -128,7 +131,7 @@ materialize.public.v5:
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
 Used Indexes:
-  - materialize.public.i4_primary_idx
+  - materialize.public.i4_primary_idx (*** full scan ***)
 
 > CREATE VIEW i6 AS SELECT c FROM v5;
 > CREATE DEFAULT INDEX ON i6;
@@ -148,7 +151,7 @@ materialize.public.v7:
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
 Used Indexes:
-  - materialize.public.i6_primary_idx
+  - materialize.public.i6_primary_idx (*** full scan ***)
 
 > CREATE VIEW i8 AS SELECT * from (SELECT * FROM i1 UNION ALL SELECT * FROM i1);
 > CREATE DEFAULT INDEX ON i8;
@@ -171,11 +174,37 @@ materialize.public.v10:
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
 
 Used Indexes:
-  - materialize.public.i9_primary_idx
+  - materialize.public.i9_primary_idx (*** full scan ***)
 
 > CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data;
 
 > CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeMonotonic
+ArrangeMonotonic
+ArrangeMonotonic
+"Arranged TopK input"
+ReduceMonotonic
+ReduceMonotonic
+ReduceMonotonic
+"Reduced TopK input"
 
 # Propagating monotonicity analysis through materialized views
 

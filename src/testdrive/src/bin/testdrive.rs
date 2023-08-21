@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -78,15 +76,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process;
 use std::time::Duration;
+use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::path::PathExt;
+use mz_testdrive::Config;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -95,11 +95,6 @@ use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
-
-use mz_ore::cli::{self, CliConfig};
-use mz_ore::path::PathExt;
-
-use mz_testdrive::Config;
 
 macro_rules! die {
     ($($e:expr),*) => {{
@@ -131,6 +126,9 @@ struct Args {
     /// name.
     #[clap(long, value_name = "PATH")]
     temp_dir: Option<String>,
+    /// Source string to print out on errors.
+    #[clap(long, value_name = "SOURCE")]
+    source: Option<String>,
     /// Default timeout for cancellable operations.
     #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
@@ -170,8 +168,8 @@ struct Args {
     junit_report: Option<PathBuf>,
     /// Which log messages to emit.
     ///
-    /// See environmentd's `--log-filter` option for details.
-    #[clap(long, value_name = "FILTER", default_value = "off")]
+    /// See environmentd's `--startup-log-filter` option for details.
+    #[clap(long, env = "LOG_FILTER", value_name = "FILTER", default_value = "off")]
     log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
@@ -373,6 +371,7 @@ async fn main() {
         seed: args.seed,
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
+        source: args.source,
         default_timeout: args.default_timeout,
         default_max_tries: args.default_max_tries,
         initial_backoff: args.initial_backoff,
@@ -512,7 +511,9 @@ async fn main() {
         eprint!("+++ ");
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);
-        if !error_files.is_empty() {
+        if config.source.is_some() {
+            eprintln!("source: {}", config.source.unwrap());
+        } else if !error_files.is_empty() {
             eprintln!(
                 "files involved: {}",
                 error_files.iter().map(|p| p.display()).join(" ")

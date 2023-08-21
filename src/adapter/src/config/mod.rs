@@ -7,54 +7,82 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::BTreeMap;
 
-use tokio::time;
+use mz_ore::metric;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_ore::now::NowFn;
+use mz_sql::catalog::EnvironmentId;
+use prometheus::IntCounter;
 
 mod backend;
 mod frontend;
 mod params;
+mod sync;
 
 pub use backend::SystemParameterBackend;
 pub use frontend::SystemParameterFrontend;
 pub use params::{ModifiedParameter, SynchronizedParameters};
+pub use sync::system_parameter_sync;
 
-/// Run a loop that periodically pulls system parameters defined in the
-/// LaunchDarkly-backed [SystemParameterFrontend] and pushes modified values to the
-/// `ALTER SYSTEM`-backed [SystemParameterBackend].
-pub async fn system_parameter_sync(
-    frontend: Arc<SystemParameterFrontend>,
-    mut backend: SystemParameterBackend,
-    tick_interval: Option<Duration>,
-) -> Result<(), anyhow::Error> {
-    let tick_interval = match tick_interval {
-        Some(tick_interval) => tick_interval,
-        None => {
-            tracing::info!("skipping system parameter sync as tick_interval = None");
-            return Ok(());
+/// A factory for [SystemParameterFrontend] instances.
+#[derive(Clone, Debug)]
+pub struct SystemParameterSyncConfig {
+    /// The environment ID that should identify connected clients.
+    env_id: EnvironmentId,
+    /// Parameter sync metrics.
+    metrics: Metrics,
+    /// Function to return the current time.
+    now_fn: NowFn,
+    /// The SDK key.
+    ld_sdk_key: String,
+    /// A map from parameter names to LaunchDarkly feature keys
+    /// to use when populating the the [SynchronizedParameters]
+    /// instance in [SystemParameterFrontend::pull].
+    ld_key_map: BTreeMap<String, String>,
+}
+
+impl SystemParameterSyncConfig {
+    /// Construct a new [SystemParameterFrontend] instance.
+    pub fn new(
+        env_id: EnvironmentId,
+        registry: &MetricsRegistry,
+        now_fn: NowFn,
+        ld_sdk_key: String,
+        ld_key_map: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            env_id,
+            metrics: Metrics::register_into(registry),
+            now_fn,
+            ld_sdk_key,
+            ld_key_map,
         }
-    };
+    }
+}
 
-    // Ensure the frontend client is initialized.
-    frontend.ensure_initialized().await;
+#[derive(Debug, Clone)]
+pub(super) struct Metrics {
+    pub last_cse_time_seconds: UIntGauge,
+    pub last_sse_time_seconds: UIntGauge,
+    pub params_changed: IntCounter,
+}
 
-    // Run the synchronization loop.
-    tracing::info!(
-        "synchronizing system parameter values every {} seconds",
-        tick_interval.as_secs()
-    );
-
-    // Tick every `tick_duration` ms, skipping missed ticks.
-    let mut interval = time::interval(tick_interval);
-    interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-    let mut params = SynchronizedParameters::default();
-    loop {
-        interval.tick().await;
-        backend.pull(&mut params).await;
-        if frontend.pull(&mut params) {
-            backend.push(&mut params).await;
+impl Metrics {
+    pub(super) fn register_into(registry: &MetricsRegistry) -> Self {
+        Self {
+            last_cse_time_seconds: registry.register(metric!(
+                name: "mz_parameter_frontend_last_cse_time_seconds",
+                help: "The last known time when the LaunchDarkly client sent an event to the LaunchDarkly server (as unix timestamp).",
+            )),
+            last_sse_time_seconds: registry.register(metric!(
+                name: "mz_parameter_frontend_last_sse_time_seconds",
+                help: "The last known time when the LaunchDarkly client received an event from the LaunchDarkly server (as unix timestamp).",
+            )),
+            params_changed: registry.register(metric!(
+                name: "mz_parameter_frontend_params_changed",
+                help: "The number of parameter changes pulled from the LaunchDarkly frontend.",
+            )),
         }
     }
 }

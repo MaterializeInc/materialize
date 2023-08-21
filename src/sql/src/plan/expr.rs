@@ -12,34 +12,31 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to lower().
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::mem;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{Display, Formatter};
+use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
-use mz_expr::visit::VisitChildren;
-use mz_ore::stack::RecursionLimitError;
-use serde::{Deserialize, Serialize};
-
-use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
-use mz_ore::collections::CollectionExt;
-use mz_ore::stack;
-use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::*;
-
-use crate::plan::error::PlanError;
-use crate::plan::query::ExprContext;
-use crate::plan::typeconv::{self, CastContext};
-use crate::plan::Params;
-
+use mz_expr::visit::{Visit, VisitChildren};
+use mz_expr::{func, CollectionPlan, Id, LetRecLimit};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack;
+use mz_ore::stack::RecursionLimitError;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::*;
+use serde::{Deserialize, Serialize};
+
+use crate::plan::error::PlanError;
+use crate::plan::query::ExprContext;
+use crate::plan::typeconv::{self, CastContext};
+use crate::plan::Params;
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;
@@ -91,7 +88,7 @@ impl AlgExcept for Hir {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-/// Just like MirRelationExpr, except where otherwise noted below.
+/// Just like [`mz_expr::MirRelationExpr`], except where otherwise noted below.
 pub enum HirRelationExpr {
     Constant {
         rows: Vec<Row>,
@@ -103,6 +100,8 @@ pub enum HirRelationExpr {
     },
     /// Mutually recursive CTE
     LetRec {
+        /// Maximum number of iterations to evaluate. If None, then there is no limit.
+        limit: Option<LetRecLimit>,
         /// List of bindings all of which are in scope of each other.
         bindings: Vec<(String, mz_expr::LocalId, HirRelationExpr, RelationType)>,
         /// Result of the AST node.
@@ -149,7 +148,7 @@ pub enum HirRelationExpr {
         input: Box<HirRelationExpr>,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     },
     Distinct {
         input: Box<HirRelationExpr>,
@@ -166,6 +165,8 @@ pub enum HirRelationExpr {
         limit: Option<usize>,
         /// Number of records to skip
         offset: usize,
+        /// User-supplied hint: how many rows will have the same group key.
+        expected_group_size: Option<u64>,
     },
     Negate {
         input: Box<HirRelationExpr>,
@@ -181,7 +182,7 @@ pub enum HirRelationExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-/// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
+/// Just like [`mz_expr::MirScalarExpr`], except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.
@@ -229,6 +230,9 @@ pub enum HirScalarExpr {
 pub struct WindowExpr {
     pub func: WindowExprType,
     pub partition: Vec<HirScalarExpr>,
+    // ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
+    // - the `ColumnOrder`s we have put in `func` above,
+    // - the `HirScalarExpr`s we have put in the following `order_by` field.
     pub order_by: Vec<HirScalarExpr>,
 }
 
@@ -438,6 +442,7 @@ impl ScalarWindowExpr {
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
+            ScalarWindowFunc::Rank => {}
             ScalarWindowFunc::DenseRank => {}
         }
         Ok(())
@@ -450,6 +455,7 @@ impl ScalarWindowExpr {
     {
         match self.func {
             ScalarWindowFunc::RowNumber => {}
+            ScalarWindowFunc::Rank => {}
             ScalarWindowFunc::DenseRank => {}
         }
         Ok(())
@@ -469,6 +475,9 @@ impl ScalarWindowExpr {
             ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
                 order_by: self.order_by,
             },
+            ScalarWindowFunc::Rank => mz_expr::AggregateFunc::Rank {
+                order_by: self.order_by,
+            },
             ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank {
                 order_by: self.order_by,
             },
@@ -480,13 +489,25 @@ impl ScalarWindowExpr {
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
+    Rank,
     DenseRank,
+}
+
+impl Display for ScalarWindowFunc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ScalarWindowFunc::RowNumber => write!(f, "row_number"),
+            ScalarWindowFunc::Rank => write!(f, "rank"),
+            ScalarWindowFunc::DenseRank => write!(f, "dense_rank"),
+        }
+    }
 }
 
 impl ScalarWindowFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
             ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
+            ScalarWindowFunc::Rank => ScalarType::Int64.nullable(false),
             ScalarWindowFunc::DenseRank => ScalarType::Int64.nullable(false),
         }
     }
@@ -495,9 +516,21 @@ impl ScalarWindowFunc {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
-    pub expr: Box<HirScalarExpr>,
+    pub args: Box<HirScalarExpr>, // arg list encoded in a record, e.g., `lag(row(#1, 3, null))`
     pub order_by: Vec<ColumnOrder>,
     pub window_frame: WindowFrame,
+    pub ignore_nulls: bool,
+}
+
+impl Display for ValueWindowFunc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueWindowFunc::Lag => write!(f, "lag"),
+            ValueWindowFunc::Lead => write!(f, "lead"),
+            ValueWindowFunc::FirstValue => write!(f, "first_value"),
+            ValueWindowFunc::LastValue => write!(f, "last_value"),
+        }
+    }
 }
 
 impl ValueWindowExpr {
@@ -506,7 +539,7 @@ impl ValueWindowExpr {
     where
         F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
     {
-        f(&self.expr)
+        f(&self.args)
     }
 
     #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
@@ -514,7 +547,7 @@ impl ValueWindowExpr {
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {
-        f(&mut self.expr)
+        f(&mut self.args)
     }
 
     fn typ(
@@ -523,7 +556,7 @@ impl ValueWindowExpr {
         inner: &RelationType,
         params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
-        self.func.output_type(self.expr.typ(outers, inner, params))
+        self.func.output_type(self.args.typ(outers, inner, params))
     }
 
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
@@ -532,10 +565,12 @@ impl ValueWindowExpr {
             ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
                 order_by: self.order_by,
                 lag_lead: mz_expr::LagLeadType::Lag,
+                ignore_nulls: self.ignore_nulls,
             },
             ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
                 order_by: self.order_by,
                 lag_lead: mz_expr::LagLeadType::Lead,
+                ignore_nulls: self.ignore_nulls,
             },
             ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
                 order_by: self.order_by,
@@ -554,14 +589,14 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     where
         F: FnMut(&HirScalarExpr),
     {
-        f(&self.expr)
+        f(&self.args)
     }
 
     fn visit_mut_children<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut HirScalarExpr),
     {
-        f(&mut self.expr)
+        f(&mut self.args)
     }
 
     fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
@@ -569,7 +604,7 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
         F: FnMut(&HirScalarExpr) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        f(&self.expr)
+        f(&self.args)
     }
 
     fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
@@ -577,7 +612,7 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
         F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        f(&mut self.expr)
+        f(&mut self.args)
     }
 }
 
@@ -1194,7 +1229,7 @@ impl HirRelationExpr {
         self,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> Self {
         HirRelationExpr::Reduce {
             input: Box::new(self),
@@ -1211,6 +1246,7 @@ impl HirRelationExpr {
         order_key: Vec<ColumnOrder>,
         limit: Option<usize>,
         offset: usize,
+        expected_group_size: Option<u64>,
     ) -> Self {
         HirRelationExpr::TopK {
             input: Box::new(self),
@@ -1218,6 +1254,7 @@ impl HirRelationExpr {
             order_key,
             limit,
             offset,
+            expected_group_size,
         }
     }
 
@@ -1333,7 +1370,11 @@ impl HirRelationExpr {
                 f(value, depth)?;
                 f(body, depth)?;
             }
-            HirRelationExpr::LetRec { bindings, body } => {
+            HirRelationExpr::LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter() {
                     f(value, depth)?;
                 }
@@ -1416,7 +1457,11 @@ impl HirRelationExpr {
                 f(value, depth)?;
                 f(body, depth)?;
             }
-            HirRelationExpr::LetRec { bindings, body } => {
+            HirRelationExpr::LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter_mut() {
                     f(value, depth)?;
                 }
@@ -1640,10 +1685,72 @@ impl HirRelationExpr {
                     order_key: finishing.order_by,
                     limit: finishing.limit,
                     offset: finishing.offset,
+                    expected_group_size: None,
                 }),
                 outputs: finishing.project,
             }
         }
+    }
+
+    /// The HirRelationExpr is considered potentially expensive if and only if
+    /// at least one of the following conditions is true:
+    ///
+    ///  - It contains at least one CallTable or a Reduce operator.
+    ///  - It contains at least one HirScalarExpr with a function call.
+    ///
+    /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    pub fn could_run_expensive_function(&self) -> bool {
+        let mut result = false;
+        if let Err(_) = self.visit_pre(&mut |e: &HirRelationExpr| {
+            use HirRelationExpr::*;
+            use HirScalarExpr::*;
+
+            self.visit_children(|scalar: &HirScalarExpr| {
+                if let Err(_) = scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
+                    result |= match scalar {
+                        Column(_)
+                        | Literal(_, _)
+                        | CallUnmaterializable(_)
+                        | If { .. }
+                        | Parameter(..)
+                        | Select(..)
+                        | Exists(..) => false,
+                        // Function calls are considered expensive
+                        CallUnary { .. }
+                        | CallBinary { .. }
+                        | CallVariadic { .. }
+                        | Windowing(..) => true,
+                    };
+                }) {
+                    // Conservatively set `true` on RecursionLimitError.
+                    result = true;
+                }
+            });
+
+            // CallTable has a table function; Reduce has an aggregate function.
+            // Other constructs use MirScalarExpr to run a function
+            result |= matches!(e, CallTable { .. } | Reduce { .. });
+        }) {
+            // Conservatively set `true` on RecursionLimitError.
+            result = true;
+        }
+
+        result
+    }
+}
+
+impl CollectionPlan for HirRelationExpr {
+    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        if let Self::Get {
+            id: Id::Global(id), ..
+        } = self
+        {
+            out.insert(*id);
+        }
+        self.visit_children(|expr: &HirRelationExpr| expr.depends_on_into(out))
     }
 }
 
@@ -1675,7 +1782,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value);
                 f(body);
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter() {
                     f(value);
                 }
@@ -1716,6 +1827,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1757,7 +1869,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value);
                 f(body);
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter_mut() {
                     f(value);
                 }
@@ -1798,6 +1914,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1839,7 +1956,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value)?;
                 f(body)?;
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter() {
                     f(value)?;
                 }
@@ -1880,6 +2001,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1922,7 +2044,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value)?;
                 f(body)?;
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                limit: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter_mut() {
                     f(value)?;
                 }
@@ -1963,6 +2089,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1995,6 +2122,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2043,6 +2171,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }
@@ -2065,6 +2194,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2113,6 +2243,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }
@@ -2136,6 +2267,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2184,6 +2316,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }
@@ -2208,6 +2341,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                limit: _,
                 bindings: _,
                 body: _,
             }
@@ -2256,6 +2390,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }

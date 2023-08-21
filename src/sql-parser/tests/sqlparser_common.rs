@@ -56,8 +56,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -86,23 +84,23 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use itertools::Itertools;
 use std::error::Error;
 use std::iter;
 
-use unicode_width::UnicodeWidthStr;
-
+use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawObjectName};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName, Statement};
 use mz_sql_parser::parser::{
     self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
 };
+use unicode_width::UnicodeWidthStr;
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     use datadriven::{walk, TestCase};
 
@@ -131,13 +129,28 @@ fn datadriven() {
                 if s.len() != 1 {
                     return "expected exactly one statement\n".to_string();
                 }
-                let stmt = s.into_element();
-                let parsed = match parser::parse_statements(&stmt.to_string()) {
-                    Ok(parsed) => parsed.into_element(),
-                    Err(err) => return format!("reparse failed: {}\n", err),
-                };
-                if parsed != stmt {
-                    return format!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);
+                let stmt = s.into_element().ast;
+                for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
+                    let mut parsed = match parser::parse_statements(&printed) {
+                        Ok(parsed) => parsed.into_element().ast,
+                        Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
+                    };
+                    match (&mut parsed, &stmt) {
+                        // DECLARE remembers the original SQL. Erase that here so it can differ if
+                        // needed (for example, quoting identifiers vs not). This is ok because we
+                        // still compare that the resulting ASTs are identical, and it's valid for
+                        // those to come from different original strings.
+                        (Statement::Declare(parsed), Statement::Declare(stmt)) => {
+                            parsed.sql = stmt.sql.clone();
+                        }
+                        _ => {}
+                    }
+                    if parsed != stmt {
+                        panic!(
+                            "reparse comparison failed:\n{:?}\n!=\n{:?}\n{printed}\n",
+                            stmt, parsed
+                        );
+                    }
                 }
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", stmt)
@@ -147,7 +160,7 @@ fn datadriven() {
                     format!("{}\n=>\n{:?}\n", stmt, stmt)
                 }
             }
-            Err(e) => render_error(input, e),
+            Err(e) => render_error(input, e.error),
         }
     }
 
@@ -155,6 +168,29 @@ fn datadriven() {
         let input = tc.input.trim();
         match parser::parse_expr(input) {
             Ok(s) => {
+                for printed in [s.to_ast_string(), s.to_ast_string_stable()] {
+                    match parser::parse_expr(&printed) {
+                        Ok(parsed) => {
+                            // TODO: We always coerce the double colon operator into a Cast expr instead
+                            // of keeping it as an Op (see parse_pg_cast). Expr::Cast always prints
+                            // itself as double colon. We're thus unable to perfectly roundtrip
+                            // `CAST(..)`. We could fix this by keeping "::" as a binary operator and
+                            // teaching func.rs how to handle it, similar to how that file handles "~~"
+                            // (without the parser converting that operator directly into an
+                            // Expr::Like).
+                            if !matches!(parsed, Expr::Cast { .. }) {
+                                if parsed != s {
+                                    panic!(
+                                    "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
+                                    s, parsed
+                                );
+                                }
+                            }
+                        }
+                        Err(err) => panic!("reparse failed: {printed}: {err}\n{s:?}"),
+                    }
+                }
+
                 if tc.args.get("roundtrip").is_some() {
                     format!("{}\n", s)
                 } else {
@@ -178,7 +214,8 @@ fn datadriven() {
     });
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
 
@@ -209,6 +246,7 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
         ("+ a / b COLLATE coll", "(+a) / (b COLLATE coll)"),
         ("- ts AT TIME ZONE 'tz'", "(-ts) AT TIME ZONE 'tz'"),
         ("a[b].c::d", "((a[b]).c)::d"),
+        ("2 OPERATOR(*) 2 + 2", "2 OPERATOR(*) (2 + 2)"),
     ] {
         let left = parser::parse_expr(actual)?;
         let mut right = parser::parse_expr(expected)?;
@@ -219,7 +257,7 @@ fn op_precedence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
+#[mz_ore::test]
 fn format_ident() {
     let cases = vec![
         ("foo", "foo", "\"foo\""),
@@ -248,7 +286,8 @@ fn format_ident() {
     }
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     struct Visitor<'a> {
         seen_idents: Vec<&'a str>,
@@ -258,8 +297,8 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         fn visit_ident(&mut self, ident: &'a Ident) {
             self.seen_idents.push(ident.as_str());
         }
-        fn visit_object_name(&mut self, object_name: &'a <Raw as AstInfo>::ObjectName) {
-            if let RawObjectName::Name(name) = object_name {
+        fn visit_item_name(&mut self, item_name: &'a <Raw as AstInfo>::ItemName) {
+            if let RawItemName::Name(name) = item_name {
                 for ident in &name.0 {
                     self.seen_idents.push(ident.as_str());
                 }
@@ -267,7 +306,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         }
         fn visit_data_type(&mut self, data_type: &'a <Raw as AstInfo>::DataType) {
             if let RawDataType::Other { name, .. } = data_type {
-                self.visit_object_name(name)
+                self.visit_item_name(name)
             }
         }
     }
@@ -348,14 +387,15 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         seen_idents: Vec::new(),
     };
     for stmt in &stmts {
-        Visit::visit_statement(&mut visitor, stmt);
+        Visit::visit_statement(&mut visitor, &stmt.ast);
     }
     assert_eq!(visitor.seen_idents, expected);
 
     Ok(())
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let size = statement.bytes().count();

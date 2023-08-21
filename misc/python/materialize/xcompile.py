@@ -15,7 +15,7 @@ import sys
 from enum import Enum
 from typing import Dict, List, Optional
 
-from materialize import ROOT, spawn
+from materialize import MZ_ROOT, spawn
 
 
 class Arch(Enum):
@@ -82,16 +82,16 @@ def cargo(
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [f"-L{sysroot}/lib"]
         extra_env = {
-            f"CMAKE_SYSTEM_NAME": "Linux",
+            "CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            f"CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
-            f"TARGET_AR": f"{_target}-ar",
-            f"TARGET_CPP": f"{_target}-cpp",
-            f"TARGET_CC": f"{_target}-cc",
-            f"TARGET_CXX": f"{_target}-c++",
-            f"TARGET_CXXSTDLIB": "static=stdc++",
-            f"TARGET_LD": f"{_target}-ld",
-            f"TARGET_RANLIB": f"{_target}-ranlib",
+            "CARGO_TARGET_DIR": str(MZ_ROOT / "target-xcompile"),
+            "TARGET_AR": f"{_target}-ar",
+            "TARGET_CPP": f"{_target}-cpp",
+            "TARGET_CC": f"{_target}-cc",
+            "TARGET_CXX": f"{_target}-c++",
+            "TARGET_CXXSTDLIB": "static=stdc++",
+            "TARGET_LD": f"{_target}-ld",
+            "TARGET_RANLIB": f"{_target}-ranlib",
         }
     else:
         # NOTE(benesch): The required Rust flags have to be duplicated with
@@ -119,22 +119,27 @@ def cargo(
     ]
 
 
-def tool(arch: Arch, name: str, channel: Optional[str] = None) -> List[str]:
+def tool(
+    arch: Arch, name: str, channel: Optional[str] = None, prefix_name: bool = True
+) -> List[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
         arch: The CPU architecture to build for.
         name: The name of the binutils tool to invoke.
         channel: The Rust toolchain channel to use. Either None/"stable" or "nightly".
+        prefix_name: Whether or not the tool name should be prefixed with the target
+            architecture.
 
     Returns:
         A list of arguments specifying the beginning of the command to invoke.
     """
     if sys.platform == "darwin":
         _bootstrap_darwin(arch)
+    tool_name = f"{target(arch)}-{name}" if prefix_name else name
     return [
         *_enter_builder(arch, channel),
-        f"{target(arch)}-{name}",
+        tool_name,
     ]
 
 
@@ -156,7 +161,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # cross-compiling toolchain on the host and use that instead.
 
     BOOTSTRAP_VERSION = "4"
-    BOOTSTRAP_FILE = ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
+    BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
     except FileNotFoundError:

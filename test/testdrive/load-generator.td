@@ -12,7 +12,7 @@
 > SHOW SOURCES
 accounts                subsource      <null>
 auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  subsource <null>
+auction_house_progress  progress       <null>
 auctions                subsource      <null>
 bids                    subsource      <null>
 organizations           subsource      <null>
@@ -20,12 +20,40 @@ users                   subsource      <null>
 
 # Adding test to check for tables() work
 > CREATE SCHEMA a;
-> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids as a.bids);
+> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids);
 
 > SHOW SOURCES FROM a;
 auction_bids            load-generator ${arg.default-storage-size}
-auction_bids_progress   subsource      <null>
+auction_bids_progress   progress       <null>
 bids                    subsource      <null>
+
+# For Tables with mentioned schema should work
+> CREATE SCHEMA another;
+> CREATE SOURCE another.auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+
+> SHOW SOURCES FROM another;
+accounts                subsource      <null>
+auction_house           load-generator ${arg.default-storage-size}
+auction_house_progress  progress       <null>
+auctions                subsource      <null>
+bids                    subsource      <null>
+organizations           subsource      <null>
+users                   subsource      <null>
+
+# Subsources should be created in source schema if no schema is provided
+> CREATE SCHEMA foo;
+> CREATE SCHEMA bar;
+> CREATE SOURCE foo.auction_subset
+  FROM LOAD GENERATOR AUCTION
+  FOR TABLES (bids as foo_bids, users as bar.bar_users);
+
+> SHOW SOURCES FROM foo;
+auction_subset            load-generator ${arg.default-storage-size}
+auction_subset_progress   progress       <null>
+foo_bids                  subsource      <null>
+
+> SHOW SOURCES FROM bar;
+bar_users                 subsource      <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -83,9 +111,9 @@ $ set-regex match=\d+ replacement=<NUMBER>
 <NUMBER>
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM auction_house_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 # Check that for all tables clause is rejected with no subsources
 ! CREATE SOURCE counter6

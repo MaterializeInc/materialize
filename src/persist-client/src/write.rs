@@ -12,34 +12,37 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType};
+use proptest_derive::Arbitrary;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig};
+use crate::batch::{
+    validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+    ProtoBatch,
+};
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
+use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HollowBatch, Upper};
-use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig, ShardId};
+use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
@@ -83,24 +86,6 @@ impl WriterId {
     }
 }
 
-/// A token representing one written batch.
-///
-/// This may be exchanged (including over the network). It is tradeable via
-/// [`WriteHandle::batch_from_hollow_batch`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "T: Timestamp + Codec64",
-    deserialize = "T: Timestamp + Codec64"
-))]
-#[serde(
-    into = "SerdeWriterEnrichedHollowBatch",
-    from = "SerdeWriterEnrichedHollowBatch"
-)]
-pub struct WriterEnrichedHollowBatch<T> {
-    pub(crate) shard_id: ShardId,
-    pub(crate) batch: HollowBatch<T>,
-}
-
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
 ///
@@ -131,14 +116,13 @@ where
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) compact: Option<Compactor<K, V, T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
-    pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) writer_id: WriterId,
+    pub(crate) debug_state: HandleDebugState,
+    pub(crate) schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
-
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -148,6 +132,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    // We don't actually do an async call in here at the moment, but we used to and may
+    // again later, so let's reserve the right for now.
+    #[allow(clippy::unused_async)]
     pub(crate) async fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
@@ -155,25 +142,35 @@ where
         gc: GarbageCollector<K, V, T, D>,
         compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
+        purpose: &str,
+        schemas: Schemas<K, V>,
         upper: Antichain<T>,
-        last_heartbeat: EpochMillis,
     ) -> Self {
+        let debug_state = HandleDebugState {
+            hostname: cfg.hostname.to_owned(),
+            purpose: purpose.to_owned(),
+        };
         WriteHandle {
             cfg,
             metrics,
-            machine: machine.clone(),
-            gc: gc.clone(),
+            machine,
+            gc,
             compact,
             blob,
-            cpu_heavy_runtime,
-            writer_id: writer_id.clone(),
+            isolated_runtime,
+            writer_id,
+            debug_state,
+            schemas,
             upper,
-            last_heartbeat,
             explicitly_expired: false,
-            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id, gc).await),
         }
+    }
+
+    /// This handle's shard id.
+    pub fn shard_id(&self) -> ShardId {
+        self.machine.shard_id()
     }
 
     /// A cached version of the shard-global `upper` frontier.
@@ -192,9 +189,11 @@ where
     pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
-        let fresh_upper = self.machine.fetch_upper().await;
-        self.upper.clone_from(fresh_upper);
-        fresh_upper
+        self.machine
+            .applier
+            .fetch_upper(|current_upper| self.upper.clone_from(current_upper))
+            .await;
+        &self.upper
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -216,9 +215,8 @@ where
     /// this shard, promising that no more data is ever incoming.
     ///
     /// `updates` may be empty, which allows for downgrading `upper` to
-    /// communicate progress. It is possible to heartbeat a writer lease by
-    /// calling this with `upper` equal to `self.upper()` and an empty `updates`
-    /// (making the call a no-op).
+    /// communicate progress. It is possible to call this with `upper` equal to
+    /// `self.upper()` and an empty `updates` (making the call a no-op).
     ///
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
@@ -355,12 +353,6 @@ where
                     return Ok(Ok(()));
                 }
                 Err(mismatch) => {
-                    // it's possible a client using `append_batch` continually fails if
-                    // it's racing with another writer. that's perfectly fine, but we should
-                    // be sure to heartbeat our writer explicitly if it's not getting a
-                    // chance to renew its lease through `[Self::compare_and_append]`
-                    self.maybe_heartbeat_writer().await;
-
                     // We tried to to a non-contiguous append, that won't work.
                     if PartialOrder::less_than(&mismatch.current, &lower) {
                         self.upper = mismatch.current.clone();
@@ -434,6 +426,15 @@ where
                     handle_shard: self.machine.shard_id(),
                 });
             }
+            if self.cfg.build_version != batch.version {
+                error!(
+                    shard_id =? self.machine.shard_id(),
+                    batch_version =? batch.version,
+                    writer_version =? self.cfg.build_version,
+                    "Appending batch with a version that does not match the current build. \
+                    This may fail in the future."
+                )
+            }
         }
 
         let lower = expected_upper.clone();
@@ -441,10 +442,17 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let (mut parts, mut num_updates) = (Vec::new(), 0);
+        let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
-            parts.extend_from_slice(&batch.batch.parts);
+            for run in batch.batch.runs() {
+                // Mark the boundary if this is not the first run in the batch.
+                let start_index = parts.len();
+                if start_index != 0 {
+                    runs.push(start_index);
+                }
+                parts.extend_from_slice(run);
+            }
             num_updates += batch.batch.len;
         }
 
@@ -456,9 +464,10 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
-                    runs: vec![],
+                    runs,
                 },
                 &self.writer_id,
+                &self.debug_state,
                 heartbeat_timestamp,
             )
             .await;
@@ -466,7 +475,6 @@ where
         let maintenance = match res {
             Ok(Ok((_seqno, maintenance))) => {
                 self.upper = desc.upper().clone();
-                self.last_heartbeat = heartbeat_timestamp;
                 for batch in batches.iter_mut() {
                     batch.mark_consumed();
                 }
@@ -489,25 +497,24 @@ where
         Ok(Ok(()))
     }
 
-    /// Turns the given [`WriterEnrichedHollowBatch`] back into a [`Batch`]
-    /// which can be used to append it to this shard.
-    pub fn batch_from_hollow_batch(
-        &self,
-        hollow: WriterEnrichedHollowBatch<T>,
-    ) -> Batch<K, V, T, D> {
-        assert_eq!(
-            hollow.shard_id,
-            self.machine.shard_id(),
-            "hollow batch with shard id {} is not for this shard {}",
-            hollow.shard_id,
-            self.machine.shard_id()
-        );
-        Batch {
-            shard_id: self.machine.shard_id(),
-            batch: hollow.batch,
+    /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
+    /// to append it to this shard.
+    pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let ret = Batch {
+            shard_id: batch
+                .shard_id
+                .into_rust()
+                .expect("valid transmittable batch"),
+            version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            batch: batch
+                .batch
+                .into_rust_if_some("ProtoBatch::batch")
+                .expect("valid transmittable batch"),
             _blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
-        }
+        };
+        assert_eq!(ret.shard_id, self.machine.shard_id());
+        ret
     }
 
     /// Returns a [BatchBuilder] that can be used to write a batch of updates to
@@ -523,19 +530,25 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        BatchBuilder::new(
-            BatchBuilderConfig::from(&self.cfg),
+        let builder = BatchBuilderInternal::new(
+            BatchBuilderConfig::new(&self.cfg, &self.writer_id),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             self.machine.shard_id().clone(),
-            self.writer_id.clone(),
+            self.cfg.build_version.clone(),
             Antichain::from_elem(T::minimum()),
             None,
             false,
-        )
+        );
+        BatchBuilder {
+            builder,
+            stats_schemas: self.schemas.clone(),
+        }
     }
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
@@ -563,14 +576,7 @@ where
             let ((k, v), t, d) = update.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
             match builder.add(k, v, t, d).await {
-                Ok(Added::Record) => (),
-                // We need to maintain this writer's lease in case the batch is taking an
-                // exceptionally long time to write, so that our staged blobs don't get GC'd
-                // while we're still processing the batch.
-                //
-                // Here, we check if we need to heartbeat the writer each time we completed
-                // and began uploading a batch part.
-                Ok(Added::RecordAndParts) => self.maybe_heartbeat_writer().await,
+                Ok(Added::Record | Added::RecordAndParts) => (),
                 Err(invalid_usage) => return Err(invalid_usage),
             }
         }
@@ -578,49 +584,7 @@ where
         builder.finish(upper.clone()).await
     }
 
-    /// Heartbeats the writer lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this on some interval that is
-    /// "frequent" compared to PersistConfig::writer_lease_duration
-    pub async fn maybe_heartbeat_writer(&mut self) {
-        let min_elapsed = self.cfg.writer_lease_duration / 4;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.applier.cfg.writer_lease_duration {
-                warn!(
-                    "writer ({}) of shard ({}) went {}s between heartbeats",
-                    self.writer_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_writer(&self.writer_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.state().collections.is_tombstone() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this writer. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the WriterId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.writer_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
-        }
-    }
-
-    /// Politely expires this writer, releasing its lease.
+    /// Politely expires this writer, releasing any associated state.
     ///
     /// There is a best-effort impl in Drop to expire a writer that wasn't
     /// explictly expired with this method. When possible, explicit expiry is
@@ -719,9 +683,6 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
-        }
         if self.explicitly_expired {
             return;
         }
@@ -754,19 +715,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use differential_dataflow::consolidation::consolidate_updates;
-    use serde_json::json;
     use std::str::FromStr;
+
+    use differential_dataflow::consolidation::consolidate_updates;
+    use mz_ore::collections::CollectionExt;
+    use serde_json::json;
 
     use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn empty_batches() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -804,10 +766,9 @@ mod tests {
         assert_eq!(count_after, count_before);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append_batch_multi() {
-        mz_ore::test::init_logging();
-
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -831,6 +792,15 @@ mod tests {
             .expect_compare_and_append_batch(&mut [&mut batch0, &mut batch1], 0, 4)
             .await;
 
+        let batch = write
+            .machine
+            .snapshot(&Antichain::from_elem(3))
+            .await
+            .expect("just wrote this")
+            .into_element();
+
+        assert!(batch.runs().count() >= 2);
+
         let expected = vec![
             (("1".to_owned(), "one".to_owned()), 1, 2),
             (("2".to_owned(), "two".to_owned()), 2, 2),
@@ -841,7 +811,7 @@ mod tests {
         assert_eq!(actual, all_ok(&expected, 3));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -873,10 +843,9 @@ mod tests {
         assert_eq!(container.writer_id, id);
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn hollow_batch_roundtrip() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -893,8 +862,8 @@ mod tests {
         // But a) turning a batch into a hollow batch consumes it, and b) Batch
         // doesn't have Eq/PartialEq.
         let batch = write.expect_batch(&data, 0, 4).await;
-        let hollow_batch = batch.into_writer_hollow_batch();
-        let mut rehydrated_batch = write.batch_from_hollow_batch(hollow_batch);
+        let hollow_batch = batch.into_transmittable_batch();
+        let mut rehydrated_batch = write.batch_from_transmittable_batch(hollow_batch);
 
         write
             .expect_compare_and_append_batch(&mut [&mut rehydrated_batch], 0, 4)

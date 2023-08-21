@@ -15,12 +15,17 @@ CREATE VIEW test_view1 AS SELECT 1
 statement ok
 CREATE VIEW test_view2 AS SELECT 2
 
-query TTTT colnames
-SELECT * FROM pg_catalog.pg_views WHERE viewname LIKE 'test_%'
+query TTT colnames
+SELECT schemaname, viewname, definition FROM pg_catalog.pg_views WHERE viewname LIKE 'test_%'
 ----
-schemaname  viewname    viewowner  definition
-public      test_view1  NULL       SELECT␠1;
-public      test_view2  NULL       SELECT␠2;
+schemaname  viewname    definition
+public      test_view1  SELECT␠1;
+public      test_view2  SELECT␠2;
+
+query I
+SELECT COUNT(*) FROM pg_catalog.pg_views WHERE viewname LIKE 'test_%' AND viewowner IS NOT NULL
+----
+2
 
 mode standard
 
@@ -29,7 +34,7 @@ query TT
 SHOW CREATE VIEW pg_views
 ----
 pg_catalog.pg_views
-CREATE VIEW "pg_catalog"."pg_views" AS SELECT "s"."name" AS "schemaname", "v"."name" AS "viewname", NULL::"pg_catalog"."oid" AS "viewowner", "v"."definition" AS "definition" FROM "mz_catalog"."mz_views" AS "v" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "v"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" WHERE "s"."database_id" IS NULL OR "d"."name" = "pg_catalog"."current_database"()
+CREATE VIEW "pg_catalog"."pg_views" AS SELECT "s"."name" AS "schemaname", "v"."name" AS "viewname", "role_owner"."oid" AS "viewowner", "v"."definition" AS "definition" FROM "mz_catalog"."mz_views" AS "v" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "v"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" JOIN "mz_catalog"."mz_roles" AS "role_owner" ON "role_owner"."id" = "v"."owner_id" WHERE "s"."database_id" IS NULL OR "d"."name" = "pg_catalog"."current_database"()
 
 # test that nothing in the pg_catalog or information_schema schemas use unsinged ints
 query ITITTITT

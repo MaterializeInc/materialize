@@ -44,9 +44,38 @@ pub mod v1 {
         pub role_suffix: String,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+    #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
-    pub struct VpcEndpointStatus {}
+    pub struct VpcEndpointStatus {
+        // This will be None if the customer hasn't allowed our principal, got the name of their
+        // VPC Endpoint Service wrong, or we've otherwise failed to create the VPC Endpoint.
+        pub vpc_endpoint_id: Option<String>,
+        pub state: Option<VpcEndpointState>,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub enum VpcEndpointState {
+        // Internal States
+        PendingServiceDiscovery,
+        CreatingEndpoint,
+        RecreatingEndpoint,
+        UpdatingEndpoint,
+
+        // AWS States
+        // Connection established to the customer's VPC Endpoint Service.
+        Available,
+        Deleted,
+        Deleting,
+        Expired,
+        Failed,
+        // Customer has approved the connection. It should eventually move to Available.
+        Pending,
+        // Waiting on the customer to approve the connection.
+        PendingAcceptance,
+        Rejected,
+        Unknown,
+    }
 }
 
 #[cfg(test)]
@@ -56,7 +85,7 @@ mod tests {
     use kube::core::crd::merge_crds;
     use kube::CustomResourceExt;
 
-    #[test]
+    #[mz_ore::test]
     fn test_vpc_endpoint_crd_matches() {
         let crd = merge_crds(vec![super::v1::VpcEndpoint::crd()], "v1").unwrap();
         let crd_json = serde_json::to_string(&serde_json::json!(&crd)).unwrap();

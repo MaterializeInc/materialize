@@ -51,8 +51,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -91,6 +89,7 @@ pub mod capture;
 pub mod event;
 pub mod operator;
 pub mod order;
+pub mod pact;
 pub mod panic;
 pub mod probe;
 pub mod progress;

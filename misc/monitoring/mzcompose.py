@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import ROOT
+from materialize import MZ_ROOT
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Service
 
@@ -48,7 +48,7 @@ def workflow_default(c: Composition) -> None:
     # the container before invoking Docker Compose, since otherwise the Docker
     # daemon will create the directory as root, and `environmentd` won't be
     # able to write to it.
-    (ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
+    (MZ_ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
     c.up()
     print(f"Prometheus running at http://localhost:{c.default_port('prometheus')}")
     print(f"Grafana running at http://localhost:{c.default_port('grafana')}")

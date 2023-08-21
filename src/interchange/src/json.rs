@@ -10,12 +10,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde_json::{json, Map};
-
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType};
+use serde_json::{json, Map};
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes;
@@ -113,6 +112,7 @@ impl ToJson for TypedDatum<'_> {
             serde_json::Value::Null
         } else {
             match &typ.scalar_type {
+                ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
                 ScalarType::Bool => json!(datum.unwrap_bool()),
                 ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
                 ScalarType::Int16 => json!(datum.unwrap_int16()),
@@ -147,7 +147,9 @@ impl ToJson for TypedDatum<'_> {
                     serde_json::Value::String(format!("{}", datum.unwrap_interval()))
                 }
                 ScalarType::Bytes => json!(datum.unwrap_bytes()),
-                ScalarType::String | ScalarType::VarChar { .. } => json!(datum.unwrap_str()),
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+                    json!(datum.unwrap_str())
+                }
                 ScalarType::Char { length } => {
                     let s = char::format_str_pad(datum.unwrap_str(), *length);
                     serde_json::Value::String(s)
@@ -216,6 +218,7 @@ impl ToJson for TypedDatum<'_> {
                     // records.
                     json!(datum.unwrap_range().to_string())
                 }
+                ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
             }
         }
     }
@@ -227,6 +230,7 @@ fn build_row_schema_field(
     typ: &ColumnType,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
+        ScalarType::AclItem => json!("string"),
         ScalarType::Bool => json!("boolean"),
         ScalarType::PgLegacyChar => json!({
             "type": "fixed",
@@ -259,7 +263,10 @@ fn build_row_schema_field(
         }),
         ScalarType::Interval => type_namer.interval_type(),
         ScalarType::Bytes => json!("bytes"),
-        ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
+        ScalarType::String
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::PgLegacyName => {
             json!("string")
         }
         ScalarType::Jsonb => json!({
@@ -332,6 +339,7 @@ fn build_row_schema_field(
         ScalarType::MzTimestamp => json!("string"),
         // https://debezium.io/documentation/reference/stable/connectors/postgresql.html
         ScalarType::Range { .. } => json!("string"),
+        ScalarType::MzAclItem => json!("string"),
     };
     if typ.nullable {
         field_type = json!(["null", field_type]);

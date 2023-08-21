@@ -7,73 +7,32 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from textwrap import dedent
 from typing import List, Optional
 
 import pytest
 
-from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
-from materialize.checks.executors import CloudtestExecutor, Executor
+from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
+from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
-from materialize.cloudtest.application import MaterializeApplication
-from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.util.wait import wait
 from materialize.util import MzVersion
+from materialize.version_list import VersionsFromDocs
 
-LAST_RELEASED_VERSION = str(util.released_materialize_versions()[0])
-
-
-class ReplaceEnvironmentdStatefulSet(Action):
-    """Change the image tag of the environmentd stateful set, re-create the definition and replace the existing one."""
-
-    def __init__(self, new_tag: Optional[str] = None) -> None:
-        self.new_tag = new_tag
-
-    def execute(self, e: Executor) -> None:
-        mz = e.cloudtest_application()
-        stateful_set = [
-            resource
-            for resource in mz.resources
-            if type(resource) == EnvironmentdStatefulSet
-        ]
-        assert len(stateful_set) == 1
-        stateful_set = stateful_set[0]
-
-        stateful_set.tag = self.new_tag
-        stateful_set.replace()
-
-
-class LiftClusterLimits(Action):
-    def execute(self, e: Executor) -> None:
-        e.testdrive(
-            input=dedent(
-                """
-                $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
-                $ postgres-execute connection=mz_system
-                ALTER SYSTEM SET max_tables = 1000;
-
-                ALTER SYSTEM SET max_sources = 1000;
-
-                ALTER SYSTEM SET max_materialized_views = 1000;
-                ALTER SYSTEM SET max_objects_per_schema = 1000;
-                """
-            )
-        )
+LAST_RELEASED_VERSION = VersionsFromDocs().minor_versions()[-1]
 
 
 class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
     def base_version(self) -> MzVersion:
-        return MzVersion.parse_mz(LAST_RELEASED_VERSION)
+        return LAST_RELEASED_VERSION
 
     def actions(self) -> List[Action]:
         return [
-            LiftClusterLimits(),
             Initialize(self),
             Manipulate(self, phase=1),
             ReplaceEnvironmentdStatefulSet(new_tag=None),
@@ -83,12 +42,22 @@ class CloudtestUpgrade(Scenario):
 
 
 @pytest.mark.long
-def test_upgrade(aws_region: Optional[str]) -> None:
+def test_upgrade(
+    aws_region: Optional[str], log_filter: Optional[str], dev: bool
+) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
+    print(
+        f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
+    )
 
-    mz = MaterializeApplication(tag=LAST_RELEASED_VERSION, aws_region=aws_region)
+    mz = MaterializeApplication(
+        tag=str(LAST_RELEASED_VERSION),
+        aws_region=aws_region,
+        log_filter=log_filter,
+        release_mode=(not dev),
+    )
     wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
-    executor = CloudtestExecutor(application=mz)
+    executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
     scenario.run()

@@ -59,8 +59,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -95,11 +93,9 @@
 
 use std::time::{Duration, Instant};
 
-use mz_avro::{
-    schema::Schema,
-    types::{Record, ToAvro, Value},
-    Reader, Writer,
-};
+use mz_avro::schema::Schema;
+use mz_avro::types::{Record, ToAvro, Value};
+use mz_avro::{Reader, Writer};
 
 fn nanos(duration: Duration) -> u64 {
     duration.as_secs() * 1_000_000_000 + duration.subsec_nanos() as u64

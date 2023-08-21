@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -90,19 +88,23 @@
 #![warn(missing_debug_implementations)]
 
 use std::error::Error;
-use std::fmt;
-use std::iter;
-use tracing::error;
+use std::rc::Rc;
+use std::{fmt, iter};
 
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
+use tracing::error;
 
 pub mod attribute;
+pub mod canonicalization;
 pub mod canonicalize_mfp;
 pub mod column_knowledge;
+pub mod compound;
 pub mod cse;
+pub mod dataflow;
 pub mod demand;
 pub mod fold_constants;
 pub mod fusion;
@@ -110,34 +112,80 @@ pub mod join_implementation;
 pub mod literal_constraints;
 pub mod literal_lifting;
 pub mod monotonic;
-pub mod nonnull_requirements;
+pub mod movement;
+pub mod non_null_requirements;
 pub mod nonnullable;
-pub mod normalize;
 pub mod normalize_lets;
+pub mod normalize_ops;
+pub mod ordering;
 pub mod predicate_pushdown;
-pub mod projection_extraction;
-pub mod projection_lifting;
-pub mod projection_pushdown;
 pub mod reduce_elision;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
+pub mod symbolic;
 pub mod threshold_elision;
-pub mod topk_elision;
+pub mod typecheck;
 pub mod union_cancel;
 
-pub mod dataflow;
 pub use dataflow::optimize_dataflow;
-use mz_ore::stack::RecursionLimitError;
 
 #[macro_use]
 extern crate num_derive;
 
+/// Compute the conjunction of a variadic number of expressions.
+#[macro_export]
+macro_rules! all {
+    ($x:expr) => ($x);
+    ($($x:expr,)+) => ( $($x)&&+ )
+}
+
+/// Compute the disjunction of a variadic number of expressions.
+#[macro_export]
+macro_rules! any {
+    ($x:expr) => ($x);
+    ($($x:expr,)+) => ( $($x)||+ )
+}
+
 /// Arguments that get threaded through all transforms.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TransformArgs<'a> {
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
+    /// Statistical estiamtes.
+    pub stats: &'a dyn StatisticsOracle,
+    /// The global ID for this query (if it exists),
+    pub global_id: Option<&'a GlobalId>,
+}
+
+impl<'a> TransformArgs<'a> {
+    /// Generates a `TransformArgs` instance for the given `IndexOracle` with no `GlobalId`
+    pub fn anonymous(indexes: &'a dyn IndexOracle) -> Self {
+        Self {
+            indexes,
+            stats: &EmptyStatisticsOracle,
+            global_id: None,
+        }
+    }
+
+    /// Geneates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with a `GlobalId`
+    pub fn with_id_and_stats(
+        indexes: &'a dyn IndexOracle,
+        stats: &'a dyn StatisticsOracle,
+        global_id: &'a GlobalId,
+    ) -> Self {
+        Self {
+            indexes,
+            stats,
+            global_id: Some(global_id),
+        }
+    }
+}
+
+impl<'a> Default for TransformArgs<'a> {
+    fn default() -> Self {
+        TransformArgs::anonymous(&EmptyIndexOracle)
+    }
 }
 
 /// Types capable of transforming relation expressions.
@@ -148,18 +196,13 @@ pub trait Transform: std::fmt::Debug {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError>;
+
     /// A string describing the transform.
     ///
     /// This is useful mainly when iterating through many `Box<Transform>`
     /// and one wants to judge progress before some defect occurs.
     fn debug(&self) -> String {
         format!("{:?}", self)
-    }
-
-    /// Indicates if the transform can be safely applied to expressions containing
-    /// `LetRec` AST nodes.
-    fn recursion_safe(&self) -> bool {
-        false
     }
 }
 
@@ -168,8 +211,6 @@ pub trait Transform: std::fmt::Debug {
 pub enum TransformError {
     /// An unstructured error.
     Internal(String),
-    /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
-    LetRecUnsupported,
     /// A reference to an apparently unbound identifier.
     IdentifierMissing(mz_expr::LocalId),
 }
@@ -178,7 +219,6 @@ impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
-            TransformError::LetRecUnsupported => write!(f, "LetRec AST node not supported"),
             TransformError::IdentifierMissing(i) => {
                 write!(f, "apparently unbound identifier: {:?}", i)
             }
@@ -220,31 +260,44 @@ impl IndexOracle for EmptyIndexOracle {
     }
 }
 
+/// A trait for a type that can estimate statistics about a given `GlobalId`
+pub trait StatisticsOracle: fmt::Debug + Send {
+    /// Returns a cardinality estimate for the given identifier
+    ///
+    /// Returning `None` means "no estimate"; returning `Some(0)` means estimating that the shard backing `id` is empty
+    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize>;
+}
+
+/// A [`StatisticsOracle`] that knows nothing and can give no estimates.
+#[derive(Debug)]
+pub struct EmptyStatisticsOracle;
+
+impl StatisticsOracle for EmptyStatisticsOracle {
+    fn cardinality_estimate(&self, _: GlobalId) -> Option<usize> {
+        None
+    }
+}
+
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
+    name: &'static str,
     transforms: Vec<Box<dyn crate::Transform>>,
     limit: usize,
 }
 
 impl Transform for Fixpoint {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
         skip_all,
-        fields(path.segment = "fixpoint")
+        fields(path.segment = self.name)
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
-
         // The number of iterations for a relation to settle depends on the
         // number of nodes in the relation. Instead of picking an arbitrary
         // hard limit on the number of iterations, we use a soft limit and
@@ -266,14 +319,7 @@ impl Transform for Fixpoint {
                 );
                 span.in_scope(|| -> Result<(), TransformError> {
                     for transform in self.transforms.iter() {
-                        if transform.recursion_safe() || !recursive {
-                            transform.transform(
-                                relation,
-                                TransformArgs {
-                                    indexes: args.indexes,
-                                },
-                            )?;
-                        }
+                        transform.transform(relation, args)?;
                     }
                     mz_repr::explain::trace_plan(relation);
                     Ok(())
@@ -291,14 +337,7 @@ impl Transform for Fixpoint {
             }
         }
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(
-                    relation,
-                    TransformArgs {
-                        indexes: args.indexes,
-                    },
-                )?;
-            }
+            transform.transform(relation, args)?;
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped too many times {:#?}; transformed relation: {}",
@@ -322,14 +361,14 @@ impl Default for FuseAndCollapse {
             // TODO (#6542): All the transforms here except for `ProjectionLifting`
             //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
-                Box::new(crate::projection_extraction::ProjectionExtraction),
-                Box::new(crate::projection_lifting::ProjectionLifting::default()),
+                Box::new(crate::canonicalization::ProjectionExtraction),
+                Box::new(crate::movement::ProjectionLifting::default()),
                 Box::new(crate::fusion::Fusion),
-                Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
+                Box::new(crate::canonicalization::FlatMapToMap),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::UnionNegate),
+                Box::new(crate::compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -368,15 +407,28 @@ impl Transform for FuseAndCollapse {
         args: TransformArgs,
     ) -> Result<(), TransformError> {
         for transform in self.transforms.iter() {
-            transform.transform(
-                relation,
-                TransformArgs {
-                    indexes: args.indexes,
-                },
-            )?;
+            transform.transform(relation, args)?;
         }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
+    }
+}
+
+/// Construct a normalizing transform that runs transforms that normalize the
+/// structure of the tree until a fixpoint.
+///
+/// Care needs to be taken to ensure that the fixpoint converges for every
+/// possible input tree. If this is not the case, there are two possibilities:
+/// 1. The rewrite loop runs enters an oscillating cycle.
+/// 2. The expression grows without bound.
+pub fn normalize() -> crate::Fixpoint {
+    crate::Fixpoint {
+        name: "normalize",
+        limit: 100,
+        transforms: vec![
+            Box::new(crate::normalize_lets::NormalizeLets::new(false)),
+            Box::new(crate::normalize_ops::NormalizeOps),
+        ],
     }
 }
 
@@ -396,16 +448,17 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
-    pub fn logical_optimizer() -> Self {
+    pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::normalize::Normalize::new()),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
-            Box::new(crate::topk_elision::TopKElision),
-            Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
+            Box::new(normalize()),
+            Box::new(crate::non_null_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![Box::new(crate::FuseAndCollapse::default())],
             }),
@@ -414,6 +467,7 @@ impl Optimizer {
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
@@ -432,9 +486,10 @@ impl Optimizer {
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
+                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence::default()),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
@@ -449,6 +504,11 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "logical",
@@ -462,18 +522,32 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn physical_optimizer() -> Self {
+    pub fn physical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
             // - there should be no RelationCSE between this LiteralConstraints and
             //   JoinImplementation, because that could move an IndexedFilter behind a Get.
             // - The last RelationCSE before JoinImplementation should be with inline_mfp = true.
-            // - Currently, JoinImplementation has to be in the same fixpoint loop with
-            //   LiteralLifting, because the latter sometimes creates `Unimplemented` joins
-            //   (despite LiteralLifting already having been run in the logical optimizer).
+            // - Currently, JoinImplementation can't be before LiteralLifting because the latter
+            //   sometimes creates `Unimplemented` joins (despite LiteralLifting already having been
+            //   run in the logical optimizer).
+            // - Not running ColumnKnowledge in the same fixpoint loop with JoinImplementation
+            //   is slightly hurting our plans. However, I'd say we should fix these problems by
+            //   making ColumnKnowledge (and/or JoinImplementation) smarter (#18051), rather than
+            //   having them in the same fixpoint loop. If they would be in the same fixpoint loop,
+            //   then we either run the risk of ColumnKnowledge invalidating a join plan (#17993),
+            //   or we would have to run JoinImplementation an unbounded number of times, which is
+            //   also not good #16076.
+            //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser
+            //   extent.)
             //
             // Also note that FoldConstants and LiteralLifting are not confluent. They can
             // oscillate between e.g.:
@@ -483,16 +557,23 @@ impl Optimizer {
             //         Map (4)
             //           Constant
             //             - ()
-            Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::literal_lifting::LiteralLifting::default()),
                 ],
+            }),
+            Box::new(crate::literal_constraints::LiteralConstraints),
+            Box::new(crate::Fixpoint {
+                name: "fix_joins",
+                limit: 100,
+                transforms: vec![Box::new(
+                    crate::join_implementation::JoinImplementation::default(),
+                )],
             }),
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
@@ -505,6 +586,11 @@ impl Optimizer {
             // identical. Check the `threshold_elision.slt` tests that fail if
             // you remove this transform for examples.
             Box::new(crate::threshold_elision::ThresholdElision),
+            // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
+            // (For example, `FoldConstants` can break the normalized form by removing all
+            // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
+            Box::new(crate::normalize_lets::NormalizeLets::new(false)),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -514,11 +600,27 @@ impl Optimizer {
 
     /// Contains the logical optimizations that should run after cross-view
     /// transformations run.
-    pub fn logical_cleanup_pass() -> Self {
+    ///
+    /// Set `allow_new_globals` when you will use these as the first passes.
+    /// The first instance of the typechecker in an optimizer pipeline should
+    /// allow new globals (or it will crash when it encounters them).
+    pub fn logical_cleanup_pass(
+        ctx: &crate::typecheck::SharedContext,
+        allow_new_globals: bool,
+    ) -> Self {
+        let mut typechecker =
+            crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences();
+
+        if !allow_new_globals {
+            typechecker = typechecker.disallow_new_globals();
+        }
+
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(typechecker),
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
@@ -529,7 +631,7 @@ impl Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::Fusion),
-                    Box::new(crate::fusion::union::UnionNegate),
+                    Box::new(crate::compound::UnionNegateFusion),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -539,6 +641,11 @@ impl Optimizer {
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "logical_cleanup",
@@ -560,7 +667,7 @@ impl Optimizer {
         &self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
+        let transform_result = self.transform(&mut relation, TransformArgs::default());
         match transform_result {
             Ok(_) => {
                 mz_repr::explain::trace_plan(&relation);
@@ -584,13 +691,10 @@ impl Optimizer {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        indexes: &dyn IndexOracle,
+        args: TransformArgs,
     ) -> Result<(), TransformError> {
-        let recursive = relation.is_recursive();
         for transform in self.transforms.iter() {
-            if transform.recursion_safe() || !recursive {
-                transform.transform(relation, TransformArgs { indexes })?;
-            }
+            transform.transform(relation, args)?;
         }
 
         Ok(())

@@ -11,10 +11,9 @@
 //! timestamps
 
 use mz_persist_client::error::UpperMismatch;
+use mz_repr::Diff;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-
-use mz_repr::Diff;
 
 /// A handle that can produce the data expressing the translation of FromTime to
 /// IntoTime.

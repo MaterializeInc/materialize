@@ -17,17 +17,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Antichain;
-use timely::PartialOrder;
-use tracing::warn;
-
-use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
+use maplit::{btreemap, btreeset};
+use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
 use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection,
 };
+use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -36,27 +35,63 @@ use mz_expr::{
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use timely::progress::Antichain;
+use timely::PartialOrder;
+use tracing::warn;
 
 use crate::catalog::{
     Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
 };
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::util::ResultExt;
-use crate::AdapterError;
+use crate::util::{viewable_variables, ResultExt};
+use crate::{rbac, AdapterError};
+
+/// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
+/// to exist after this has been made.
+#[derive(Debug, Clone)]
+pub struct ComputeInstanceSnapshot {
+    instance_id: ComputeInstanceId,
+    collections: BTreeSet<GlobalId>,
+}
+
+impl ComputeInstanceSnapshot {
+    pub fn new(controller: &Controller, id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
+        controller
+            .compute
+            .instance_ref(id)
+            .map(|instance| ComputeInstanceSnapshot {
+                instance_id: id,
+                collections: BTreeSet::from_iter(instance.collections().map(|(id, _state)| *id)),
+            })
+    }
+
+    /// Return the ID of this compute instance.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance_id
+    }
+
+    /// Reports whether the instance contains the indicated collection.
+    pub fn contains_collection(&self, id: &GlobalId) -> bool {
+        self.collections.contains(id)
+    }
+}
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
-pub struct DataflowBuilder<'a, T> {
+#[derive(Debug)]
+pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeInstanceRef<'a, T>,
+    pub compute: ComputeInstanceSnapshot,
     recursion_guard: RecursionGuard,
 }
 
@@ -68,33 +103,40 @@ pub enum ExprPrepStyle<'a> {
     /// The expression is being prepared to run once at the specified logical
     /// time in the specified session.
     OneShot {
-        logical_time: Option<mz_repr::Timestamp>,
+        logical_time: EvalTime,
         session: &'a Session,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
     AsOfUpTo,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum EvalTime {
+    Time(mz_repr::Timestamp),
+    /// Skips mz_now() calls.
+    Deferred,
+    /// Errors on mz_now() calls.
+    NotAvailable,
+}
+
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
-            .controller
-            .compute
-            .instance_ref(instance)
+            .instance_snapshot(instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog.state(),
-            compute,
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-        }
+        DataflowBuilder::new(self.catalog().state(), compute)
+    }
+
+    /// Return a reference-less snapshot to the indicated compute instance.
+    pub fn instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        ComputeInstanceSnapshot::new(&self.controller, id)
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::must_ship_dataflows`]
     ///
     /// # Panics
     ///
@@ -104,65 +146,36 @@ impl Coordinator {
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) {
-        self.must_ship_dataflows(vec![dataflow], instance).await
-    }
-
-    /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the dataflows fail to ship.
-    async fn must_ship_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDesc>,
-        instance: ComputeInstanceId,
-    ) {
-        self.ship_dataflows(dataflows, instance)
+        self.ship_dataflow(dataflow, instance)
             .await
-            .expect("failed to ship dataflows");
+            .expect("failed to ship dataflow");
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::ship_dataflows`]
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
     /// [`Self::must_ship_dataflow`].
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDesc,
+        mut dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) -> Result<(), AdapterError> {
-        self.ship_dataflows(vec![dataflow], instance).await
-    }
-
-    /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    ///
-    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::must_ship_dataflows`].
-    async fn ship_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDesc>,
-        instance: ComputeInstanceId,
-    ) -> Result<(), AdapterError> {
-        let mut output_ids = Vec::new();
-        let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for dataflow in dataflows.into_iter() {
-            output_ids.extend(dataflow.export_ids());
-            let mut plan = self.finalize_dataflow(dataflow, instance)?;
-            // If the only outputs of the dataflow are sinks, we might
-            // be able to turn off the computation early, if they all
-            // have non-trivial `up_to`s.
-            if plan.index_exports.is_empty() {
-                plan.until = Antichain::from_elem(Timestamp::MIN);
-                for (_, sink) in &plan.sink_exports {
-                    plan.until.join_assign(&sink.up_to);
-                }
+        // If the only outputs of the dataflow are sinks, we might
+        // be able to turn off the computation early, if they all
+        // have non-trivial `up_to`s.
+        if dataflow.index_exports.is_empty() {
+            dataflow.until = Antichain::from_elem(Timestamp::MIN);
+            for (_, sink) in &dataflow.sink_exports {
+                dataflow.until.join_assign(&sink.up_to);
             }
-            dataflow_plans.push(plan);
         }
+
+        let output_ids = dataflow.export_ids().collect();
+        let plan = self.finalize_dataflow(dataflow, instance)?;
+
         self.controller
             .active_compute()
-            .create_dataflows(instance, dataflow_plans)
+            .create_dataflow(instance, plan)
             .unwrap_or_terminate("dataflow creation cannot fail");
         self.initialize_compute_read_policies(
             output_ids,
@@ -208,9 +221,13 @@ impl Coordinator {
     /// invariants such as ensuring that the `as_of` frontier is in advance of
     /// the various `since` frontiers of participating data inputs.
     ///
-    /// In particular, there are requirement on the `as_of` field for the dataflow
+    /// In particular, there are requirements on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
+    ///
+    /// Additionally, this method requires that the `until` field of the dataflow
+    /// has been set, so that any plan improvements based on its difference to `as_of`
+    /// can be carried out.
     ///
     /// This method will return an error if the finalization fails. DO NOT call this
     /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
@@ -223,22 +240,8 @@ impl Coordinator {
         mut dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
     ) -> Result<DataflowDescription<mz_compute_client::plan::Plan>, AdapterError> {
-        let storage_ids = dataflow
-            .source_imports
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let compute_ids = dataflow
-            .index_imports
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>();
-
-        let compute_ids = vec![(compute_instance, compute_ids)].into_iter().collect();
-        let since = self.least_valid_read(&CollectionIdBundle {
-            storage_ids,
-            compute_ids,
-        });
+        let id_bundle = dataflow_import_id_bundle(&dataflow, compute_instance);
+        let since = self.least_valid_read(&id_bundle);
 
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
@@ -262,30 +265,50 @@ impl Coordinator {
                 .unwrap_or_terminate("Normalize failed; unrecoverable error");
         }
 
-        mz_compute_client::plan::Plan::finalize_dataflow(dataflow).map_err(AdapterError::Internal)
+        mz_compute_client::plan::Plan::finalize_dataflow(
+            dataflow,
+            self.catalog()
+                .system_config()
+                .enable_consolidate_after_union_negate(),
+            self.catalog()
+                .system_config()
+                .enable_monotonic_oneshot_selects(),
+        )
+        .map_err(AdapterError::Internal)
+    }
+}
+
+/// Returns an ID bundle with the given dataflows imports.
+pub fn dataflow_import_id_bundle(
+    dataflow: &DataflowDesc,
+    compute_instance: ComputeInstanceId,
+) -> CollectionIdBundle {
+    let storage_ids = dataflow.source_imports.keys().copied().collect();
+    let compute_ids = dataflow.index_imports.keys().copied().collect();
+    CollectionIdBundle {
+        storage_ids,
+        compute_ids: btreemap! {compute_instance => compute_ids},
     }
 }
 
 impl CatalogTxn<'_, mz_repr::Timestamp> {
     /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self
-            .dataflow_client
-            .compute
-            .instance_ref(instance)
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        let snapshot = ComputeInstanceSnapshot::new(self.dataflow_client, instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog,
+        DataflowBuilder::new(self.catalog, snapshot)
+    }
+}
+
+impl<'a> DataflowBuilder<'a> {
+    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+        Self {
+            catalog,
             compute,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
-}
 
-impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(
@@ -307,8 +330,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             // NOTE(benesch): is the above TODO still true? The dataflow layer
             // has gotten increasingly smart about index selection. Maybe it's
             // now fine to present all indexes?
-            let index_oracle = self.index_oracle();
-            let mut valid_indexes = index_oracle.indexes_on(*id).peekable();
+            let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
                 // Deduplicate indexes by keys, in case we have redundant indexes.
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
@@ -400,7 +422,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             .expect("can only create indexes on items with a valid description")
             .typ()
             .clone();
-        let name = index_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(index_entry.name(), index_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
         self.import_into_dataflow(&index.on, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
@@ -416,7 +441,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle())?;
+        mz_transform::optimize_dataflow(&mut dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(dataflow)
     }
@@ -445,7 +470,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         id: GlobalId,
         sink_description: ComputeSinkDesc,
     ) -> Result<(), AdapterError> {
-        dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
@@ -453,7 +477,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(dataflow, &self.index_oracle())?;
+        mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(())
     }
@@ -467,7 +491,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     pub fn build_materialized_view_dataflow(
         &mut self,
         id: GlobalId,
-        as_of: Antichain<Timestamp>,
         internal_view_id: GlobalId,
     ) -> Result<DataflowDesc, AdapterError> {
         let mview_entry = self.catalog.get_entry(&id);
@@ -478,7 +501,10 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             ),
         };
 
-        let name = mview_entry.name().to_string();
+        let name = self
+            .catalog
+            .resolve_full_name(mview_entry.name(), mview_entry.conn_id())
+            .to_string();
         let mut dataflow = DataflowDesc::new(name);
 
         self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
@@ -493,10 +519,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),
-            as_of: SinkAsOf {
-                frontier: as_of,
-                strict: false,
-            },
+            with_snapshot: true,
             up_to: Antichain::default(),
         };
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
@@ -512,6 +535,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
+            | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Source => false,
         }
     }
@@ -596,7 +620,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 }
 
-impl<'a, T> CheckedRecursion for DataflowBuilder<'a, T> {
+impl<'a> CheckedRecursion for DataflowBuilder<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
@@ -689,7 +713,7 @@ pub fn prep_scalar_expr(
 fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
-    logical_time: Option<mz_repr::Timestamp>,
+    logical_time: EvalTime,
     session: &Session,
 ) -> Result<MirScalarExpr, AdapterError> {
     let pack_1d_array = |datums: Vec<Datum>| {
@@ -724,6 +748,14 @@ fn eval_unmaterializable_func(
 
     match f {
         UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
+        UnmaterializableFunc::CurrentSchema => {
+            let catalog = Catalog::for_session_state(state, session);
+            let schema = catalog
+                .search_path()
+                .first()
+                .map(|(db, schema)| &*state.get_schema(db, schema, session.conn_id()).name.schema);
+            pack(Datum::from(schema))
+        }
         UnmaterializableFunc::CurrentSchemasWithSystem => {
             let catalog = Catalog::for_session_state(state, session);
             let search_path = catalog.effective_search_path(false);
@@ -751,7 +783,7 @@ fn eval_unmaterializable_func(
             )
         }
         UnmaterializableFunc::ViewableVariables => pack_dict(
-            Coordinator::viewable_variables(state, session)
+            viewable_variables(state, session)
                 .map(|var| (var.name().to_lowercase(), var.value()))
                 .collect(),
         ),
@@ -759,14 +791,54 @@ fn eval_unmaterializable_func(
             let t: Datum = session.pcx().wall_time.try_into()?;
             pack(t)
         }
-        UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
+        UnmaterializableFunc::CurrentUser => pack(Datum::from(
+            state.get_role(session.current_role_id()).name(),
+        )),
+        UnmaterializableFunc::SessionUser => pack(Datum::from(
+            state.get_role(session.session_role_id()).name(),
+        )),
+        UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
+            rbac::is_rbac_enabled_for_session(state.system_config(), session),
+        )),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))
         }
+        UnmaterializableFunc::MzIsSuperuser => pack(Datum::from(session.is_superuser())),
         UnmaterializableFunc::MzNow => match logical_time {
-            None => coord_bail!("cannot call mz_now in this context"),
-            Some(logical_time) => pack(Datum::MzTimestamp(logical_time)),
+            EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
+            EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
+            EvalTime::NotAvailable => coord_bail!("cannot call mz_now in this context"),
         },
+        UnmaterializableFunc::MzRoleOidMemberships => {
+            let role_memberships = role_oid_memberships(state);
+            let mut role_memberships: Vec<(_, Vec<_>)> = role_memberships
+                .into_iter()
+                .map(|(role_id, role_membership)| {
+                    (
+                        role_id.to_string(),
+                        role_membership
+                            .into_iter()
+                            .map(|role_id| role_id.to_string())
+                            .collect(),
+                    )
+                })
+                .collect();
+            role_memberships.sort();
+            let mut row = Row::default();
+            row.packer().push_dict_with(|row| {
+                for (role_id, role_membership) in &role_memberships {
+                    row.push(Datum::from(role_id.as_str()));
+                    row.push_array(
+                        &[ArrayDimension {
+                            lower_bound: 1,
+                            length: role_membership.len(),
+                        }],
+                        role_membership.iter().map(|role_id| Datum::from(role_id.as_str())),
+                    ).expect("role_membership is 1 dimensional, and its length is used for the array length");
+                }
+            });
+            Ok(MirScalarExpr::Literal(Ok(row), f.output_type()))
+        }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {
             let uptime = state.config().start_instant.elapsed();
@@ -779,9 +851,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
-        UnmaterializableFunc::PgBackendPid => {
-            pack(Datum::Int32(i32::reinterpret_cast(session.conn_id())))
-        }
+        UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(i32::reinterpret_cast(
+            session.conn_id().unhandled(),
+        ))),
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;
             pack(t)
@@ -800,11 +872,47 @@ fn eval_unmaterializable_func(
     }
 }
 
+fn role_oid_memberships<'a>(catalog: &'a CatalogState) -> BTreeMap<u32, BTreeSet<u32>> {
+    let mut role_memberships = BTreeMap::new();
+    for role_id in catalog.get_roles() {
+        let role = catalog.get_role(role_id);
+        if !role_memberships.contains_key(&role.oid) {
+            role_oid_memberships_inner(catalog, role_id, &mut role_memberships);
+        }
+    }
+    role_memberships
+}
+
+fn role_oid_memberships_inner<'a>(
+    catalog: &'a CatalogState,
+    role_id: &RoleId,
+    role_memberships: &mut BTreeMap<u32, BTreeSet<u32>>,
+) {
+    let role = catalog.get_role(role_id);
+    role_memberships.insert(role.oid, btreeset! {role.oid});
+    for parent_role_id in role.membership.map.keys() {
+        let parent_role = catalog.get_role(parent_role_id);
+        if !role_memberships.contains_key(&parent_role.oid) {
+            role_oid_memberships_inner(catalog, parent_role_id, role_memberships);
+        }
+        let parent_membership: BTreeSet<_> = role_memberships
+            .get(&parent_role.oid)
+            .expect("inserted in recursive call above")
+            .into_iter()
+            .cloned()
+            .collect();
+        role_memberships
+            .get_mut(&role.oid)
+            .expect("inserted above")
+            .extend(parent_membership);
+    }
+}
+
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
-        // must_ship_dataflow, must_ship_dataflows, and must_finalize_dataflow are not allowed
+        // must_ship_dataflow and must_finalize_dataflow are not allowed
         // to have a `Result` return because these functions are called after
         // `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors
@@ -816,9 +924,6 @@ impl Coordinator {
 
         let df = DataflowDesc::new("".into());
         let _: () = self.must_ship_dataflow(df.clone(), compute_instance).await;
-        let _: () = self
-            .must_ship_dataflows(vec![df.clone()], compute_instance)
-            .await;
         let _: DataflowDescription<mz_compute_client::plan::Plan> =
             self.must_finalize_dataflow(df, compute_instance);
     }

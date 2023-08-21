@@ -1822,7 +1822,7 @@ SELECT ('1'::jsonb)::int;
 ----
 1
 
-query error integer out of range
+query error "9999999999999999999" integer out of range
 SELECT ('9999999999999999999'::jsonb)::int;
 
 # not a number
@@ -1984,3 +1984,18 @@ SELECT
     NULL::jsonb::bool
 ----
 NULL NULL NULL NULL NULL NULL NULL
+
+query T
+SELECT '{}'::JSONB ->> -9223372036854775808;
+----
+NULL
+
+query T
+SELECT '{}'::JSONB - -9223372036854775808;
+----
+NULL
+
+query T
+SELECT '{}'::JSONB #> '{-9223372036854775808}';
+----
+NULL

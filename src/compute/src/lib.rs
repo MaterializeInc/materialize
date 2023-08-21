@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -80,11 +78,10 @@
 
 pub(crate) mod arrangement;
 pub mod compute_state;
+pub(crate) mod extensions;
 pub(crate) mod logging;
 pub(crate) mod metrics;
 pub(crate) mod render;
 pub mod server;
 pub(crate) mod sink;
 mod typedefs;
-
-pub use arrangement::manager::{TraceManager, TraceMetrics};

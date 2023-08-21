@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import os
 import ssl
 import time
@@ -14,12 +15,12 @@ import urllib.parse
 
 import pg8000
 
-from materialize.mzcompose import Composition, _wait_for_pg
+from materialize.mzcompose import Composition, WorkflowArgumentParser, _wait_for_pg
 from materialize.mzcompose.services import Cockroach, Materialized, Mz, Testdrive
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
-ENVIRONMENT = "staging"
+ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
 USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com")
 APP_PASSWORD = os.environ["NIGHTLY_CANARY_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
@@ -27,9 +28,9 @@ VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
 SCHEMA_REGISTRY_ENDPOINT = "https://psrc-8kz20.us-east-2.aws.confluent.cloud"
-# The actual values are stored as Pulumi secrets in the i2 repository
-CONFLUENT_API_KEY = os.environ["NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY"]
-CONFLUENT_API_SECRET = os.environ["NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET"]
+# The actual values are stored in the i2 repository
+CONFLUENT_API_KEY = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME"]
+CONFLUENT_API_SECRET = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD"]
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -40,29 +41,53 @@ SERVICES = [
         image=f"materialize/environmentd:{VERSION}",
         external_cockroach=True,
         persist_blob_url="file:///mzdata/persist/blob",
-        options=["--orchestrator-process-secrets-directory=/mzdata/secrets"],
+        options=[
+            "--orchestrator-process-secrets-directory=/mzdata/secrets",
+            "--orchestrator-process-scratch-directory=/scratch",
+        ],
     ),
     Testdrive(),  # Overriden below
     Mz(
         region=REGION,
         environment=ENVIRONMENT,
-        username=USERNAME,
         app_password=APP_PASSWORD,
     ),
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Deploy the current source to the cloud and run tests."""
 
-    print(f"Shutting down region {REGION} ...")
-    c.run("mz", "region", "disable", REGION)
+    parser.add_argument(
+        "--cleanup",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Destroy the region at the end of the workflow.",
+    )
+    parser.add_argument(
+        "--version-check",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Perform a version check.",
+    )
+
+    parser.add_argument(
+        "td_files",
+        nargs="*",
+        default=["*.td"],
+        help="run against the specified files",
+    )
+
+    args = parser.parse_args()
+
+    if args.cleanup:
+        workflow_disable_region(c)
 
     test_failed = True
     try:
         print(f"Enabling region using Mz version {VERSION} ...")
         try:
-            c.run("mz", "region", "enable", REGION, "--version", VERSION)
+            c.run("mz", "region", "enable", "--version", VERSION)
         except UIError:
             # Work around https://github.com/MaterializeInc/materialize/issues/17219
             pass
@@ -72,24 +97,33 @@ def workflow_default(c: Composition) -> None:
         assert "materialize.cloud" in cloud_hostname(c)
         wait_for_cloud(c)
 
-        version_check(c)
+        if args.version_check:
+            version_check(c)
 
-        print("Running tests ...")
-        td(c, "*.td")
+        print("Running .td files ...")
+        td(c, *args.td_files)
         test_failed = False
     finally:
         # Clean up
-        workflow_disable_region(c)
+        if args.cleanup:
+            workflow_disable_region(c)
 
     assert not test_failed
 
 
+def workflow_disable_region(c: Composition) -> None:
+    print(f"Shutting down region {REGION} ...")
+
+    c.run("mz", "region", "disable")
+
+
 def cloud_hostname(c: Composition) -> str:
     print("Obtaining hostname of cloud instance ...")
-    region_status = c.run("mz", "region", "status", REGION, capture=True)
+    region_status = c.run("mz", "region", "show", capture=True)
     sql_line = region_status.stdout.split("\n")[2]
     cloud_url = sql_line.split("\t")[1].strip()
-    cloud_hostname = urllib.parse.urlparse(cloud_url).hostname
+    # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
+    cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
     return str(cloud_hostname)
 
 
@@ -102,7 +136,7 @@ def wait_for_cloud(c: Composition) -> None:
         port=6875,
         query="SELECT 1",
         expected=[[1]],
-        timeout_secs=600,
+        timeout_secs=900,
         dbname="materialize",
         ssl_context=ssl.SSLContext(),
         # print_result=True
@@ -165,9 +199,3 @@ def td(c: Composition, *args: str) -> None:
             *args,
             rm=True,
         )
-
-
-def workflow_disable_region(c: Composition) -> None:
-    print(f"Shutting down region {REGION} ...")
-
-    c.run("mz", "region", "disable", REGION)

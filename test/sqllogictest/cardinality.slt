@@ -1,0 +1,443 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# TEST `EXPLAIN WITH(cardinality)`
+# (we test the stats themselves in the second half of this file)
+
+statement ok
+CREATE TABLE t (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t2 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE INDEX t_x ON t (x);
+
+statement ok
+CREATE INDEX tt_x ON t2 (x);
+
+statement ok
+CREATE TABLE cities (name TEXT NOT NULL, state TEXT NOT NULL, pop integer);
+
+statement ok
+CREATE TABLE states (state TEXT NOT NULL, pop integer);
+
+statement ok
+CREATE INDEX cities_name ON cities (name);
+
+statement ok
+CREATE INDEX cities_state ON cities (state);
+
+statement ok
+CREATE INDEX cities_name_and_state ON cities (name, state);
+
+statement ok
+CREATE INDEX state_state ON states (state);
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT DISTINCT x FROM t
+----
+Explained Query:
+  Distinct group_by=[#0] // { cardinality: "materialize.public.t" }
+    Project (#0) // { cardinality: "materialize.public.t" }
+      Get materialize.public.t // { cardinality: "materialize.public.t" }
+
+Used Indexes:
+  - materialize.public.t_x (*** full scan ***)
+
+EOF
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT * FROM (SELECT DISTINCT ON(t.x) t.x, t.y FROM t) WHERE x = y
+----
+Explained Query:
+  Filter (#0 = #1) // { cardinality: "materialize.public.t * icard(#0)^1" }
+    TopK group_by=[#0] limit=1 // { cardinality: "materialize.public.t" }
+      Get materialize.public.t // { cardinality: "materialize.public.t" }
+
+Used Indexes:
+  - materialize.public.t_x (*** full scan ***)
+
+EOF
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT name, cities.state FROM
+  cities JOIN states
+  ON cities.state = states.state
+  WHERE cities.pop > states.pop / 2;
+----
+Explained Query:
+  Project (#0, #1) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
+    Filter (#2 > (#4 / 2)) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
+      Join on=(#1 = #3) type=differential // { cardinality: "materialize.public.cities * materialize.public.states" }
+        ArrangeBy keys=[[#1]] // { cardinality: "materialize.public.cities" }
+          Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+        ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.states" }
+          Get materialize.public.states // { cardinality: "materialize.public.states" }
+
+Used Indexes:
+  - materialize.public.cities_state (differential join)
+  - materialize.public.state_state (differential join)
+
+EOF
+
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT MAX(t.y) FROM t JOIN t2 ON t.x = t2.x
+----
+Explained Query:
+  Return // { cardinality: "3" }
+    Union // { cardinality: "3" }
+      Get l0 // { cardinality: "1" }
+      Map (null) // { cardinality: "2" }
+        Union // { cardinality: "2" }
+          Negate // { cardinality: "1" }
+            Project () // { cardinality: "1" }
+              Get l0 // { cardinality: "1" }
+          Constant // { cardinality: "1" }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[max(#0)] // { cardinality: "1" }
+        Project (#1) // { cardinality: "materialize.public.t * materialize.public.t2" }
+          Join on=(#0 = #2) type=differential // { cardinality: "materialize.public.t * materialize.public.t2" }
+            ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t" }
+              Get materialize.public.t // { cardinality: "materialize.public.t" }
+            ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t2" }
+              Get materialize.public.t2 // { cardinality: "materialize.public.t2" }
+
+Used Indexes:
+  - materialize.public.t_x (differential join)
+  - materialize.public.tt_x (differential join)
+
+EOF
+
+
+query T multiline
+EXPLAIN WITH(cardinality) SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (SELECT name FROM cities WHERE state = grp.state ORDER BY pop DESC NULLS LAST LIMIT 3);
+----
+Explained Query:
+  Project (#1, #0) // { cardinality: "materialize.public.cities" }
+    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 // { cardinality: "materialize.public.cities" }
+      Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+
+Used Indexes:
+  - materialize.public.cities_name (*** full scan ***)
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cardinality_estimates = true
+----
+COMPLETE 0
+
+simple
+SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
+----
+COMPLETE 0
+
+statement ok
+INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t as l, t as r WHERE l.x = r.x;
+----
+Explained Query:
+  Return
+    Project (#0, #1, #0, #3)
+      Join on=(#0 = #2) type=differential
+        implementation
+          %0:l0[#0]KA|4| » %1:l0[#0]KA|4|
+        Get l0
+        Get l0
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_x (differential join)
+
+EOF
+
+statement ok
+INSERT INTO t2 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 200)) AS l, (SELECT generate_series(1, 50)) AS r
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t, t2 WHERE t.x = t2.x;
+----
+Explained Query:
+  Project (#0, #1, #0, #3)
+    Join on=(#0 = #2) type=differential
+      implementation
+        %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t2
+
+Used Indexes:
+  - materialize.public.t_x (differential join)
+  - materialize.public.tt_x (differential join)
+
+EOF
+
+# regression test drawn from LDBC-BI query 15 for having a selectivity of 0
+# TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE Person_knows_Person (
+    creationDate timestamp with time zone NOT NULL,
+    Person1id bigint NOT NULL,
+    Person2id bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+  mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
+  path (src bigint, dst bigint, w double precision) AS (
+      SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
+      FROM Person_knows_Person pp left join mm on least(pp.person1id, pp.person2id) = mm.src AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  pexists (src bigint, dir bool) AS (
+      (
+          SELECT 1::bigint, true
+          UNION
+          SELECT 2::bigint, false
+      )
+      UNION
+      (
+          WITH
+          ss (src, dir) AS (SELECT src, dir FROM pexists),
+          ns (src, dir) AS (SELECT p.dst, ss.dir FROM ss, path p WHERE ss.src = p.src),
+          bb (src, dir) AS (SELECT src, dir FROM ns UNION ALL SELECT src, dir FROM ss),
+          found (found) AS (
+              SELECT 1 AS found
+              FROM bb b1, bb b2
+              WHERE b1.dir AND (NOT b2.dir) AND b1.src = b2.src
+          )
+          SELECT src, dir
+          FROM ns
+          WHERE NOT EXISTS (SELECT 1 FROM found)
+          UNION
+          SELECT -1, true
+          WHERE EXISTS (SELECT 1 FROM found)
+      )
+  ),
+  pathfound (c bool) AS (
+      SELECT true AS c
+      FROM pexists
+      WHERE src = -1 AND dir
+  )
+SELECT * FROM pexists;
+----
+Explained Query:
+  Return
+    Get l4
+  With Mutually Recursive
+    cte l4 =
+      Distinct group_by=[#0, #1]
+        Union
+          Distinct group_by=[#0, #1]
+            Union
+              Project (#1, #0)
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l1
+                  ArrangeBy keys=[[]]
+                    Union
+                      Negate
+                        Get l3
+                      Constant
+                        - ()
+              Project (#1, #0)
+                Map (true, -1)
+                  Get l3
+          Constant
+            - (1, true)
+            - (2, false)
+    cte l3 =
+      Distinct
+        Project ()
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter #1
+                  Get l2
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter NOT(#1)
+                  Get l2
+    cte l2 =
+      Union
+        Project (#1, #0)
+          Get l1
+        Get l4
+    cte l1 =
+      Project (#1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l4
+          ArrangeBy keys=[[#0]]
+            Union
+              Project (#1, #2)
+                Get l0
+              Project (#1, #2)
+                Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential
+                  ArrangeBy keys=[[#0..=#2]]
+                    Union
+                      Negate
+                        Distinct group_by=[#0..=#2]
+                          Get l0
+                      Distinct group_by=[#0..=#2]
+                        Get materialize.public.person_knows_person
+                  ArrangeBy keys=[[#0..=#2]]
+                    Get materialize.public.person_knows_person
+    cte l0 =
+      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
+        Get materialize.public.person_knows_person
+
+Used Indexes:
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+EOF
+
+# regression test drawn from LDBC-BI query 15 for having a selectivity of 0
+# TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive TO true;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+  mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
+  path (src bigint, dst bigint, w double precision) AS (
+      SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
+      FROM Person_knows_Person pp left join mm on least(pp.person1id, pp.person2id) = mm.src AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  pexists (src bigint, dir bool) AS (
+      (
+          SELECT 1::bigint, true
+          UNION
+          SELECT 2::bigint, false
+      )
+      UNION
+      (
+          WITH
+          ss (src, dir) AS (SELECT src, dir FROM pexists),
+          ns (src, dir) AS (SELECT p.dst, ss.dir FROM ss, path p WHERE ss.src = p.src),
+          bb (src, dir) AS (SELECT src, dir FROM ns UNION ALL SELECT src, dir FROM ss),
+          found (found) AS (
+              SELECT 1 AS found
+              FROM bb b1, bb b2
+              WHERE b1.dir AND (NOT b2.dir) AND b1.src = b2.src
+          )
+          SELECT src, dir
+          FROM ns
+          WHERE NOT EXISTS (SELECT 1 FROM found)
+          UNION
+          SELECT -1, true
+          WHERE EXISTS (SELECT 1 FROM found)
+      )
+  ),
+  pathfound (c bool) AS (
+      SELECT true AS c
+      FROM pexists
+      WHERE src = -1 AND dir
+  )
+SELECT * FROM pexists;
+----
+Explained Query:
+  Return
+    Get l4
+  With Mutually Recursive
+    cte l4 =
+      Distinct group_by=[#0, #1]
+        Union
+          Distinct group_by=[#0, #1]
+            Union
+              Project (#1, #0)
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l1
+                  ArrangeBy keys=[[]]
+                    Union
+                      Negate
+                        Get l3
+                      Constant
+                        - ()
+              Project (#1, #0)
+                Map (true, -1)
+                  Get l3
+          Constant
+            - (1, true)
+            - (2, false)
+    cte l3 =
+      Distinct
+        Project ()
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter #1
+                  Get l2
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter NOT(#1)
+                  Get l2
+    cte l2 =
+      Union
+        Project (#1, #0)
+          Get l1
+        Get l4
+    cte l1 =
+      Project (#1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l4
+          ArrangeBy keys=[[#0]]
+            Union
+              Project (#1, #2)
+                Get l0
+              Project (#1, #2)
+                Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential
+                  ArrangeBy keys=[[#0..=#2]]
+                    Union
+                      Negate
+                        Distinct group_by=[#0..=#2]
+                          Get l0
+                      Distinct group_by=[#0..=#2]
+                        Get materialize.public.person_knows_person
+                  ArrangeBy keys=[[#0..=#2]]
+                    Get materialize.public.person_knows_person
+    cte l0 =
+      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
+        Get materialize.public.person_knows_person
+
+Used Indexes:
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+EOF

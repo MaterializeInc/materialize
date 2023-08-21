@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,30 +79,67 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use mz_ore::soft_assert;
+use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use timely::progress::Antichain;
+use tokio_postgres::error::SqlState;
+
+pub mod objects;
 
 mod postgres;
 mod transaction;
 
+// TODO(parkmycar): This shouldn't be public, but it is for now to prevent dead code warnings.
+pub mod upgrade;
+
+#[cfg(test)]
+mod tests;
+
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
-pub use crate::transaction::Transaction;
+pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
+
+/// The current version of the [`Stash`].
+///
+/// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
+/// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
+/// change, we need to bump this version.
+pub const STASH_VERSION: u64 = 33;
+
+/// The minimum [`Stash`] version number that we support migrating from.
+///
+/// After bumping this we can delete the old migrations.
+pub(crate) const MIN_STASH_VERSION: u64 = 25;
+
+// TODO(jkosh44) There's some circular logic going on with this key across crates.
+// mz_adapter::catalog::storage::stash initializes uses this value to initialize
+// `CONFIG_COLLECTION: mz_stash::TypedCollection`. Then `mz_stash::postgres::Stash` uses this value
+// to check if the stash has been initialized.
+/// The key within the Config Collection that stores the version of the Stash.
+pub const USER_VERSION_KEY: &str = "user_version";
+pub const COLLECTION_CONFIG: TypedCollection<
+    objects::proto::ConfigKey,
+    objects::proto::ConfigValue,
+> = TypedCollection::new("config");
 
 pub type Diff = i64;
 pub type Timestamp = i64;
-pub type Id = i64;
 
-// A common trait for uses of K and V to express in a single place all of the
-// traits required by async_trait and StashCollection.
-pub trait Data: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync {}
+pub(crate) type Id = i64;
 
-impl<T: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync> Data for T {}
+/// A common trait for uses of K and V to express in a single place all of the
+/// traits required by async_trait and StashCollection.
+pub trait Data:
+    prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>
+{
+}
+impl<T: prost::Message + Default + Ord + Send + Sync + Serialize + for<'de> Deserialize<'de>> Data
+    for T
+{
+}
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
 /// state of the collection is durable.
@@ -115,13 +150,8 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync> Data for T {}
 /// diff types are fixed to `i64`.
 ///
 /// A `StashCollection` maintains a since frontier and an upper frontier, as
-/// described in the [correctness vocabulary document]. To advance the since
-/// frontier, call [`compact`]. To advance the upper frontier, call [`seal`]. To
-/// physically compact data beneath the since frontier, call [`consolidate`].
+/// described in the [correctness vocabulary document].
 ///
-/// [`compact`]: Transaction::compact
-/// [`consolidate`]: Stash::consolidate
-/// [`seal`]: Transaction::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
 #[derive(Debug)]
@@ -186,7 +216,25 @@ impl StashError {
     /// or a retry is not safe due to an indeterminate state).
     pub fn is_unrecoverable(&self) -> bool {
         match &self.inner {
-            InternalStashError::Fence(_) => true,
+            InternalStashError::Fence(_) | InternalStashError::StashNotWritable(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Reports whether the error can be recovered if we opened the stash in writeable
+    pub fn can_recover_with_write_mode(&self) -> bool {
+        match &self.inner {
+            InternalStashError::StashNotWritable(_) => true,
+            _ => false,
+        }
+    }
+
+    /// The underlying transaction failed in a way that must be resolved by retrying
+    pub fn should_retry(&self) -> bool {
+        match &self.inner {
+            InternalStashError::Postgres(e) => {
+                matches!(e.code(), Some(&SqlState::T_R_SERIALIZATION_FAILURE))
+            }
             _ => false,
         }
     }
@@ -197,6 +245,11 @@ enum InternalStashError {
     Postgres(::tokio_postgres::Error),
     Fence(String),
     PeekSinceUpper(String),
+    IncompatibleVersion(u64),
+    Proto(TryFromProtoError),
+    Decoding(prost::DecodeError),
+    Uninitialized,
+    StashNotWritable(String),
     Other(String),
 }
 
@@ -205,8 +258,15 @@ impl fmt::Display for StashError {
         f.write_str("stash error: ")?;
         match &self.inner {
             InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
+            InternalStashError::Proto(e) => write!(f, "proto: {e}"),
+            InternalStashError::Decoding(e) => write!(f, "prost decoding: {e}"),
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),
+            InternalStashError::IncompatibleVersion(v) => {
+                write!(f, "incompatible Stash version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}")
+            }
+            InternalStashError::Uninitialized => write!(f, "uninitialized"),
+            InternalStashError::StashNotWritable(e) => f.write_str(e),
             InternalStashError::Other(e) => f.write_str(e),
         }
     }
@@ -220,10 +280,18 @@ impl From<InternalStashError> for StashError {
     }
 }
 
-impl From<serde_json::Error> for StashError {
-    fn from(e: serde_json::Error) -> StashError {
+impl From<prost::DecodeError> for StashError {
+    fn from(e: prost::DecodeError) -> Self {
         StashError {
-            inner: InternalStashError::Other(e.to_string()),
+            inner: InternalStashError::Decoding(e),
+        }
+    }
+}
+
+impl From<TryFromProtoError> for StashError {
+    fn from(e: TryFromProtoError) -> Self {
+        StashError {
+            inner: InternalStashError::Proto(e),
         }
     }
 }
@@ -252,53 +320,36 @@ impl From<std::io::Error> for StashError {
     }
 }
 
-/*
-/// A multi-collection extension of Stash.
-///
-/// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
-#[async_trait]
-pub trait Append: Stash {
-    /// Same as `append`, but does not consolidate batches.
-    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError>;
-
-    /// Atomically adds entries, seals, compacts, and consolidates multiple
-    /// collections.
-    ///
-    /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
-    /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
-    /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
-    ///
-    /// If this method returns `Ok`, the entries have been made durable and uppers
-    /// advanced, otherwise no changes were committed.
-    async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
-        if batches.is_empty() {
-            return Ok(());
+impl From<anyhow::Error> for StashError {
+    fn from(e: anyhow::Error) -> Self {
+        StashError {
+            inner: InternalStashError::Other(e.to_string()),
         }
-        self.append_batch(batches).await?;
-        let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
-        self.consolidate_batch(&ids).await?;
-        Ok(())
     }
 }
-*/
 
+/// An [`AppendBatch`] describes a set of changes to append to a stash collection.
 #[derive(Clone, Debug)]
 pub struct AppendBatch {
-    pub collection_id: Id,
-    pub lower: Antichain<Timestamp>,
-    pub upper: Antichain<Timestamp>,
-    pub timestamp: Timestamp,
-    pub entries: Vec<((Value, Value), Timestamp, Diff)>,
+    /// Id of stash collection.
+    pub(crate) collection_id: Id,
+    /// Current upper of the collection. The collection will also be compacted to `lower`.
+    pub(crate) lower: Antichain<Timestamp>,
+    /// The collection will be sealed to `upper`.
+    pub(crate) upper: Antichain<Timestamp>,
+    /// The timestamp of all entries in `entries`.
+    pub(crate) timestamp: Timestamp,
+    /// Entries to append to a collection. Each entry is of the form
+    /// ((key [in bytes], value [in bytes]), timestamp, diff).
+    pub(crate) entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
 }
 
 impl<K, V> StashCollection<K, V> {
-    /// Create a new AppendBatch for this collection from its current upper.
-    pub async fn make_batch(&self, stash: &mut Stash) -> Result<AppendBatch, StashError> {
-        let id = self.id;
-        let lower = stash
-            .with_transaction(move |tx| Box::pin(async move { tx.upper(id).await }))
-            .await?;
-        self.make_batch_lower(lower)
+    /// Returns whether the collection is initialized, i.e. has been written to at least once.
+    /// Collections that haven't been written to at least once cannot be read.
+    pub async fn is_initialized(&self, tx: &Transaction<'_>) -> Result<bool, StashError> {
+        let upper = tx.upper(self.id).await?;
+        Ok(upper.elements() != [Timestamp::MIN])
     }
 
     /// Create a new AppendBatch for this collection from its current upper.
@@ -309,7 +360,10 @@ impl<K, V> StashCollection<K, V> {
     }
 
     /// Create a new AppendBatch for this collection from its current upper.
-    pub fn make_batch_lower(&self, lower: Antichain<Timestamp>) -> Result<AppendBatch, StashError> {
+    pub(crate) fn make_batch_lower(
+        &self,
+        lower: Antichain<Timestamp>,
+    ) -> Result<AppendBatch, StashError> {
         let timestamp: Timestamp = match lower.elements() {
             [ts] => *ts,
             _ => return Err("cannot determine batch timestamp".into()),
@@ -333,10 +387,11 @@ where
     K: Data,
     V: Data,
 {
+    /// Append `key`, `value`, `diff` to `batch`.
     pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
-        let key = serde_json::to_value(key).expect("must serialize");
-        let value = serde_json::to_value(value).expect("must serialize");
-        batch.entries.push(((key, value), batch.timestamp, diff));
+        let key = key.encode_to_vec();
+        let val = value.encode_to_vec();
+        batch.entries.push(((key, val), batch.timestamp, diff));
     }
 }
 
@@ -357,6 +412,7 @@ pub struct TypedCollection<K, V> {
 }
 
 impl<K, V> TypedCollection<K, V> {
+    /// Creates a new [`TypedCollection`] with `name`.
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -364,6 +420,7 @@ impl<K, V> TypedCollection<K, V> {
         }
     }
 
+    /// Returns the name of this [`TypedCollection`].
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -374,43 +431,12 @@ where
     K: Data,
     V: Data,
 {
-    pub async fn make_batch(
-        &self,
-        stash: &mut Stash,
-    ) -> Result<(StashCollection<K, V>, AppendBatch), StashError> {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    let lower = tx.upper(collection.id).await?;
-                    let batch = collection.make_batch_lower(lower)?;
-                    Ok((collection, batch))
-                })
-            })
-            .await
-    }
-
-    pub async fn get(&self, stash: &mut Stash) -> Result<StashCollection<K, V>, StashError> {
-        stash.collection(self.name).await
-    }
-
+    /// Returns a [`StashCollection`] corresponding to this [`TypedCollection`].
     pub async fn from_tx(&self, tx: &Transaction<'_>) -> Result<StashCollection<K, V>, StashError> {
         tx.collection(self.name).await
     }
 
-    pub async fn upper(&self, stash: &mut Stash) -> Result<Antichain<Timestamp>, StashError> {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    tx.upper(collection.id).await
-                })
-            })
-            .await
-    }
-
+    /// Returns all ((key, value), timestamp, diff) tuples in this [`TypedCollection`].
     pub async fn iter(
         &self,
         stash: &mut Stash,
@@ -426,25 +452,8 @@ where
             .await
     }
 
-    pub async fn peek(&self, stash: &mut Stash) -> Result<Vec<(K, V, Diff)>, StashError>
-    where
-        K: Hash,
-    {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    tx.peek(collection).await
-                })
-            })
-            .await
-    }
-
-    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError>
-    where
-        K: Hash,
-    {
+    /// Returns all key, value pairs in this [`TypedCollection`].
+    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError> {
         let name = self.name;
         stash
             .with_transaction(move |tx| {
@@ -456,6 +465,7 @@ where
             .await
     }
 
+    /// Returns the value of `key` in this [`TypedCollection`].
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn peek_key_one(&self, stash: &mut Stash, key: K) -> Result<Option<V>, StashError>
     where
@@ -537,7 +547,7 @@ where
     where
         I: IntoIterator<Item = (K, V)>,
         // TODO: Figure out if it's possible to remove the 'static bounds.
-        K: Clone + Hash + 'static,
+        K: Clone + 'static,
         V: Clone + 'static,
     {
         let name = self.name;
@@ -576,7 +586,8 @@ where
             .await
     }
 
-    /// Sets a value for a key. `f` is passed the previous value, if any.
+    /// Sets a value for a key to the result of `f`. `f` is passed the
+    /// previous value, if any.
     ///
     /// Returns the previous value if one existed and the value returned from
     /// `f`.
@@ -636,7 +647,7 @@ where
     pub async fn upsert<I>(&self, stash: &mut Stash, entries: I) -> Result<(), StashError>
     where
         I: IntoIterator<Item = (K, V)>,
-        K: Hash + 'static,
+        K: 'static,
         V: 'static,
     {
         let name = self.name;
@@ -675,97 +686,46 @@ where
             .await
     }
 
-    /// Transactionally deletes any kv pair from `self` which returns `true` for
-    /// `predicate`.
+    /// Transactionally deletes any kv pair from `self` whose key is in `keys`.
     ///
-    /// Note that this operation:
-    /// - Runs in a single transaction and cannot be combined with other
-    ///   transactions.
-    /// - Scans the entire table to perform deletions.
+    /// Note that:
+    /// - Unlike `delete`, this operation operates in time O(keys), and not
+    ///   O(set), however does so by parallelizing a number of point queries so
+    ///   is likely not performant for more than 10-or-so keys.
+    /// - This operation runs in a single transaction and cannot be combined
+    ///   with other transactions.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn delete<P>(&self, stash: &mut Stash, predicate: P) -> Result<(), StashError>
+    pub async fn delete_keys(&self, stash: &mut Stash, keys: BTreeSet<K>) -> Result<(), StashError>
     where
-        P: Fn(&K, &V) -> bool + Clone + Sync + Send + 'static,
-        K: Hash + Clone,
+        K: Clone + 'static,
         V: Clone,
     {
-        let name = self.name;
+        use futures::StreamExt;
+
+        let name = self.name.to_string();
         stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
+                    let collection = tx.collection::<K, V>(&name).await?;
                     let lower = tx.upper(collection.id).await?;
                     let mut batch = collection.make_batch_lower(lower)?;
-                    let set = match tx.peek_one(collection).await {
-                        Ok(set) => set,
-                        Err(err) => match err.inner {
-                            InternalStashError::PeekSinceUpper(_) => {
-                                // If the upper isn't > since, bump the upper and try again to find a sealed
-                                // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
-                                let lower = tx.upper(collection.id).await?;
-                                batch = collection.make_batch_lower(lower)?;
-                                tx.peek_one(collection).await?
-                            }
-                            _ => return Err(err),
-                        },
-                    };
 
-                    for (k, v) in set {
-                        if (predicate)(&k, &v) {
-                            collection.append_to_batch(&mut batch, &k, &v, -1);
+                    let tx = &tx;
+
+                    let kv_results: Vec<(K, Result<Option<V>, StashError>)> =
+                        futures::stream::iter(keys.into_iter())
+                            .map(|key| async move {
+                                (key.clone(), tx.peek_key_one(collection.clone(), &key).await)
+                            })
+                            .buffer_unordered(10)
+                            .collect()
+                            .await;
+
+                    for (key, val) in kv_results {
+                        if let Some(v) = val? {
+                            collection.append_to_batch(&mut batch, &key, &v, -1);
                         }
                     }
-
-                    tx.append(vec![batch]).await?;
-                    Ok(())
-                })
-            })
-            .await
-    }
-
-    /// Transactionally updates values in all KV pairs using `transform`.
-    ///
-    /// Note that this operation:
-    /// - Runs in a single transaction and cannot be combined with other
-    ///   transactions.
-    /// - Scans the entire table to perform deletions.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn update<T>(&self, stash: &mut Stash, transform: T) -> Result<(), StashError>
-    where
-        T: Fn(&K, &V) -> Option<V> + Clone + Sync + Send + 'static,
-        K: Hash + Clone,
-        V: Clone,
-    {
-        let name = self.name;
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let collection = tx.collection::<K, V>(name).await?;
-                    let lower = tx.upper(collection.id).await?;
-                    let mut batch = collection.make_batch_lower(lower)?;
-                    let set = match tx.peek_one(collection).await {
-                        Ok(set) => set,
-                        Err(err) => match err.inner {
-                            InternalStashError::PeekSinceUpper(_) => {
-                                // If the upper isn't > since, bump the upper and try again to find a sealed
-                                // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
-                                let lower = tx.upper(collection.id).await?;
-                                batch = collection.make_batch_lower(lower)?;
-                                tx.peek_one(collection).await?
-                            }
-                            _ => return Err(err),
-                        },
-                    };
-
-                    for (k, v) in set {
-                        if let Some(new_v) = (transform)(&k, &v) {
-                            collection.append_to_batch(&mut batch, &k, &v, -1);
-                            collection.append_to_batch(&mut batch, &k, &new_v, 1);
-                        }
-                    }
-
                     tx.append(vec![batch]).await?;
                     Ok(())
                 })
@@ -796,23 +756,43 @@ pub struct TableTransaction<K, V> {
 
 impl<K, V> TableTransaction<K, V>
 where
-    K: Ord + Eq + Hash + Clone,
+    K: Ord + Eq + Clone,
     V: Ord + Clone,
 {
-    /// Create a new TableTransaction with initial data.
-    /// `uniqueness_violation` is a function whether there is a
-    /// uniqueness violation among two values.
-    pub fn new(initial: BTreeMap<K, V>, uniqueness_violation: fn(a: &V, b: &V) -> bool) -> Self {
-        Self {
+    /// Create a new TableTransaction with initial data. `uniqueness_violation` is a function
+    /// whether there is a uniqueness violation among two values.
+    ///
+    /// Internally the [`Stash`] serializes data as protobuf. All fields in a proto message are
+    /// optional, which makes using them in Rust cumbersome. Generic parameters `KP` and `VP` are
+    /// protobuf types which deserialize to `K` and `V` that a [`TableTransaction`] is generic
+    /// over.
+    pub fn new<KP, VP>(
+        initial: BTreeMap<KP, VP>,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    ) -> Result<Self, TryFromProtoError>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
+        let initial = initial
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
             initial,
             pending: BTreeMap::new(),
             uniqueness_violation,
-        }
+        })
     }
 
     /// Consumes and returns the pending changes and their diffs. `Diff` is
     /// guaranteed to be 1 or -1.
-    pub fn pending(self) -> Vec<(K, V, Diff)> {
+    pub fn pending<KP, VP>(self) -> Vec<(KP, VP, Diff)>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
         soft_assert!(self.verify().is_ok());
         // Pending describes the desired final state for some keys. K,V pairs should be
         // retracted if they already exist and were deleted or are being updated.
@@ -835,6 +815,7 @@ where
                 }
             })
             .flatten()
+            .map(|(key, val, diff)| (key.into_proto(), val.into_proto(), diff))
             .collect()
     }
 
@@ -852,7 +833,7 @@ where
     }
 
     /// Iterates over the items viewable in the current transaction in arbitrary
-    /// order.
+    /// order and applies `f` on all key, value pairs.
     pub fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
         let mut seen = BTreeSet::new();
         for (k, v) in self.pending.iter() {
@@ -892,8 +873,8 @@ where
     }
 
     /// Iterates over the items viewable in the current transaction, and provides a
-    /// Vec where additional pending items can be inserted, which will be appended
-    /// to current pending items. Does not verify unqiueness.
+    /// map where additional pending items can be inserted, which will be appended
+    /// to current pending items. Does not verify uniqueness.
     fn for_values_mut<F: FnMut(&mut BTreeMap<K, Option<V>>, &K, &V)>(&mut self, mut f: F) {
         let mut pending = BTreeMap::new();
         self.for_values(|k, v| f(&mut pending, k, v));
@@ -997,73 +978,4 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
-}
-
-/// Helper function to consolidate `serde_json::Value`. `Value` doesn't
-/// implement `Ord` which is required by `consolidate`, so we must serialize and
-/// deserialize through bytes.
-fn consolidate<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Diff)>,
-{
-    // This assumes the to bytes representation is deterministic. The current
-    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
-    // guarantee.
-    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
-    let mut rows = rows
-        .into_iter()
-        .map(|((key, value), diff)| {
-            let key = serde_json::to_vec(&key).expect("must serialize");
-            let value = serde_json::to_vec(&value).expect("must serialize");
-            ((key, value), diff)
-        })
-        .collect();
-    differential_dataflow::consolidation::consolidate(&mut rows);
-    rows.into_iter().map(|((key, value), diff)| {
-        let key = serde_json::from_slice(&key).expect("must deserialize");
-        let value = serde_json::from_slice(&value).expect("must deserialize");
-        ((key, value), diff)
-    })
-}
-
-/// Helper function to consolidate `serde_json::Value` updates. `Value` doesn't
-/// implement `Ord` which is required by `consolidate_updates`, so we must
-/// serialize and deserialize through bytes.
-fn consolidate_updates<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Timestamp, Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
-{
-    // This assumes the to bytes representation is deterministic. The current
-    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
-    // guarantee.
-    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
-    let mut rows = rows
-        .into_iter()
-        .map(|((key, value), ts, diff)| {
-            let key = serde_json::to_vec(&key).expect("must serialize");
-            let value = serde_json::to_vec(&value).expect("must serialize");
-            ((key, value), ts, diff)
-        })
-        .collect();
-    differential_dataflow::consolidation::consolidate_updates(&mut rows);
-    rows.into_iter().map(|((key, value), ts, diff)| {
-        let key = serde_json::from_slice(&key).expect("must deserialize");
-        let value = serde_json::from_slice(&value).expect("must deserialize");
-        ((key, value), ts, diff)
-    })
-}
-
-fn consolidate_updates_kv<K, V, I>(rows: I) -> impl Iterator<Item = ((K, V), Timestamp, Diff)>
-where
-    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
-    K: Data,
-    V: Data,
-{
-    consolidate_updates(rows)
-        .into_iter()
-        .map(|((key, value), ts, diff)| {
-            let key: K = serde_json::from_value(key).expect("must deserialize");
-            let value: V = serde_json::from_value(value).expect("must deserialize");
-            ((key, value), ts, diff)
-        })
 }

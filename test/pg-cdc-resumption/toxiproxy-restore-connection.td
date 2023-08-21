@@ -7,4 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ http-request method=DELETE url=http://toxiproxy:8474/proxies/postgres/toxics/postgres content-type=application/json
+$ http-request method=POST url=http://toxiproxy:8474/proxies/postgres content-type=application/json
+{
+  "name": "postgres",
+  "listen": "0.0.0.0:5432",
+  "upstream": "postgres:5432",
+  "enabled": true
+}

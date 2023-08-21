@@ -11,6 +11,11 @@
 # bug: https://github.com/MaterializeInc/materialize/issues/9397
 # fix: https://github.com/MaterializeInc/materialize/pull/9398
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t1 (f1 INTEGER, f2 INTEGER, f3 INTEGER);
 
@@ -34,7 +39,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -47,7 +52,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -60,7 +65,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -73,7 +78,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -86,7 +91,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -99,7 +104,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -112,7 +117,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -125,7 +130,7 @@ Explained Query (fast path):
       ReadExistingIndex materialize.public.v1_primary_idx
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -143,7 +148,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -157,7 +162,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -171,7 +176,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -185,7 +190,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -199,7 +204,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -213,7 +218,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 
@@ -227,7 +232,7 @@ Explained Query:
         Get materialize.public.v1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.v1_primary_idx
+  - materialize.public.v1_primary_idx (*** full scan ***)
 
 EOF
 

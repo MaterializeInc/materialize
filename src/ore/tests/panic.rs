@@ -51,8 +51,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -83,15 +81,14 @@
 
 use std::panic;
 
-use scopeguard::defer;
-
 use mz_ore::panic::{catch_unwind, set_abort_on_panic};
+use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
 // removes panic hooks and can interfere with any concurrently running test.
 // Therefore, it needs to be run in isolation.
 
-#[test]
+#[test] // allow(test-attribute)
 fn catch_panic() {
     let old_hook = panic::take_hook();
     defer! {

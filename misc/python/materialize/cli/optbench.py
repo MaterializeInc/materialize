@@ -16,7 +16,7 @@ from typing import Optional, cast
 
 import click
 import numpy as np
-import pandas as pd  # type: ignore
+import pandas as pd
 
 from ..optbench import Scenario, scenarios, sql, util
 

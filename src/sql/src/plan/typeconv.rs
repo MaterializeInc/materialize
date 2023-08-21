@@ -10,21 +10,19 @@
 //! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
-use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
+use mz_expr::{func, VariadicFunc};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
 
-use mz_expr::func;
-use mz_expr::VariadicFunc;
-use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
-
-use super::error::PlanError;
-use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
-use super::query::{ExprContext, QueryContext};
-use super::scope::Scope;
 use crate::catalog::TypeCategory;
+use crate::plan::error::PlanError;
+use crate::plan::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use crate::plan::query::{ExprContext, QueryContext};
+use crate::plan::scope::Scope;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
@@ -289,9 +287,9 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
         (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
-        (Oid, RegClass) => Assignment: CastOidToRegClass(func::CastOidToRegClass),
-        (Oid, RegProc) => Assignment: CastOidToRegProc(func::CastOidToRegProc),
-        (Oid, RegType) => Assignment: CastOidToRegType(func::CastOidToRegType),
+        (Oid, RegClass) => Implicit: CastOidToRegClass(func::CastOidToRegClass),
+        (Oid, RegProc) => Implicit: CastOidToRegProc(func::CastOidToRegProc),
+        (Oid, RegType) => Implicit: CastOidToRegType(func::CastOidToRegType),
 
         // REGCLASS
         (RegClass, Oid) => Implicit: CastRegClassToOid(func::CastRegClassToOid),
@@ -401,6 +399,8 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         // so use mz_error_if_null to coerce that into an error. This is hacky and
         // incomplete in a few ways, but gets us close enough to making drivers happy.
         // TODO: Support the correct error code for does not exist (42883).
+        // TODO: Support qualified names.
+        // TODO: This should take into account the search path when looking for an object.
         (String, RegClass) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE
@@ -525,17 +525,27 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         }),
         (VarChar, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
 
-        //PG LEGACY CHAR
+        // PG LEGACY CHAR
         (PgLegacyChar, String) => Implicit: CastPgLegacyCharToString(func::CastPgLegacyCharToString),
-        (PgLegacyChar, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-            let length = to_type.unwrap_char_length();
-            Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx == CastContext::Assignment})))
-        }),
-        (PgLegacyChar, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
-            let length = to_type.unwrap_varchar_max_length();
-            Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx == CastContext::Assignment})))
-        }),
+        (PgLegacyChar, Char) => Assignment: CastPgLegacyCharToChar(func::CastPgLegacyCharToChar),
+        (PgLegacyChar, VarChar) => Assignment: CastPgLegacyCharToVarChar(func::CastPgLegacyCharToVarChar),
         (PgLegacyChar, Int32) => Explicit: CastPgLegacyCharToInt32(func::CastPgLegacyCharToInt32),
+
+        // PG LEGACY NAME
+        // Under the hood VarChars and Name's are just Strings, so we can re-use existing methods
+        // on Strings and VarChars instead of defining new ones.
+        (PgLegacyName, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
+        (PgLegacyName, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            let length = to_type.unwrap_char_length();
+            Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
+        }),
+        (PgLegacyName, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            let length = to_type.unwrap_varchar_max_length();
+            Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
+        }),
+        (String, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+        (Char, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+        (VarChar, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
 
         // RECORD
         (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
@@ -569,6 +579,14 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
             Some(|e: HirScalarExpr| e.call_unary(CastArrayToString(func::CastArrayToString { ty })))
         }),
         (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
+        (Array, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            let inner_from_type = from_type.unwrap_array_element_type();
+            let inner_to_type = to_type.unwrap_array_element_type();
+            let cast_expr = plan_hypothetical_cast(ecx, ccx, inner_from_type, inner_to_type)?;
+            let return_ty = to_type.clone();
+
+            Some(move |e: HirScalarExpr| e.call_unary(CastArrayToArray(func::CastArrayToArray { return_ty, cast_expr: Box::new(cast_expr) })))
+        }),
 
         // INT2VECTOR
         (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
@@ -644,7 +662,65 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Range, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
             let ty = from_type.clone();
             Some(|e: HirScalarExpr| e.call_unary(CastRangeToString(func::CastRangeToString { ty })))
-        })
+        }),
+
+        // MzAclItem
+        (MzAclItem, String) => Explicit: sql_impl_cast("(
+                SELECT
+                    (CASE
+                        WHEN grantee_role_id = 'p' THEN ''
+                        ELSE COALESCE(grantee_role.name, grantee_role_id)
+                    END)
+                    || '='
+                    || mz_internal.mz_aclitem_privileges($1)
+                    || '/'
+                    || COALESCE(grantor_role.name, grantor_role_id)
+                FROM
+                    (SELECT mz_internal.mz_aclitem_grantee($1) AS grantee_role_id),
+                    (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id)
+                LEFT JOIN mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
+                LEFT JOIN mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
+            )"),
+        (MzAclItem, AclItem) => Explicit: sql_impl_cast("(
+                SELECT makeaclitem(
+                    (CASE mz_internal.mz_aclitem_grantee($1)
+                        WHEN 'p' THEN 0
+                        ELSE (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantee($1))
+                    END),
+                    (SELECT oid FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantor($1)),
+                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges($1)), ',')),
+                    -- GRANT OPTION isn't implemented so we hardcode false.
+                    false
+                )
+            )"),
+
+        // AclItem
+        (AclItem, String) => Explicit: sql_impl_cast("(
+                SELECT
+                    (CASE grantee_oid
+                        WHEN 0 THEN ''
+                        ELSE COALESCE(grantee_role.name, grantee_oid::text)
+                    END)
+                    || '='
+                    || mz_internal.aclitem_privileges($1)
+                    || '/'
+                    || COALESCE(grantor_role.name, grantor_oid::text)
+                FROM
+                    (SELECT mz_internal.aclitem_grantee($1) AS grantee_oid),
+                    (SELECT mz_internal.aclitem_grantor($1) AS grantor_oid)
+                LEFT JOIN mz_roles AS grantee_role ON grantee_oid = grantee_role.oid
+                LEFT JOIN mz_roles AS grantor_role ON grantor_oid = grantor_role.oid
+            )"),
+        (AclItem, MzAclItem) => Explicit: sql_impl_cast("(
+                SELECT mz_internal.make_mz_aclitem(
+                    (CASE mz_internal.aclitem_grantee($1)
+                        WHEN 0 THEN 'p'
+                        ELSE (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantee($1))
+                    END),
+                    (SELECT id FROM mz_roles WHERE oid = mz_internal.aclitem_grantor($1)),
+                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.aclitem_privileges($1)), ','))
+                )
+            )")
     }
 });
 
@@ -889,6 +965,7 @@ pub fn plan_hypothetical_cast(
         relation_type: &relation_type,
         allow_aggregates: false,
         allow_subqueries: true,
+        allow_parameters: true,
         allow_windows: false,
     };
 
@@ -899,15 +976,11 @@ pub fn plan_hypothetical_cast(
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
-    Some(
-        plan_cast(&ecx, ccx, col_expr, to)
-            .ok()?
-            .lower_uncorrelated()
-            .expect(
-                "lower_uncorrelated should not fail given that there is no correlation \
-                in the input col_expr",
-            ),
-    )
+    plan_cast(&ecx, ccx, col_expr, to)
+        .ok()?
+        // TODO(jkosh44) Support casts that have correlated implementations.
+        .lower_uncorrelated()
+        .ok()
 }
 
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are
@@ -970,15 +1043,8 @@ pub fn plan_cast(
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    mut cast_from: &ScalarType,
-    mut cast_to: &ScalarType,
+    cast_from: &ScalarType,
+    cast_to: &ScalarType,
 ) -> bool {
-    // All stringlike types are treated like `ScalarType::String` during casts.
-    if TypeCategory::from_type(cast_from) == TypeCategory::String {
-        cast_from = &ScalarType::String;
-    }
-    if TypeCategory::from_type(cast_to) == TypeCategory::String {
-        cast_to = &ScalarType::String;
-    }
     get_cast(ecx, ccx, cast_from, cast_to).is_some()
 }

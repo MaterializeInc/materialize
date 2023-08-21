@@ -388,17 +388,17 @@ su
 
 # testing large numbers
 query T
-SELECT substr('abcdef', 2, 2147483648);
+SELECT substr('abcdef', 2, 2147483647);
 ----
 bcdef
 
 query T
-SELECT substr('abcdef', 2147483648, 2);
+SELECT substr('abcdef', 2147483647, 2);
 ----
 (empty)
 
 query T
-SELECT substr('abcdef', 2147483648, 2147483648);
+SELECT substr('abcdef', 2147483647, 2147483647);
 ----
 (empty)
 
@@ -450,22 +450,22 @@ SELECT substring('abcdef' from -1);
 abcdef
 
 query T
-SELECT substring('abcdef' from 2 for 2147483648);
+SELECT substring('abcdef' from 2 for 2147483647);
 ----
 bcdef
 
 query T
-SELECT substring('abcdef' from 2147483648 for 2);
+SELECT substring('abcdef' from 2147483647 for 2);
 ----
 (empty)
 
 query T
-SELECT substring('abcdef' from 2147483648 for 2147483648);
+SELECT substring('abcdef' from 2147483647 for 2147483647);
 ----
 (empty)
 
 query T
-SELECT substring('abcdef' for 2147483648);
+SELECT substring('abcdef' for 2147483647);
 ----
 abcdef
 
@@ -725,6 +725,54 @@ SELECT '你' || '好'
 query error db error: ERROR: operator does not exist: boolean \|\| boolean
 SELECT true || false
 
+# concat_ws
+
+query error db error: ERROR: function concat_ws\(\) does not exist
+SELECT concat_ws();
+
+query error db error: ERROR: function concat_ws\(unknown\) does not exist
+SELECT concat_ws('a');
+
+query T
+SELECT concat_ws('', 'a', 'b') AS word;
+----
+ab
+
+query T
+SELECT concat_ws(E'\t', 'S', 'M', 'T');
+----
+S	M	T
+
+query T
+SELECT concat_ws(', ', interval '1d', 1.23::numeric, 4.56::float);
+----
+1 day, 1.23, 4.56
+
+query T
+SELECT concat_ws(', ', interval '1d', null, 1.23::numeric, null, 4.57::float);
+----
+1 day, 1.23, 4.57
+
+query T
+SELECT concat_ws(', ', interval '1d', null, 1.23::numeric, null, 4.57::float, null);
+----
+1 day, 1.23, 4.57
+
+query T
+SELECT concat_ws(null, interval '1d', null, 1.23::numeric, null, 4.57::float, null);
+----
+NULL
+
+query T
+SELECT concat_ws(null, null);
+----
+NULL
+
+query T
+SELECT concat_ws('x', null);
+----
+(empty)
+
 query T
 SELECT split_part('abc~@~def~@~ghi', '~@~', 2)
 ----
@@ -855,6 +903,9 @@ query T
 SELECT lpad('str', 5, 'đẹp')
 ----
 đẹstr
+
+query error requested length too large
+SELECT lpad('', 2147483647)
 
 
 ### ilike ###
@@ -1309,6 +1360,9 @@ SELECT repeat('a', -1)
 ----
 (empty)
 
+query error requested length too large
+SELECT repeat('a', 2147483647)
+
 # Check for char cmp validity, which ignores white space
 # ...at datum level
 
@@ -1375,6 +1429,21 @@ SELECT 'abc'::char(3) ~~ 'abc'::char(4);
 ----
 true
 
+query B
+SELECT 'abc'::char(3) !~~* 'Abc'::char(4);
+----
+false
+
+query B
+SELECT 'abc'::char(3) NOT ILIKE 'Abc'::char(4);
+----
+false
+
+query B
+SELECT 'abc'::char(3) !~ 'Abc'::char(4);
+----
+true
+
 # Regression for https://github.com/MaterializeInc/materialize/pull/7522#issuecomment-893343138
 
 query T
@@ -1417,3 +1486,102 @@ query T
 SELECT CONCAT('a'::text, 'b'::char(3), 'c');
 ----
 ab  c
+
+# Regression for https://github.com/MaterializeInc/materialize/issues/18095
+
+statement ok
+CREATE TABLE gh18095_0(c0 VARCHAR(55))
+
+statement ok
+CREATE TABLE gh18095_1(c0 CHAR(96));
+
+statement ok
+INSERT INTO gh18095_1 VALUES('''%ꆔA?')
+
+query T
+SELECT FROM gh18095_1 JOIN gh18095_0 ON (gh18095_1.c0)LIKE((gh18095_1.c0)::VARCHAR(4));
+----
+
+### translate ###
+
+# NULL inputs
+
+query I
+SELECT translate(NULL, 'one', 'two')
+----
+NULL
+
+query I
+SELECT translate('one', NULL, 'two')
+----
+NULL
+
+query I
+SELECT translate('one', 'two', NULL)
+----
+NULL
+
+query I
+SELECT translate('one', NULL, NULL)
+----
+NULL
+
+query I
+SELECT translate(NULL, 'one', NULL)
+----
+NULL
+
+query I
+SELECT translate(NULL, NULL, 'one')
+----
+NULL
+
+query I
+SELECT translate(NULL, NULL, NULL)
+----
+NULL
+
+# replace single occurrence of a single char
+
+query T
+SELECT translate('foe', 'f', 't')
+----
+toe
+
+# replace multiple occurrences of a single char
+
+query T
+SELECT translate('hello', 'l', 'x')
+----
+hexxo
+
+# remove extra occurrences when len(from) > len(to)
+
+query T
+SELECT translate('ffl', 'fl', 't')
+----
+tt
+
+query I
+SELECT translate('[1]', '[]', '')::numeric
+----
+1
+
+# ignore extra occurences when len(to) > len(from)
+
+query T
+SELECT translate('something', 'sth', 'xfvlg')
+----
+xomefving
+
+# ignore non-matching extra occurrences
+
+query T
+SELECT translate('ffl', 'fx', 't')
+----
+ttl
+
+query T
+SELECT translate('hello', 'fl', 'tx')
+----
+hexxo

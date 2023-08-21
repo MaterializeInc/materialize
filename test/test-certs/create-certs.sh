@@ -128,7 +128,7 @@ create_cert() {
         -passout pass:$SSL_SECRET
 }
 
-for i in materialized producer postgres certuser
+for i in materialized producer postgres certuser no_describe_configs
 do
     create_cert $i "ca" $i
 

@@ -12,32 +12,39 @@
 #![warn(missing_debug_implementations)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU64;
 
+use itertools::Itertools;
+use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
+use mz_expr::{
+    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+};
+use mz_ore::soft_panic_or_log;
+use mz_ore::str::Indent;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::explain::text::text_string_at;
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::{Diff, GlobalId, Row};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
-use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
-    MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
-};
-use mz_ore::soft_panic_or_log;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row};
-
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::types::dataflows::{BuildDesc, DataflowDescription};
+use crate::plan::transform::{Transform, TransformConfig};
+use crate::types::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 
+pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
+pub mod transform;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
 
@@ -208,6 +215,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
         values: Vec<Plan<T>>,
+        /// Maximum number of iterations. See further info on the MIR `LetRec`.
+        limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
@@ -321,6 +330,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
     Union {
         /// The input collections
         inputs: Vec<Plan<T>>,
+        /// Whether to consolidate the output, e.g., cancel negated records.
+        consolidate_output: bool,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -371,7 +382,7 @@ impl<T> Plan<T> {
             | ArrangeBy { input, .. } => {
                 first = Some(&mut **input);
             }
-            Join { inputs, .. } | Union { inputs } => {
+            Join { inputs, .. } | Union { inputs, .. } => {
                 rest = Some(inputs);
             }
         }
@@ -381,6 +392,25 @@ impl<T> Plan<T> {
             .chain(second)
             .chain(rest.into_iter().flatten())
             .chain(last)
+    }
+}
+
+impl Plan {
+    /// Pretty-print this [Plan] to a string.
+    pub fn pretty(&self) -> String {
+        let config = ExplainConfig::default();
+        self.explain(&config, None)
+    }
+
+    /// Pretty-print this [Plan] to a string using a custom
+    /// [ExplainConfig] and an optionally provided [ExprHumanizer].
+    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+        text_string_at(self, || PlanRenderingContext {
+            indent: Indent::default(),
+            humanizer: humanizer.unwrap_or(&DummyHumanizer),
+            annotations: BTreeMap::default(),
+            config,
+        })
     }
 }
 
@@ -484,8 +514,11 @@ impl Arbitrary for Plan {
                     })
                     .boxed(),
                 // Plan::Union
-                prop::collection::vec(inner.clone(), 0..2)
-                    .prop_map(|x| Plan::Union { inputs: x })
+                (prop::collection::vec(inner.clone(), 0..2), any::<bool>())
+                    .prop_map(|(x, b)| Plan::Union {
+                        inputs: x,
+                        consolidate_output: b,
+                    })
                     .boxed(),
                 //Plan::ArrangeBy
                 (
@@ -568,9 +601,35 @@ impl RustType<ProtoPlan> for Plan {
                     body: Some(body.into_proto()),
                 }
                 .into()),
-                Plan::LetRec { ids, values, body } => LetRec(
+                Plan::LetRec {
+                    ids,
+                    values,
+                    limits,
+                    body,
+                } => LetRec(
                     ProtoPlanLetRec {
                         ids: ids.into_proto(),
+                        limits: limits
+                            .clone()
+                            .into_iter()
+                            .map(|limit| match limit {
+                                Some(limit) => limit,
+                                None => LetRecLimit {
+                                    // The actual value doesn't matter here, because the limit_is_some
+                                    // field will be false, so we won't read this value when converting
+                                    // back.
+                                    max_iters: NonZeroU64::new(1).unwrap(),
+                                    return_at_limit: false,
+                                },
+                            })
+                            .collect_vec()
+                            .into_proto(),
+                        limit_is_some: limits
+                            .clone()
+                            .into_iter()
+                            .map(|limit| limit.is_some())
+                            .collect_vec()
+                            .into_proto(),
                         values: values.into_proto(),
                         body: Some(body.into_proto()),
                     }
@@ -638,8 +697,12 @@ impl RustType<ProtoPlan> for Plan {
                     }
                     .into(),
                 ),
-                Plan::Union { inputs } => Union(ProtoPlanUnion {
+                Plan::Union {
+                    inputs,
+                    consolidate_output,
+                } => Union(ProtoPlanUnion {
                     inputs: inputs.into_proto(),
+                    consolidate_output: consolidate_output.into_proto(),
                 }),
                 Plan::ArrangeBy {
                     input,
@@ -707,11 +770,35 @@ impl RustType<ProtoPlan> for Plan {
                 value: proto.value.into_rust_if_some("ProtoPlanLet::value")?,
                 body: proto.body.into_rust_if_some("ProtoPlanLet::body")?,
             },
-            LetRec(proto) => Plan::LetRec {
-                ids: proto.ids.into_rust()?,
-                values: proto.values.into_rust()?,
-                body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
-            },
+            LetRec(proto) => {
+                let ids: Vec<LocalId> = proto.ids.into_rust()?;
+                let values: Vec<Plan> = proto.values.into_rust()?;
+                let limits_raw: Vec<LetRecLimit> = proto.limits.into_rust()?;
+                let limit_is_some: Vec<bool> = proto.limit_is_some.into_rust()?;
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), limits_raw.len());
+                assert_eq!(ids.len(), limit_is_some.len());
+                let limits = limits_raw
+                    .into_iter()
+                    .zip_eq(limit_is_some.into_iter())
+                    .map(
+                        |(limit_raw, is_some)| {
+                            if is_some {
+                                Some(limit_raw)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                    .collect_vec();
+                assert_eq!(ids.len(), limits.len());
+                Plan::LetRec {
+                    ids,
+                    values,
+                    limits,
+                    body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
+                }
+            }
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.into_rust_if_some("ProtoPlanMfp::input")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
@@ -753,6 +840,7 @@ impl RustType<ProtoPlan> for Plan {
             },
             Union(proto) => Plan::Union {
                 inputs: proto.inputs.into_rust()?,
+                consolidate_output: proto.consolidate_output.into_rust()?,
             },
             ArrangeBy(proto) => Plan::ArrangeBy {
                 input: proto.input.into_rust_if_some("ProtoPlanArrangeBy::input")?,
@@ -849,6 +937,22 @@ impl RustType<ProtoGetPlan> for GetPlan {
     }
 }
 
+impl RustType<ProtoLetRecLimit> for LetRecLimit {
+    fn into_proto(&self) -> ProtoLetRecLimit {
+        ProtoLetRecLimit {
+            max_iters: self.max_iters.get(),
+            return_at_limit: self.return_at_limit,
+        }
+    }
+
+    fn from_proto(proto: ProtoLetRecLimit) -> Result<Self, TryFromProtoError> {
+        Ok(LetRecLimit {
+            max_iters: NonZeroU64::new(proto.max_iters).expect("max_iters > 0"),
+            return_at_limit: proto.return_at_limit,
+        })
+    }
+}
+
 /// Various bits of state to print along with error messages during LIR planning,
 /// to aid debugging.
 #[derive(Copy, Clone, Debug)]
@@ -922,20 +1026,10 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// are certain to be produced, which can be relied on by the next steps in the plan.
     /// Each of the arrangement keys is associated with an MFP that must be applied if that arrangement is used,
     /// to back out the permutation associated with that arrangement.
-
+    ///
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
-    pub fn from_mir(
-        expr: &MirRelationExpr,
-        arrangements: &mut BTreeMap<Id, AvailableCollections>,
-        debug_info: LirDebugInfo<'_>,
-    ) -> Result<(Self, AvailableCollections), String> {
-        // We don't want to trace recursive calls, which is why the public `from_mir`
-        // is annotated and delegates the work to a private (recursive) from_mir_inner.
-        Plan::from_mir_inner(expr, arrangements, debug_info)
-    }
-
-    fn from_mir_inner(
+    fn from_mir(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
@@ -1000,9 +1094,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     .unwrap_or_else(AvailableCollections::new_raw);
 
                 // Seek out an arrangement key that might be constrained to a literal.
-                // TODO: Improve key selection heuristic.
-                // Note that most (actually all, as far as I know) of the cases that used to be
-                // handled by this code are instead handled by `CanonicalizeMfp`.
+                // Note: this code has very little use nowadays, as its job was mostly taken over
+                // by `LiteralConstraints` (see in the below longer comment).
                 let key_val = in_keys
                     .arranged
                     .iter()
@@ -1014,6 +1107,20 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Determine the plan of action for the `Get` stage.
                 let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
+                    // This code path used to handle looking up literals from indexes, but it's
+                    // mostly deprecated, as this is nowadays performed by the `LiteralConstraints`
+                    // MIR transform instead. However, it's still called in a couple of tricky
+                    // special cases:
+                    // - `LiteralConstraints` handles only Gets of global ids, so this code still
+                    //   gets to handle Filters on top of Gets of local ids.
+                    // - Lowering does a `MapFilterProject::extract_from_expression`, while
+                    //   `LiteralConstraints` does
+                    //   `MapFilterProject::extract_non_errors_from_expr_mut`.
+                    // - It might happen that new literal constraint optimization opportunities
+                    //   appear somewhere near the end of the MIR optimizer after
+                    //   `LiteralConstraints` has already run.
+                    // (Also note that a similar literal constraint handling machinery is also
+                    // present when handling the leftover MFP after this big match.)
                     mfp.permute(permutation.clone(), thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
                     GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
@@ -1056,12 +1163,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys) = Plan::from_mir_inner(value, arrangements, debug_info)?;
+                let (value, v_keys) = Plan::from_mir(value, arrangements, debug_info)?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 (
@@ -1073,7 +1180,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     b_keys,
                 )
             }
-            MirRelationExpr::LetRec { ids, values, body } => {
+            MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), limits.len());
                 // Plan the values using only the available arrangements, but
                 // introduce any resulting arrangements bound to each `id`.
                 // Arrangements made available cannot be used by prior bindings,
@@ -1081,7 +1195,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip(values) {
                     let (mut lir_value, mut v_keys) =
-                        Plan::from_mir_inner(value, arrangements, debug_info)?;
+                        Plan::from_mir(value, arrangements, debug_info)?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -1093,11 +1207,35 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                         let forms = AvailableCollections::new_raw();
 
-                        lir_value = Plan::ArrangeBy {
-                            input: Box::new(lir_value),
-                            forms,
-                            input_key,
-                            input_mfp,
+                        // We just want to insert an `ArrangeBy` to form an unarranged collection,
+                        // but there is a complication: We shouldn't break the invariant (created by
+                        // `NormalizeLets`, and relied upon by the rendering) that there isn't
+                        // anything between two `LetRec`s. So if `lir_value` is itself a `LetRec`,
+                        // then we insert the `ArrangeBy` on the `body` of the inner `LetRec`,
+                        // instead of on top of the inner `LetRec`.
+                        lir_value = match lir_value {
+                            Plan::LetRec {
+                                ids,
+                                values,
+                                limits,
+                                body,
+                            } => Plan::LetRec {
+                                ids,
+                                values,
+                                limits,
+                                body: Box::new(Plan::ArrangeBy {
+                                    input: body,
+                                    forms,
+                                    input_key,
+                                    input_mfp,
+                                }),
+                            },
+                            lir_value => Plan::ArrangeBy {
+                                input: Box::new(lir_value),
+                                forms,
+                                input_key,
+                                input_mfp,
+                            },
                         };
                         v_keys.raw = true;
                     }
@@ -1112,7 +1250,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
                 for id in ids.iter() {
                     arrangements.remove(&Id::Local(*id));
                 }
@@ -1121,13 +1259,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     Plan::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
+                        limits: limits.clone(),
                         body: Box::new(body),
                     },
                     b_keys,
                 )
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Plan::from_mir(input, arrangements, debug_info)?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
                 let mut exprs = exprs.clone();
@@ -1172,7 +1311,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                    let (plan, keys) = Plan::from_mir(input, arrangements, debug_info)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
@@ -1186,18 +1325,11 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         let start: usize = 1;
                         let order = vec![(0usize, key.clone(), None)];
                         // All columns of the constant input will be part of the arrangement key.
-                        // Note that currently nothing else would make this arrangement exist, so
-                        // this will end up in `missing`, and thus we'll insert an LIR ArrangeBy
-                        // later.
                         let source_arrangement = (
                             (0..key.len())
-                                .into_iter()
                                 .map(MirScalarExpr::Column)
                                 .collect::<Vec<_>>(),
-                            (0..key.len())
-                                .into_iter()
-                                .map(|i| (i, i))
-                                .collect::<BTreeMap<_, _>>(),
+                            (0..key.len()).map(|i| (i, i)).collect::<BTreeMap<_, _>>(),
                             Vec::<usize>::new(),
                         );
                         let (ljp, missing) = LinearJoinPlan::create_from(
@@ -1255,15 +1387,28 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     if missing != Default::default() {
                         if is_delta {
                             // join_implementation.rs produced a sub-optimal plan here;
-                            // we shouldn't plan delta joins at all if not all of the required arrangements
-                            // are available. Print an error message, to increase the chances that
-                            // the user will tell us about this.
+                            // we shouldn't plan delta joins at all if not all of the required
+                            // arrangements are available. Soft panic in CI and log an error in
+                            // production to increase the chances that we will catch all situations
+                            // that violate this constraint.
                             soft_panic_or_log!("Arrangements depended on by delta join alarmingly absent: {:?}
 Dataflow info: {}
 This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
                         } else {
-                            // It's fine and expected that linear joins don't have all their arrangements available up front,
-                            // so no need to print an error here.
+                            soft_panic_or_log!("Arrangements depended on by a non-delta join are absent: {:?}
+Dataflow info: {}
+This is not expected to cause incorrect results, but could indicate a performance issue in Materialize.", missing, debug_info);
+                            // Nowadays MIR transforms take care to insert MIR ArrangeBys for each
+                            // Join input. (Earlier, they were missing in the following cases:
+                            //  - They were const-folded away for constant inputs. This is not
+                            //    happening since
+                            //    https://github.com/MaterializeInc/materialize/pull/16351
+                            //  - They were not being inserted for the constant input of
+                            //    `IndexedFilter`s. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/20920
+                            //  - They were not being inserted for the first input of Differential
+                            //    joins. This was fixed in
+                            //    https://github.com/MaterializeInc/materialize/pull/16099)
                         }
                         let raw_plan = std::mem::replace(
                             input_plan,
@@ -1292,7 +1437,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } => {
                 let input_arity = input.arity();
                 let output_arity = group_key.len() + aggregates.len();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
                     permutation,
@@ -1333,9 +1478,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 limit,
                 offset,
                 monotonic,
+                expected_group_size,
             } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -1344,6 +1490,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     *limit,
                     arity,
                     *monotonic,
+                    *expected_group_size,
                 );
 
                 // We don't have an MFP here -- install an operator to permute the
@@ -1364,7 +1511,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1383,7 +1530,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
@@ -1391,8 +1538,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     input
                 };
-                let (threshold_plan, required_arrangement) =
-                    ThresholdPlan::create_from(arity, false);
+                let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let input = if !keys
                     .arranged
                     .iter()
@@ -1420,10 +1566,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Union { base, inputs } => {
                 let arity = base.arity();
                 let mut plans_keys = Vec::with_capacity(1 + inputs.len());
-                let (plan, keys) = Self::from_mir_inner(base, arrangements, debug_info)?;
+                let (plan, keys) = Self::from_mir(base, arrangements, debug_info)?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
-                    let (plan, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                    let (plan, keys) = Self::from_mir(input, arrangements, debug_info)?;
                     plans_keys.push((plan, keys));
                 }
                 let plans = plans_keys
@@ -1439,13 +1585,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     })
                     .collect();
                 // Return the plan and no arrangements.
-                let plan = Plan::Union { inputs: plans };
+                let plan = Plan::Union {
+                    inputs: plans,
+                    consolidate_output: false,
+                };
                 (plan, AvailableCollections::new_raw())
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
-                let (input, mut input_keys) =
-                    Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, mut input_keys) = Self::from_mir(input, arrangements, debug_info)?;
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
                     .iter()
@@ -1572,19 +1720,85 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
-        target = "optimizer"
+        target = "optimizer",
         level = "debug",
         skip_all,
-        fields(path.segment = "mir_to_lir")
+        fields(path.segment = "finalize_dataflow")
     )]
     pub fn finalize_dataflow(
+        desc: DataflowDescription<OptimizedMirRelationExpr>,
+        enable_consolidate_after_union_negate: bool,
+        enable_monotonic_oneshot_selects: bool,
+    ) -> Result<DataflowDescription<Self>, String> {
+        // First, we lower the dataflow description from MIR to LIR.
+        let mut dataflow = Self::lower_dataflow(desc)?;
+
+        // Subsequently, we perform plan refinements for the dataflow.
+        Self::refine_source_mfps(&mut dataflow);
+
+        if enable_consolidate_after_union_negate {
+            Self::refine_union_negate_consolidation(&mut dataflow);
+        }
+
+        if enable_monotonic_oneshot_selects {
+            Self::refine_single_time_operator_selection(&mut dataflow);
+
+            // The relaxation of the `must_consolidate` flag performs an LIR-based
+            // analysis and transform under checked recursion. By a similar argument
+            // made in `from_mir`, we do not expect the recursion limit to be hit.
+            // However, if that happens, we propagate an error to the caller.
+            // To apply the transform, we first obtain monotonic source and index
+            // global IDs and add them to a `TransformConfig` instance.
+            let monotonic_ids = dataflow
+                .source_imports
+                .iter()
+                .filter_map(|(id, (_, monotonic))| if *monotonic { Some(id) } else { None })
+                .chain(
+                    dataflow
+                        .index_imports
+                        .iter()
+                        .filter_map(|(id, index_import)| {
+                            if index_import.monotonic {
+                                Some(id)
+                            } else {
+                                None
+                            }
+                        }),
+                )
+                .cloned()
+                .collect::<BTreeSet<_>>();
+
+            let config = TransformConfig { monotonic_ids };
+            Self::refine_single_time_consolidation(&mut dataflow, &config)?;
+        }
+
+        mz_repr::explain::trace_plan(&dataflow);
+
+        Ok(dataflow)
+    }
+
+    /// Lowers the dataflow description from MIR to LIR. To this end, the
+    /// method collects all available arrangements and based on this information
+    /// creates plans for every object to be built for the dataflow.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment ="mir_to_lir")
+    )]
+    fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
-        for (index_desc, r#type, _monotonic) in desc.index_imports.values() {
+        for IndexImport {
+            desc: index_desc,
+            typ,
+            ..
+        } in desc.index_imports.values()
+        {
             let key = index_desc.key.clone();
             // TODO[btv] - We should be told the permutation by
             // `index_desc`, and it should have been generated
@@ -1594,7 +1808,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             // a bit of a refactor, so for now we just
             // _assume_ that they were both generated by `permutation_for_arrangement`,
             // and recover it here.
-            let (permutation, thinning) = permutation_for_arrangement(&key, r#type.arity());
+            let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
             arrangements
                 .entry(Id::Global(index_desc.on_id))
                 .or_insert_with(AvailableCollections::default)
@@ -1621,7 +1835,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
-        let mut dataflow = DataflowDescription {
+        let dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
@@ -1632,6 +1846,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
             debug_name: desc.debug_name,
         };
 
+        mz_repr::explain::trace_plan(&dataflow);
+
+        Ok(dataflow)
+    }
+
+    /// Refines the source instance descriptions for sources imported by `dataflow` to
+    /// push down common MFP expressions.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_source_mfps")
+    )]
+    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
         for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
@@ -1678,10 +1906,119 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 source.arguments.operators = Some(mfp);
             }
         }
+        mz_repr::explain::trace_plan(dataflow);
+    }
 
-        mz_repr::explain::trace_plan(&dataflow);
+    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_union_negate_consolidation")
+    )]
+    fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                match expression {
+                    Plan::Union {
+                        inputs,
+                        consolidate_output,
+                    } => {
+                        if inputs
+                            .iter()
+                            .any(|input| matches!(input, Plan::Negate { .. }))
+                        {
+                            *consolidate_output = true;
+                        }
+                    }
+                    _ => {}
+                }
+                todo.extend(expression.children_mut());
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
+    }
 
-        Ok(dataflow)
+    /// Refines the plans of objects to be built as part of `dataflow` to take advantage
+    /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
+    /// one-shot SELECT query.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_single_time_operator_selection")
+    )]
+    fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
+        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
+        if !dataflow.is_single_time() {
+            return;
+        }
+
+        // Upgrade single-time plans to monotonic.
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                match expression {
+                    Plan::Reduce { plan, .. } => {
+                        // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
+                        match plan {
+                            ReducePlan::Collation(collation) => {
+                                collation.as_monotonic(true);
+                            }
+                            ReducePlan::Hierarchical(hierarchical) => {
+                                hierarchical.as_monotonic(true);
+                            }
+                            _ => {
+                                // Nothing to do for other plans, and doing nothing is safe for future variants.
+                            }
+                        }
+                        todo.extend(expression.children_mut());
+                    }
+                    Plan::TopK { top_k_plan, .. } => {
+                        top_k_plan.as_monotonic(true);
+                        todo.extend(expression.children_mut());
+                    }
+                    Plan::LetRec { body, .. } => {
+                        // Only the non-recursive `body` is restricted to a single time.
+                        todo.push(body);
+                    }
+                    _ => {
+                        // Nothing to do for other expressions, and doing nothing is safe for future expressions.
+                        todo.extend(expression.children_mut());
+                    }
+                }
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
+    }
+
+    /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
+    /// the setting of the `must_consolidate` attribute of monotonic operators, if necessary,
+    /// whenever the input is deemed to be physically monotonic.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_single_time_consolidation")
+    )]
+    fn refine_single_time_consolidation(
+        dataflow: &mut DataflowDescription<Self>,
+        config: &TransformConfig,
+    ) -> Result<(), String> {
+        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
+        if !dataflow.is_single_time() {
+            return Ok(());
+        }
+
+        let transform = transform::RelaxMustConsolidate::<T>::new();
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            transform
+                .transform(config, &mut build_desc.plan)
+                .map_err(|_| "Maximum recursion limit error in consolidation relaxation.")?;
+        }
+        mz_repr::explain::trace_plan(dataflow);
+        Ok(())
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.
@@ -1735,7 +2072,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         })
                         .collect()
                 }
-                Plan::LetRec { ids, values, body } => {
+                Plan::LetRec {
+                    ids,
+                    values,
+                    limits,
+                    body,
+                } => {
                     let mut values_parts: Vec<Vec<Self>> = vec![Vec::new(); parts];
                     for value in values.into_iter() {
                         for (index, part) in value.partition_among(parts).into_iter().enumerate() {
@@ -1749,6 +2091,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|(values, body)| Plan::LetRec {
                             values,
                             body: Box::new(body),
+                            limits: limits.clone(),
                             ids: ids.clone(),
                         })
                         .collect()
@@ -1841,7 +2184,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         threshold_plan: threshold_plan.clone(),
                     })
                     .collect(),
-                Plan::Union { inputs } => {
+                Plan::Union {
+                    inputs,
+                    consolidate_output,
+                } => {
                     let mut inputs_parts = vec![Vec::new(); parts];
                     for input in inputs.into_iter() {
                         for (index, input_part) in
@@ -1852,7 +2198,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     inputs_parts
                         .into_iter()
-                        .map(|inputs| Plan::Union { inputs })
+                        .map(|inputs| Plan::Union {
+                            inputs,
+                            consolidate_output,
+                        })
                         .collect()
                 }
                 Plan::ArrangeBy {
@@ -1896,6 +2245,7 @@ impl<T> CollectionPlan for Plan<T> {
             Plan::LetRec {
                 ids: _,
                 values,
+                limits: _,
                 body,
             } => {
                 for value in values.iter() {
@@ -1903,7 +2253,11 @@ impl<T> CollectionPlan for Plan<T> {
                 }
                 body.depends_on_into(out);
             }
-            Plan::Join { inputs, plan: _ } | Plan::Union { inputs } => {
+            Plan::Join { inputs, plan: _ }
+            | Plan::Union {
+                inputs,
+                consolidate_output: _,
+            } => {
                 for input in inputs {
                     input.depends_on_into(out);
                 }
@@ -1947,14 +2301,38 @@ impl<T> CollectionPlan for Plan<T> {
     }
 }
 
+/// Returns bucket sizes, descending, suitable for hierarchical decomposition of an operator, based
+/// on the expected number of rows that will have the same group key.
+fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64> {
+    // NOTE(vmarcos): The fan-in of 16 defined below is used in the tuning advice built-in view
+    // mz_internal.mz_expected_group_size_advice.
+    let mut buckets = vec![];
+    let mut current = 16;
+
+    // Plan for 4B records in the expected case if the user didn't specify a group size.
+    let limit = expected_group_size.unwrap_or(4_000_000_000);
+
+    // Distribute buckets in powers of 16, so that we can strike a balance between how many inputs
+    // each layer gets from the preceding layer, while also limiting the number of layers.
+    while current < limit {
+        buckets.push(current);
+        current = current.saturating_mul(16);
+    }
+
+    buckets.reverse();
+    buckets
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
             assert!(actual.is_ok());
@@ -1964,7 +2342,8 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
             assert!(actual.is_ok());
@@ -1974,7 +2353,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
-        #[test]
+        #[mz_ore::test]
         fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
             let actual = protobuf_roundtrip::<_, ProtoPlan>(&expect);
             assert!(actual.is_ok());

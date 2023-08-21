@@ -74,8 +74,8 @@ concepts](#user-facing-concepts) section below.
 
 ### Web UI
 
-We will evolve the existing Materialize Cloud web UI
-(<https://cloud.materialize.com>) to reflect the new hierarchy of concepts. The
+We will evolve the existing Materialize web UI
+(<https://console.materialize.com>) to reflect the new hierarchy of concepts. The
 following wireframe is a very rough sketch of what the Materialize Platform
 UI could look like:
 
@@ -118,7 +118,7 @@ authentication. Here is a rough sketch of the interface:
 
 ```shell
 $ mzcloud login aj@foocorp.com
-Opening https://cloud.materialize.com/login/SFB33-47281 in your browser...
+Opening https://console.materialize.com/login/SFB33-47281 in your browser...
 $ mzcloud connect aws:us-east-1
 psql (14.1)
 Type "help" for help.
@@ -887,8 +887,8 @@ Materialize maintains four correctness guarantees.
    This includes partial orders.*  In practice this means Materialize assigns
    new timestamps to events in sources.  This assignment of new timestamps is called
    reclocking. Once reclocking occurs, it defines a permanent order of events within
-   Materialize. For sources without transactional semantics (basic Kafka streams)
-   Maerialize reclocks the events to reflect the order in which the source emits
+   Materialize. For sources without transactional semantics (basic Kafka streams),
+   Materialize reclocks the events to reflect the order in which the source emits
    each event. For sources that do have transactional semantics (Postgres, Debezium)
    Materialize reclocks events to respect the transactional boundaries.  For partially
    ordered events x and y:

@@ -10,7 +10,9 @@
 use std::str;
 
 use mz_ore::fmt::FormatBuffer;
+use mz_repr::adt::char::Char;
 use mz_repr::adt::system::PgLegacyChar;
+use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 
 use crate::EvalError;
 
@@ -40,6 +42,28 @@ sqlfunc!(
         let mut buf = String::new();
         format_pg_legacy_char(&mut buf, a.0)?;
         Ok(buf)
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "\"char\"_to_char"]
+    #[preserves_uniqueness = true]
+    #[inverse = to_unary!(super::CastStringToPgLegacyChar)]
+    fn cast_pg_legacy_char_to_char(a: PgLegacyChar) -> Result<Char<String>, EvalError> {
+        let mut buf = String::new();
+        format_pg_legacy_char(&mut buf, a.0)?;
+        Ok(Char(buf))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "\"char\"_to_varchar"]
+    #[preserves_uniqueness = true]
+    #[inverse = to_unary!(super::CastStringToVarChar{fail_on_len: false, length: Some(VarCharMaxLength::try_from(1).unwrap())})]
+    fn cast_pg_legacy_char_to_var_char(a: PgLegacyChar) -> Result<VarChar<String>, EvalError> {
+        let mut buf = String::new();
+        format_pg_legacy_char(&mut buf, a.0)?;
+        Ok(VarChar(buf))
     }
 );
 

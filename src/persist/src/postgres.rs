@@ -9,7 +9,11 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use crate::cfg::ConsensusKnobs;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -17,9 +21,9 @@ use deadpool_postgres::tokio_postgres::config::SslMode;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{
-    Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
+    Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
+    RecyclingMethod,
 };
-use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -27,23 +31,26 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::debug;
 
+use crate::cfg::ConsensusKnobs;
 use crate::error::Error;
-use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
+use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
 
+// These `sql_stats_automatic_collection_enabled` are for the cost-based
+// optimizer but all the queries against this table are single-table and very
+// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
+// really get us anything. OTOH, the background jobs that crdb creates to
+// collect these stats fill up the jobs table (slowing down all sorts of
+// things).
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
     data bytea NOT NULL,
     PRIMARY KEY(shard, sequence_number)
-);
+) WITH (sql_stats_automatic_collection_enabled = false);
 ";
 
 impl ToSql for SeqNo {
@@ -146,6 +153,9 @@ impl PostgresConsensusConfig {
             fn connect_timeout(&self) -> Duration {
                 Duration::MAX
             }
+            fn tcp_user_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -175,6 +185,7 @@ impl PostgresConsensus {
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         let mut pg_config: Config = config.url.parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());
+        pg_config.tcp_user_timeout(config.knobs.tcp_user_timeout());
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(
@@ -242,8 +253,8 @@ impl PostgresConsensus {
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
         client
             .batch_execute(&format!(
-                "{}; {}",
-                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;"
+                "{} {}",
+                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
             ))
             .await?;
 
@@ -371,7 +382,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -417,17 +428,9 @@ impl Consensus for PostgresConsensus {
         };
 
         if result == 1 {
-            Ok(Ok(()))
+            Ok(CaSResult::Committed)
         } else {
-            // It's safe to call scan in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            let current = self.scan(key, from, SCAN_ALL).await?;
-            Ok(Err(current))
+            Ok(CaSResult::ExpectationMismatch)
         }
     }
 
@@ -502,13 +505,15 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
 
+    use crate::location::tests::consensus_impl_test;
+
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
@@ -533,7 +538,7 @@ mod tests {
 
         assert_eq!(
             consensus.compare_and_set(&key, None, state.clone()).await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

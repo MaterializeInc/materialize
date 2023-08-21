@@ -26,8 +26,8 @@ SELECT '${arg.default-replica-size}' != '4-4'
 > SELECT COUNT(*)
   FROM
     mz_materialized_views AS views,
-    mz_internal.mz_compute_exports AS compute_exports,
-    mz_internal.mz_compute_frontiers AS frontiers
+    mz_internal.mz_compute_exports_per_worker AS compute_exports,
+    mz_internal.mz_compute_frontiers_per_worker AS frontiers
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND

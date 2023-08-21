@@ -19,18 +19,18 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
 
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::{Codec, Codec64};
-
 use crate::error::InvalidUsage;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, ReadMetrics};
+use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
 use crate::ShardId;
@@ -47,7 +47,9 @@ where
 {
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) shard_id: ShardId,
+    pub(crate) schemas: Schemas<K, V>,
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
@@ -65,7 +67,9 @@ where
         let b = BatchFetcher {
             blob: Arc::clone(&handle.blob),
             metrics: Arc::clone(&handle.metrics),
+            shard_metrics: Arc::clone(&handle.machine.applier.shard_metrics),
             shard_id: handle.machine.shard_id(),
+            schemas: handle.schemas.clone(),
             _phantom: PhantomData,
         };
         handle.expire().await;
@@ -104,7 +108,9 @@ where
             self.blob.as_ref(),
             Arc::clone(&self.metrics),
             &self.metrics.read.batch_fetcher,
+            &self.shard_metrics,
             None,
+            self.schemas.clone(),
         )
         .await;
         (part, Ok(fetched_part))
@@ -164,7 +170,9 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
+    shard_metrics: &ShardMetrics,
     reader_id: Option<&LeasedReaderId>,
+    schemas: Schemas<K, V>,
 ) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
 where
     K: Debug + Codec,
@@ -188,6 +196,7 @@ where
         &part.shard_id,
         blob,
         &metrics,
+        shard_metrics,
         read_metrics,
         &part.key,
         &part.desc,
@@ -214,6 +223,13 @@ where
         metrics,
         ts_filter,
         part: encoded_part,
+        schemas,
+        filter_pushdown_audit: if part.filter_pushdown_audit {
+            part.stats.clone()
+        } else {
+            None
+        },
+        part_cursor: Cursor::default(),
         _phantom: PhantomData,
     };
 
@@ -224,6 +240,7 @@ pub(crate) async fn fetch_batch_part<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
+    shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
@@ -234,6 +251,7 @@ where
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        shard_metrics.blob_gets.inc();
         blob.get(&key.complete(shard_id)).await
     })
     .instrument(get_span.clone())
@@ -340,6 +358,8 @@ where
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
+    pub(crate) stats: Option<LazyPartStats>,
+    pub(crate) filter_pushdown_audit: bool,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -366,6 +386,8 @@ where
             encoded_size_bytes: self.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
+            stats: self.stats.clone(),
+            filter_pushdown_audit: self.filter_pushdown_audit,
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -394,6 +416,14 @@ where
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
     }
+
+    /// The filter has indicated we don't need this part, we can verify the
+    /// ongoing end-to-end correctness of corner cases via "audit". This means
+    /// we fetch the part like normal and if the MFP keeps anything from it,
+    /// then something has gone horribly wrong.
+    pub fn request_filter_pushdown_audit(&mut self) {
+        self.filter_pushdown_audit = true;
+    }
 }
 
 impl<T> Drop for LeasedBatchPart<T>
@@ -408,22 +438,39 @@ where
 
 /// A [Blob] object that has been fetched, but not yet decoded.
 #[derive(Debug)]
-pub struct FetchedPart<K, V, T, D> {
+pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
+    schemas: Schemas<K, V>,
+    filter_pushdown_audit: Option<LazyPartStats>,
+    part_cursor: Cursor,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-impl<K, V, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
+impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             metrics: Arc::clone(&self.metrics),
             ts_filter: self.ts_filter.clone(),
             part: self.part.clone(),
+            schemas: self.schemas.clone(),
+            filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            part_cursor: self.part_cursor.clone(),
             _phantom: self._phantom.clone(),
         }
+    }
+}
+
+impl<K: Codec, V: Codec, T, D> FetchedPart<K, V, T, D> {
+    /// Returns Some if this part was only fetched as part of a filter pushdown
+    /// audit. See [LeasedBatchPart::request_filter_pushdown_audit].
+    ///
+    /// If set, the value in the Option is for debugging and should be included
+    /// in any error messages.
+    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug> {
+        self.filter_pushdown_audit.clone()
     }
 }
 
@@ -433,10 +480,7 @@ impl<K, V, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
 pub(crate) struct EncodedPart<T> {
     registered_desc: Description<T>,
     part: Arc<BlobTraceBatchPart<T>>,
-
     needs_truncation: bool,
-    part_idx: usize,
-    idx: usize,
 }
 
 impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
@@ -449,14 +493,40 @@ where
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some((k, v, mut t, d)) = self.part.next() {
+        while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
+                continue;
+            }
+
+            let mut d = D::decode(d);
+
+            // If `filter_ts` advances our timestamp, we may end up with the same K, V, T in successive
+            // records. If so, opportunistically consolidate those out.
+            while let Some((k_next, v_next, mut t_next, d_next)) = self.part_cursor.peek(&self.part)
+            {
+                if (k, v) != (k_next, v_next) {
+                    break;
+                }
+
+                if !self.ts_filter.filter_ts(&mut t_next) {
+                    break;
+                }
+                if t != t_next {
+                    break;
+                }
+
+                // All equal... consolidate!
+                self.part_cursor.idx += 1;
+                d.plus_equals(&D::decode(d_next));
+            }
+
+            // If multiple updates consolidate out entirely, drop the record.
+            if d.is_zero() {
                 continue;
             }
 
             let k = self.metrics.codecs.key.decode(|| K::decode(k));
             let v = self.metrics.codecs.val.decode(|| V::decode(v));
-            let d = D::decode(d);
             return Some(((k, v), t, d));
         }
         None
@@ -530,19 +600,34 @@ where
         EncodedPart {
             registered_desc,
             part: Arc::new(part),
-            part_idx: 0,
-            idx: 0,
             needs_truncation,
         }
     }
+}
 
-    pub fn next<'a>(&'a mut self) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        while let Some(part) = self.part.updates.get(self.part_idx) {
+/// A pointer into a particular encoded part, with methods for fetching an update and
+/// scanning forward to the next. It is an error to use the same cursor for distinct
+/// parts.
+///
+/// We avoid implementing copy to make it hard to accidentally duplicate a cursor. However,
+/// clone is very cheap.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Cursor {
+    part_idx: usize,
+    idx: usize,
+}
+
+impl Cursor {
+    /// A cursor points to a particular update in the backing part data.
+    /// If the update it points to is not valid, advance it to the next valid update
+    /// if there is one, and return the pointed-to data.
+    pub fn peek<'a, T: Timestamp + Codec64>(
+        &mut self,
+        encoded: &'a EncodedPart<T>,
+    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+        while let Some(part) = encoded.part.updates.get(self.part_idx) {
             let ((k, v), t, d) = match part.get(self.idx) {
-                Some(x) => {
-                    self.idx += 1;
-                    x
-                }
+                Some(x) => x,
                 None => {
                     self.part_idx += 1;
                     self.idx = 0;
@@ -554,17 +639,29 @@ where
 
             // This filtering is really subtle, see the comment above for
             // what's going on here.
-            if self.needs_truncation {
-                if !self.registered_desc.lower().less_equal(&t) {
-                    continue;
-                }
-                if self.registered_desc.upper().less_equal(&t) {
-                    continue;
-                }
+            let truncated_t = encoded.needs_truncation && {
+                !encoded.registered_desc.lower().less_equal(&t)
+                    || encoded.registered_desc.upper().less_equal(&t)
+            };
+            if truncated_t {
+                self.idx += 1;
+                continue;
             }
             return Some((k, v, t, d));
         }
         None
+    }
+
+    /// Similar to peek, but advance the cursor just past the end of the most recent update.
+    pub fn pop<'a, T: Timestamp + Codec64>(
+        &mut self,
+        part: &'a EncodedPart<T>,
+    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+        let update = self.peek(part);
+        if update.is_some() {
+            self.idx += 1;
+        }
+        update
     }
 }
 
@@ -587,6 +684,15 @@ pub struct SerdeLeasedBatchPart {
     encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
+    stats: Option<LazyPartStats>,
+    filter_pushdown_audit: bool,
+}
+
+impl SerdeLeasedBatchPart {
+    /// Returns the encoded size of the given part.
+    pub fn encoded_size_bytes(&self) -> usize {
+        self.encoded_size_bytes
+    }
 }
 
 impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
@@ -613,11 +719,13 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             encoded_size_bytes: x.encoded_size_bytes,
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
+            stats: x.stats,
+            filter_pushdown_audit: x.filter_pushdown_audit,
         }
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn client_exchange_data() {
     // The whole point of SerdeLeasedBatchPart is that it can be exchanged
     // between timely workers, including over the network. Enforce then that it

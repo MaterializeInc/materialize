@@ -9,6 +9,9 @@
 
 # Test Avro UPSERT sinks.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+
 
 
 # sinking directly from an UPSERT source with multi-part key
@@ -310,13 +313,13 @@ $ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (a), there are no valid keys
+contains:upsert key could not be validated as unique
 
 ! CREATE SINK another_invalid_key FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (b), valid keys are: (a)
+contains:upsert key could not be validated as unique
 
 > CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
 
@@ -324,22 +327,63 @@ contains:Invalid upsert key: (b), valid keys are: (a)
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (a), valid keys are: (a, b)
+contains:upsert key could not be validated as unique
 
 ! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (b), valid keys are: (a, b)
+contains:upsert key could not be validated as unique
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (key1), valid keys are: (key1, key2)
+contains:upsert key could not be validated as unique
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (key2), valid keys are: (key1, key2)
+contains:upsert key could not be validated as unique
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+"Arrange ReduceMinsMaxes"
+"Arrange ReduceMinsMaxes"
+"Arranged DistinctBy"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+DistinctBy
+DistinctByErrorCheck
+ReduceMinsMaxes
+ReduceMinsMaxes
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"

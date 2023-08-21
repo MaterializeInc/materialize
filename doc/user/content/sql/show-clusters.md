@@ -7,9 +7,7 @@ menu:
 
 ---
 
-{{< show-command-note >}}
-
-`SHOW CLUSTERS` lists the [clusters](/overview/key-concepts/#clusters) configured in Materialize.
+`SHOW CLUSTERS` lists the [clusters](/get-started/key-concepts/#clusters) configured in Materialize.
 
 ## Syntax
 
@@ -23,7 +21,7 @@ pre-installed.
 
 ### `default` cluster
 
-A cluster named `default` with a single `xsmall` [replica](/overview/key-concepts/#cluster-replicas)
+A cluster named `default` with a single `xsmall` [replica](/get-started/key-concepts/#cluster-replicas)
 named `r1` will be pre-installed in every environment. You can modify or drop
 this cluster or its replicas at any time.
 
@@ -69,12 +67,12 @@ SHOW CLUSTERS;
 ```
 
 ```nofmt
-       name
----------------------
- default
- auction_house
- mz_introspection
- mz_system
+       name                  replicas
+--------------------- | ------------------
+ default              |  r1 (3xsmall)
+ auction_house        |  r1 (3xsmall)
+ mz_introspection     |  r1 (2xsmall)
+ mz_system            |  r1 (2xsmall)
 ```
 
 ```sql
@@ -82,9 +80,9 @@ SHOW CLUSTERS LIKE 'auction_%';
 ```
 
 ```nofmt
-       name
----------------------
- auction_house
+      name                  replicas
+--------------------- | ------------------
+ auction_house        |  r1 (3xsmall)
 ```
 
 

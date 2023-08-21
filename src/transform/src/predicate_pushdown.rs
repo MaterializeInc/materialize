@@ -22,6 +22,9 @@
 //! the literal errors will be unconditionally evaluated. For example, the pushdown
 //! will not happen if not all predicates can be pushed down (e.g. reduce and map),
 //! or if we are not certain that the input is non-empty (e.g. join).
+//! Note that this is not addressing the problem in its full generality, because this problem can
+//! occur with any function call that might error (although much more rarely than with literal
+//! errors). See <https://github.com/MaterializeInc/materialize/issues/17189#issuecomment-1547391011>
 //!
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
@@ -60,6 +63,8 @@
 //! use mz_transform::{Transform, TransformArgs};
 //! PredicatePushdown::default().transform(&mut expr, TransformArgs {
 //!   indexes: &mz_transform::EmptyIndexOracle,
+//!   stats: &mz_transform::EmptyStatisticsOracle,
+//!   global_id: None,
 //! });
 //!
 //! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
@@ -76,15 +81,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    func, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, VariadicFunc,
-    RECURSION_LIMIT,
+    func, AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
+    VariadicFunc, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, Datum, ScalarType};
+
+use crate::{TransformArgs, TransformError};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -159,7 +165,8 @@ impl PredicatePushdown {
                     // Depending on the type of `input` we have different
                     // logic to apply to consider pushing `predicates` down.
                     match &mut **input {
-                        MirRelationExpr::Let { body, .. } => {
+                        MirRelationExpr::Let { body, .. }
+                        | MirRelationExpr::LetRec { body, .. } => {
                             // Push all predicates to the body.
                             **body = body
                                 .take_dangerous()
@@ -202,8 +209,7 @@ impl PredicatePushdown {
                             let mut pred_not_translated = Vec::new();
 
                             for mut predicate in predicates.drain(..) {
-                                use mz_expr::BinaryFunc;
-                                use mz_expr::UnaryFunc;
+                                use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,
@@ -344,6 +350,7 @@ impl PredicatePushdown {
                             limit: _,
                             offset: _,
                             monotonic: _,
+                            expected_group_size: _,
                         } => {
                             let mut retain = Vec::new();
                             let mut push_down = Vec::new();
@@ -442,10 +449,28 @@ impl PredicatePushdown {
                                 self.action(input, get_predicates)?;
                             }
                         }
-                        MirRelationExpr::Negate { input: inner } => {
-                            let predicates = std::mem::take(predicates);
-                            *relation = inner.take_dangerous().filter(predicates).negate();
-                            self.action(relation, get_predicates)?;
+                        MirRelationExpr::Negate { input } => {
+                            // Don't push literal errors past a Negate. The problem is that it's
+                            // hard to appropriately reflect the negation in the error stream:
+                            // - If we don't negate, then errors that should cancel out will not
+                            //   cancel out. For example, see
+                            //   https://github.com/MaterializeInc/materialize/issues/19179
+                            // - If we negate, then unrelated errors might cancel out. E.g., there
+                            //   might be a division-by-0 in both inputs to an EXCEPT ALL, but
+                            //   on different input data. These shouldn't cancel out.
+                            let (retained, pushdown): (Vec<_>, Vec<_>) = std::mem::take(predicates)
+                                .into_iter()
+                                .partition(|p| p.is_literal_err());
+                            let mut result = input.take_dangerous();
+                            if !pushdown.is_empty() {
+                                result = result.filter(pushdown);
+                            }
+                            self.action(&mut result, get_predicates)?;
+                            result = result.negate();
+                            if !retained.is_empty() {
+                                result = result.filter(retained);
+                            }
+                            *relation = result;
                         }
                         x => {
                             x.try_visit_mut_children(|e| self.action(e, get_predicates))?;
@@ -478,32 +503,53 @@ impl PredicatePushdown {
                     // `get_predicates` should now contain the intersection
                     // of predicates at each *use* of the binding. If it is
                     // non-empty, we can move those predicates to the value.
-                    if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
-                        if !list.is_empty() {
-                            // Remove the predicates in `list` from the body.
-                            body.try_visit_mut_post::<_, TransformError>(&mut |e| {
-                                if let MirRelationExpr::Filter { input, predicates } = e {
-                                    if let MirRelationExpr::Get { id: get_id, .. } = **input {
-                                        if get_id == Id::Local(*id) {
-                                            predicates.retain(|p| !list.contains(p));
-                                        }
-                                    }
-                                }
-                                Ok(())
-                            })?;
-                            // Apply the predicates in `list` to value. Canonicalize
-                            // `list` so that plans are always deterministic.
-                            let mut list = list.into_iter().collect::<Vec<_>>();
-                            mz_expr::canonicalize::canonicalize_predicates(
-                                &mut list,
-                                &value.typ().column_types,
-                            );
-                            **value = value.take_dangerous().filter(list);
-                        }
-                    }
+                    Self::push_into_let_binding(get_predicates, id, value, &mut [body])?;
 
                     // Continue recursively on the value.
                     self.action(value, get_predicates)
+                }
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits: _,
+                    body,
+                } => {
+                    // Note: This could be extended to be able to do a little more pushdowns, see
+                    // https://github.com/MaterializeInc/materialize/issues/18167#issuecomment-1477588262
+
+                    // Pre-compute which Ids are used across iterations
+                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?;
+
+                    // Predicate pushdown within the body
+                    self.action(body, get_predicates)?;
+
+                    // `users` will be the body plus the values of those bindings that we have seen
+                    // so far, while going one-by-one through the list of bindings backwards.
+                    // `users` contains those expressions from which we harvested `get_predicates`,
+                    // and therefore we should attend to all of these expressions when pushing down
+                    // a predicate into a Let binding.
+                    let mut users = vec![&mut **body];
+                    for (id, value) in ids.iter_mut().zip(values).rev() {
+                        // Predicate pushdown from Gets in `users` into the value of a Let binding
+                        //
+                        // For now, we simply always avoid pushing into a Let binding that is
+                        // referenced across iterations to avoid soundness problems and infinite
+                        // pushdowns.
+                        //
+                        // Note that `push_into_let_binding` makes a further check based on
+                        // `get_predicates`: We push a predicate into the value of a binding, only
+                        // if all Gets of this Id have this same predicate on top of them.
+                        if !ids_used_across_iterations.contains(id) {
+                            Self::push_into_let_binding(get_predicates, id, value, &mut users)?;
+                        }
+
+                        // Predicate pushdown within a binding
+                        self.action(value, get_predicates)?;
+
+                        users.push(value);
+                    }
+
+                    Ok(())
                 }
                 MirRelationExpr::Join {
                     inputs,
@@ -750,6 +796,44 @@ impl PredicatePushdown {
         *inputs = new_inputs;
     }
 
+    // Checks `get_predicates` to see whether we can push a predicate into the Let binding given
+    // by `id` and `value`.
+    // `users` is the list of those expressions from which we will need to remove a predicate that
+    // is being pushed.
+    fn push_into_let_binding(
+        get_predicates: &mut BTreeMap<Id, BTreeSet<MirScalarExpr>>,
+        id: &LocalId,
+        value: &mut MirRelationExpr,
+        users: &mut [&mut MirRelationExpr],
+    ) -> Result<(), TransformError> {
+        if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
+            if !list.is_empty() {
+                // Remove the predicates in `list` from the users.
+                for user in users {
+                    user.try_visit_mut_post::<_, TransformError>(&mut |e| {
+                        if let MirRelationExpr::Filter { input, predicates } = e {
+                            if let MirRelationExpr::Get { id: get_id, .. } = **input {
+                                if get_id == Id::Local(*id) {
+                                    predicates.retain(|p| !list.contains(p));
+                                }
+                            }
+                        }
+                        Ok(())
+                    })?;
+                }
+                // Apply the predicates in `list` to value. Canonicalize
+                // `list` so that plans are always deterministic.
+                let mut list = list.into_iter().collect::<Vec<_>>();
+                mz_expr::canonicalize::canonicalize_predicates(
+                    &mut list,
+                    &value.typ().column_types,
+                );
+                *value = value.take_dangerous().filter(list);
+            }
+        }
+        Ok(())
+    }
+
     /// Returns `(<predicates to retain>, <predicates to push at each input>)`.
     pub fn push_filters_through_join(
         input_mapper: &JoinInputMapper,
@@ -766,9 +850,18 @@ impl PredicatePushdown {
             // equivalences allow the predicate to be rewritten
             // in terms of only columns from that input.
             for (index, push_down) in push_downs.iter_mut().enumerate() {
-                if predicate.is_literal_err() {
+                if predicate.is_literal_err() || predicate.contains_error_if_null() {
                     // Do nothing. We don't push down literal errors,
                     // as we can't know the join will be non-empty.
+                    //
+                    // We also don't want to push anything that involves `error_if_null`. This is
+                    // for the same reason why in theory we shouldn't really push anything that can
+                    // error, assuming that we want to preserve error semantics. (Because we would
+                    // create a spurious error if some other Join input ends up empty.) We can't fix
+                    // this problem in general (as we can't just not push anything that might
+                    // error), but we decided to fix the specific problem instance involving
+                    // `error_if_null`, because it was very painful:
+                    // <https://github.com/MaterializeInc/materialize/issues/20769>
                 } else {
                     let mut localized = predicate.clone();
                     if input_mapper.try_localize_to_input_with_bound_expr(

@@ -16,98 +16,25 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::trace::TraceReader;
-use prometheus::core::{AtomicF64, AtomicU64};
+use mz_repr::{GlobalId, Timestamp};
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use mz_ore::metric;
-use mz_ore::metrics::{
-    CounterVec, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
-    MetricsRegistry, UIntGaugeVec,
-};
-use mz_repr::{GlobalId, Timestamp};
-
+use crate::metrics::TraceMetrics;
 use crate::typedefs::{ErrsHandle, KeysValsHandle};
-
-/// Base metrics for arrangements.
-#[derive(Clone, Debug)]
-pub struct TraceMetrics {
-    total_maintenance_time: CounterVec,
-    doing_maintenance: UIntGaugeVec,
-}
-
-impl TraceMetrics {
-    /// TODO(undocumented)
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
-        Self {
-            total_maintenance_time: registry.register(metric!(
-                name: "mz_arrangement_maintenance_seconds_total",
-                help: "The total time spent maintaining an arrangement",
-                var_labels: ["worker_id", "arrangement_id"],
-            )),
-            doing_maintenance: registry.register(metric!(
-                name: "mz_arrangement_maintenance_active_info",
-                help: "Whether or not maintenance is currently occurring",
-                var_labels: ["worker_id"],
-            )),
-        }
-    }
-
-    fn maintenance_time_metric(
-        &self,
-        worker_id: usize,
-        id: GlobalId,
-    ) -> DeleteOnDropCounter<'static, AtomicF64, Vec<String>> {
-        self.total_maintenance_time
-            .get_delete_on_drop_counter(vec![worker_id.to_string(), id.to_string()])
-    }
-
-    fn maintenance_flag_metric(
-        &self,
-        worker_id: usize,
-    ) -> DeleteOnDropGauge<'static, AtomicU64, Vec<String>> {
-        self.doing_maintenance
-            .get_delete_on_drop_gauge(vec![worker_id.to_string()])
-    }
-}
-
-struct MaintenanceMetrics {
-    /// total time spent doing maintenance. More useful in the general case.
-    total_maintenance_time: DeleteOnDropCounter<'static, AtomicF64, Vec<String>>,
-}
-
-impl MaintenanceMetrics {
-    fn new(metrics: &TraceMetrics, worker_id: usize, arrangement_id: GlobalId) -> Self {
-        MaintenanceMetrics {
-            total_maintenance_time: metrics.maintenance_time_metric(worker_id, arrangement_id),
-        }
-    }
-}
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
 pub struct TraceManager {
     pub(crate) traces: BTreeMap<GlobalId, TraceBundle>,
-    worker_id: usize,
-    maintenance_metrics: BTreeMap<GlobalId, MaintenanceMetrics>,
-    /// 1 if this worker is currently doing maintenance.
-    ///
-    /// If maintenance turns out to take a very long time, this will allow us
-    /// to gain a sense that materialize is stuck on maintenance before the
-    /// maintenance completes
-    doing_maintenance: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     metrics: TraceMetrics,
 }
 
 impl TraceManager {
     /// TODO(undocumented)
-    pub fn new(metrics: TraceMetrics, worker_id: usize) -> Self {
-        let doing_maintenance = metrics.maintenance_flag_metric(worker_id);
+    pub fn new(metrics: TraceMetrics) -> Self {
         TraceManager {
             traces: BTreeMap::new(),
-            worker_id,
             metrics,
-            maintenance_metrics: BTreeMap::new(),
-            doing_maintenance,
         }
     }
 
@@ -119,27 +46,20 @@ impl TraceManager {
     /// of differential dataflow, which requires users to perform this explicitly; if that changes we may
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
+        let start = Instant::now();
+        self.metrics.maintenance_active_info.set(1);
+
         let mut antichain = Antichain::new();
-        for (arrangement_id, bundle) in self.traces.iter_mut() {
-            // Update maintenance metrics
-            // Entry is guaranteed to exist as it gets created when we initialize the partition.
-            let maintenance_metrics = self.maintenance_metrics.get_mut(arrangement_id).unwrap();
-
-            // signal that maintenance is happening
-            self.doing_maintenance.set(1);
-            let now = Instant::now();
-
+        for bundle in self.traces.values_mut() {
             bundle.oks.read_upper(&mut antichain);
             bundle.oks.set_physical_compaction(antichain.borrow());
             bundle.errs.read_upper(&mut antichain);
             bundle.errs.set_physical_compaction(antichain.borrow());
-
-            maintenance_metrics
-                .total_maintenance_time
-                .inc_by(now.elapsed().as_secs_f64());
-            // signal that maintenance has ended
-            self.doing_maintenance.set(0);
         }
+
+        let duration = start.elapsed().as_secs_f64();
+        self.metrics.maintenance_seconds_total.inc_by(duration);
+        self.metrics.maintenance_active_info.set(0);
     }
 
     /// Enables compaction of traces associated with the identifier.
@@ -168,23 +88,12 @@ impl TraceManager {
 
     /// Binds the arrangement for `id` to `trace`.
     pub fn set(&mut self, id: GlobalId, trace: TraceBundle) {
-        self.maintenance_metrics.insert(
-            id,
-            MaintenanceMetrics::new(&self.metrics, self.worker_id, id),
-        );
         self.traces.insert(id, trace);
     }
 
     /// Removes the trace for `id`.
     pub fn del_trace(&mut self, id: &GlobalId) -> bool {
-        self.maintenance_metrics.remove(id);
         self.traces.remove(id).is_some()
-    }
-
-    /// Removes all managed traces.
-    pub fn del_all_traces(&mut self) {
-        self.maintenance_metrics.clear();
-        self.traces.clear();
     }
 }
 

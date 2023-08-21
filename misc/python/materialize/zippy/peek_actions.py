@@ -25,7 +25,7 @@ class PeekCancellation(Action):
     def run(self, c: Composition) -> None:
         c.testdrive(
             dedent(
-                f"""
+                """
                     > DROP TABLE IF EXISTS peek_cancellation;
                     > CREATE TABLE IF NOT EXISTS peek_cancellation (f1 INTEGER);
                     > INSERT INTO peek_cancellation SELECT generate_series(1, 1000);

@@ -18,7 +18,7 @@ pip install dbt-materialize      # install the adapter
 ## Requirements
 
 <!-- If you update this, bump the constraint in connections.py too. -->
-`dbt-materialize` requires Materialize v0.28.0+.
+`dbt-materialize` requires Materialize v0.49.0+.
 
 ## Configuring your profile
 
@@ -62,7 +62,7 @@ Type               | Supported? | Details
 
 ### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, or `materialized view` materializations. Each Materialize index can have the following components:
+Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, `table` or `materialized view` materializations. Each Materialize index can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------

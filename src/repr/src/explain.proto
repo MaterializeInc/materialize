@@ -1,0 +1,28 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package mz_repr.explain;
+
+message ProtoIndexUsageType {
+    oneof kind {
+        google.protobuf.Empty full_scan = 1;
+        google.protobuf.Empty lookup = 2;
+        google.protobuf.Empty differential_join = 3;
+        bool delta_join = 4;
+        google.protobuf.Empty plan_root = 5;
+        google.protobuf.Empty unknown = 6;
+        google.protobuf.Empty dangling_arrange_by = 7;
+        google.protobuf.Empty sink_export = 8;
+        google.protobuf.Empty index_export = 9;
+    }
+}

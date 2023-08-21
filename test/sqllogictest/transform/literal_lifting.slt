@@ -1,0 +1,92 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test various cases of literal lifting
+#
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+
+# WITH MUTUALLY RECURSIVE support
+# -------------------------------
+
+# Single non-recursive binding under `WITH MUTUALLY RECURSIVE`
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(x INT, y INT) AS (
+    SELECT * FROM c0
+    UNION
+    SELECT f1, 42 FROM t1
+    UNION
+    SELECT f2, 42 FROM t1
+  )
+SELECT * FROM c0
+----
+Explained Query:
+  Return // { arity: 2 }
+    Get l0 // { arity: 2 }
+  With Mutually Recursive
+    cte l0 =
+      Map (42) // { arity: 2 }
+        Distinct group_by=[#0] // { arity: 1 }
+          Union // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Union // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Get materialize.public.t1 // { arity: 2 }
+            Project (#1) // { arity: 1 }
+              Get materialize.public.t1 // { arity: 2 }
+
+EOF
+
+# Multiple bindings under `WITH MUTUALLY RECURSIVE`
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(x INT, y INT) AS (
+    SELECT f1, 42 FROM t1
+    UNION
+    SELECT f2, 42 FROM t1
+  ),
+  c1(x INT, y INT) AS (
+    SELECT * FROM c0
+    UNION
+    SELECT * FROM c1
+  )
+SELECT * FROM c0 UNION ALL SELECT * FROM c1
+----
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Map (42) // { arity: 2 }
+        Get l0 // { arity: 1 }
+      Get l1 // { arity: 2 }
+  With Mutually Recursive
+    cte l1 =
+      Map (42) // { arity: 2 }
+        Distinct group_by=[#0] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l0 // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l1 // { arity: 2 }
+    cte l0 =
+      Distinct group_by=[#0] // { arity: 1 }
+        Union // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get materialize.public.t1 // { arity: 2 }
+          Project (#1) // { arity: 1 }
+            Get materialize.public.t1 // { arity: 2 }
+
+EOF

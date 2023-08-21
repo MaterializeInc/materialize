@@ -11,6 +11,7 @@
 
 import argparse
 import os
+import shlex
 import shutil
 import signal
 import sys
@@ -20,13 +21,13 @@ from urllib.parse import urlparse
 
 import psutil
 
-from materialize import ROOT, spawn, ui
+from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["clusterd"]
 
-DEFAULT_POSTGRES = f"postgres://root@localhost:26257/materialize"
+DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
 MACOS_ENTITLEMENTS_DATA = """
@@ -114,6 +115,16 @@ def main() -> int:
         help="Disables the limited codesigning we do on macOS to support Instruments",
         action="store_true",
     )
+    parser.add_argument(
+        "--coverage",
+        help="Build with coverage",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--wrapper",
+        help="Wrapper command for the program",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -128,9 +139,9 @@ def main() -> int:
             return build_retcode
 
         if args.release:
-            path = ROOT / "target" / "release" / args.program
+            path = MZ_ROOT / "target" / "release" / args.program
         else:
-            path = ROOT / "target" / "debug" / args.program
+            path = MZ_ROOT / "target" / "debug" / args.program
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -140,12 +151,17 @@ def main() -> int:
         elif sys.platform == "darwin":
             _macos_codesign(path)
 
-        command = [str(path)]
+        if args.wrapper:
+            command = shlex.split(args.wrapper)
+        else:
+            command = []
+        command.append(str(path))
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
-            mzdata = ROOT / "mzdata"
+            mzdata = MZ_ROOT / "mzdata"
+            scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:
@@ -161,6 +177,7 @@ def main() -> int:
                 # the `prometheus` directory.
                 paths = list(mzdata.glob("prometheus/*"))
                 paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
                     if path.is_dir():
@@ -169,6 +186,7 @@ def main() -> int:
                         path.unlink()
 
             mzdata.mkdir(exist_ok=True)
+            scratch.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"
             try:
                 environment_id = environment_file.read_text().rstrip()
@@ -180,16 +198,19 @@ def main() -> int:
                 # Setting the listen addresses below to 0.0.0.0 is required
                 # to allow Prometheus running in Docker (misc/prometheus)
                 # access these services to scrape metrics.
-                f"--internal-http-listen-addr=0.0.0.0:6878",
-                f"--orchestrator=process",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
-                f"--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
+                "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
+                f"--orchestrator-process-scratch-directory={scratch}",
+                "--secrets-controller=local-file",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
+                "--bootstrap-role=materialize",
                 *args.args,
             ]
         elif args.program == "sqllogictest":
@@ -262,6 +283,10 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     if args.tokio_console:
         features += ["tokio-console"]
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
+    if args.coverage:
+        env["RUSTFLAGS"] = (
+            env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
+        )
     if args.features:
         features.extend(args.features.split(","))
     if features:

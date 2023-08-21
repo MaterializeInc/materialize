@@ -49,12 +49,15 @@ class Td(MeasurementSource):
         self,
         executor: Optional[Executor] = None,
     ) -> List[Timestamp]:
-        assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
+        executor = executor or self._executor
+        assert executor
 
-        td_output = getattr((executor if executor else self._executor), "Td")(
-            self._td_str
-        )
+        td_output = executor.Td(self._td_str)
+        # Print each query once so that it is easier to reproduce regressions
+        # based on just the logs from CI
+        if executor.add_known_fragment(self._td_str):
+            print(td_output)
 
         lines = td_output.splitlines()
         lines = [l for l in lines if l]
@@ -100,7 +103,7 @@ class Lambda(MeasurementSource):
         self,
         executor: Optional[Executor] = None,
     ) -> Timestamp:
-        e = executor if executor else self._executor
+        e = executor or self._executor
         assert e is not None
         e.Lambda(self._lambda)
         return time.time()

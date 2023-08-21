@@ -1,0 +1,23 @@
+# Test that a first query error doesn't ignore startup options.
+
+send conn=c cluster=mz_introspection
+Query {"query": "SELECT wat"}
+----
+
+until conn=c
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"column \"wat\" does not exist"}]}
+ReadyForQuery {"status":"I"}
+
+send conn=c
+Query {"query": "SHOW cluster"}
+----
+
+until conn=c
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"cluster"}]}
+DataRow {"fields":["mz_introspection"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

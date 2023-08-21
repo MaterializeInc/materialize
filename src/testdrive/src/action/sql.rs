@@ -13,14 +13,8 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use md5::{Digest, Md5};
-use postgres_array::Array;
-use regex::Regex;
-use tokio_postgres::error::DbError;
-use tokio_postgres::row::Row;
-use tokio_postgres::types::{FromSql, Type};
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
@@ -28,6 +22,11 @@ use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
 use mz_repr::adt::range::Range;
 use mz_sql::ast::ExplainStage;
 use mz_sql_parser::ast::{Raw, Statement};
+use postgres_array::Array;
+use regex::Regex;
+use tokio_postgres::error::DbError;
+use tokio_postgres::row::Row;
+use tokio_postgres::types::{FromSql, Type};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
@@ -40,7 +39,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
     }
-    let stmt = stmts.into_element();
+    let stmt = stmts.into_element().ast;
     if let SqlOutput::Full { expected_rows, .. } = &mut cmd.expected_output {
         // TODO(benesch): one day we'll support SQL queries where order matters.
         expected_rows.sort();
@@ -68,7 +67,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | AlterObjectRename(_)
         | AlterIndex(_)
         | Discard(_)
-        | DropDatabase(_)
         | DropObjects(_)
         | SetVariable(_) => false,
         _ => true,
@@ -123,17 +121,26 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
 
     match stmt {
-        Statement::CreateDatabase { .. }
+        Statement::AlterDefaultPrivileges { .. }
+        | Statement::AlterOwner { .. }
+        | Statement::CreateDatabase { .. }
         | Statement::CreateIndex { .. }
         | Statement::CreateSchema { .. }
         | Statement::CreateSource { .. }
         | Statement::CreateTable { .. }
         | Statement::CreateView { .. }
-        | Statement::DropDatabase { .. }
-        | Statement::DropObjects { .. } => {
+        | Statement::CreateMaterializedView { .. }
+        | Statement::DropObjects { .. }
+        | Statement::GrantPrivileges { .. }
+        | Statement::GrantRole { .. }
+        | Statement::RevokePrivileges { .. }
+        | Statement::RevokeRole { .. } => {
             let disk_state = state
-                .with_catalog_copy(|catalog| catalog.state().dump())
-                .await?;
+                .with_catalog_copy(|catalog| {
+                    catalog.state().dump().expect("state must be dumpable")
+                })
+                .await
+                .map_err(|e| anyhow!("failed to dump on-disk catalog state: {e}"))?;
             if let Some(disk_state) = disk_state {
                 let mem_state = reqwest::get(&format!(
                     "http://{}/api/catalog",
@@ -143,13 +150,18 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 .text()
                 .await?;
                 if disk_state != mem_state {
-                    bail!(
-                        "the on-disk state of the catalog does not match its in-memory state\n\
-                     disk:{}\n\
-                     mem:{}",
-                        disk_state,
-                        mem_state
-                    );
+                    // The state objects here are around 100k lines pretty printed, so find the
+                    // first lines that differs and show context around it.
+                    let diff = similar::TextDiff::from_lines(&mem_state, &disk_state)
+                        .unified_diff()
+                        .context_radius(50)
+                        .to_string()
+                        .lines()
+                        .take(200)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    bail!("the on-disk state of the catalog does not match its in-memory state:\n{diff}");
                 }
             }
         }
@@ -169,7 +181,7 @@ async fn try_run_sql(
         .prepare(query)
         .await
         .context("preparing query failed")?;
-    let mut actual: Vec<_> = state
+    let rows: Vec<_> = state
         .pgclient
         .query(&stmt, &[])
         .await
@@ -177,6 +189,26 @@ async fn try_run_sql(
         .into_iter()
         .map(|row| decode_row(state, row))
         .collect::<Result<_, _>>()?;
+
+    let (mut actual, raw_actual): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+
+    let raw_actual: Option<Vec<_>> = if raw_actual.iter().any(|r| r.is_some()) {
+        // TODO(guswynn): Note we don't sort the raw rows, because
+        // there is no easy way of ensuring they sort the same way as actual.
+        Some(
+            actual
+                .iter()
+                .zip(raw_actual.into_iter())
+                .map(|(actual, unreplaced)| match unreplaced {
+                    Some(raw_row) => raw_row,
+                    None => actual.clone(),
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     actual.sort();
 
     match expected_output {
@@ -223,12 +255,22 @@ async fn try_run_sql(
                     writeln!(buf, "+ {}", TestdriveRow(a)).unwrap();
                     right += 1;
                 }
-                bail!(
-                    "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nPoor diff:\n{}",
-                    expected_rows,
-                    actual,
-                    buf
-                )
+                if let Some(raw_actual) = raw_actual {
+                    bail!(
+                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\ngot raw rows:\n{:?}\nPoor diff:\n{}",
+                        expected_rows,
+                        actual,
+                        raw_actual,
+                        buf,
+                    )
+                } else {
+                    bail!(
+                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nPoor diff:\n{}",
+                        expected_rows,
+                        actual,
+                        buf
+                    )
+                }
             }
         }
         SqlOutput::Hashed { num_values, md5 } => {
@@ -315,7 +357,7 @@ pub async fn run_fail_sql(
             if s.len() != 1 {
                 bail!("expected one statement, but got {}", s.len());
             }
-            Some(s.into_element())
+            Some(s.into_element().ast)
         }
         Err(_) => None,
     };
@@ -473,7 +515,11 @@ pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
     }
 }
 
-pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
+// Returns the row after regex replacments, and the before, if its different
+pub fn decode_row(
+    state: &State,
+    row: Row,
+) -> Result<(Vec<String>, Option<Vec<String>>), anyhow::Error> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -543,9 +589,11 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
     }
 
     let mut out = vec![];
+    let mut raw_out = vec![];
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
         let mut value: String = match *ty {
+            Type::ACLITEM => row.get::<_, Option<AclItem>>(i).map(|x| x.0),
             Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
             Type::BPCHAR | Type::TEXT | Type::VARCHAR => row.get::<_, Option<String>>(i),
             Type::TEXT_ARRAY => row
@@ -675,6 +723,7 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         }
         .unwrap_or_else(|| "<null>".into());
 
+        raw_out.push(value.clone());
         if let Some(regex) = &state.regex {
             value = regex
                 .replace_all(&value, state.regex_replacement.as_str())
@@ -683,7 +732,8 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
 
         out.push(value);
     }
-    Ok(out)
+    let raw_out = if out != raw_out { Some(raw_out) } else { None };
+    Ok((out, raw_out))
 }
 
 struct MzTimestamp(String);
@@ -695,6 +745,30 @@ impl<'a> FromSql<'a> for MzTimestamp {
 
     fn accepts(ty: &Type) -> bool {
         ty.oid() == mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID
+    }
+}
+
+struct MzAclItem(String);
+
+impl<'a> FromSql<'a> for MzAclItem {
+    fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(MzAclItem(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_OID
+    }
+}
+
+struct AclItem(String);
+
+impl<'a> FromSql<'a> for AclItem {
+    fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(AclItem(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == 1033
     }
 }
 

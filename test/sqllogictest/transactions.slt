@@ -222,6 +222,7 @@ DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 ----
 db error: ERROR: transaction in read-only mode
+DETAIL: SELECT queries cannot be combined with other query types, including SUBSCRIBE.
 
 # Using an AS OF in the SELECT or SUBSCRIBE allows lifting that restriction.
 
@@ -589,6 +590,11 @@ SELECT INTERVAL '1 day'
 statement ok
 COMMIT
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET allow_real_time_recency = true
+----
+COMPLETE 0
+
 statement ok
 SET REAL_TIME_RECENCY TO TRUE
 
@@ -611,3 +617,185 @@ SELECT * FROM rtr
 ----
 1
 1
+
+statement ok
+DROP TABLE t CASCADE;
+
+statement ok
+CREATE TABLE t (a INT);
+
+# AS OF should work in the middle of a transaction
+
+statement ok
+BEGIN
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+# Give t a chance to advance.
+statement ok
+SELECT mz_internal.mz_sleep(2)
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+query T
+SELECT * FROM t;
+----
+
+# Give t a chance to advance.
+statement ok
+SELECT mz_internal.mz_sleep(2)
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+SET TRANSACTION_ISOLATION TO serializable
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+SET TRANSACTION ISOLATION LEVEL serializable
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SET TRANSACTION_ISOLATION TO serializable
+
+statement ok
+SELECT * FROM t
+
+statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
+RESET TRANSACTION_ISOLATION
+
+statement ok
+ROLLBACK
+
+# Test explicit single statement transactions.
+
+reset-server
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE t (i INT)
+
+# Should not have executed.
+simple conn=c1
+SHOW tables
+----
+COMPLETE 0
+
+statement ok
+COMMIT
+
+simple conn=c1
+SHOW tables
+----
+t
+COMPLETE 1
+
+statement ok
+BEGIN
+
+# No error yet because we didn't try to execute.
+statement ok
+CREATE TABLE t (i INT)
+
+statement error db error: ERROR: table "materialize\.public\.t" already exists
+COMMIT
+
+statement ok
+BEGIN
+
+# No error yet because we didn't try to execute.
+statement ok
+CREATE TABLE t (i INT)
+
+statement error db error: ERROR: this transaction can only execute a single statement
+SELECT 1
+
+statement ok
+ROLLBACK
+
+# Test CREATE SOURCE for its off thread purify.
+statement ok
+BEGIN
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER
+
+statement ok
+COMMIT
+
+simple
+SHOW SOURCES
+----
+s,load-generator,1
+s_progress,progress,NULL
+COMPLETE 2
+
+# Test a statement that doesn't work even in this mode because of ambiguous responses.
+statement ok
+CREATE DEFAULT INDEX ON s
+
+statement ok
+BEGIN
+
+statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(LOGICAL COMPACTION WINDOW = 0\) cannot be run inside a transaction block
+ALTER INDEX s_primary_idx SET (LOGICAL COMPACTION WINDOW = 0)
+
+query error db error: ERROR: current transaction is aborted, commands ignored until end of transaction block
+SELECT 1
+
+statement ok
+ROLLBACK
+
+# Test ALTER and DROP which go through separate paths to determine the correct response.
+statement ok
+BEGIN
+
+statement ok
+ALTER SOURCE s RENAME TO v
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DROP SOURCE v
+
+statement ok
+COMMIT
+
+simple
+SHOW SOURCES
+----
+COMPLETE 0

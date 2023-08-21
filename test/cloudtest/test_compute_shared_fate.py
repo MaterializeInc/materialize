@@ -11,7 +11,8 @@ import subprocess
 import time
 from textwrap import dedent
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.util.cluster import cluster_pod_name
 
 CLUSTER_SIZE = 8
 
@@ -91,10 +92,10 @@ def kill_clusterd(
     mz: MaterializeApplication, compute_id: int, signal: str = "SIGKILL"
 ) -> None:
     cluster_id, replica_id = mz.environmentd.sql_query(
-        f"SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'shared_fate_replica'"
+        "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'shared_fate_replica'"
     )[0]
 
-    pod_name = f"pod/cluster-{cluster_id}-replica-{replica_id}-{compute_id}"
+    pod_name = cluster_pod_name(cluster_id, replica_id, compute_id)
 
     print(f"sending signal {signal} to pod {pod_name}...")
 

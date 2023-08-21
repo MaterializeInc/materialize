@@ -18,14 +18,14 @@
 
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::explain::{
-    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan,
+    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource,
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::normalize_lets::normalize_lets;
 
-use super::Explainable;
+use crate::explain::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
     type Context = ExplainContext<'a>;
@@ -131,7 +131,7 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                         .humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| id.to_string());
-                    (id, op)
+                    ExplainSource::new(id, op, context)
                 })
             })
             .collect::<Vec<_>>();

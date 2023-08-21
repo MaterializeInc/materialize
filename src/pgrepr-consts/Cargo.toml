@@ -1,0 +1,13 @@
+[package]
+name = "mz-pgrepr-consts"
+description = "Constant definitions for representation of and serialization for PostgreSQL data types."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

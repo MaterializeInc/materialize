@@ -20,6 +20,10 @@
 {% macro materialize__create_view_as(relation, sql) -%}
 
   create view {{ relation }}
+    {% set contract_config = config.get('contract') %}
+    {% if contract_config.enforced %}
+      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+    {%- endif %}
   as (
     {{ sql }}
   );
@@ -29,6 +33,10 @@
   {%- set cluster = config.get('cluster', target.cluster) -%}
 
   create materialized view {{ relation }}
+    {% set contract_config = config.get('contract') %}
+    {% if contract_config.enforced %}
+      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+    {%- endif %}
   {% if cluster %}
     in cluster {{ cluster }}
   {% endif %}
@@ -38,6 +46,10 @@
 {%- endmacro %}
 
 {% macro materialize__create_arbitrary_object(sql) -%}
+    {% set contract_config = config.get('contract') %}
+    {% if contract_config.enforced %}
+      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+    {%- endif %}
     {{ sql }}
 {%- endmacro %}
 
@@ -96,11 +108,17 @@
         d.name as database,
         s.name as schema,
         o.name,
-        case when o.type = 'materialized-view' then 'materializedview' else o.type end as type
+        case when o.type = 'materialized-view' then 'materializedview'
+             else o.type
+        end as type
     from mz_objects o
+    left join mz_sources so on o.id = so.id
     join mz_schemas s on o.schema_id = s.id and s.name = '{{ schema_relation.schema }}'
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
-    where type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
+    where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
+      --Exclude subsources and progress subsources, which aren't relevant in this
+      --context and can bork the adapter (see #20483)
+      and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
 {% endmacro %}

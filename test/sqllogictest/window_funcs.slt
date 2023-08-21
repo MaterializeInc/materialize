@@ -12,7 +12,7 @@
 
 mode cockroach
 
-statement error window function row_number requires an OVER clause
+statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() FROM t
 
@@ -113,7 +113,7 @@ ORDER BY row_number, x
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
   Project (#2, #0)
     Return
-      Map (row_number() over (#0) order by (#0))
+      Map (row_number() over (partition by [#0] order by [#0 asc nulls_last]))
         Get l0
     With
       cte l0 =
@@ -134,7 +134,7 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
         Project (#3..=#5) // { arity: 3 }
           Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
             FlatMap unnest_list(#1) // { arity: 3 }
-              Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1)], #0))] // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0))] // { arity: 2 }
                 FlatMap wrap2("a", 1, "b", 2, "c", 1) // { arity: 2 }
                   Constant // { arity: 0 }
                     - ()
@@ -202,7 +202,7 @@ With
               Project (#3..=#6) // { arity: 4 }
                 Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
                   FlatMap unnest_list(#1) // { arity: 3 }
-                    Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin // { arity: 3 }
                         Get l1 // { arity: 1 }
                         Get materialize.public.t2 // { arity: 2 }
@@ -236,7 +236,7 @@ Explained Query:
               Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1)) // { arity: 2 }
                 FlatMap unnest_list(#0) // { arity: 2 }
                   Project (#1) // { arity: 1 }
-                    Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin type=differential // { arity: 3 }
                         implementation
                           %0[×] » %1:t2[×]
@@ -307,7 +307,7 @@ Return // { arity: 5 }
             Project (#3..=#6) // { arity: 4 }
               Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
                 FlatMap unnest_list(#1) // { arity: 3 }
-                  Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                  Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                     Filter (#2 = #0) // { arity: 3 }
                       CrossJoin // { arity: 3 }
                         Distinct group_by=[#1] // { arity: 1 }
@@ -335,7 +335,7 @@ Return // { arity: 5 }
             Project (#4..=#7) // { arity: 4 }
               Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
                 FlatMap unnest_list(#2) // { arity: 4 }
-                  Reduce group_by=[#0, #1] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 3 }
+                  Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
                     Filter (#2 = #0) // { arity: 3 }
                       CrossJoin // { arity: 3 }
                         Distinct group_by=[#1] // { arity: 1 }
@@ -370,165 +370,165 @@ a
 b
 c
 
-# dense_rank
+# rank and dense_rank
 
-query IT
+query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
-SELECT dense_rank() OVER (ORDER BY x), x FROM t
+SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank
 ----
-1  a
-2  b
-3  c
+1  1  a
+2  2  b
+3  3  c
 
-query IT
+query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
-SELECT dense_rank() OVER (ORDER BY x), x FROM t
+SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank
 ----
-1  a
-2  b
-2  b
-3  c
+1  1  a
+2  2  b
+2  2  b
+4  3  c
 
-query IT
+query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
-SELECT dense_rank() OVER (ORDER BY x), x FROM t
+SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank
 ----
-1  a
-2  b
-2  b
-3  c
-3  c
+1  1  a
+2  2  b
+2  2  b
+4  3  c
+4  3  c
 
-query IT
+query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
-SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+SELECT rank() OVER (ORDER BY x DESC), dense_rank() OVER (ORDER BY x DESC), x FROM t
 ORDER BY dense_rank
 ----
-1  c
-2  b
-3  a
+1  1  c
+2  2  b
+3  3  a
 
-query IT
+query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'))
-SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+SELECT rank() OVER (ORDER BY x DESC), dense_rank() OVER (ORDER BY x DESC), x FROM t
 ORDER BY dense_rank
 ----
-1  c
-2  b
-2  b
-3  a
+1  1  c
+2  2  b
+2  2  b
+4  3  a
 
-query IT
+query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('b'), ('c'), ('c'))
-SELECT dense_rank() OVER (ORDER BY x DESC), x FROM t
+SELECT rank() OVER (ORDER BY x DESC), dense_rank() OVER (ORDER BY x DESC), x FROM t
 ORDER BY dense_rank
 ----
-1  c
-1  c
-2  b
-2  b
-3  a
+1  1  c
+1  1  c
+3  2  b
+3  2  b
+5  3  a
 
-query IT
+query IIT
 WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98))
-SELECT dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
+SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY dense_rank, x
 ----
-1  a
-1  b
-2  c
+1  1  a
+1  1  b
+2  2  c
 
-query IT
+query IIT
 WITH t (x, y) AS (VALUES ('a', 98), ('b', 99), ('c', 98), ('a', 98), ('a', 99))
-SELECT dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
+SELECT rank() OVER (PARTITION BY y ORDER BY x), dense_rank() OVER (PARTITION BY y ORDER BY x), x FROM t
 ORDER BY dense_rank, x
 ----
-1  a
-1  a
-1  a
-2  b
-2  c
+1  1  a
+1  1  a
+1  1  a
+2  2  b
+3  2  c
 
-query IT
+query IIT
 WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
-SELECT dense_rank() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
+SELECT rank() OVER (PARTITION BY y ORDER BY x DESC), dense_rank() OVER (PARTITION BY y ORDER BY x DESC), x FROM t
 ORDER BY dense_rank, x
 ----
-1  b
-1  c
-2  a
+1  1  b
+1  1  c
+2  2  a
 
-query IT
+query IIT
 WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
-SELECT dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t
+SELECT rank() OVER (PARTITION BY x ORDER BY x), dense_rank() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY dense_rank, x
 ----
-1  a
-1  b
-1  c
+1  1  a
+1  1  b
+1  1  c
 
-query IT
+query IIT
 WITH t (x, y) AS (VALUES ('a', 1), ('b', 2), ('c', 1))
-SELECT dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
+SELECT rank() OVER (PARTITION BY NULL ORDER BY 10000), dense_rank() OVER (PARTITION BY NULL ORDER BY 10000) AS q, a1.x
 FROM t AS a1, t AS a2
 ORDER BY q DESC, a1.x DESC
 ----
-1  c
-1  c
-1  c
-1  b
-1  b
-1  b
-1  a
-1  a
-1  a
+1  1  c
+1  1  c
+1  1  c
+1  1  b
+1  1  b
+1  1  b
+1  1  a
+1  1  a
+1  1  a
 
 # Make sure a non-column expression following the window function is correctly
 # handled.
-query ITT
+query IITT
 WITH t (x) AS (VALUES ('a'))
-SELECT dense_rank() OVER (PARTITION BY NULL) AS q, x, 'b'
+SELECT rank() OVER (PARTITION BY NULL), dense_rank() OVER (PARTITION BY NULL) AS q, x, 'b'
 FROM t
 ----
-1 a b
+1  1  a  b
 
 
-query IITT
+query IIITT
 WITH t (x, y, z) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0))
-SELECT dense_rank() OVER (PARTITION BY y ORDER BY x DESC, z), x, y, z
+SELECT rank() OVER (PARTITION BY y ORDER BY x DESC, z), dense_rank() OVER (PARTITION BY y ORDER BY x DESC, z), x, y, z
 FROM t
 ORDER BY y, x DESC, z
 ----
-1  3  a    1
-2  2  a    1
-2  2  a    1
-3  1  a    1
-1  4  b    0
-2  4  b    1
-1  3  c    1
-2  2  c  NaN
-3  1  c  NaN
+1  1  3  a  1
+2  2  2  a  1
+2  2  2  a  1
+4  3  1  a  1
+1  1  4  b  0
+2  2  4  b  1
+1  1  3  c  1
+2  2  2  c  NaN
+3  3  1  c  NaN
 
 
 # NaNs have the same rank
-query IITT
+query IIITT
 WITH t (x, y, z) AS (VALUES (1, 'a', 1.0), (2, 'a', 1.0), (2, 'a', 1.0), (3, 'a', 1.0), (4, 'b', 0), (4, 'b', 1), (1, 'c', 'NaN'), (2, 'c', 'NaN'), (3, 'c', 1.0))
-SELECT dense_rank() OVER (PARTITION BY y ORDER BY z DESC), x, y, z
+SELECT rank() OVER (PARTITION BY y ORDER BY z DESC), dense_rank() OVER (PARTITION BY y ORDER BY z DESC), x, y, z
 FROM t
 ORDER BY y, z DESC, x
 ----
-1  1  a    1
-1  2  a    1
-1  2  a    1
-1  3  a    1
-1  4  b    1
-2  4  b    0
-1  1  c  NaN
-1  2  c  NaN
-2  3  c    1
+1  1  1  a  1
+1  1  2  a  1
+1  1  2  a  1
+1  1  3  a  1
+1  1  4  b  1
+2  2  4  b  0
+1  1  1  c  NaN
+1  1  2  c  NaN
+3  2  3  c  1
 
 ## lag
 
@@ -1984,6 +1984,85 @@ query II
 SELECT f1, lead(0, f1 , 0) OVER (PARTITION BY f1 ORDER BY f1) FROM t4 GROUP BY f1 ORDER BY 1
 ----
 NULL NULL
+
+## lag/lead ignore nulls
+
+statement ok
+create table t6(x int, y int);
+
+statement ok
+insert into t6 values (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18);
+
+query IIIIIIIIIIIIIII
+select
+  x,
+  y,
+  lag(y) over (order by x) as lag1,
+  lag(y) respect nulls over (order by x) as lag1_resp,
+  lag(y) ignore nulls over (order by x) as lag1_ign,
+  lead(y) over (order by x) as lead1,
+  lead(y) ignore nulls over (order by x) as lead1_ign,
+  lag(y, 2) over (order by x) as lag2,
+  lag(y, 2) ignore nulls over (order by x) as lag2_ign,
+  lead(y, 2) over (order by x) as lead2,
+  lead(y, 2) ignore nulls over (order by x) as lead2_ign,
+  lag(y, 2, -1) ignore nulls over (order by x) as lag2_ign_def,
+  lead(y, 2, -1) ignore nulls over (order by x) as lead2_ign_def,
+  lag(y, 2, 16) ignore nulls over (order by x) as lag2_ign_def16,
+  lead(y, 2, 16) ignore nulls over (order by x) as lead2_ign_def16
+from t6
+order by x;
+----
+1  2  NULL  NULL  NULL  NULL  6  NULL  NULL  6  8  -1  8  16  8
+3  NULL  2  2  2  6  6  NULL  NULL  8  8  -1  8  16  8
+5  6  NULL  NULL  2  8  8  2  NULL  NULL  14  -1  14  16  14
+7  8  6  6  6  NULL  14  NULL  2  NULL  16  2  16  2  16
+9  NULL  8  8  8  NULL  14  6  6  14  16  6  16  6  16
+11  NULL  NULL  NULL  8  14  14  8  6  16  16  6  16  6  16
+13  14  NULL  NULL  8  16  16  NULL  6  18  18  6  18  6  18
+15  16  14  14  14  18  18  NULL  8  NULL  NULL  8  -1  8  16
+17  18  16  16  16  NULL  NULL  14  14  NULL  NULL  14  -1  14  16
+
+# Same as above, but with a `partition by`
+
+query IIIIIIIIIIIIIII
+select
+  x,
+  y,
+  lag(y) over (partition by x%4 order by x) as lag1,
+  lag(y) respect nulls over (partition by x%4 order by x) as lag1_resp,
+  lag(y) ignore nulls over (partition by x%4 order by x) as lag1_ign,
+  lead(y) over (partition by x%4 order by x) as lead1,
+  lead(y) ignore nulls over (partition by x%4 order by x) as lead1_ign,
+  lag(y, 2) over (partition by x%4 order by x) as lag2,
+  lag(y, 2) ignore nulls over (partition by x%4 order by x) as lag2_ign,
+  lead(y, 2) over (partition by x%4 order by x) as lead2,
+  lead(y, 2) ignore nulls over (partition by x%4 order by x) as lead2_ign,
+  lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
+  lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
+  lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
+  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16
+from t6
+order by x%4, x;
+----
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16
+
+query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+select first_value(x) ignore nulls over() from t6;
+
+query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+select row_number() ignore nulls over();
+
+query error db error: ERROR: Both IGNORE NULLS and RESPECT NULLS were given\.
+select row_number() ignore nulls respect nulls over();
 
 ## window frames
 
@@ -4842,3 +4921,822 @@ FROM t5
 GROUP BY f1
 ----
 1 NULL
+
+# Check some HIR plans to verify that the lifting of window functions to the top of Maps is actually happening.
+
+statement ok
+CREATE TABLE foo (
+    a int,
+    b text
+);
+
+statement ok
+INSERT INTO foo (a, b) VALUES (0, 'zero'), (1, 'one'), (2, 'two'), (3, 'three');
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT 3 + lag(a) OVER (ORDER BY a) + 5 + 27
+FROM foo;
+----
+Project (#3)
+  Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (((3 + #2) + 5) + 27))
+    Get materialize.public.foo
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT -lag(10*right_a+3) OVER (ORDER BY right_a NULLS FIRST), -sum(foo.a), b
+FROM foo LEFT JOIN (SELECT a AS right_a FROM foo WHERE a<2) ON foo.a = right_a
+GROUP BY b, right_a;
+----
+Project (#4, #5, #0)
+  Map (lag(row(((10 * #1) + 3), 1, null)) over (order by [#1 asc nulls_first]), -(#3), -(#2))
+    Reduce group_by=[#3, #4] aggregates=[sum(#0)]
+      Map (#1, #2)
+        LeftOuterJoin (#0 = #2)
+          Get materialize.public.foo
+          Project (#0)
+            Filter (#0 < 2)
+              Get materialize.public.foo
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT 3 + lag(a) OVER (ORDER BY a) AS o
+FROM foo
+ORDER BY o;
+----
+Finish order_by=[#0 asc nulls_last] output=[#0]
+  Project (#3)
+    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (3 + #2))
+      Get materialize.public.foo
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT
+  a,
+  3 + lag(a) OVER (ORDER BY a),
+  3 + lag(a) OVER (ORDER BY a),
+  lag(a) OVER (ORDER BY a),
+  lead(a) OVER (ORDER BY a),
+  5 + lag(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
+  Project (#0, #4, #4, #2, #3, #5)
+    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lead(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (3 + #2), (5 + #2))
+      Get materialize.public.foo
+
+EOF
+
+query IIIIII nosort
+SELECT
+  a,
+  3 + lag(a) OVER (ORDER BY a),
+  3 + lag(a) OVER (ORDER BY a),
+  lag(a) OVER (ORDER BY a),
+  lead(a) OVER (ORDER BY a),
+  5 + lag(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  NULL  NULL  NULL  1  NULL
+1  3  3  0  2  5
+2  4  4  1  3  6
+3  5  5  2  NULL  7
+
+# Two window function calls in the same HirScalarExpr, but both calls are the same
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT a, b, lag(a) OVER (ORDER BY a) + lag(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
+  Project (#0, #1, #3)
+    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (#2 + #2))
+      Get materialize.public.foo
+
+EOF
+
+query ITI nosort
+SELECT a, b, lag(a) OVER (ORDER BY a) + lag(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL
+1  one  0
+2  two  2
+3  three  4
+
+# Two window function calls in the same HirScalarExpr, and they are different
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT a, b, lag(a) OVER (ORDER BY a) + lead(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
+  Project (#0, #1, #4)
+    Map (lead(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), (#3 + #2))
+      Get materialize.public.foo
+
+EOF
+
+query ITI nosort
+SELECT a, b, lag(a) OVER (ORDER BY a) + lead(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL
+1  one  2
+2  two  4
+3  three  NULL
+
+# Window function in DISTINCT ON
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
+FROM foo;
+----
+Project (#0, #1)
+  TopK group_by=[#3] limit=1
+    Map (lag(row(#0, 1, 0)) over (order by [#0 asc nulls_last]), (1 + #2))
+      Get materialize.public.foo
+
+EOF
+
+query IIT
+SELECT 1 + lag(a, 1, 0) OVER (ORDER BY a), *
+FROM foo;
+----
+1  1  one
+2  2  two
+1  0  zero
+3  3  three
+
+query IT
+SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
+FROM foo;
+----
+2  two
+0  zero
+3  three
+
+query IIT nosort
+SELECT 1 + lag(a, 1, 0) OVER (ORDER BY a), *
+FROM foo
+ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a), a ASC;
+----
+1  0  zero
+1  1  one
+2  2  two
+3  3  three
+
+query IT nosort
+SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
+FROM foo
+ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a), a ASC;
+----
+0  zero
+2  two
+3  three
+
+query error db error: ERROR: SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
+FROM foo
+ORDER BY lag(a, 1, 0) OVER (ORDER BY a), a DESC;
+
+query IIIT nosort
+SELECT 1 + lag(a, 1, 0) OVER (ORDER BY a), lead(a) OVER (ORDER BY b) AS o, a, b
+FROM foo
+ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a), o DESC;
+----
+1  NULL  0  zero
+1  3  1  one
+2  0  2  two
+3  2  3  three
+
+query IIT nosort
+SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) lead(a) OVER (ORDER BY b) AS o, a, b
+FROM foo
+ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a), o DESC;
+----
+NULL  0  zero
+0  2  two
+2  3  three
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT DISTINCT ON(5 + lag(a) OVER (ORDER BY a)) lead(a) OVER (ORDER BY b) AS o
+FROM foo
+ORDER BY 5 + lag(a) OVER (ORDER BY a), o;
+----
+Finish order_by=[#4 asc nulls_last, #3 asc nulls_last] output=[#3]
+  TopK group_by=[#4] order_by=[#3 asc nulls_last] limit=1
+    Map (lag(row(#0, 1, null)) over (order by [#0 asc nulls_last]), lead(row(#0, 1, null)) over (order by [#1 asc nulls_last]), (5 + #2))
+      Get materialize.public.foo
+
+EOF
+
+# Nested window function call in the argument of a window function call (Postgres doesn't allow this, but we do)
+
+query ITI nosort
+SELECT a, b, lag(lag(a) OVER (ORDER BY a)) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL
+1  one  NULL
+2  two  0
+3  three  1
+
+query ITI nosort
+SELECT a, b, lag(lag(a) OVER (PARTITION BY length(b) ORDER BY a)) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL
+1  one  NULL
+2  two  NULL
+3  three  1
+
+# The inner window function call also appears outside
+
+query ITII nosort
+SELECT a, b, lag(lag(a) OVER (ORDER BY a)) OVER (ORDER BY a), lag(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL  NULL
+1  one  NULL  0
+2  two  0  1
+3  three  1  2
+
+query ITII nosort
+SELECT a, b, lag(a) OVER (ORDER BY a), lag(lag(a) OVER (ORDER BY a)) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL  NULL
+1  one  0  NULL
+2  two  1  0
+3  three  2  1
+
+# Nested window function call in the PARTITION BY of a window function call (Postgres doesn't allow this, but we do)
+
+query ITII nosort
+SELECT a, b, lag(a) OVER (PARTITION BY lag(length(b)) OVER (ORDER BY a) ORDER BY a), lag(length(b)) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL  NULL
+1  one  NULL  4
+2  two  NULL  3
+3  three  2  3
+
+query ITI nosort
+SELECT a, b, lag(a) OVER (PARTITION BY lag(length(b)) OVER (ORDER BY a) ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL
+1  one  NULL
+2  two  NULL
+3  three  2
+
+query ITII nosort
+SELECT a, b, row_number() OVER (PARTITION BY lag(length(b)) OVER (ORDER BY a) ORDER BY a), lag(length(b)) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  1  NULL
+1  one  1  4
+2  two  1  3
+3  three  2  3
+
+# Nested window function calls in both the argument and the PARTITION BY of a window function call (Postgres doesn't
+# allow this, but we do)
+
+query ITI nosort
+SELECT a, b, lead(lag(a) OVER (PARTITION BY lag(length(b)) OVER (ORDER BY a) ORDER BY a), 1, -5) OVER (ORDER BY a)
+FROM foo
+ORDER BY a;
+----
+0  zero  NULL
+1  one  NULL
+2  two  2
+3  three  -5
+
+# Nested window function calls in the ORDER BY of a window function call (Postgres doesn't allow this, but we do)
+
+query ITII nosort
+SELECT a, b, lag(a) OVER (ORDER BY lag(a) OVER (ORDER BY a)), lag(a) OVER (ORDER BY a)
+FROM foo
+ORDER BY lag(a) OVER (ORDER BY a);
+----
+1  one  NULL  0
+2  two  1  1
+3  three  2  2
+0  zero  3  NULL
+
+query ITI
+SELECT a, b, lag(a) OVER (ORDER BY lag(a) OVER (ORDER BY a))
+FROM foo;
+----
+1  one  NULL
+2  two  1
+0  zero  3
+3  three  2
+
+# Window function inside CASE WHEN
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20746
+
+statement ok
+CREATE TABLE bools(cond bool, x int);
+
+statement ok
+INSERT INTO bools VALUES (true, 0), (false, 1), (false, 2);
+
+# The window function call should be lifted outside of the If
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT
+  cond,
+  x,
+  CASE
+    WHEN cond THEN
+      first_value(x) OVER (ORDER BY x DESC)
+    ELSE
+      42
+    END
+FROM bools;
+----
+Project (#0, #1, #3)
+  Map (first_value(#1) over (order by [#1 desc nulls_first]), case when #0 then #2 else 42 end)
+    Get materialize.public.bools
+
+EOF
+
+query TII
+SELECT
+  cond,
+  x,
+  CASE
+    WHEN cond THEN
+      first_value(x) OVER (ORDER BY x DESC)
+    ELSE
+      42
+    END
+FROM bools;
+----
+false  1  42
+false  2  42
+true  0  2
+
+statement ok
+CREATE TABLE tcm(
+  chat_id int,
+  chat_message_id int,
+  message_tstamp date,
+  xxx_id int,
+  first_xxx_id int,
+  user_id int,
+  boolean_flag bool
+);
+
+statement ok
+INSERT INTO tcm VALUES
+  (
+    5814889,
+    78687406,
+    '2023-08-04'::DATE,
+    11111111,
+    null,
+    22222221,
+    true
+  ),
+  (
+    5814889,
+    78707836,
+    '2023-08-05'::DATE,
+    11111112,
+    923095,
+    22222222,
+    false
+  ),
+  (
+    5814889,
+    78708445,
+    '2023-08-06'::DATE,
+    11111113,
+    743482,
+    22222223,
+    false
+  ),
+  (
+    581488900,
+    78687406,
+    '2023-08-04'::DATE,
+    11111111,
+    null,
+    22222221,
+    true
+  ),
+  (
+    581488900,
+    78707836,
+    '2023-08-05'::DATE,
+    11111112,
+    923095,
+    22222222,
+    false
+  ),
+  (
+    581488900,
+    78708445,
+    '2023-08-06'::DATE,
+    11111113,
+    743482,
+    22222223,
+    true
+  );
+
+query IITIIIIT nosort
+SELECT
+  tcm.chat_id AS chat_id,
+  tcm.chat_message_id AS chat_message_id,
+  tcm.message_tstamp AS message_tstamp,
+  tcm.first_xxx_id AS first_xxx_id,
+  lead(tcm.first_xxx_id) ignore nulls over (partition by tcm.chat_id order by tcm.message_tstamp) AS _lead,
+  lag(tcm.first_xxx_id) ignore nulls over (partition by tcm.chat_id order by tcm.message_tstamp) AS _lag,
+  CASE
+    WHEN tcm.boolean_flag THEN
+      coalesce(
+          lead(tcm.first_xxx_id) ignore nulls over (partition by tcm.chat_id order by tcm.message_tstamp),
+          lag(tcm.first_xxx_id) ignore nulls over (partition by tcm.chat_id order by tcm.message_tstamp),
+          tcm.xxx_id
+      )
+    ELSE tcm.user_id end AS xxx_id,
+  tcm.boolean_flag AS boolean_flag
+FROM tcm
+ORDER BY chat_id, message_tstamp;
+----
+5814889  78687406  2023-08-04  NULL  923095  NULL  923095  true
+5814889  78707836  2023-08-05  923095  743482  NULL  22222222  false
+5814889  78708445  2023-08-06  743482  NULL  923095  22222223  false
+581488900  78687406  2023-08-04  NULL  923095  NULL  923095  true
+581488900  78707836  2023-08-05  923095  743482  NULL  22222222  false
+581488900  78708445  2023-08-06  743482  NULL  923095  923095  true
+
+query IITIIT nosort
+SELECT
+  tcm.chat_id AS chat_id,
+  tcm.chat_message_id AS chat_message_id,
+  tcm.message_tstamp AS message_tstamp,
+  tcm.first_xxx_id AS first_xxx_id,
+  CASE
+    WHEN tcm.boolean_flag THEN
+      coalesce(
+          lead(tcm.first_xxx_id) ignore nulls over (partition by tcm.chat_id order by tcm.message_tstamp),
+          lag(tcm.first_xxx_id) ignore nulls over (partition by tcm.chat_id order by tcm.message_tstamp),
+          tcm.xxx_id
+      )
+    ELSE tcm.user_id end AS xxx_id,
+  tcm.boolean_flag AS boolean_flag
+FROM tcm
+ORDER BY chat_id, message_tstamp;
+----
+5814889  78687406  2023-08-04  NULL  923095  true
+5814889  78707836  2023-08-05  923095  22222222  false
+5814889  78708445  2023-08-06  743482  22222223  false
+581488900  78687406  2023-08-04  NULL  923095  true
+581488900  78707836  2023-08-05  923095  22222222  false
+581488900  78708445  2023-08-06  743482  923095  true
+
+# Window func with (non-windowed) aggregations
+
+query error db error: ERROR: window functions are not allowed in aggregate function \(function pg_catalog\.lag\)
+EXPLAIN RAW PLAN FOR
+SELECT sum(lag(a) OVER ())
+FROM foo;
+
+query III nosort
+SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
+FROM foo
+GROUP BY length(b)
+ORDER BY sum(a), length(b);
+----
+4  0  NULL
+3  3  0
+5  3  3
+
+query III nosort
+SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY length(b))
+FROM foo
+GROUP BY length(b)
+ORDER BY length(b);
+----
+3  3  NULL
+4  0  3
+5  3  0
+
+query III
+(SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
+ FROM foo
+ GROUP BY length(b))
+UNION
+(SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY length(b))
+ FROM foo
+ GROUP BY length(b));
+----
+3  3  NULL
+4  0  NULL
+3  3  0
+4  0  3
+5  3  0
+5  3  3
+
+query IIII nosort
+SELECT *, row_number() OVER (PARTITION BY len ORDER BY sum DESC, lag NULLS FIRST) as row_num FROM (
+    (SELECT length(b) AS len, sum(a) AS sum, lag(sum(a)) OVER (ORDER BY sum(a)) AS lag
+     FROM foo
+     GROUP BY length(b))
+    UNION
+    (SELECT length(b), -1 + sum(a) + row_number() OVER (ORDER BY length(b)), lag(sum(a)) OVER (ORDER BY length(b))
+     FROM foo
+     GROUP BY length(b))
+) AS sq
+ORDER BY len, row_num;
+----
+3  3  NULL  1
+3  3  0  2
+4  1  3  1
+4  0  NULL  2
+5  5  0  1
+5  3  3  2
+
+## Subqueries
+
+# Correlated scalar subquery in the 2nd argument of lag
+query ITI nosort
+SELECT *,
+    lag(
+        outer_a,
+        (SELECT count(*) FROM foo WHERE length(b) = length(outer_b))::integer
+    ) OVER (ORDER BY outer_a)
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  NULL
+1  one  NULL
+2  two  0
+3  three  2
+
+# Add a correlated IN subquery at the 3rd argument of lag
+query ITI nosort
+SELECT *,
+    lag(
+        outer_a,
+        (SELECT count(*) FROM foo WHERE length(b) = length(outer_b))::integer,
+        CASE WHEN outer_a - 1 IN (SELECT a FrOM foo) THEN 100 ELSE 500 END
+    ) OVER (ORDER BY outer_a)
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  500
+1  one  100
+2  two  0
+3  three  2
+
+# Correlated subquery in the PARTITION BY.
+# The same subquery is also present in the SELECT to make the output more human-friendly.
+query IITI nosort
+SELECT (SELECT count(*) FROM foo WHERE length(b) = length(outer_b)) as part, *,
+    lag(outer_a) OVER (
+        PARTITION BY (SELECT count(*) FROM foo WHERE length(b) = length(outer_b))
+        ORDER BY outer_a
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY part, outer_a;
+----
+1  0  zero  NULL
+1  3  three  0
+2  1  one  NULL
+2  2  two  1
+
+# Same query as the previous, but the subquery is not present in the SELECT
+query ITI nosort
+SELECT *,
+    lag(outer_a) OVER (
+        PARTITION BY (SELECT count(*) FROM foo WHERE length(b) = length(outer_b))
+        ORDER BY outer_a
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  NULL
+1  one  NULL
+2  two  1
+3  three  0
+
+# Correlated subquery in the ORDER BY of a window function.
+# The same subquery is also present in the SELECT to make the output more human-friendly.
+query IITI nosort
+SELECT (SELECT count(*) FROM foo WHERE length(outer_b) > a + 2) as ord, *,
+    lag(outer_a) OVER (
+        ORDER BY (SELECT count(*) FROM foo WHERE length(outer_b) > a + 2), outer_a
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY ord, outer_a;
+----
+1  1  one  NULL
+1  2  two  1
+2  0  zero  2
+3  3  three  0
+
+# Same query as the previous, but the subquery is not present in the SELECT
+query ITI nosort
+SELECT *,
+    lag(outer_a) OVER (
+        ORDER BY (SELECT count(*) FROM foo WHERE length(outer_b) > a + 2), outer_a
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  2
+1  one  NULL
+2  two  1
+3  three  0
+
+# Window func in a correlated subquery, but the correlating column reference is outside the window function
+query ITI nosort
+SELECT *,
+    (
+        SELECT sum(lead_a)
+        FROM (
+            SELECT lead(a) OVER (ORDER BY a) AS lead_a
+            FROM foo
+            WHERE a <= outer_a AND a < 3
+        ) as fsq2
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  NULL
+1  one  1
+2  two  3
+3  three  3
+
+# Similar to the previous one, but more window functions and aggregations
+query ITI nosort
+SELECT *,
+    (
+        SELECT sum(2 * w) + max(w)
+        FROM (
+            SELECT lead(a) OVER (ORDER BY a) + row_number() OVER (ORDER BY a) AS w
+            FROM foo
+            WHERE a <= outer_a AND a < 3
+        ) as fsq2
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  NULL
+1  one  6
+2  two  16
+3  three  16
+
+# Window func in a correlated subquery, and the window function argument refers to the outer query
+query ITI nosort
+SELECT *,
+    (
+        SELECT sum(lead_a)
+        FROM (
+            SELECT lead(outer_a + a) OVER (ORDER BY a) AS lead_a
+            FROM foo
+        ) as fsq2
+    )
+FROM (
+    SELECT a AS outer_a, b AS outer_b
+    FROM foo
+) as fsq
+ORDER BY outer_a;
+----
+0  zero  6
+1  one  9
+2  two  12
+3  three  15
+
+# Window func in a correlated subquery, and the window function's PARTITION BY refers to the outer query
+query ITI
+SELECT *,
+    (
+        SELECT sum(lead_a)
+        FROM (
+            SELECT 3 + lead(a) OVER (PARTITION BY 4 * a / (outer_a + length(outer_b)) ORDER BY a) AS lead_a
+            FROM foo
+        ) as fsq2
+    )
+FROM (
+    (SELECT a AS outer_a, b AS outer_b
+     FROM foo)
+    UNION
+    (SELECT a + 2 AS outer_a, b AS outer_b
+     FROM foo)
+    UNION
+    (SELECT a + 5 AS outer_a, b AS outer_b
+     FROM foo)
+) as fsq
+ORDER BY outer_a, outer_b;
+----
+0  zero  NULL
+1  one  NULL
+2  two  4
+2  zero  4
+3  one  4
+3  three  10
+4  two  10
+5  three  9
+5  zero  9
+6  one  9
+7  two  9
+8  three  15
+
+# Let's check the HIR plan for the above query to see if the window function is lifted out from behind the `3 +`
+query T multiline
+EXPLAIN RAW PLAN FOR
+SELECT *,
+    (
+        SELECT sum(lead_a)
+        FROM (
+            SELECT 3 + lead(a) OVER (PARTITION BY 4 * a / (outer_a + length(outer_b)) ORDER BY a) AS lead_a
+            FROM foo
+        ) as fsq2
+    )
+FROM (
+    (SELECT a AS outer_a, b AS outer_b
+     FROM foo)
+    UNION
+    (SELECT a + 2 AS outer_a, b AS outer_b
+     FROM foo)
+    UNION
+    (SELECT a + 5 AS outer_a, b AS outer_b
+     FROM foo)
+) as fsq
+ORDER BY outer_a, outer_b;
+----
+Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
+  Return
+    Map (select(Get l1))
+      Distinct
+        Union
+          Distinct
+            Union
+              Get materialize.public.foo
+              Project (#2, #1)
+                Map ((#0 + 2))
+                  Get materialize.public.foo
+          Project (#2, #1)
+            Map ((#0 + 5))
+              Get materialize.public.foo
+  With
+    cte l1 =
+      Reduce aggregates=[sum(#0)]
+        Project (#3)
+          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
+            Get materialize.public.foo
+
+EOF

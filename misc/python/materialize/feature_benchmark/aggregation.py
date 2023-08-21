@@ -12,16 +12,21 @@ from typing import Any, Callable, List
 
 import numpy as np
 
+from materialize.feature_benchmark.measurement import Measurement
+
 
 class Aggregation:
     def __init__(self) -> None:
         self._data: List[float] = []
 
-    def append(self, measurement: float) -> None:
-        self._data.append(measurement)
+    def append(self, measurement: Measurement) -> None:
+        self._data.append(measurement.value)
 
     def aggregate(self) -> Any:
-        return self.func()([*self._data])
+        if len(self._data) == 0:
+            return None
+        else:
+            return self.func()([*self._data])
 
     def func(self) -> Callable:
         assert False

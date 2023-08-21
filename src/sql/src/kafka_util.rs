@@ -10,19 +10,17 @@
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::bail;
-use rdkafka::client::ClientContext;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::{Offset, TopicPartitionList};
-use tokio::time::Duration;
-
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use mz_storage_client::types::connections::StringOrSecret;
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::{Offset, TopicPartitionList};
+use tokio::time::Duration;
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
@@ -194,56 +192,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
     }
 }
 
-/// Create a new `rdkafka::ClientConfig` with the provided
-/// [`options`](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
-/// and test its ability to create an `rdkafka::consumer::BaseConsumer`.
-///
-/// Expected to test the output of `extract_security_config`.
-///
-/// # Panics
-///
-/// - `options` does not contain `bootstrap.servers` as a key
-///
-/// # Errors
-///
-/// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
-pub async fn create_consumer(
-    connection_context: &ConnectionContext,
-    kafka_connection: &KafkaConnection,
-    topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<KafkaErrCheckContext>>>, PlanError> {
-    let consumer: BaseConsumer<_> = kafka_connection
-        .create_with_context(
-            connection_context,
-            KafkaErrCheckContext::default(),
-            &BTreeMap::new(),
-        )
-        .await
-        .map_err(|e| sql_err!("{}", e))?;
-    let consumer = Arc::new(consumer);
-
-    let context = Arc::clone(consumer.context());
-    let owned_topic = String::from(topic);
-    // Wait for a metadata request for up to one second. This greatly
-    // increases the probability that we'll see a connection error if
-    // e.g. the hostname was mistyped. librdkafka doesn't expose a
-    // better API for asking whether a connection succeeded or failed,
-    // unfortunately.
-    task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
-        let consumer = Arc::clone(&consumer);
-        move || {
-            let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
-        }
-    })
-    .await
-    .map_err(|e| sql_err!("{}", e))?;
-    let error = context.inner().error.lock().expect("lock poisoned");
-    if let Some(error) = &*error {
-        sql_bail!("librdkafka: {}", error)
-    }
-    Ok(consumer)
-}
-
 /// Returns start offsets for the partitions of `topic` and the provided
 /// `START TIMESTAMP` option.
 ///
@@ -294,7 +242,7 @@ where
             let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
-                Duration::from_secs(10),
+                DEFAULT_FETCH_METADATA_TIMEOUT,
             )
             .map_err(|e| sql_err!("{}", e))?
             .len();
@@ -353,39 +301,4 @@ where
         .fetch_watermarks(topic, pid, Duration::from_secs(10))
         .map_err(|e| sql_err!("{}", e))?;
     Ok(high)
-}
-
-/// Gets error strings from `rdkafka` when creating test consumers.
-#[derive(Default, Debug)]
-pub struct KafkaErrCheckContext {
-    pub error: Mutex<Option<String>>,
-}
-
-impl ConsumerContext for KafkaErrCheckContext {}
-
-impl ClientContext for KafkaErrCheckContext {
-    // `librdkafka` doesn't seem to propagate all errors up the stack, but does
-    // log them, so we are currently relying on the `log` callback for error
-    // handling in some situations.
-    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        use rdkafka::config::RDKafkaLogLevel::*;
-        // `INFO` messages with a `fac` of `FAIL` occur when e.g. connecting to
-        // an SSL-authed broker without credentials.
-        if fac == "FAIL" || matches!(level, Emerg | Alert | Critical | Error) {
-            let mut error = self.error.lock().expect("lock poisoned");
-            // Do not allow logging to overwrite other values if
-            // present.
-            if error.is_none() {
-                *error = Some(log_message.to_string());
-            }
-        }
-        MzClientContext.log(level, fac, log_message)
-    }
-    // Refer to the comment on the `log` callback.
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        // Allow error to overwrite value irrespective of other conditions
-        // (i.e. logging).
-        *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
-        MzClientContext.error(error, reason)
-    }
 }

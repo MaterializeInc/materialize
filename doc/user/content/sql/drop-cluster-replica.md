@@ -35,6 +35,14 @@ SHOW CLUSTER REPLICAS WHERE cluster = 'auction_house';
 DROP CLUSTER REPLICA auction_house.bigger;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped cluster replica.
+- `USAGE` privileges on the containing cluster.
+
 ## Related pages
 
 - [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas)
+- [DROP OWNED](../drop-owned)

@@ -16,11 +16,17 @@ on the underlying relations based on common query patterns.
 
 ## Syntax
 
+### select_stmt
+
 {{< diagram "select-stmt.svg" >}}
+
+### simple_select_stmt
+
+{{< diagram "simple-select-stmt.svg" >}}
 
 Field | Use
 ------|-----
-**WITH** ... **AS** ... | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
+_select&lowbar;with&lowbar;ctes_, _select&lowbar;with&lowbar;recursive&lowbar;ctes_ | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
 **(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
 **ALL** | Return all rows from query _(Default)_.
 **DISTINCT** | Return only distinct values.
@@ -67,7 +73,7 @@ and re-order results.
 ### Ad hoc queries
 
 Queries over non-materialized views will create an ephemeral dataflow to compute
-the results. These dataflows are bound to the active [cluster](/overview/key-concepts#clusters),
+the results. These dataflows are bound to the active [cluster](/get-started/key-concepts#clusters),
  which you can change using:
 
 ```sql
@@ -81,22 +87,33 @@ it returns the query results to you.
 
 ### Common table expressions (CTEs)
 
-Common table expressions, also known as CTEs or `WITH` queries, create aliases
-for statements that subsequent expressions can refer to (including subsequent
-CTEs). This can enhance legibility of complex queries, but doesn't alter the
-queries' semantics.
+Common table expressions, also known as CTEs or `WITH` queries, create aliases for statements.
 
-For an example, see [Using CTEs](#using-ctes).
+#### Regular CTEs
+
+{{< diagram "with-ctes.svg" >}}
+
+##### cte_binding
+
+{{< diagram "cte-binding.svg" >}}
+
+With _regular CTEs_, any `cte_ident` alias can be referenced in subsequent `cte_binding` definitions and in the final `select_stmt`.
+Regular CTEs can enhance legibility of complex queries, but doesn't alter the queries' semantics.
+For an example, see [Using regular CTEs](#using-regular-ctes).
+
+#### Recursive CTEs
+
+
+In addition, Materialize also provides support for _recursive CTEs_ that can mutually reference each other.
+Recursive CTEs can be used to define computations on recursively defined structures (such as trees or graphs) implied by your data.
+For details and examples, see the [Recursive CTEs](../recursive-ctes) page.
 
 #### Known limitations
 
 CTEs have the following limitations, which we are working to improve:
 
-- CTEs only support `SELECT` queries. {{% gh 4867 %}}
-- Materialize inlines the CTE where it's referenced, which could cause
-  unexpected performance characteristics for especially complex expressions. {{%
-  gh 4867 %}}
-- `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
+- SQL99-compliant `WITH RECURSIVE` CTEs are not supported (use the [non-standard flavor](../recursive-ctes) instead).
 
 ### Query hints
 
@@ -107,7 +124,7 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions, and some [Top K patterns](/guides/top-k), more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
 
@@ -178,7 +195,7 @@ a materialized view, but it will tear down the dataflow once it's returned its
 results to the client. If you regularly want to view the results of this query,
 you may want to [create a view](../create-view) for it.
 
-### Using CTEs
+### Using regular CTEs
 
 ```sql
 WITH
@@ -222,6 +239,17 @@ OPTIONS (EXPECTED GROUP SIZE = 100)
 Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs
 for each `a` value, and Materialize can optimize its dataflow rendering with that
 knowledge.
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+ - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+   execute the view definition.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 

@@ -10,6 +10,6 @@
 name: jobs
 pre-image:
   - type: cargo-build
-    example: persistcli
+    bin: persistcli
     strip: false
 publish: true

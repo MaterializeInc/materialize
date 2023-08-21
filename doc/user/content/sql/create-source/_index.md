@@ -11,7 +11,8 @@ menu:
     weight: 20
 ---
 
-A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+A [source](../../get-started/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
 
@@ -29,6 +30,7 @@ Materialize bundles **native connectors** for the following external systems:
 {{</ linkbox >}}
 {{< linkbox title="Datagen" >}}
 - [Load generator](/sql/create-source/load-generator)
+- [Webhook](/sql/create-source/webhook)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
@@ -62,37 +64,19 @@ Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.
 
 ### JSON
 
-<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT BYTES</code></p>
+<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
 
-{{< note >}}
-Support for the more ergonomic `FORMAT JSON` is in progress {{% gh 7186 %}}!
-{{</ note >}}
+Materialize can decode JSON messages into a single column named `data` with type
+`jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
+supported operations on this type.
 
-Materialize cannot decode JSON directly from an external data source. Instead, you must create a source that reads the data as [raw bytes](#bytes), and handle the conversion to primitive types using [`jsonb`](/sql/types/jsonb) as an intermediate representation.
-
-```sql
--- create raw byte array source
-CREATE SOURCE my_bytea_source
-  FROM ...
-  FORMAT BYTES
-  WITH (SIZE='3xsmall');
-
--- convert from byte array to jsonb
-CREATE VIEW my_jsonb_source AS
-  SELECT
-    CONVERT_FROM(data, 'utf8')::jsonb AS data
-  FROM bytea_source;
-```
-
-{{< note >}}
-Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
-{{</ note >}}
-
-To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
+If your JSON messages have a consistent shape, consider creating a
+[view](/get-started/key-concepts/#views) that extracts the fields of the JSON
+into columns:
 
 ```sql
--- parse jsonb into typed columns
-CREATE MATERIALIZED VIEW my_typed_source AS
+-- extract jsonb into typed columns
+CREATE VIEW my_typed_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
@@ -108,9 +92,9 @@ Retrieving schemas from a schema registry is not supported yet for JSON-formatte
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT PROTOBUF</code></p>
 
-Materialize can decode Protobuf messages by integrating with a schema registry to retrieve a `.proto` schema definition, and automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
+Materialize can decode Protobuf messages by integrating with a schema registry or parsing an inline schema to retrieve a `.proto` schema definition. It can then automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
 
-* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with `protoc`, for example:
+* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with [`protoc`](https://grpc.io/docs/protoc-installation/), for example:
 
   ```shell
   protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
@@ -251,7 +235,7 @@ Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.
 
 You can also choose to place a source in an existing
-[cluster](/overview/key-concepts/#clusters) by using the `IN CLUSTER` option.
+[cluster](/get-started/key-concepts/#clusters) by using the `IN CLUSTER` option.
 Sources in a cluster share the resource allocation of the cluster with all other
 objects in the cluster.
 
@@ -259,9 +243,19 @@ Colocating multiple sources onto the same cluster can be more resource efficient
 when you have many low-traffic sources that occasionally need some burst
 capacity.
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
+
 ## Related pages
 
-- [Key Concepts](../../overview/key-concepts/)
+- [Key Concepts](../../get-started/key-concepts/)
 - [`SHOW SOURCES`](/sql/show-sources/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SOURCE`](/sql/show-create-source/)

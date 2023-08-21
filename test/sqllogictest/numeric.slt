@@ -252,10 +252,10 @@ SELECT 0::numeric::int, '-0'::numeric::int
 ----
 0  0
 
-query error integer out of range
+query error "2147483648" integer out of range
 SELECT '2147483648'::numeric::int4
 
-query error integer out of range
+query error "-2147483649" integer out of range
 SELECT '-2147483649'::numeric::int4
 
 ## int8 to numeric
@@ -293,10 +293,10 @@ SELECT 0::numeric::int8, -0::numeric::int8
 ----
 0  0
 
-query error integer out of range
+query error "9223372036854775808" integer out of range
 SELECT '9223372036854775808'::numeric::int4
 
-query error integer out of range
+query error "-9223372036854775809" integer out of range
 SELECT '-9223372036854775809'::numeric::int4
 
 # numeric to float4

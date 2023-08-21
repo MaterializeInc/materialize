@@ -18,6 +18,7 @@ BenchmarkingSequence = Union[MeasurementSource, List[Union[Action, MeasurementSo
 
 class RootScenario:
     SCALE: float = 6
+    FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenarioo
 
     def __init__(self, scale: float) -> None:
         self._name = self.__class__.__name__
@@ -58,7 +59,16 @@ class RootScenario:
         return TdAction(
             """
 > CREATE TABLE ten (f1 INTEGER);
-> INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+> INSERT INTO ten VALUES (0)
+> INSERT INTO ten VALUES (1)
+> INSERT INTO ten VALUES (2)
+> INSERT INTO ten VALUES (3)
+> INSERT INTO ten VALUES (4)
+> INSERT INTO ten VALUES (5)
+> INSERT INTO ten VALUES (6)
+> INSERT INTO ten VALUES (7)
+> INSERT INTO ten VALUES (8)
+> INSERT INTO ten VALUES (9)
 """
         )
 

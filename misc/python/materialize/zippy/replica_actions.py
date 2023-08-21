@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from textwrap import dedent
 from typing import List, Optional, Set, Type
 
 from materialize.mzcompose import Composition
@@ -24,7 +25,16 @@ class DropDefaultReplica(Action):
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.testdrive("> DROP CLUSTER REPLICA default.r1;")
+        # Default cluster is not owned by materialize, thus can't be dropped by
+        # it if enable_rbac_checks is on.
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            DROP CLUSTER REPLICA default.r1
+            """
+            )
+        )
 
 
 class CreateReplica(Action):
@@ -75,8 +85,15 @@ class CreateReplica(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_replica:
+            # Default cluster is not owned by materialize, thus can't have a replica
+            # added if enable_rbac_checks is on.
             c.testdrive(
-                f"> CREATE CLUSTER REPLICA default.{self.replica.name} SIZE '{self.replica.size}'"
+                dedent(
+                    f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                CREATE CLUSTER REPLICA default.{self.replica.name} SIZE '{self.replica.size}'
+                """
+                )
             )
 
     def provides(self) -> List[Capability]:
@@ -105,4 +122,13 @@ class DropReplica(Action):
 
     def run(self, c: Composition) -> None:
         if self.replica is not None:
-            c.testdrive(f"> DROP CLUSTER REPLICA IF EXISTS default.{self.replica.name}")
+            # Default cluster is not owned by materialize, thus can't have a replica
+            # removed if enable_rbac_checks is on.
+            c.testdrive(
+                dedent(
+                    f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                DROP CLUSTER REPLICA IF EXISTS default.{self.replica.name}
+                """
+                )
+            )

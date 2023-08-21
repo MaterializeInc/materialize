@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -75,6 +73,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -83,21 +82,9 @@ use std::time::Duration;
 use std::{env, thread};
 
 use anyhow::anyhow;
-use once_cell::sync::Lazy;
-use postgres::error::DbError;
-use postgres::tls::{MakeTlsConnect, TlsConnect};
-use postgres::types::{FromSql, Type};
-use postgres::{NoTls, Socket};
-use regex::Regex;
-use tempfile::TempDir;
-use tokio::runtime::Runtime;
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
-use tower_http::cors::AllowOrigin;
-
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::FronteggAuthentication;
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
@@ -108,15 +95,31 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, PersistParameters};
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
-use tracing_subscriber::filter::Targets;
+use once_cell::sync::Lazy;
+use postgres::error::DbError;
+use postgres::tls::{MakeTlsConnect, TlsConnect};
+use postgres::types::{FromSql, Type};
+use postgres::{NoTls, Socket};
+use regex::Regex;
+use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
+use tokio_postgres::config::Host;
+use tokio_postgres::Client;
+use tokio_stream::wrappers::TcpListenerStream;
+use tower_http::cors::AllowOrigin;
+use tracing::Level;
+use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
+use url::Url;
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -136,6 +139,10 @@ pub struct Config {
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
+    bootstrap_role: Option<String>,
+    deploy_generation: Option<u64>,
+    system_parameter_defaults: BTreeMap<String, String>,
+    concurrent_webhook_req_count: Option<usize>,
 }
 
 impl Default for Config {
@@ -154,6 +161,10 @@ impl Default for Config {
             builtin_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
             enable_tracing: false,
+            bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
+            system_parameter_defaults: BTreeMap::new(),
+            concurrent_webhook_req_count: None,
         }
     }
 }
@@ -164,14 +175,8 @@ impl Config {
         self
     }
 
-    pub fn with_tls(
-        mut self,
-        mode: TlsMode,
-        cert_path: impl Into<PathBuf>,
-        key_path: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn with_tls(mut self, cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
         self.tls = Some(mz_environmentd::TlsConfig {
-            mode,
             cert: cert_path.into(),
             key: key_path.into(),
         });
@@ -239,152 +244,237 @@ impl Config {
         self.enable_tracing = enable_tracing;
         self
     }
+
+    pub fn with_bootstrap_role(mut self, bootstrap_role: Option<String>) -> Self {
+        self.bootstrap_role = bootstrap_role;
+        self
+    }
+
+    pub fn with_deploy_generation(mut self, deploy_generation: Option<u64>) -> Self {
+        self.deploy_generation = deploy_generation;
+        self
+    }
+
+    pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
+        self.system_parameter_defaults.insert(param, value);
+        self
+    }
+
+    pub fn with_concurrent_webhook_req_count(mut self, limit: usize) -> Self {
+        self.concurrent_webhook_req_count = Some(limit);
+        self
+    }
+}
+
+pub struct Listeners {
+    pub runtime: Arc<Runtime>,
+    pub inner: mz_environmentd::Listeners,
+}
+
+impl Listeners {
+    pub fn new() -> Result<Listeners, anyhow::Error> {
+        let runtime = Arc::new(Runtime::new()?);
+        let inner =
+            runtime.block_on(async { mz_environmentd::Listeners::bind_any_local().await })?;
+        Ok(Listeners { runtime, inner })
+    }
+
+    pub fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
+        let environment_id = EnvironmentId::for_tests();
+        let (data_directory, temp_dir) = match config.data_directory {
+            None => {
+                // If no data directory is provided, we create a temporary
+                // directory. The temporary directory is cleaned up when the
+                // `TempDir` is dropped, so we keep it alive until the `Server` is
+                // dropped.
+                let temp_dir = tempfile::tempdir()?;
+                (temp_dir.path().to_path_buf(), Some(temp_dir))
+            }
+            Some(data_directory) => (data_directory, None),
+        };
+        let scratch_dir = tempfile::tempdir()?;
+        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+            let seed = config.seed;
+            let cockroach_url = env::var("COCKROACH_URL")
+                .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
+            let mut conn = postgres::Client::connect(&cockroach_url, NoTls)?;
+            conn.batch_execute(&format!(
+                "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
+                 CREATE SCHEMA IF NOT EXISTS adapter_{seed};
+                 CREATE SCHEMA IF NOT EXISTS storage_{seed};",
+            ))?;
+            (
+                format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
+                format!("{cockroach_url}?options=--search_path=adapter_{seed}"),
+                format!("{cockroach_url}?options=--search_path=storage_{seed}"),
+            )
+        };
+        let metrics_registry = MetricsRegistry::new();
+        let orchestrator = Arc::new(
+            self.runtime
+                .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
+                    image_dir: env::current_exe()?
+                        .parent()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .to_path_buf(),
+                    suppress_output: false,
+                    environment_id: environment_id.to_string(),
+                    secrets_dir: data_directory.join("secrets"),
+                    command_wrapper: vec![],
+                    propagate_crashes: config.propagate_crashes,
+                    tcp_proxy: None,
+                    scratch_directory: scratch_dir.path().to_path_buf(),
+                }))?,
+        );
+        // Messing with the clock causes persist to expire leases, causing hangs and
+        // panics. Is it possible/desirable to put this back somehow?
+        let persist_now = SYSTEM_TIME.clone();
+        let mut persist_cfg = PersistConfig::new(&mz_environmentd::BUILD_INFO, persist_now);
+        // Tune down the number of connections to make this all work a little easier
+        // with local postgres.
+        persist_cfg.consensus_connection_pool_max_size = 1;
+        // Stress persist more by writing rollups frequently
+        let mut persist_parameters = PersistParameters::default();
+        persist_parameters.rollup_threshold = Some(5);
+        persist_parameters.apply(&persist_cfg);
+
+        let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
+        let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+        let persist_pubsub_tcp_listener = self
+            .runtime
+            .block_on(TcpListener::bind(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                0,
+            )))
+            .expect("pubsub addr binding");
+        let persist_pubsub_server_port = persist_pubsub_tcp_listener
+            .local_addr()
+            .expect("pubsub addr has local addr")
+            .port();
+        let _persist_pubsub_server = {
+            let _tokio_guard = self.runtime.enter();
+            mz_ore::task::spawn(|| "persist_pubsub_server", async move {
+                persist_pubsub_server
+                    .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
+                    .await
+                    .expect("success")
+            });
+        };
+        let persist_clients = {
+            let _tokio_guard = self.runtime.enter();
+            PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
+        };
+        let persist_clients = Arc::new(persist_clients);
+        let postgres_factory = StashFactory::new(&metrics_registry);
+        let secrets_controller = Arc::clone(&orchestrator);
+        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let (tracing_handle, tracing_guard) = if config.enable_tracing {
+            let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
+                service_name: "environmentd",
+                stderr_log: StderrLogConfig {
+                    format: StderrLogFormat::Json,
+                    filter: EnvFilter::default(),
+                },
+                opentelemetry: Some(OpenTelemetryConfig {
+                    endpoint: "http://fake_address_for_testing:8080".to_string(),
+                    headers: http::HeaderMap::new(),
+                    filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
+                    resource: opentelemetry::sdk::resource::Resource::default(),
+                }),
+                #[cfg(feature = "tokio-console")]
+                tokio_console: None,
+                sentry: None,
+                build_version: mz_environmentd::BUILD_INFO.version,
+                build_sha: mz_environmentd::BUILD_INFO.sha,
+                build_time: mz_environmentd::BUILD_INFO.time,
+                registry: metrics_registry.clone(),
+            };
+            let (tracing_handle, tracing_guard) =
+                self.runtime.block_on(mz_ore::tracing::configure(config))?;
+            (tracing_handle, Some(tracing_guard))
+        } else {
+            (TracingHandle::disabled(), None)
+        };
+
+        let inner = self.runtime.block_on(async {
+            self.inner
+                .serve(mz_environmentd::Config {
+                    adapter_stash_url,
+                    controller: ControllerConfig {
+                        build_info: &mz_environmentd::BUILD_INFO,
+                        orchestrator,
+                        clusterd_image: "clusterd".into(),
+                        init_container_image: None,
+                        persist_location: PersistLocation {
+                            blob_uri: format!("file://{}/persist/blob", data_directory.display()),
+                            consensus_uri,
+                        },
+                        persist_clients,
+                        storage_stash_url,
+                        now: SYSTEM_TIME.clone(),
+                        postgres_factory,
+                        metrics_registry: metrics_registry.clone(),
+                        persist_pubsub_url: format!(
+                            "http://localhost:{}",
+                            persist_pubsub_server_port
+                        ),
+                        secrets_args: mz_service::secrets::SecretsReaderCliArgs {
+                            secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                            secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
+                            secrets_reader_kubernetes_context: None,
+                            secrets_reader_aws_region: None,
+                            secrets_reader_aws_prefix: None,
+                        },
+                    },
+                    secrets_controller,
+                    cloud_resource_controller: None,
+                    tls: config.tls,
+                    frontegg: config.frontegg,
+                    concurrent_webhook_req_count: config.concurrent_webhook_req_count,
+                    unsafe_mode: config.unsafe_mode,
+                    all_features: false,
+                    metrics_registry: metrics_registry.clone(),
+                    now: config.now,
+                    environment_id,
+                    cors_allowed_origin: AllowOrigin::list([]),
+                    cluster_replica_sizes: Default::default(),
+                    default_storage_cluster_size: None,
+                    bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
+                    bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
+                    system_parameter_defaults: config.system_parameter_defaults,
+                    availability_zones: Default::default(),
+                    connection_context,
+                    tracing_handle,
+                    storage_usage_collection_interval: config.storage_usage_collection_interval,
+                    storage_usage_retention_period: config.storage_usage_retention_period,
+                    segment_api_key: None,
+                    egress_ips: vec![],
+                    aws_account_id: None,
+                    aws_privatelink_availability_zones: None,
+                    launchdarkly_sdk_key: None,
+                    launchdarkly_key_map: Default::default(),
+                    config_sync_loop_interval: None,
+                    bootstrap_role: config.bootstrap_role,
+                    deploy_generation: config.deploy_generation,
+                })
+                .await
+        })?;
+        let server = Server {
+            inner,
+            runtime: self.runtime,
+            metrics_registry,
+            _temp_dir: temp_dir,
+            _tracing_guard: tracing_guard,
+        };
+        Ok(server)
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
-    let runtime = Arc::new(Runtime::new()?);
-    let environment_id = EnvironmentId::for_tests();
-    let (data_directory, temp_dir) = match config.data_directory {
-        None => {
-            // If no data directory is provided, we create a temporary
-            // directory. The temporary directory is cleaned up when the
-            // `TempDir` is dropped, so we keep it alive until the `Server` is
-            // dropped.
-            let temp_dir = tempfile::tempdir()?;
-            (temp_dir.path().to_path_buf(), Some(temp_dir))
-        }
-        Some(data_directory) => (data_directory, None),
-    };
-    let (consensus_uri, adapter_stash_url, storage_stash_url) = {
-        let seed = config.seed;
-        let cockroach_url = env::var("COCKROACH_URL")
-            .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
-        let mut conn = postgres::Client::connect(&cockroach_url, NoTls)?;
-        conn.batch_execute(&format!(
-            "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-             CREATE SCHEMA IF NOT EXISTS adapter_{seed};
-             CREATE SCHEMA IF NOT EXISTS storage_{seed};",
-        ))?;
-        (
-            format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
-            format!("{cockroach_url}?options=--search_path=adapter_{seed}"),
-            format!("{cockroach_url}?options=--search_path=storage_{seed}"),
-        )
-    };
-    let metrics_registry = MetricsRegistry::new();
-    let orchestrator = Arc::new(
-        runtime.block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
-            image_dir: env::current_exe()?
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_path_buf(),
-            suppress_output: false,
-            environment_id: environment_id.to_string(),
-            secrets_dir: data_directory.join("secrets"),
-            command_wrapper: vec![],
-            propagate_crashes: config.propagate_crashes,
-            tcp_proxy: None,
-        }))?,
-    );
-    // Messing with the clock causes persist to expire leases, causing hangs and
-    // panics. Is it possible/desirable to put this back somehow?
-    let persist_now = SYSTEM_TIME.clone();
-    let mut persist_cfg = PersistConfig::new(&mz_environmentd::BUILD_INFO, persist_now);
-    // Tune down the number of connections to make this all work a little easier
-    // with local postgres.
-    persist_cfg.consensus_connection_pool_max_size = 1;
-    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
-    let persist_clients = Arc::new(persist_clients);
-    let postgres_factory = StashFactory::new(&metrics_registry);
-    let secrets_controller = Arc::clone(&orchestrator);
-    let connection_context = ConnectionContext::for_tests(orchestrator.reader());
-    let (tracing_handle, tracing_guard) = if config.enable_tracing {
-        let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
-            service_name: "environmentd",
-            stderr_log: StderrLogConfig {
-                format: StderrLogFormat::Json,
-                filter: Targets::default(),
-            },
-            opentelemetry: Some(OpenTelemetryConfig {
-                endpoint: "http://fake_address_for_testing:8080".to_string(),
-                headers: http::HeaderMap::new(),
-                filter: Targets::default().with_default(tracing_core::Level::DEBUG),
-                resource: opentelemetry::sdk::resource::Resource::default(),
-                start_enabled: true,
-            }),
-            #[cfg(feature = "tokio-console")]
-            tokio_console: None,
-            sentry: None,
-            build_version: mz_environmentd::BUILD_INFO.version,
-            build_sha: mz_environmentd::BUILD_INFO.sha,
-            build_time: mz_environmentd::BUILD_INFO.time,
-        };
-        let (tracing_handle, tracing_guard) =
-            runtime.block_on(mz_ore::tracing::configure(config))?;
-        (tracing_handle, Some(tracing_guard))
-    } else {
-        (TracingHandle::disabled(), None)
-    };
-
-    let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
-        adapter_stash_url,
-        controller: ControllerConfig {
-            build_info: &mz_environmentd::BUILD_INFO,
-            orchestrator,
-            clusterd_image: "clusterd".into(),
-            init_container_image: None,
-            persist_location: PersistLocation {
-                blob_uri: format!("file://{}/persist/blob", data_directory.display()),
-                consensus_uri,
-            },
-            persist_clients,
-            storage_stash_url,
-            now: SYSTEM_TIME.clone(),
-            postgres_factory,
-            metrics_registry: metrics_registry.clone(),
-        },
-        secrets_controller,
-        cloud_resource_controller: None,
-        sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        tls: config.tls,
-        frontegg: config.frontegg,
-        unsafe_mode: config.unsafe_mode,
-        persisted_introspection: true,
-        metrics_registry: metrics_registry.clone(),
-        now: config.now,
-        environment_id,
-        cors_allowed_origin: AllowOrigin::list([]),
-        cluster_replica_sizes: Default::default(),
-        default_storage_cluster_size: None,
-        bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-        bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-        bootstrap_system_parameters: Default::default(),
-        availability_zones: Default::default(),
-        connection_context,
-        tracing_handle,
-        storage_usage_collection_interval: config.storage_usage_collection_interval,
-        storage_usage_retention_period: config.storage_usage_retention_period,
-        segment_api_key: None,
-        egress_ips: vec![],
-        aws_account_id: None,
-        aws_privatelink_availability_zones: None,
-        launchdarkly_sdk_key: None,
-        launchdarkly_key_map: Default::default(),
-        config_sync_loop_interval: None,
-    }))?;
-    let server = Server {
-        inner,
-        runtime,
-        metrics_registry,
-        _temp_dir: temp_dir,
-        _tracing_guard: tracing_guard,
-    };
-    Ok(server)
+    let listeners = Listeners::new()?;
+    listeners.serve(config)
 }
 
 pub struct Server {
@@ -412,7 +502,7 @@ impl Server {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("materialize");
+            .user("mz_system");
         config
     }
 
@@ -426,20 +516,40 @@ impl Server {
         config
     }
 
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    pub fn enable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
         T::Stream: Send,
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
-        Ok(self.pg_config().connect(tls)?)
+        self.pg_config().connect(tls)
+    }
+
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config_internal().connect(tls)?)
     }
 
     pub async fn connect_async<T>(
         &self,
         tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), anyhow::Error>
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
@@ -453,6 +563,14 @@ impl Server {
             }
         });
         Ok((client, handle))
+    }
+
+    pub fn ws_addr(&self) -> Url {
+        Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            self.inner.http_local_addr()
+        ))
+        .unwrap()
     }
 }
 
@@ -645,7 +763,6 @@ pub fn wait_for_view_population(
         .get::<_, String>(0);
     mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
     Retry::default()
-        .max_duration(Duration::from_secs(10))
         .retry(|_| {
             let rows = mz_client
                 .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
@@ -666,28 +783,40 @@ pub fn wait_for_view_population(
     Ok(())
 }
 
-pub fn auth_with_ws(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
-    ws.write_message(Message::Text(
+// Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
+pub fn auth_with_ws(
+    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    options: BTreeMap<String, String>,
+) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
+    ws.send(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
             password: "".into(),
+            options,
         })
         .unwrap(),
-    ))
-    .unwrap();
+    ))?;
     // Wait for initial ready response.
+    let mut msgs = Vec::new();
     loop {
-        let resp = ws.read_message().unwrap();
+        let resp = ws.read()?;
         match resp {
             Message::Text(msg) => {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => break,
-                    _ => {}
+                    msg => {
+                        msgs.push(msg);
+                    }
                 }
             }
             Message::Ping(_) => continue,
+            Message::Close(None) => return Err(anyhow!("ws closed after auth")),
+            Message::Close(Some(close_frame)) => {
+                return Err(anyhow!("ws closed after auth").context(close_frame))
+            }
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
+    Ok(msgs)
 }

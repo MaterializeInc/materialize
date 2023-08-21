@@ -17,4 +17,23 @@ message ProtoPersistParameters {
     optional uint64 blob_target_size = 1;
     mz_proto.ProtoDuration compaction_minimum_timeout = 2;
     mz_proto.ProtoDuration consensus_connect_timeout = 3;
+    optional uint64 sink_minimum_batch_updates = 4;
+    optional uint64 storage_sink_minimum_batch_updates = 8;
+    optional ProtoRetryParameters next_listen_batch_retryer = 5;
+    optional uint64 stats_audit_percent = 9;
+    optional bool stats_collection_enabled = 6;
+    optional bool stats_filter_enabled = 7;
+    optional bool pubsub_client_enabled = 10;
+    optional bool pubsub_push_diff_enabled = 11;
+    mz_proto.ProtoDuration consensus_tcp_user_timeout = 12;
+    optional uint64 rollup_threshold = 13;
+    optional uint64 blob_cache_mem_limit_bytes = 14;
+    mz_proto.ProtoDuration consensus_connection_pool_ttl = 15;
+    mz_proto.ProtoDuration consensus_connection_pool_ttl_stagger = 16;
+}
+
+message ProtoRetryParameters {
+    mz_proto.ProtoDuration initial_backoff = 1;
+    uint32 multiplier = 2;
+    mz_proto.ProtoDuration clamp = 3;
 }

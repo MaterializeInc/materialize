@@ -10,7 +10,7 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 ! ALTER SYSTEM SET max_tables TO 42
-contains:unauthorized: only user 'mz_system' is allowed to execute 'ALTER SYSTEM ...'
+contains:permission denied to alter system
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_tables = 2
@@ -23,14 +23,14 @@ ALTER SYSTEM SET max_tables = 2
 > CREATE TABLE t2 (a INT)
 
 ! CREATE TABLE t3 (a INT)
-contains:Table resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
+contains:creating table would violate max_tables limit (desired: 3, limit: 2, current: 2)
 
 > DROP TABLE t2;
 
 > CREATE TABLE t3 (a INT)
 
 ! CREATE TABLE t4 (a INT)
-contains:Table resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
+contains:creating table would violate max_tables limit (desired: 3, limit: 2, current: 2)
 
 
 $ postgres-execute connection=mz_system
@@ -48,16 +48,16 @@ ALTER SYSTEM SET max_objects_per_schema = 2
 2
 
 ! CREATE TABLE t5 (a INT)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+contains:creating object would violate max_objects_per_schema limit (desired: 4, limit: 2, current: 3)
 
 ! CREATE VIEW v as SELECT 1
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+contains:creating object would violate max_objects_per_schema limit (desired: 4, limit: 2, current: 3)
 
 ! CREATE INDEX ind on t1 (a)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+contains:creating object would violate max_objects_per_schema limit (desired: 4, limit: 2, current: 3)
 
 ! CREATE TYPE t AS (a float8)
-contains:Objects per schema resource limit of 2 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+contains:creating object would violate max_objects_per_schema limit (desired: 4, limit: 2, current: 3)
 
 > CREATE SCHEMA s1;
 
@@ -82,14 +82,14 @@ ALTER SYSTEM SET max_clusters = 3
 > CREATE CLUSTER c2 REPLICAS (r (SIZE '1'));
 
 ! CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
-contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+contains:creating cluster would violate max_clusters limit (desired: 4, limit: 3, current: 3)
 
 > DROP CLUSTER c2 CASCADE;
 
 > CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
 
 ! CREATE CLUSTER c4 REPLICAS (r (SIZE '1'));
-contains:Cluster resource limit of 3 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+contains:creating cluster would violate max_clusters limit (desired: 4, limit: 3, current: 3)
 
 
 $ postgres-execute connection=mz_system
@@ -107,7 +107,7 @@ ALTER SYSTEM SET max_replicas_per_cluster = 1
 1
 
 ! CREATE CLUSTER REPLICA c1.r2 SIZE '1'
-contains:Replicas per cluster resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
+contains:creating cluster replica would violate max_replicas_per_cluster limit (desired: 2, limit: 1, current: 1)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 100
@@ -155,7 +155,7 @@ ALTER SYSTEM SET max_databases = 1
 1
 
 ! CREATE DATABASE d1
-contains:Database resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
+contains:creating database would violate max_databases limit (desired: 2, limit: 1, current: 1)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_databases = 42
@@ -172,7 +172,7 @@ ALTER SYSTEM SET max_schemas_per_database = 2
 2
 
 ! CREATE SCHEMA s2
-contains:Schemas per database resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
+contains:creating schema would violate max_schemas_per_database limit (desired: 3, limit: 2, current: 2)
 
 > CREATE SCHEMA d1.s2
 
@@ -193,7 +193,7 @@ ALTER SYSTEM SET max_roles = 2;
 > CREATE ROLE joe
 
 ! CREATE ROLE mike
-contains:Role resource limit of 2 cannot be exceeded. Current amount is 2 instances, tried to create 1 new instances.
+contains:creating role would violate max_roles limit (desired: 3, limit: 2, current: 2)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_roles = 3;
@@ -212,7 +212,7 @@ ALTER SYSTEM SET max_secrets = 1
 > CREATE SECRET secret AS 'secure_password'
 
 ! CREATE SECRET password AS 'pass'
-contains:Secret resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
+contains:creating secret would violate max_secrets limit (desired: 2, limit: 1, current: 1)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_secrets = 50000
@@ -231,7 +231,7 @@ ALTER SYSTEM SET max_materialized_views = 1
 > CREATE MATERIALIZED VIEW mv1 AS SELECT 1
 
 ! CREATE MATERIALIZED VIEW mv2 AS SELECT 2
-contains:Materialized view resource limit of 1 cannot be exceeded. Current amount is 1 instances, tried to create 1 new instances.
+contains:creating materialized view would violate max_materialized_views limit (desired: 2, limit: 1, current: 1)
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_materialized_views = 2
@@ -284,9 +284,6 @@ ALTER SYSTEM RESET ALL
 > DROP TABLE t3;
 > DROP TABLE t4;
 
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_sources = 2
-
 # Insert Postgres data
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -315,6 +312,19 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     USER postgres,
     PASSWORD SECRET pgpass
   )
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = 2
+
+# Creating 3 subsources is equivalent to 3 shards
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+contains:creating source would violate max_sources limit (desired: 3, limit: 2, current: 0)
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = 3
+
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
@@ -336,12 +346,28 @@ ALTER TABLE t4 REPLICA IDENTITY FULL;
 INSERT INTO t4 VALUES (4);
 CREATE PUBLICATION mz_source2 FOR TABLE t4;
 
+# Show that we're at limit
+! CREATE SOURCE mz_source2
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
+  FOR ALL TABLES;
+contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
+
+# Show that dropping source does proper accounting
+> DROP SOURCE mz_source
+
 > CREATE SOURCE mz_source2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
   FOR ALL TABLES;
 
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+contains:creating source would violate max_sources limit (desired: 5, limit: 3, current: 1)
+
 > SELECT * FROM t4
 4
+
+> DROP SOURCE mz_source2
 
 > SHOW max_aws_privatelink_connections
 0
@@ -351,6 +377,45 @@ ALTER SYSTEM SET max_aws_privatelink_connections = 42
 
 > SHOW max_aws_privatelink_connections
 42
+
+$ postgres-execute connection=mz_system
+DROP CLUSTER default CASCADE
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_replicas_per_cluster = 100
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_credit_consumption_rate = 3
+
+> SHOW max_credit_consumption_rate
+3
+
+# Size 1 has 1 credit and size 2-1 has 2 credits
+
+> CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '2-1'))
+
+! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 4, limit: 3, current: 3)
+
+! CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER WITH (SIZE = '8-8');
+contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 11, limit: 3, current: 3)
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_credit_consumption_rate = 4.0
+
+> SHOW max_credit_consumption_rate
+4.0
+
+> CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+
+! CREATE CLUSTER REPLICA c1.r4 SIZE '2-1'
+contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 6, limit: 4.0, current: 4)
+
+> DROP CLUSTER REPLICA c1.r2
+
+> CREATE CLUSTER REPLICA c1.r4 SIZE '2-1'
+
+> DROP CLUSTER c1 CASCADE
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL

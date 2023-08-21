@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -80,11 +78,13 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
-
 use mz_repr::GlobalId;
+
+pub mod cache;
 
 /// Securely manages user secrets.
 #[async_trait]
@@ -102,6 +102,14 @@ pub trait SecretsController: Debug + Send + Sync {
 
     /// Returns a reader for the secrets managed by this controller.
     fn reader(&self) -> Arc<dyn SecretsReader>;
+}
+
+#[derive(Debug)]
+pub struct CachingPolicy {
+    /// Whether or not caching is enabled.
+    pub enabled: bool,
+    /// "time to live" of records within the cache.
+    pub ttl: Duration,
 }
 
 /// Securely reads secrets that are managed by a [`SecretsController`].

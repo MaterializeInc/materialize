@@ -28,17 +28,17 @@ Parameter(1)
 parse-scalar
 $91 + $42
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Parameter(91), expr2: Some(Parameter(42)) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Parameter(91), expr2: Some(Parameter(42)) }
 
 parse-scalar
 NOT salary = ''
 ----
-Not { expr: Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
+Not { expr: Op { op: Op { namespace: None, op: "=" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
 
 parse-scalar
 salary <> 'Not Provided' AND salary <> ''
 ----
-And { left: Op { op: Op { namespace: [], op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String("Not Provided"))) }, right: Op { op: Op { namespace: [], op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
+And { left: Op { op: Op { namespace: None, op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String("Not Provided"))) }, right: Op { op: Op { namespace: None, op: "<>" }, expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }
 
 parse-scalar
 name LIKE '%a'
@@ -90,6 +90,26 @@ name NOT LIKE '%a' IS NULL
 ----
 IsExpr { expr: Like { expr: Identifier([Ident("name")]), pattern: Value(String("%a")), escape: None, case_insensitive: false, negated: true }, construct: Null, negated: false }
 
+parse-scalar roundtrip
+name ~~ '%a'
+----
+name ~~ '%a'
+
+parse-scalar roundtrip
+name ~~* '%a'
+----
+name ~~* '%a'
+
+parse-scalar roundtrip
+name !~~* '%a'
+----
+name !~~* '%a'
+
+parse-scalar roundtrip
+name LIKE '%a' ESCAPE '\\'
+----
+name LIKE '%a' ESCAPE '\\'
+
 parse-scalar
 name IS TRUE
 ----
@@ -111,34 +131,51 @@ name IS NOT UNKNOWN
 IsExpr { expr: Identifier([Ident("name")]), construct: Unknown, negated: true }
 
 parse-scalar
+1 + 1 IS DISTINCT FROM 1 + 2
+----
+IsExpr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: false }
+
+parse-scalar
+1 + 1 IS NOT DISTINCT FROM 1 + 2
+----
+IsExpr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, construct: DistinctFrom(Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }), negated: true }
+
+parse-scalar
+1 + 1 IS DISTINCT NOT FROM 1 + 2
+----
+error: Expected FROM, found NOT
+1 + 1 IS DISTINCT NOT FROM 1 + 2
+                  ^
+
+parse-scalar
 a ~ 'foo'
 ----
-Op { op: Op { namespace: [], op: "~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a ~* 'foo'
 ----
-Op { op: Op { namespace: [], op: "~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !~ 'foo'
 ----
-Op { op: Op { namespace: [], op: "!~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "!~" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !~* 'foo'
 ----
-Op { op: Op { namespace: [], op: "!~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+Op { op: Op { namespace: None, op: "!~*" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
 
 parse-scalar
 a !x 'foo'
 ----
-Op { op: Op { namespace: [], op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: Name(UnresolvedObjectName([Ident("x")])), typ_mod: [] } }) }
+Op { op: Op { namespace: None, op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] } }) }
 
 parse-scalar
 a !x
 ----
-Op { op: Op { namespace: [], op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("x")])) }
+Op { op: Op { namespace: None, op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("x")])) }
 
 # Casts
 
@@ -199,214 +236,269 @@ id::numeric
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("year")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("year")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(YEAR FROM d)
+----
+extract('year' FROM d)
 
 parse-scalar
 EXTRACT(MILLENIUM FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("millenium")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("millenium")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(MILLENNIUM FROM d)
+----
+extract('millennium' FROM d)
 
 parse-scalar
 EXTRACT(CENTURY FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("century")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("century")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
-parse-scalar
-EXTRACT(YEAR FROM d)
+parse-scalar roundtrip
+EXTRACT(CENTURY FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("year")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+extract('century' FROM d)
 
 parse-scalar
 EXTRACT(ISOYEAR FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("isoyear")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("isoyear")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(ISOYEAR FROM d)
+----
+extract('isoyear' FROM d)
 
 parse-scalar
 EXTRACT(QUARTER FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("quarter")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("quarter")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(QUARTER FROM d)
+----
+extract('quarter' FROM d)
 
 parse-scalar
 EXTRACT(MONTH FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("month")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("month")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(MONTH FROM d)
+----
+extract('month' FROM d)
 
 parse-scalar
 EXTRACT(DAY FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("day")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("day")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(DAY FROM d)
+----
+extract('day' FROM d)
 
 parse-scalar
 EXTRACT(HOUR FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("hour")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("hour")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(HOUR FROM d)
+----
+extract('hour' FROM d)
 
 parse-scalar
 EXTRACT(MINUTE FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("minute")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("minute")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(MINUTE FROM d)
+----
+extract('minute' FROM d)
 
 parse-scalar
 EXTRACT(SECOND FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("second")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("second")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(SECOND FROM d)
+----
+extract('second' FROM d)
 
 parse-scalar
 EXTRACT(MILLISECONDS FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("milliseconds")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("milliseconds")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(MILLISECOND FROM d)
+----
+extract('millisecond' FROM d)
 
 parse-scalar
 EXTRACT(MICROSECONDS FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("microseconds")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("microseconds")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+EXTRACT(MICROSECONDS FROM d)
+----
+extract('microseconds' FROM d)
 
 parse-scalar
 EXTRACT(TIMEZONE FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("timezone")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("timezone")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE_HOUR FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("timezone_hour")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("timezone_hour")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE_MINUTE FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("timezone_minute")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("timezone_minute")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(WEEK FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("week")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("week")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DOY FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("doy")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("doy")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DOW FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("dow")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("dow")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(ISODOW FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("isodow")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("isodow")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(EPOCH FROM d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("extract")]), args: Args { args: [Value(String("epoch")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("extract")])), args: Args { args: [Value(String("epoch")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 # date_part
 
 parse-scalar
 DATE_PART('YEAR', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("YEAR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("YEAR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('MILLENIUM', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("MILLENIUM")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("MILLENIUM")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('CENTURY', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("CENTURY")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("CENTURY")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('YEAR', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("YEAR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("YEAR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('ISOYEAR', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("ISOYEAR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("ISOYEAR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('QUARTER', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("QUARTER")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("QUARTER")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('MONTH', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("MONTH")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("MONTH")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('DAY', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("DAY")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("DAY")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('HOUR', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("HOUR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("HOUR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('MINUTE', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("MINUTE")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("MINUTE")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('SECOND', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("SECOND")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("SECOND")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('MILLISECONDS', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("MILLISECONDS")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("MILLISECONDS")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('MICROSECONDS', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("MICROSECONDS")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("MICROSECONDS")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('TIMEZONE', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("TIMEZONE")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("TIMEZONE")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('TIMEZONE_HOUR', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("TIMEZONE_HOUR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("TIMEZONE_HOUR")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('TIMEZONE_MINUTE', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("TIMEZONE_MINUTE")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("TIMEZONE_MINUTE")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('WEEK', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("WEEK")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("WEEK")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('DOY', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("DOY")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("DOY")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('DOW', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("DOW")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("DOW")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('ISODOW', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("ISODOW")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("ISODOW")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 DATE_PART('EPOCH', d)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args { args: [Value(String("EPOCH")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("date_part")])), args: Args { args: [Value(String("EPOCH")), Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 COALESCE(foo, bar)
@@ -420,11 +512,26 @@ error: Expected an expression, found right parenthesis
 COALESCE()
          ^
 
+parse-scalar roundtrip
+COALESCE(foo, bar)
+----
+COALESCE(foo, bar)
+
+parse-scalar roundtrip
+GREATEST(foo, bar)
+----
+GREATEST(foo, bar)
+
+parse-scalar roundtrip
+LEAST(foo, bar)
+----
+LEAST(foo, bar)
+
 
 parse-scalar
 sqrt(id)
 ----
-Function(Function { name: UnresolvedObjectName([Ident("sqrt")]), args: Args { args: [Identifier([Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("sqrt")])), args: Args { args: [Identifier([Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar roundtrip
 (a + b) - (c + d)
@@ -444,17 +551,87 @@ Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1")
 parse-scalar
 (SELECT 1) + (SELECT 2)
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
+
+parse-scalar roundtrip
+1 < 2
+----
+1 < 2
+
+parse-scalar roundtrip
+1 <= 2
+----
+1 <= 2
+
+parse-scalar roundtrip
+1 >= 2
+----
+1 >= 2
+
+parse-scalar roundtrip
+1 > 2
+----
+1 > 2
+
+parse-scalar roundtrip
+1 - 2
+----
+1 - 2
+
+parse-scalar roundtrip
+1 * 2
+----
+1 * 2
+
+parse-scalar roundtrip
+1 % 2
+----
+1 % 2
+
+parse-scalar roundtrip
+1 / 2
+----
+1 / 2
+
+parse-scalar roundtrip
+1 OPERATOR(+) 2
+----
+1 OPERATOR(+) 2
+
+parse-scalar roundtrip
+1 OPERATOR(pg_catalog.+) 2
+----
+1 OPERATOR(pg_catalog.+) 2
+
+parse-scalar
+1 OPERATOR(+) 2
+----
+Op { op: Op { namespace: Some([]), op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar
+1 OPERATOR(*) 2
+----
+Op { op: Op { namespace: Some([]), op: "*" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+
+parse-scalar roundtrip
+1 OPERATOR(*) 2
+----
+1 OPERATOR(*) 2
+
+parse-scalar
+1 OPERATOR(pg_catalog.+) 2
+----
+Op { op: Op { namespace: Some([Ident("pg_catalog")]), op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
 
 parse-scalar
 1 < ANY (SELECT 2)
 ----
-AnySubquery { left: Value(Number("1")), op: Op { namespace: [], op: "<" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }
+AnySubquery { left: Value(Number("1")), op: Op { namespace: None, op: "<" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }
 
 parse-scalar
 1 < ANY (fn())
 ----
-AnyExpr { left: Value(Number("1")), op: Op { namespace: [], op: "<" }, right: Function(Function { name: UnresolvedObjectName([Ident("fn")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }
+AnyExpr { left: Value(Number("1")), op: Op { namespace: None, op: "<" }, right: Function(Function { name: Name(UnresolvedItemName([Ident("fn")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }) }
 
 parse-scalar
 LIST[]
@@ -469,7 +646,7 @@ List([Value(Number("1")), Value(String("foo"))])
 parse-scalar
 LIST[LIST[1 + 1, 2], a || b]
 ----
-List([List([Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, Value(Number("2"))]), Op { op: Op { namespace: [], op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }])
+List([List([Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, Value(Number("2"))]), Op { op: Op { namespace: None, op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }])
 
 parse-scalar
 LIST[1,2,3][1]
@@ -529,114 +706,119 @@ address[1:list_length(address) - 1]
 parse-scalar
 ARRAY[]::int[]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
 
 parse-scalar
 ARRAY[]::int[][][][]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
 
 parse-scalar
 ARRAY[]::int[2][2]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
+
+parse-scalar roundtrip
+ARRAY[1, 2, 3][-1]
+----
+ARRAY[1, 2, 3][-1]
 
 parse-scalar
 a -> b
 ----
-Op { op: Op { namespace: [], op: "->" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "->" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ->> b
 ----
-Op { op: Op { namespace: [], op: "->>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "->>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #> b
 ----
-Op { op: Op { namespace: [], op: "#>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "#>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #>> b
 ----
-Op { op: Op { namespace: [], op: "#>>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "#>>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @> b
 ----
-Op { op: Op { namespace: [], op: "@>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "@>" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a <@ b
 ----
-Op { op: Op { namespace: [], op: "<@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "<@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ? b
 ----
-Op { op: Op { namespace: [], op: "?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ?| b
 ----
-Op { op: Op { namespace: [], op: "?|" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "?|" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a ?& b
 ----
-Op { op: Op { namespace: [], op: "?&" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "?&" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a || b
 ----
-Op { op: Op { namespace: [], op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a #- b
 ----
-Op { op: Op { namespace: [], op: "#-" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "#-" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @? b
 ----
-Op { op: Op { namespace: [], op: "@?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "@?" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 parse-scalar
 a @@ b
 ----
-Op { op: Op { namespace: [], op: "@@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
+Op { op: Op { namespace: None, op: "@@" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }
 
 # Strange operator constructions.
 
 parse-scalar
 1*-1
 ----
-Op { op: Op { namespace: [], op: "*" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
+Op { op: Op { namespace: None, op: "*" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
 
 parse-scalar
 1+-1
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("-1"))) }
 
 parse-scalar
 1+-00.00
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: [], op: "-" }, expr1: Value(Number("00.00")), expr2: None }) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: None, op: "-" }, expr1: Value(Number("00.00")), expr2: None }) }
 
 parse-scalar
 1+-a
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: [], op: "-" }, expr1: Identifier([Ident("a")]), expr2: None }) }
+Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Op { op: Op { namespace: None, op: "-" }, expr1: Identifier([Ident("a")]), expr2: None }) }
 
 parse-scalar
 1@+2
 ----
-Op { op: Op { namespace: [], op: "@+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+Op { op: Op { namespace: None, op: "@+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
 
 parse-scalar
 1</*embedded comment*/2
 ----
-Op { op: Op { namespace: [], op: "<" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
+Op { op: Op { namespace: None, op: "<" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }
 
 parse-scalar
 (x).a
@@ -700,12 +882,12 @@ Nested(WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")])))))
 parse-scalar
 position('om' IN 'Thomas')
 ----
-Function(Function { name: UnresolvedObjectName([Ident("position")]), args: Args { args: [Value(String("om")), Value(String("Thomas"))], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("position")])), args: Args { args: [Value(String("om")), Value(String("Thomas"))], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 "position"('om', 'Thomas')
 ----
-Function(Function { name: UnresolvedObjectName([Ident("position")]), args: Args { args: [Value(String("om")), Value(String("Thomas"))], order_by: [] }, filter: None, over: None, distinct: false })
+Function(Function { name: Name(UnresolvedItemName([Ident("position")])), args: Args { args: [Value(String("om")), Value(String("Thomas"))], order_by: [] }, filter: None, over: None, distinct: false })
 
 parse-scalar
 position('om', 'Thomas')
@@ -713,3 +895,68 @@ position('om', 'Thomas')
 error: Expected IN, found comma
 position('om', 'Thomas')
              ^
+
+parse-scalar roundtrip
+position('om' IN 'Thomas')
+----
+position('om' IN 'Thomas')
+
+parse-scalar roundtrip
+trim('chars' from 'string')
+----
+btrim('string', 'chars')
+
+parse-scalar
+trim('chars' from 'string')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("string")), Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim(both from 'chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim(from 'chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim('chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("btrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+trim(trailing 'chars')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("rtrim")])), args: Args { args: [Value(String("chars"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+position('str' in 'str')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("position")])), args: Args { args: [Value(String("str")), Value(String("str"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str', 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str' FROM 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str' FROM 'int' FOR 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str' FOR 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(Number("1")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })
+
+parse-scalar
+substring('str', 'int', 'int')
+----
+Function(Function { name: Name(UnresolvedItemName([Ident("substring")])), args: Args { args: [Value(String("str")), Value(String("int")), Value(String("int"))], order_by: [] }, filter: None, over: None, distinct: false })

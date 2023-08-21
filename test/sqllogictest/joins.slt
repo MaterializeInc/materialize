@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mz_join_core = true;
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE l (la int, lb text)
 
@@ -725,6 +730,101 @@ INSERT INTO t4 VALUES
     (4, 3),
     (9, 10);
 
+# Test join using aliases
+# Adapted from: https://github.com/postgres/postgres/blob/master/src/test/regress/sql/join.sql
+
+query T
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f2 = 1;
+----
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f1 = 3;
+----
+f1  f2  f2
+3   4   4
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x;
+----
+f1  f2  f2
+3   4   4
+
+query II colnames
+SELECT * FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query II colnames
+SELECT * FROM (SELECT x.f2 AS f3 FROM t1 JOIN t2 USING (f2) AS x) t5 JOIN t3 USING (f3) AS x;
+----
+f3  f1
+4   3
+
+query error table name "x" specified more than once
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS x;
+
+query IIII colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS y;
+----
+f1  f2  f2  f3
+3   4   4   4
+
+query error column "t1.f1" does not exist
+SELECT * FROM (t1 JOIN t2 USING (f1)) AS x WHERE t1.f1 = 1;
+
+query error column "x.f5" does not exist
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE x.f5 = 'one';
+
+query error column "x.f4" does not exist
+SELECT * FROM (t3 JOIN t4 USING (f3) AS x) AS xx WHERE x.f4 = 1;
+
+query error table name "a1" specified more than once
+SELECT * FROM t1 a1 JOIN t2 a2 USING (f1) AS a1
+
+query I colnames
+SELECT x.* FROM t3 JOIN t4 USING (f3) AS x WHERE t3.f3 = 4;
+----
+f3
+4
+
+query II colnames
+SELECT x.* FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query T colnames
+SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x;
+----
+row
+("(3)")
+
+statement ok
+CREATE VIEW v1 AS SELECT x.* FROM t1 JOIN t2 USING (f1) AS x WHERE x.f1 = 3;
+
+query T colnames
+SELECT * FROM v1;
+----
+f1
+3
+
+# Ensure the output from `SHOW CREATE VIEW` contains a correctly-formed `AS` part
+
+mode standard
+
+query TT
+SHOW CREATE VIEW v1;
+----
+materialize.public.v1
+CREATE VIEW "materialize"."public"."v1" AS SELECT "x".* FROM "materialize"."public"."t1" JOIN "materialize"."public"."t2" USING ("f1") AS "x" WHERE "x"."f1" = 3
+
+mode cockroach
+
+statement ok
+DROP VIEW v1;
+
+
 # Left
 
 query TTTTTT
@@ -1023,7 +1123,7 @@ Explained Query:
     Map (4) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0[×]A » %1[×]A
+          %0[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 0 }
           Union // { arity: 0 }
             Get l0 // { arity: 0 }
@@ -1060,3 +1160,76 @@ Explained Query:
           Get materialize.public.c // { arity: 1 }
 
 EOF
+
+# Verify that the fueling logic of the linear join implementation is correct
+# by running a large cross-join that exhausts the avaible fuel (currently
+# 1 million output records) at least once.
+
+statement ok
+CREATE TABLE fuel_test_1 (a int)
+
+statement ok
+CREATE TABLE fuel_test_2 (b int)
+
+statement ok
+INSERT INTO fuel_test_1 SELECT generate_series(1, 2000)
+
+statement ok
+INSERT INTO fuel_test_2 SELECT generate_series(2001, 4000)
+
+query T multiline
+EXPLAIN SELECT sum(a + b) FROM fuel_test_1, fuel_test_2
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 + #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get materialize.public.fuel_test_1
+          ArrangeBy keys=[[]]
+            Get materialize.public.fuel_test_2
+
+EOF
+
+query I
+SELECT sum(a + b) FROM fuel_test_1, fuel_test_2
+----
+16004000000
+
+# Test the code path for producing errors from joins.
+statement ok
+CREATE TABLE error_test (a int)
+
+statement ok
+INSERT INTO error_test VALUES (0)
+
+query error division by zero
+SELECT t1.a / t2.a FROM error_test t1, error_test t2
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20060
+query
+select
+  from
+    (select
+          ref_4."schema_id" as c0
+        from
+          mz_catalog.mz_default_privileges as ref_4
+        where current_schemas(
+            CAST((select max(atthasdef) from pg_attribute)
+               as bool)) = mz_internal.mz_normalize_object_name(
+            CAST(ref_4."schema_id" as text))
+               ) as subq_7
+  where (select "child_id" from mz_internal.mz_view_foreign_keys limit 1)
+       = subq_7."c0";
+----

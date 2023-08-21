@@ -38,10 +38,6 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{< diagram "strat.svg" >}}
 
-#### `key_constraint`
-
-{{< diagram "key-constraint.svg" >}}
-
 #### `with_options`
 
 {{< diagram "with-options.svg" >}}
@@ -81,7 +77,7 @@ By default, the message key is decoded using the same format as the message valu
 To create a source that uses the standard key-value convention to support inserts, updates, and deletes within Materialize, you can use `ENVELOPE UPSERT`:
 
 ```sql
-CREATE SOURCE current_predictions
+CREATE SOURCE kafka_upsert
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT
@@ -92,13 +88,22 @@ Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
 
-#### Defining primary keys
+#### Null keys
 
-{{< warning >}}
-Materialize will **not enforce** the constraint and will produce wrong results if it's not unique.
-{{</ warning >}}
+If a message with a `NULL` key is detected, Materialize sets the source into an
+error state. To recover an errored source, you must produce a record with a
+`NULL` value and a `NULL` key to the topic, to force a retraction.
 
-Primary keys are **automatically** inferred for Kafka sources using the `UPSERT` or `DEBEZIUM` envelopes. For other source configurations, you can manually define a column (or set of columns) as a primary key using the `PRIMARY KEY (...) NOT ENFORCED` [syntax](#key_constraint). This enables optimizations and constructs that rely on a key to be present when it cannot be inferred.
+As an example, you can use [`kcat`](https://docs.confluent.io/platform/current/clients/kafkacat-usage.html)
+to produce an empty message:
+
+```bash
+echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
+  -X security.protocol=SASL_SSL \
+  -X sasl.mechanisms=SCRAM-SHA-256 \
+  -X sasl.username=$KAFKA_USERNAME \
+  -X sasl.password=$KAFKA_PASSWORD
+```
 
 ### Using Debezium
 
@@ -145,7 +150,11 @@ Note that:
 
 #### Headers
 
-Message headers are exposed via the `INCLUDE HEADERS` option, and are included as a column (named `headers` by default) containing a [`list`](/sql/types/list/) of ([`text`](/sql/types/text/), [`bytea`](/sql/types/bytea/)) pairs.
+Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
+as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
+of records of type `(key text, value bytea)`.
+
+The following example demonstrates use of the `INCLUDE HEADERS` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
@@ -156,40 +165,30 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the headers in a message, you can unpack the value:
+To retrieve the value of an individual header in a message, you can use standard
+SQL techniques for working with [`list`](/sql/types/list) and
+[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
+encoded `client_id` header of the messages from the Kafka topic. Messages
+without a `client_id` header result in null values (`"\N"`) for the parsed
+attribute.
 
 ```sql
-SELECT key,
-       field1,
-       field2,
-       headers[1].value AS kafka_header
-FROM mv_kafka_metadata;
+SELECT
+    id,
+    seller,
+    item,
+    (
+        SELECT convert_from((h).value, 'utf8') AS client_id
+        FROM unnest(headers) AS h
+        WHERE (h).key = 'client_id'
+    )
+FROM kafka_metadata;
 
-  key  |  field1  |  field2  |  kafka_header
--------+----------+----------+----------------
-  foo  |  fooval  |   1000   |     hvalue
-  bar  |  barval  |   5000   |     <null>
-```
-
-, or lookup by key:
-
-```sql
-SELECT key,
-       field1,
-       field2,
-       thekey,
-       value
-FROM (SELECT key,
-             field1,
-             field2,
-             unnest(headers).key AS thekey,
-             unnest(headers).value AS value
-      FROM mv_kafka_metadata) AS km
-WHERE thekey = 'kvalue';
-
-  key  |  field1  |  field2  |  thekey  |  value
--------+----------+----------+----------+--------
-  foo  |  fooval  |   1000   |  kvalue  |  hvalue
+ id | seller |        item        | client_id
+----+--------+--------------------+-----------
+  2 |   1592 | Custom Art         |        23
+  7 |   1509 | Custom Art         |        42
+  3 |   1411 | City Bar Crawl     |      "\N"
 ```
 
 Note that:
@@ -261,6 +260,100 @@ It is possible to define how an Avro reader schema will be chosen for Avro sourc
 using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax diagram.
 
 A strategy of `LATEST` (the default) will choose the latest writer schema from the schema registry to use as a reader schema. `ID` or `INLINE` will allow specifying a schema from the registry by ID or inline in the `CREATE SOURCE` statement, respectively.
+
+### Monitoring source progress
+
+By default, Kafka sources expose progress metadata as a subsource that you can
+use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`partition`    | `numrange`                               | The upstream Kafka partition.
+`offset`       | [`uint8`](/sql/types/uint/#uint8-info)   | The greatest offset consumed from each upstream Kafka partition.
+
+And can be queried using:
+
+```sql
+SELECT
+  partition, "offset"
+FROM
+  (
+    SELECT
+      -- Take the upper of the range, which is null for non-partition rows
+      -- Cast partition to u64, which is more ergonomic
+      upper(partition)::uint8 AS partition, "offset"
+    FROM
+      <src_name>_progress
+  )
+WHERE
+  -- Remove all non-partition rows
+  partition IS NOT NULL;
+```
+
+As long as any offset continues increasing, Materialize is consuming data from
+the upstream Kafka broker. For more details on monitoring source ingestion
+progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
+### Monitoring consumer lag
+
+To support Kafka tools that monitor consumer lag, Kafka sources commit offsets
+once the messages up through that offset have been durably recorded in
+Materialize's storage layer.
+
+However, rather than relying on committed offsets, Materialize suggests using
+our native [progress monitoring](#monitoring-source-progress), which contains
+more up-to-date information.
+
+{{< note >}}
+Some Kafka monitoring tools may indicate that Materialize's consumer groups have
+no active members. This is **not a cause for concern**.
+
+Materialize does not participate in the consumer group protocol nor does it
+recover on restart by reading the committed offsets. The committed offsets are
+provided solely for the benefit of Kafka monitoring tools.
+{{< /note >}}
+
+Committed offsets are associated with a consumer group specific to the source.
+The ID of the consumer group has a prefix with the following format:
+
+```
+materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}
+```
+
+You should not make assumptions about the number of consumer groups that
+Materialize will use to consume from a given source. The only guarantee is that
+the ID of each consumer group will begin with the above prefix.
+
+The rendered consumer group ID prefix for each Kafka source in the system is
+available in the `group_id_base` column of the [`mz_kafka_sources`] table. To
+look up the `group_id_base` for a source by name, use:
+
+```sql
+SELECT group_id_base
+FROM mz_internal.mz_kafka_sources ks
+JOIN mz_sources s ON s.id = ks.id
+WHERE s.name = '<src_name>'
+```
+
+## Required permissions
+
+The access control lists (ACLs) on the Kafka cluster must allow Materialize
+to perform the following operations on the following resources:
+
+Operation type | Resource type    | Resource name
+---------------|------------------|--------------
+Read           | Topic            | The specified `TOPIC` option
+
+To allow Materialize to [commit offsets](#monitoring-consumer-lag) to the Kafka
+broker, Materialize additionally requires access to the following operations:
+
+Operation type | Resource type    | Resource name
+---------------|------------------|--------------
+Read           | Group            | `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}*`
 
 ## Examples
 
@@ -424,6 +517,8 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 {{< tabs tabID="1" >}}
 {{< tab "Avro">}}
 
+**Using Confluent Schema Registry**
+
 ```sql
 CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
@@ -437,10 +532,9 @@ CREATE SOURCE avro_source
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES
+  FORMAT JSON
   WITH (SIZE = '3xsmall');
 ```
-
 
 ```sql
 CREATE MATERIALIZED VIEW typed_kafka_source AS
@@ -448,11 +542,13 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
     (data->>'field3')::float AS field_3
-  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM json_source);
+  FROM json_source;
 ```
 
 {{< /tab >}}
 {{< tab "Protobuf">}}
+
+**Using Confluent Schema Registry**
 
 ```sql
 CREATE SOURCE proto_source
@@ -460,6 +556,45 @@ CREATE SOURCE proto_source
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall');
 ```
+
+**Using an inline schema**
+
+If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause to specify a Protobuf schema descriptor inline. Protobuf does not serialize a schema with the message, so before creating a source you must:
+
+* Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
+
+  ```proto
+  // example.proto
+  syntax = "proto3";
+  message Batch {
+      int32 id = 1;
+      // ...
+  }
+  ```
+
+  ```bash
+  protoc --include_imports --descriptor_set_out=example.pb example.proto
+  ```
+
+* Encode the descriptor file into a SQL byte string:
+
+  ```bash
+  $ printf '\\x' && xxd -p example.pb | tr -d '\n'
+  \x0a300a0d62696...
+  ```
+
+* Create the source using the encoded descriptor bytes from the previous step
+  (including the `\x` at the beginning):
+
+  ```sql
+  CREATE SOURCE proto_source
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...'
+    WITH (SIZE = '3xsmall');
+  ```
+
+  For more details about Protobuf message names and descriptors, check the
+  [Protobuf format](../#protobuf) documentation.
 
 {{< /tab >}}
 {{< tab "Text/bytes">}}
@@ -522,3 +657,4 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 [Append-only envelope]: /sql/create-source/#append-only-envelope
 [Upsert envelope]: /sql/create-source/#upsert-envelope
 [Debezium envelope]: /sql/create-source/#debezium-envelope
+[`mz_kafka_sources`]: /sql/system-catalog/mz_internal/#mz_kafka_sources

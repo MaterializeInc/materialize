@@ -7,15 +7,40 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Callable, List
+import time
+from textwrap import dedent
+from typing import Any, Callable, List, Optional, Set
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized
 
 
 class Executor:
+    _known_fragments: Set[str] = set()
+
     def Lambda(self, _lambda: Callable[["Executor"], float]) -> float:
         return _lambda(self)
+
+    def Td(self, input: str) -> Any:
+        raise NotImplementedError
+
+    def Kgen(self, topic: str, args: List[str]) -> Any:
+        raise NotImplementedError
+
+    def add_known_fragment(self, fragment: str) -> bool:
+        """
+        Record whether a TD fragment has been printed already. Returns true
+        if it wasn't added before.
+        """
+        result = fragment not in self._known_fragments
+        self._known_fragments.add(fragment)
+        return result
+
+    def DockerMem(self) -> int:
+        raise NotImplementedError
+
+    def Messages(self) -> Optional[int]:
+        raise NotImplementedError
 
 
 class Docker(Executor):
@@ -49,6 +74,58 @@ class Docker(Executor):
         return self._composition.run(
             "kgen", f"--topic=testdrive-{topic}-{self._seed}", *args
         )
+
+    def DockerMem(self) -> int:
+        return self._composition.mem("materialized")
+
+    def Messages(self) -> Optional[int]:
+        """Return the sum of all messages in the system from mz_internal.mz_message_counts_per_worker"""
+
+        def one_count(e: Docker) -> Optional[int]:
+            result = e._composition.sql_query(
+                dedent(
+                    """
+                    SELECT SUM(sent) as cnt
+                    FROM
+                        mz_internal.mz_message_counts_per_worker mc,
+                        mz_internal.mz_dataflow_channel_operators_per_worker c
+                    WHERE
+                        c.id = mc.channel_id AND
+                        c.worker_id = mc.from_worker_id AND
+                        from_operator_id IN (
+                            SELECT dod.id
+                            FROM mz_internal.mz_dataflow_operator_dataflows dod
+                            WHERE dod.dataflow_name NOT LIKE '%oneshot-select%'
+                            AND dod.dataflow_name NOT LIKE '%subscribe%'
+                        )
+                    """
+                )
+            )
+            if len(result) == 0:
+                return None
+            elif result[0][0] is None:
+                return None
+            else:
+                return int(result[0][0])
+
+        # Loop until the message count converges
+        prev_count: Optional[int] = None
+        for i in range(50):
+            new_count = one_count(self)
+            if new_count is not None and prev_count is not None:
+                pct = (max(prev_count, new_count) / min(prev_count, new_count)) - 1
+                # It has converged
+                if pct < 0.05 and i > 2:
+                    return new_count
+
+            # No message count data available
+            if new_count is None and i > 2:
+                return new_count
+
+            prev_count = new_count
+            time.sleep(0.1)
+
+        return None
 
 
 class MzCloud(Executor):

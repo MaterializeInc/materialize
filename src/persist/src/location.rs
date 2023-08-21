@@ -15,8 +15,10 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
 use mz_proto::RustType;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
@@ -34,7 +36,9 @@ use crate::error::Error;
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
 pub struct SeqNo(pub u64);
 
 impl std::fmt::Display for SeqNo {
@@ -307,6 +311,15 @@ pub const SCAN_ALL: usize = u64_to_usize(i64::MAX as u64);
 /// A key usable for liveness checks via [Consensus::head].
 pub const CONSENSUS_HEAD_LIVENESS_KEY: &str = "LIVENESS";
 
+/// Return type to indicate whether [Consensus::compare_and_set] succeeded or failed.
+#[derive(Debug, PartialEq)]
+pub enum CaSResult {
+    /// The compare-and-set succeeded and committed new state.
+    Committed,
+    /// The compare-and-set failed due to expectation mismatch.
+    ExpectationMismatch,
+}
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -325,11 +338,9 @@ pub trait Consensus: std::fmt::Debug {
     /// current sequence number is exactly `expected` and `new`'s sequence
     /// number > the current sequence number.
     ///
-    /// If the current seqno does not equal `expected`, returns all versions >
-    /// `expected` and <= current. It is invalid to call this function with a
-    /// `new` and `expected` such that `new`'s sequence number is <= `expected`.
-    /// It is invalid to call this function with a sequence number outside of
-    /// the range `[0, i64::MAX]`.
+    /// It is invalid to call this function with a `new` and `expected` such
+    /// that `new`'s sequence number is <= `expected`. It is invalid to call
+    /// this function with a sequence number outside of the range `[0, i64::MAX]`.
     ///
     /// This data is initialized to None, and the first call to compare_and_set
     /// needs to happen with None as the expected value to set the state.
@@ -338,7 +349,7 @@ pub trait Consensus: std::fmt::Debug {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError>;
+    ) -> Result<CaSResult, ExternalError>;
 
     /// Return `limit` versions of data stored for this `key` at sequence numbers
     /// >= `from`, in ascending order of sequence number.
@@ -387,7 +398,7 @@ pub const BLOB_GET_LIVENESS_KEY: &str = "LIVENESS";
 #[async_trait]
 pub trait Blob: std::fmt::Debug {
     /// Returns a reference to the value corresponding to the key.
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError>;
 
     /// List all of the keys in the map with metadata about the entry.
     ///
@@ -481,15 +492,27 @@ pub mod tests {
         blob0
             .set(k0, values[0].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(k0).await?, Some(values[0].clone()));
-        assert_eq!(blob1.get(k0).await?, Some(values[0].clone()));
+        assert_eq!(
+            blob0.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
+        assert_eq!(
+            blob1.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
 
         // Set a key with RequireAtomic and get it back.
         blob0
             .set("k0a", values[0].clone().into(), RequireAtomic)
             .await?;
-        assert_eq!(blob0.get("k0a").await?, Some(values[0].clone()));
-        assert_eq!(blob1.get("k0a").await?, Some(values[0].clone()));
+        assert_eq!(
+            blob0.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
+        assert_eq!(
+            blob1.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
 
         // Blob contains the key we just inserted.
         let mut blob_keys = get_keys(&blob0).await?;
@@ -503,14 +526,26 @@ pub mod tests {
         blob0
             .set(k0, values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(k0).await?, Some(values[1].clone()));
-        assert_eq!(blob1.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(
+            blob0.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
+        assert_eq!(
+            blob1.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
         // Can overwrite a key with RequireAtomic.
         blob0
             .set("k0a", values[1].clone().into(), RequireAtomic)
             .await?;
-        assert_eq!(blob0.get("k0a").await?, Some(values[1].clone()));
-        assert_eq!(blob1.get("k0a").await?, Some(values[1].clone()));
+        assert_eq!(
+            blob0.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
+        assert_eq!(
+            blob1.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
 
         // Can delete a key.
         assert_eq!(blob0.delete(k0).await, Ok(Some(2)));
@@ -538,8 +573,14 @@ pub mod tests {
         blob0
             .set(k0, values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob1.get(k0).await?, Some(values[1].clone()));
-        assert_eq!(blob0.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(
+            blob1.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
+        assert_eq!(
+            blob0.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
@@ -581,7 +622,10 @@ pub mod tests {
 
         // We can open a new blob to the same path and use it.
         let blob3 = new_fn("path0").await?;
-        assert_eq!(blob3.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(
+            blob3.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
 
         Ok(())
     }
@@ -618,13 +662,13 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(SeqNo(0)), state.clone())
                 .await,
-            Ok(Err(vec![]))
+            Ok(CaSResult::ExpectationMismatch),
         );
 
         // Correctly updating the state with the correct expected value should succeed.
         assert_eq!(
             consensus.compare_and_set(&key, None, state.clone()).await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         // We can observe the a recent value on successful update.
@@ -664,7 +708,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(SeqNo(7)), new_state.clone())
                 .await,
-            Ok(Err(vec![]))
+            Ok(CaSResult::ExpectationMismatch),
         );
 
         // Trying to update without the correct expected seqno fails, (even if expected < current)
@@ -672,7 +716,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(SeqNo(3)), new_state.clone())
                 .await,
-            Ok(Err(vec![state.clone()]))
+            Ok(CaSResult::ExpectationMismatch),
         );
 
         let invalid_constant_seqno = VersionedData {
@@ -708,41 +752,11 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), new_state.clone())
                 .await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(new_state.clone())));
-
-        // We get both versions back if our expected is < both of them
-        assert_eq!(
-            consensus
-                .compare_and_set(
-                    &key,
-                    Some(SeqNo(0)),
-                    VersionedData {
-                        seqno: SeqNo(3),
-                        data: Bytes::from(""),
-                    }
-                )
-                .await,
-            Ok(Err(vec![state.clone(), new_state.clone()]))
-        );
-
-        // We only get the greater back if our expected == the lesser one
-        assert_eq!(
-            consensus
-                .compare_and_set(
-                    &key,
-                    Some(state.seqno),
-                    VersionedData {
-                        seqno: SeqNo(20),
-                        data: Bytes::from(""),
-                    }
-                )
-                .await,
-            Ok(Err(vec![new_state.clone()]))
-        );
 
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
@@ -817,7 +831,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&other_key, None, state.clone())
                 .await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         assert_eq!(consensus.head(&other_key).await, Ok(Some(state.clone())));
@@ -834,7 +848,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), invalid_jump_forward)
                 .await,
-            Ok(Err(vec![new_state.clone()]))
+            Ok(CaSResult::ExpectationMismatch),
         );
 
         // Writing a large (~10 KiB) amount of data works fine.
@@ -846,7 +860,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(new_state.seqno), large_state)
                 .await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
 
         // Truncate can delete more than one version at a time.
@@ -856,7 +870,7 @@ pub mod tests {
         };
         assert_eq!(
             consensus.compare_and_set(&key, Some(SeqNo(11)), v12).await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
         assert_eq!(consensus.truncate(&key, SeqNo(12)).await, Ok(2));
 
@@ -873,7 +887,7 @@ pub mod tests {
                     }
                 )
                 .await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
         assert_eq!(
             consensus
@@ -886,7 +900,7 @@ pub mod tests {
                     }
                 )
                 .await,
-            Ok(Ok(()))
+            Ok(CaSResult::Committed),
         );
         assert!(consensus
             .compare_and_set(
@@ -914,7 +928,7 @@ pub mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn timeout_error() {
         assert!(ExternalError::new_timeout(Instant::now()).is_timeout());
         assert!(!ExternalError::from(anyhow!("foo")).is_timeout());

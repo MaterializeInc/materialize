@@ -7,47 +7,64 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match="cluster1|default|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
+# Cloudtest is still running with RBAC off, while the mzcompose-based tests
+# have it enabled, so enable it explicitly for this test so that we have
+# consistent output in "SHOW ALL".
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_rbac_checks = true;
+
+$ set-regex match="cluster1|^default$|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
 
 > SHOW ALL
-allowed_cluster_replica_sizes           ""                     "The allowed sizes when creating a new cluster replica (Materialize)."
-application_name                        ""                     "Sets the application name to be reported in statistics and logs (PostgreSQL)."
-client_encoding                         UTF8                   "Sets the client's character set encoding (PostgreSQL)."
-client_min_messages                     notice                 "Sets the message levels that are sent to the client (PostgreSQL)."
-cluster                                 <VARIES>               "Sets the current cluster (Materialize)."
-cluster_replica                         ""                     "Sets a target cluster replica for SELECT queries (Materialize)."
-database                                materialize            "Sets the current database (CockroachDB)."
-DateStyle                               "ISO, MDY"             "Sets the display format for date and time values (PostgreSQL)."
-emit_timestamp_notice                   off                    "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
-emit_trace_id_notice                    off                    "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
-extra_float_digits                      3                      "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
-failpoints                              ""                     "Allows failpoints to be dynamically activated."
-idle_in_transaction_session_timeout     "2 min"                "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. A value of zero disables the timeout (PostgreSQL)."
-integer_datetimes                       on                     "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
-IntervalStyle                           postgres               "Sets the display format for interval values (PostgreSQL)."
-max_aws_privatelink_connections         0                      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
-max_clusters                            10                     "The maximum number of clusters in the region (Materialize)."
-max_databases                           1000                   "The maximum number of databases in the region (Materialize)."
-max_materialized_views                  100                    "The maximum number of materialized views in the region, across all schemas (Materialize)."
-max_objects_per_schema                  1000                   "The maximum number of objects in a schema (Materialize)."
-max_replicas_per_cluster                5                      "The maximum number of replicas of a single cluster (Materialize)."
-max_result_size                         1073741824             "The maximum size in bytes for a single query's result (Materialize)."
-max_roles                               1000                   "The maximum number of roles in the region (Materialize)."
-max_schemas_per_database                1000                   "The maximum number of schemas in a database (Materialize)."
-max_secrets                             100                    "The maximum number of secrets in the region, across all schemas (Materialize)."
-max_sinks                               25                     "The maximum number of sinks in the region, across all schemas (Materialize)."
-max_sources                             25                     "The maximum number of sources in the region, across all schemas (Materialize)."
-max_tables                              25                     "The maximum number of tables in the region, across all schemas (Materialize)."
-mz_version                              <VARIES>               "Shows the Materialize server version (Materialize)."
-search_path                             "public"               "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
-server_version                          9.5.0                  "Shows the server version (PostgreSQL)."
-server_version_num                      90500                  "Shows the server version as an integer (PostgreSQL)."
-sql_safe_updates                        off                    "Prohibits SQL statements that may be overly destructive (CockroachDB)."
-standard_conforming_strings             on                     "Causes '...' strings to treat backslashes literally (PostgreSQL)."
-statement_timeout                       "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
-TimeZone                                UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
-transaction_isolation                   "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
-is_superuser                            off                    "Indicates whether the current session is a super user (PostgreSQL)."
+allowed_cluster_replica_sizes       ""                      "The allowed sizes when creating a new cluster replica (Materialize)."
+application_name                    ""                      "Sets the application name to be reported in statistics and logs (PostgreSQL)."
+auto_route_introspection_queries    on                      "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize)."
+client_encoding                     UTF8                    "Sets the client's character set encoding (PostgreSQL)."
+client_min_messages                 notice                  "Sets the message levels that are sent to the client (PostgreSQL)."
+cluster                             <VARIES>                "Sets the current cluster (Materialize)."
+cluster_replica                     ""                      "Sets a target cluster replica for SELECT queries (Materialize)."
+database                            materialize             "Sets the current database (CockroachDB)."
+DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
+emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
+emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
+enable_rbac_checks                  on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
+enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
+extra_float_digits                  3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
+failpoints                          <omitted>               "Allows failpoints to be dynamically activated."
+idle_in_transaction_session_timeout "2 min"                 "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
+integer_datetimes                   on                      "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
+IntervalStyle                       postgres                "Sets the display format for interval values (PostgreSQL)."
+is_superuser                        off                     "Reports whether the current session is a superuser (PostgreSQL)."
+max_aws_privatelink_connections     0                       "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
+max_clusters                        10                      "The maximum number of clusters in the region (Materialize)."
+max_connections                     1000                    "The maximum number of concurrent connections (Materialize)."
+max_credit_consumption_rate         1024                    "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize)."
+max_databases                       1000                    "The maximum number of databases in the region (Materialize)."
+max_identifier_length               255                     "The maximum length of object identifiers in bytes (PostgreSQL)."
+max_materialized_views              100                     "The maximum number of materialized views in the region, across all schemas (Materialize)."
+max_objects_per_schema              1000                    "The maximum number of objects in a schema (Materialize)."
+max_query_result_size               1073741824              "The maximum size in bytes for a single query's result (Materialize)."
+max_replicas_per_cluster            5                       "The maximum number of replicas of a single cluster (Materialize)."
+max_result_size                     1073741824              "The maximum size in bytes for an internal query result (Materialize)."
+max_roles                           1000                    "The maximum number of roles in the region (Materialize)."
+max_schemas_per_database            1000                    "The maximum number of schemas in a database (Materialize)."
+max_secrets                         100                     "The maximum number of secrets in the region, across all schemas (Materialize)."
+max_sinks                           25                      "The maximum number of sinks in the region, across all schemas (Materialize)."
+max_sources                         25                      "The maximum number of sources in the region, across all schemas (Materialize)."
+max_tables                          25                      "The maximum number of tables in the region, across all schemas (Materialize)."
+mz_version                          <VARIES>                "Shows the Materialize server version (Materialize)."
+search_path                         public                  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
+server_version                      9.5.0                   "Shows the PostgreSQL compatible server version (PostgreSQL)."
+server_version_num                  90500                   "Shows the PostgreSQL compatible server version as an integer (PostgreSQL)."
+sql_safe_updates                    off                     "Prohibits SQL statements that may be overly destructive (CockroachDB)."
+standard_conforming_strings         on                      "Causes '...' strings to treat backslashes literally (PostgreSQL)."
+statement_logging_default_sample_rate 1.0                   "The default value of `statement_logging_sample_rate` for new sessions (Materialize)."
+statement_logging_max_sample_rate   1.0                     "The maximum rate at which statements may be logged. If this value is less than that of `statement_logging_sample_rate`, the latter is ignored (Materialize)."
+statement_logging_sample_rate       1.0                     "User-facing session variable indicating how many statement executions should be logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize)."
+statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
+TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
+transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
+enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
 
 > SET application_name = 'foo'
 
@@ -58,7 +75,7 @@ UTF8
 UTF8
 
 ! SET client_encoding = UTF9
-contains:parameter "client_encoding" can only be set to "UTF8"
+contains:invalid value for parameter "client_encoding": "utf9"
 
 # if its utf8 we let it through
 > SET NAMES 'UTF8';
@@ -124,7 +141,7 @@ contains:invalid value for parameter "TimeZone": "nope"
 contains:invalid value for parameter "transaction_isolation": "read draft"
 
 ! SET integer_datetimes = false
-contains:parameter "integer_datetimes" cannot be changed
+contains:parameter "integer_datetimes" can only be set to "on"
 
 > SET client_min_messages TO ERROR
 > SHOW client_min_messages
@@ -162,6 +179,17 @@ contains:invalid value for parameter "client_min_messages": "invalid"
 postgres
 
 ! SET intervalstyle = 'postgres-legacy'
-contains:parameter "IntervalStyle" can only be set to "postgres"
+contains:invalid value for parameter "IntervalStyle": "postgres-legacy"
 
 > SET intervalstyle = 'postgres';
+
+# Test some other parameter value codepaths, like `Option<String>` here
+> SET cluster_replica = ''
+
+> SET cluster_replica = 'r1'
+
+! SET cluster_replica = 1, 2
+contains:parameter "cluster_replica" cannot have value "1","2": expects a single value
+
+! SET statement_logging_sample_rate = 1.1
+contains:parameter "statement_logging_sample_rate" cannot have value "1.1": only supports values in range 0.0..=1.0

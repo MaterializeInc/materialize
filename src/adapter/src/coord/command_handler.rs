@@ -10,48 +10,100 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
-
-use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{oneshot, watch};
-use tracing::Instrument;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
-use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
+use mz_sql::ast::{
+    CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
+};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
-use mz_sql::plan::{CreateRolePlan, Params};
+use mz_sql::names::{PartialItemName, ResolvedIds};
+use mz_sql::plan::{
+    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
+    TransactionType,
+};
+use mz_sql::session::vars::{
+    EndTransactionAction, OwnedVarInput, Var, VarInput, STATEMENT_LOGGING_SAMPLE_RATE,
+};
+use opentelemetry::trace::TraceContextExt;
+use tokio::sync::{oneshot, watch};
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::client::ConnectionId;
+use crate::catalog::{CatalogItem, DataSourceDesc, Source};
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
+    AppendWebhookResponse, AppendWebhookValidator, Canceled, Command, ExecuteResponse,
+    GetVariablesResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
-use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
+use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::vars::OwnedVarInput;
-use crate::session::{PreparedStatement, Session, TransactionStatus};
+use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics};
+use crate::{catalog, metrics, rbac, ExecuteContext};
+
+use super::ExecuteContextExtra;
 
 impl Coordinator {
+    fn send_error(&mut self, cmd: Command, e: AdapterError) {
+        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
+            let _ = tx.send(Response::<T> {
+                result: Err(e),
+                session,
+            });
+        }
+        match cmd {
+            Command::Startup { tx, session, .. } => send(tx, session, e),
+            Command::Declare { tx, session, .. } => send(tx, session, e),
+            Command::Prepare { tx, session, .. } => send(tx, session, e),
+            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
+            Command::Execute { tx, session, .. } => send(tx, session, e),
+            Command::Commit { tx, session, .. } => send(tx, session, e),
+            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
+            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
+            Command::CopyRows { tx, session, .. } => send(tx, session, e),
+            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
+            Command::AppendWebhook { tx, .. } => {
+                // We don't care if our listener went away.
+                let _ = tx.send(Err(e));
+            }
+            Command::Terminate { tx, session, .. } => {
+                if let Some(tx) = tx {
+                    send(tx, session, e)
+                }
+            }
+            Command::RetireExecute { .. } => panic!("Command::RetireExecute is infallible"),
+        }
+    }
+
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
-        if let Some(session) = cmd.session() {
+        if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
+        }
+        if let Err(e) = rbac::check_command(self.catalog(), &cmd) {
+            self.send_error(cmd, e.into());
+            return;
         }
         match cmd {
             Command::Startup {
                 session,
                 cancel_tx,
                 tx,
+                set_setting_keys,
             } => {
-                self.handle_startup(session, cancel_tx, tx).await;
+                // Note: We purposefully do not use a ClientTransmitter here because startup
+                // handles errors and cleanup of sessions itself.
+                self.handle_startup(session, cancel_tx, tx, set_setting_keys)
+                    .await;
             }
 
             Command::Execute {
@@ -59,35 +111,47 @@ impl Coordinator {
                 session,
                 tx,
                 span,
+                outer_ctx_extra,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let span = span
+                    .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
 
-                let span = tracing::debug_span!(parent: &span, "message_command (execute)");
-                self.handle_execute(portal_name, session, tx)
+                self.handle_execute(portal_name, session, tx, outer_ctx_extra)
                     .instrument(span)
                     .await;
             }
 
+            Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
+
             Command::Declare {
                 name,
                 stmt,
+                inner_sql: sql,
                 param_types,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.declare(&mut session, name, stmt, param_types);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let ctx = ExecuteContext::from_parts(
+                    tx,
+                    self.internal_cmd_tx.clone(),
+                    session,
+                    Default::default(),
+                );
+                self.declare(ctx, name, stmt, sql, param_types);
             }
 
-            Command::Describe {
+            Command::Prepare {
                 name,
                 stmt,
+                sql,
                 param_types,
-                mut session,
+                session,
                 tx,
             } => {
-                let result = self.handle_describe(&mut session, name, stmt, param_types);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                self.handle_prepare(tx, session, name, stmt, sql, param_types);
             }
 
             Command::CancelRequest {
@@ -97,52 +161,82 @@ impl Coordinator {
                 self.handle_cancel(conn_id, secret_key);
             }
 
-            Command::DumpCatalog { session, tx } => {
-                // TODO(benesch/jkosh44): when we have RBAC, dumping the catalog should
-                // require superuser permissions.
+            Command::PrivilegedCancelRequest { conn_id } => {
+                self.handle_privileged_cancel(conn_id);
+            }
 
-                let _ = tx.send(Response {
-                    result: Ok(self.catalog.dump()),
-                    session,
-                });
+            Command::DumpCatalog { session, tx } => {
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                tx.send(self.catalog().dump().map_err(AdapterError::from), session);
             }
 
             Command::CopyRows {
                 id,
                 columns,
                 rows,
-                mut session,
+                session,
+                tx,
+                ctx_extra,
+            } => {
+                let ctx = ExecuteContext::from_parts(
+                    ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
+                    self.internal_cmd_tx.clone(),
+                    session,
+                    ctx_extra,
+                );
+                self.sequence_plan(
+                    ctx,
+                    Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
+                    ResolvedIds(BTreeSet::new()),
+                )
+                .await;
+            }
+
+            Command::AppendWebhook {
+                database,
+                schema,
+                name,
+                conn_id,
                 tx,
             } => {
-                let result = self.sequence_copy_rows(&mut session, id, columns, rows);
-                let _ = tx.send(Response { result, session });
+                self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
             Command::GetSystemVars { session, tx } => {
-                let mut vars = BTreeMap::new();
-                for var in self.catalog.system_config().iter() {
-                    vars.insert(var.name().to_string(), var.value());
-                }
-                let _ = tx.send(Response {
-                    result: Ok(vars),
-                    session,
-                });
+                let vars =
+                    GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
+                        var.visible(session.user(), Some(self.catalog.system_config()))
+                            .is_ok()
+                    }));
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                tx.send(Ok(vars), session);
             }
 
             Command::SetSystemVars { vars, session, tx } => {
-                let ops = vars
-                    .into_iter()
-                    .map(|(name, value)| catalog::Op::UpdateSystemConfiguration {
+                let mut ops = Vec::with_capacity(vars.len());
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+
+                for (name, value) in vars {
+                    if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
+                        var.visible(session.user(), Some(self.catalog.system_config()))
+                    }) {
+                        return tx.send(Err(e.into()), session);
+                    }
+
+                    ops.push(catalog::Op::UpdateSystemConfiguration {
                         name,
                         value: OwnedVarInput::Flat(value),
-                    })
-                    .collect();
+                    });
+                }
+
                 let result = self.catalog_transact(Some(&session), ops).await;
-                let _ = tx.send(Response { result, session });
+                tx.send(result, session);
             }
 
             Command::Terminate { mut session, tx } => {
                 self.handle_terminate(&mut session).await;
+                // Note: We purposefully do not use a ClientTransmitter here because we're already
+                // terminating the provided session.
                 if let Some(tx) = tx {
                     let _ = tx.send(Response {
                         result: Ok(()),
@@ -151,26 +245,44 @@ impl Coordinator {
                 }
             }
 
-            Command::StartTransaction {
-                implicit,
-                session,
-                tx,
-            } => {
-                let now = self.now_datetime();
-                let (session, result) = match implicit {
-                    None => session.start_transaction(now, None, None),
-                    Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
-                };
-                let _ = tx.send(Response { result, session });
-            }
-
             Command::Commit {
                 action,
                 session,
                 tx,
+                otel_ctx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.sequence_end_transaction(tx, session, action);
+                // We reach here not through a statement execution, but from the
+                // "commit" pgwire command. Thus, we just generate a default statement
+                // execution context (once statement logging is implemented, this will cause nothing to be logged
+                // when the execution finishes.)
+                let ctx = ExecuteContext::from_parts(
+                    tx,
+                    self.internal_cmd_tx.clone(),
+                    session,
+                    Default::default(),
+                );
+                let plan = match action {
+                    EndTransactionAction::Commit => {
+                        Plan::CommitTransaction(CommitTransactionPlan {
+                            transaction_type: TransactionType::Implicit,
+                        })
+                    }
+                    EndTransactionAction::Rollback => {
+                        Plan::AbortTransaction(AbortTransactionPlan {
+                            transaction_type: TransactionType::Implicit,
+                        })
+                    }
+                };
+                // TODO: We need a Span that is not none for the otel_ctx to
+                // attach the parent relationship to. If we do the TODO to swap
+                // otel_ctx in `Command::Commit` for a Span, we can downgrade
+                // this to a debug_span.
+                let span = tracing::info_span!("message_command (commit)");
+                span.in_scope(|| otel_ctx.attach_as_parent());
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .instrument(span)
+                    .await;
             }
 
             Command::VerifyPreparedStatement {
@@ -178,8 +290,12 @@ impl Coordinator {
                 mut session,
                 tx,
             } => {
-                let result = self.verify_prepared_statement(&mut session, &name);
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let catalog = self.owned_catalog();
+                mz_ore::task::spawn(|| "coord::VerifyPreparedStatement", async move {
+                    let result = Self::verify_prepared_statement(&catalog, &mut session, &name);
+                    tx.send(result, session);
+                });
             }
         }
     }
@@ -189,13 +305,12 @@ impl Coordinator {
         mut session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
+        set_setting_keys: Vec<String>,
     ) {
-        // Lookup is done with the system session because the current session has no role set.
         if self
-            .catalog
-            .for_system_session()
-            .resolve_role(&session.user().name)
-            .is_err()
+            .catalog()
+            .try_get_role_by_name(&session.user().name)
+            .is_none()
         {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -206,7 +321,7 @@ impl Coordinator {
                 name: session.user().name.to_string(),
                 attributes,
             };
-            if let Err(err) = self.sequence_create_role(&session, plan).await {
+            if let Err(err) = self.sequence_create_role_for_startup(&session, plan).await {
                 let _ = tx.send(Response {
                     result: Err(err),
                     session,
@@ -215,16 +330,17 @@ impl Coordinator {
             }
         }
 
-        // Lookup is done with the system session because the current session has no role set.
         let role_id = self
-            .catalog
-            .for_system_session()
-            .resolve_role(&session.user().name)
+            .catalog()
+            .try_get_role_by_name(&session.user().name)
             .expect("created above")
-            .id();
-        session.set_role_id(role_id);
+            .id;
+        session.initialize_role_metadata(role_id);
 
-        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+        if let Err(e) = self
+            .catalog_mut()
+            .create_temporary_schema(session.conn_id(), role_id)
+        {
             let _ = tx.send(Response {
                 result: Err(e.into()),
                 session,
@@ -233,11 +349,33 @@ impl Coordinator {
         }
 
         let mut messages = vec![];
-        let catalog = self.catalog.for_session(&session);
+        let catalog = self.catalog();
+        let catalog = catalog.for_session(&session);
         if catalog.active_database().is_none() {
             messages.push(StartupMessage::UnknownSessionDatabase(
                 session.vars().database().into(),
             ));
+        }
+        if !set_setting_keys
+            .iter()
+            .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
+        {
+            let default = catalog
+                .state()
+                .system_config()
+                .statement_logging_default_sample_rate();
+            session
+                .vars_mut()
+                .set(
+                    None,
+                    STATEMENT_LOGGING_SAMPLE_RATE.name(),
+                    VarInput::Flat(&default.to_string()),
+                    false,
+                )
+                .expect("constrained to be valid");
+            session
+                .vars_mut()
+                .end_transaction(EndTransactionAction::Commit);
         }
 
         let session_type = metrics::session_type_label_value(session.user());
@@ -246,14 +384,19 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .inc();
         self.active_conns.insert(
-            session.conn_id(),
+            session.conn_id().clone(),
             ConnMeta {
                 cancel_tx,
                 secret_key: session.secret_key(),
                 notice_tx: session.retain_notice_transmitter(),
                 drop_sinks: Vec::new(),
+                // TODO: Switch to authenticated role once implemented.
+                authenticated_role: session.session_role_id().clone(),
             },
         );
+        let update = self.catalog().state().pack_session_update(&session, 1);
+        self.begin_session_for_statement_logging(&session);
+        self.send_builtin_table_updates(vec![update]).await;
 
         ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
             .send(Ok(StartupResponse { messages }), session)
@@ -261,11 +404,18 @@ impl Coordinator {
 
     /// Handles an execute command.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn handle_execute(
+    pub(crate) async fn handle_execute(
         &mut self,
         portal_name: String,
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
+        // If this command was part of another execute command
+        // (for example, executing a `FETCH` statement causes an execute to be
+        //  issued for the cursor it references),
+        // then `outer_context` should be `Some`.
+        // This instructs the coordinator that the
+        // outer execute should be considered finished once the inner one is.
+        outer_context: Option<ExecuteContextExtra>,
     ) {
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
@@ -281,40 +431,90 @@ impl Coordinator {
         }
 
         if let Err(err) = self.verify_portal(&mut session, &portal_name) {
-            return tx.send(Err(err), session);
+            // If statement logging hasn't started yet, we don't need
+            // to add any "end" event, so just make up a no-op
+            // `ExecuteContextExtra` here, via `Default::default`.
+            //
+            // It's a bit unfortunate because the edge case of failed
+            // portal verifications won't show up in statement
+            // logging, but there seems to be nothing else we can do,
+            // because we need access to the portal to begin logging.
+            //
+            // Another option would be to log a begin and end event, but just fill in NULLs
+            // for everything we get from the portal (prepared statement id, params).
+            let extra = outer_context.unwrap_or_else(Default::default);
+            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
+            return ctx.retire(Err(err));
         }
 
-        let portal = session
-            .get_portal_unverified(&portal_name)
-            .expect("known to exist");
+        // The reference to `portal` can't outlive `session`, which we
+        // use to construct the context, so scope the reference to this block where we
+        // get everything we need from the portal for later.
+        let (stmt, ctx, params) = {
+            let portal = session
+                .get_portal_unverified(&portal_name)
+                .expect("known to exist");
+            let params = portal.parameters.clone();
+            let stmt = portal.stmt.clone();
+            let logging = Arc::clone(&portal.logging);
 
-        let stmt = match &portal.stmt {
-            Some(stmt) => stmt.clone(),
-            None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
+            let extra = if let Some(extra) = outer_context {
+                // We are executing in the context of another SQL statement, so we don't
+                // want to begin statement logging anew. The context of the actual statement
+                // being executed is the one that should be retired once this finishes.
+                extra
+            } else {
+                // This is a new statement, log it and return the context
+                let maybe_uuid =
+                    self.begin_statement_execution(&mut session, params.clone(), &logging);
+
+                ExecuteContextExtra::new(maybe_uuid)
+            };
+            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
+            (stmt, ctx, params)
         };
 
-        let session_type = metrics::session_type_label_value(session.user());
+        let stmt = match stmt {
+            Some(stmt) => stmt,
+            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
+        };
+
+        let session_type = metrics::session_type_label_value(ctx.session().user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
         self.metrics
             .query_total
             .with_label_values(&[session_type, stmt_type])
             .inc();
+        match &stmt {
+            Statement::Subscribe(SubscribeStatement { output, .. })
+            | Statement::Copy(CopyStatement {
+                relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
+                ..
+            }) => {
+                self.metrics
+                    .subscribe_outputs
+                    .with_label_values(&[
+                        session_type,
+                        metrics::subscribe_output_label_value(output),
+                    ])
+                    .inc();
+            }
+            _ => {}
+        }
 
-        let params = portal.parameters.clone();
-        self.handle_execute_inner(stmt, params, session, tx).await
+        self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[tracing::instrument(level = "trace", skip(self, tx, session))]
+    #[tracing::instrument(level = "trace", skip(self, ctx))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
         params: Params,
-        mut session: Session,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut ctx: ExecuteContext,
     ) {
         // Verify that this statement type can be executed in the current
         // transaction state.
-        match session.transaction() {
+        match ctx.session_mut().transaction_mut() {
             // By this point we should be in a running transaction.
             TransactionStatus::Default => unreachable!(),
 
@@ -335,12 +535,9 @@ impl Coordinator {
                     // it, it will always result in nothing happening, since all portals will be
                     // immediately closed. Users don't know this detail, so this error helps them
                     // understand what's going wrong. Postgres does this too.
-                    return tx.send(
-                        Err(AdapterError::OperationRequiresTransaction(
-                            "DECLARE CURSOR".into(),
-                        )),
-                        session,
-                    );
+                    return ctx.retire(Err(AdapterError::OperationRequiresTransaction(
+                        "DECLARE CURSOR".into(),
+                    )));
                 }
 
                 // TODO(mjibson): The current code causes DDL statements (well, any statement
@@ -361,7 +558,8 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
+            txn @ TransactionStatus::InTransactionImplicit(_)
+            | txn @ TransactionStatus::InTransaction(_) => {
                 match stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
@@ -401,22 +599,27 @@ impl Coordinator {
                     }
 
                     // Statements below must by run singly (in Started).
-                    Statement::AlterConnection(_)
+                    Statement::AlterCluster(_)
+                    | Statement::AlterConnection(_)
+                    | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
+                    | Statement::AlterSetCluster(_)
+                    | Statement::AlterObjectRename(_)
+                    | Statement::AlterOwner(_)
+                    | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterSink(_)
                     | Statement::AlterSource(_)
-                    | Statement::AlterObjectRename(_)
-                    | Statement::AlterRole(_)
-                    | Statement::AlterSystemSet(_)
                     | Statement::AlterSystemReset(_)
                     | Statement::AlterSystemResetAll(_)
+                    | Statement::AlterSystemSet(_)
+                    | Statement::CreateCluster(_)
+                    | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
+                    | Statement::CreateMaterializedView(_)
                     | Statement::CreateRole(_)
-                    | Statement::CreateCluster(_)
-                    | Statement::CreateClusterReplica(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
@@ -425,63 +628,89 @@ impl Coordinator {
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
-                    | Statement::CreateMaterializedView(_)
+                    | Statement::CreateWebhookSource(_)
                     | Statement::Delete(_)
-                    | Statement::DropDatabase(_)
-                    | Statement::DropSchema(_)
                     | Statement::DropObjects(_)
-                    | Statement::DropRoles(_)
-                    | Statement::DropClusters(_)
-                    | Statement::DropClusterReplicas(_)
+                    | Statement::DropOwned(_)
+                    | Statement::GrantPrivileges(_)
+                    | Statement::GrantRole(_)
                     | Statement::Insert(_)
-                    | Statement::Update(_) => {
-                        return tx.send(
-                            Err(AdapterError::OperationProhibitsTransaction(
-                                stmt.to_string(),
-                            )),
-                            session,
-                        )
+                    | Statement::ReassignOwned(_)
+                    | Statement::RevokePrivileges(_)
+                    | Statement::RevokeRole(_)
+                    | Statement::Update(_)
+                    | Statement::ValidateConnection(_) => {
+                        // If we're not in an implicit transaction and we could generate exactly one
+                        // valid ExecuteResponse, we can delay execution until commit.
+                        if !txn.is_implicit() {
+                            // Statements whose tag is trivial (known only from an unexecuted statement) can
+                            // be run in a special single-statement explicit mode. In this mode (`BEGIN;
+                            // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
+                            // delay execution until `COMMIT`.
+                            if let Ok(resp) = ExecuteResponse::try_from(&stmt) {
+                                if let Err(err) =
+                                    txn.add_ops(TransactionOps::SingleStatement { stmt, params })
+                                {
+                                    ctx.retire(Err(err));
+                                    return;
+                                }
+                                ctx.retire(Ok(resp));
+                                return;
+                            }
+                        }
+
+                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
+                            stmt.to_string(),
+                        )));
                     }
                 }
             }
         }
 
-        let catalog = self.catalog.for_session(&session);
+        let catalog = self.catalog();
+        let catalog = catalog.for_session(ctx.session());
         let original_stmt = stmt.clone();
-        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = depends_on.into_iter().collect();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
-        //   - In the handler for `Message::CreateSourceStatementReady`, before we handle the purified statement.
+        //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
-            Statement::CreateSource(stmt) => {
+            stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
-                let purify_fut = mz_sql::pure::purify_create_source(
-                    Box::new(catalog.into_owned()),
-                    self.now(),
-                    stmt,
-                    self.connection_context.clone(),
-                );
+                let conn_id = ctx.session().conn_id().clone();
+                let catalog = self.owned_catalog();
+                let now = self.now();
+                let connection_context = self.connection_context.clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let result = purify_fut.await.map_err(|e| e.into());
+                    let catalog = catalog.for_session(ctx.session());
+
+                    // Checks if the session is authorized to purify a statement. Usually
+                    // authorization is checked after planning, however purification happens before
+                    // planning, which may require the use of some connections and secrets.
+                    if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
+                        return ctx.retire(Err(e));
+                    }
+
+                    let result =
+                        mz_sql::pure::purify_statement(catalog, now, stmt, connection_context)
+                            .await
+                            .map_err(|e| e.into());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::CreateSourceStatementReady(
-                        CreateSourceStatementReady {
-                            session,
-                            tx,
+                    let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
+                        PurifiedStatementReady {
+                            ctx,
                             result,
                             params,
-                            depends_on,
+                            resolved_ids,
                             original_stmt,
                             otel_ctx,
                         },
@@ -494,38 +723,68 @@ impl Coordinator {
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
             // automatically as part of purification
-            Statement::CreateSubsource(_) => tx.send(
-                Err(AdapterError::Unsupported("CREATE SUBSOURCE statements")),
-                session,
-            ),
+            Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
+                "CREATE SUBSOURCE statements",
+            ))),
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params) {
-                Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
-                Err(e) => tx.send(Err(e), session),
+            _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+                Err(e) => ctx.retire(Err(e)),
             },
         }
     }
 
-    fn handle_describe(
+    fn handle_prepare(
         &self,
-        session: &mut Session,
+        tx: ClientTransmitter<()>,
+        mut session: Session,
         name: String,
         stmt: Option<Statement<Raw>>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), AdapterError> {
-        let desc = self.describe(session, stmt.clone(), param_types)?;
-        session.set_prepared_statement(
-            name,
-            PreparedStatement::new(stmt, desc, self.catalog.transient_revision()),
-        );
-        Ok(())
+    ) {
+        let catalog = self.owned_catalog();
+        let now = self.now();
+        mz_ore::task::spawn(|| "coord::handle_prepare", async move {
+            // Note: This failpoint is used to simulate a request outliving the external connection
+            // that made it.
+            let mut async_pause = false;
+            (|| {
+                fail::fail_point!("async_prepare", |val| {
+                    async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
+                });
+            })();
+            if async_pause {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            };
+
+            let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
+                Ok(desc) => {
+                    session.set_prepared_statement(
+                        name,
+                        stmt,
+                        sql,
+                        desc,
+                        catalog.transient_revision(),
+                        now,
+                    );
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            };
+            tx.send(res, session);
+        });
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
-    /// the named `conn_id`.
-    fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
+    /// the named `conn_id` if the correct secret key is specified.
+    ///
+    /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned
+    /// `ConnectionId` because this method gets called by external clients when
+    /// they request to cancel a request.
+    fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
+        if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
             // rogue cancellation request and ignore it.
@@ -533,24 +792,31 @@ impl Coordinator {
                 return;
             }
 
+            // Now that we've verified the secret key, this is a privileged
+            // cancellation request. We can upgrade the raw connection ID to a
+            // proper `IdHandle`.
+            self.handle_privileged_cancel(id_handle.clone())
+        }
+    }
+
+    /// Unconditionally instructs the dataflow layer to cancel any ongoing,
+    /// interactive work for the named `conn_id`.
+    pub(crate) fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // Cancel pending writes. There is at most one pending write per session.
+            let mut maybe_ctx = None;
             if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
                 matches!(pending_write_txn, PendingWriteTxn::User {
-                    pending_txn: PendingTxn { session, .. },
+                    pending_txn: PendingTxn { ctx, .. },
                     ..
-                } if session.conn_id() == conn_id)
+                } if *ctx.session().conn_id() == conn_id)
             }) {
                 if let PendingWriteTxn::User {
-                    pending_txn:
-                        PendingTxn {
-                            client_transmitter,
-                            session,
-                            ..
-                        },
+                    pending_txn: PendingTxn { ctx, .. },
                     ..
                 } = self.pending_writes.remove(idx)
                 {
-                    let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                    maybe_ctx = Some(ctx);
                 }
             }
 
@@ -558,11 +824,11 @@ impl Coordinator {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id() == conn_id))
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
                 if let Deferred::Plan(ready) = ready {
-                    ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+                    maybe_ctx = Some(ready.ctx);
                 }
             }
 
@@ -570,8 +836,12 @@ impl Coordinator {
             if let Some(real_time_recency_context) =
                 self.pending_real_time_recency_timestamp.remove(&conn_id)
             {
-                let (tx, session) = real_time_recency_context.take_tx_and_session();
-                tx.send(Ok(ExecuteResponse::Canceled), session);
+                let ctx = real_time_recency_context.take_context();
+                maybe_ctx = Some(ctx);
+            }
+
+            if let Some(ctx) = maybe_ctx {
+                ctx.retire(Ok(ExecuteResponse::Canceled));
             }
 
             // Inform the target session (if it asks) about the cancellation.
@@ -582,6 +852,11 @@ impl Coordinator {
                 conn_id: _,
                 cluster_id: _,
                 depends_on: _,
+                // We take responsibility for retiring the
+                // peek in `self.cancel_pending_peeks`,
+                // so we don't need to do anything with `ctx_extra` here.
+                ctx_extra: _,
+                is_fast_path: _,
             } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
@@ -596,18 +871,119 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
+        if self.active_conns.get(session.conn_id()).is_none() {
+            // If the session doesn't exist in `active_conns`, then this method will panic later on.
+            // Instead we explicitly panic here while dumping the entire Coord to the logs to help
+            // debug. This panic is very infrequent so we want as much information as possible.
+            // See https://github.com/MaterializeInc/materialize/issues/18996.
+            panic!("unknown session: {session:?}\n\n{self:?}")
+        }
+
         self.clear_transaction(session);
 
         self.drop_temp_items(session).await;
-        self.catalog
-            .drop_temporary_schema(&session.conn_id())
+        self.catalog_mut()
+            .drop_temporary_schema(session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");
         let session_type = metrics::session_type_label_value(session.user());
         self.metrics
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(&session.conn_id());
+        self.active_conns.remove(session.conn_id());
+        self.cancel_pending_peeks(session.conn_id());
+        self.end_session_for_statement_logging(session.uuid());
+        let update = self.catalog().state().pack_session_update(session, -1);
+        self.send_builtin_table_updates(vec![update]).await;
+    }
+
+    fn handle_append_webhook(
+        &mut self,
+        database: String,
+        schema: String,
+        name: String,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+    ) {
+        // Make sure the feature is enabled before doing anything else.
+        if !self.catalog().system_config().enable_webhook_sources() {
+            // We don't care if the listener went away.
+            let _ = tx.send(Err(AdapterError::Unsupported("enable_webhook_sources")));
+            return;
+        }
+
+        /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
+        ///
+        /// Returns a struct that can be used to append data to the underlying storate collection, and the
+        /// types we should cast the request to.
+        fn resolve(
+            coord: &Coordinator,
+            database: String,
+            schema: String,
+            name: String,
+            conn_id: ConnectionId,
+        ) -> Result<AppendWebhookResponse, PartialItemName> {
+            // Resolve our collection.
+            let name = PartialItemName {
+                database: Some(database),
+                schema: Some(schema),
+                item: name,
+            };
+            let Ok(entry) = coord.catalog().resolve_entry(None, &vec![], &name, &conn_id) else {
+                return Err(name);
+            };
+
+            let (body_ty, header_ty, validator) = match entry.item() {
+                CatalogItem::Source(Source {
+                    data_source: DataSourceDesc::Webhook { validation, .. },
+                    desc,
+                    ..
+                }) => {
+                    // All Webhook sources should have at most 2 columns.
+                    mz_ore::soft_assert!(desc.arity() <= 2);
+
+                    let body = desc
+                        .get_by_name(&"body".into())
+                        .map(|(_idx, ty)| ty.clone())
+                        .ok_or(name.clone())?;
+                    let header = desc
+                        .get_by_name(&"headers".into())
+                        .map(|(_idx, ty)| ty.clone());
+
+                    // Create a validator that can be called to validate a webhook request.
+                    let validator = validation.as_ref().map(|v| {
+                        let validation = v.clone();
+                        AppendWebhookValidator::new(
+                            validation,
+                            coord.caching_secrets_reader.clone(),
+                        )
+                    });
+                    (body, header, validator)
+                }
+                _ => return Err(name),
+            };
+
+            // Get a channel so we can queue updates to be written.
+            let row_tx = coord
+                .controller
+                .storage
+                .monotonic_appender(entry.id())
+                .map_err(|_| name)?;
+            Ok(AppendWebhookResponse {
+                tx: row_tx,
+                body_ty,
+                header_ty,
+                validator,
+            })
+        }
+
+        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
+        let _ = tx.send(response);
     }
 }

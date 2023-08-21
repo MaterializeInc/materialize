@@ -18,11 +18,12 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import dbt.exceptions
-from dbt.adapters.base.impl import AdapterConfig
+from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.materialize import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+from dbt.contracts.graph.nodes import ConstraintType
 from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 
@@ -45,9 +46,9 @@ class MaterializeIndexConfig(dbtClassMixin):
             dbt.exceptions.CompilationError(f"Could not parse index config: {msg}")
         except TypeError:
             dbt.exceptions.CompilationError(
-                f"Invalid index config:\n"
+                "Invalid index config:\n"
                 f"  Got: {raw_index}\n"
-                f'  Expected a dictionary with at minimum a "columns" key'
+                '  Expected a dictionary with at minimum a "columns" key'
             )
 
 
@@ -62,11 +63,21 @@ class MaterializeAdapter(PostgresAdapter):
 
     AdapterSpecificConfigs = MaterializeConfig
 
+    # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint,
+    # but only for tables. In dbt-materialize, table models are materialized as
+    # static materialized views (see #5266), so we're marking all constraints
+    # as not supported.
+    CONSTRAINT_SUPPORT = {
+        ConstraintType.check: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.not_null: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.unique: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.primary_key: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.foreign_key: ConstraintSupport.NOT_SUPPORTED,
+    }
+
     @classmethod
     def is_cancelable(cls) -> bool:
-        # TODO: we can support cancellation if Materialize gets support for
-        # pg_terminate_backend.
-        return False
+        return True
 
     def _link_cached_relations(self, manifest):
         # NOTE(benesch): this *should* reimplement the parent class's method

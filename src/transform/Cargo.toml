@@ -7,14 +7,16 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.12.0"
 itertools = "0.10.5"
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
+mz-persist-client = { path = "../persist-client" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 num-traits = "0.2"
 num-derive = "0.3"
+ordered-float = { version = "3.4.0", features = ["serde"] }
 tracing = "0.1.37"
 typemap_rev = "0.3.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
@@ -22,10 +24,11 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 anyhow = "1.0.66"
 datadriven = "0.6.0"
+mz-expr-parser = { path = "../expr-parser" }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.47"
+mz-ore = { path = "../ore", features = ["test"] }
+proc-macro2 = "1.0.60"
 serde_json = "1.0.89"
 
 [package.metadata.cargo-udeps.ignore]

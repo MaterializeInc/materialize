@@ -8,10 +8,13 @@
 # by the Apache License, Version 2.0.
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_from_testscript = true
+
 # Basic test for `TEST SCRIPT` sources.
 
 # replace timestamps
-$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 
 
 > CREATE CONNECTION c_conn
@@ -35,7 +38,7 @@ fish          value2
 fish2         hmm
 
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.unit (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 > CREATE SOURCE unit_terminated
   FROM TEST SCRIPT
@@ -54,7 +57,7 @@ fish          value
 
 # Terminal sources have empty uppers
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit_terminated
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_terminated (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.unit_terminated (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"
 
 # Query automatically generated progress topics
 > SELECT * FROM unit_progress
@@ -63,10 +66,10 @@ fish          value
 > SELECT * FROM unit_terminated_progress
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.unit_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 > EXPLAIN TIMESTAMP FOR SELECT * FROM unit_terminated_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.unit_terminated_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <>\n                          upper:[]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.unit_terminated_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[]\n"

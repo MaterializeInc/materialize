@@ -72,6 +72,8 @@ impl<'a> Parser<'a> {
             return Ok(Record::Halt);
         }
 
+        let line_number = self.curline;
+
         static COMMENT_AND_LINE_REGEX: Lazy<Regex> =
             Lazy::new(|| Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap());
         let first_line = self.split_at(&COMMENT_AND_LINE_REGEX)?.trim();
@@ -145,7 +147,11 @@ impl<'a> Parser<'a> {
 
             "reset-server" => Ok(Record::ResetServer),
 
-            other => bail!("Unexpected start of record: {}", other),
+            other => bail!(
+                "Unexpected start of record on line {}: {}",
+                line_number,
+                other
+            ),
         }
     }
 

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -80,29 +78,33 @@ use std::process;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::http::StatusCode;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
-use once_cell::sync::Lazy;
-use tracing::info;
-
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
+use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
+use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
-use mz_service::grpc::GrpcServer;
+use mz_service::grpc::{GrpcServer, MAX_GRPC_MESSAGE_SIZE};
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use tracing::info;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -140,6 +142,16 @@ struct Args {
     )]
     internal_http_listen_addr: SocketAddr,
 
+    // === Storage options. ===
+    /// The URL for the Persist PubSub service.
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_URL",
+        value_name = "http://HOST:PORT",
+        default_value = "http://localhost:6879"
+    )]
+    persist_pubsub_url: String,
+
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -161,6 +173,15 @@ struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    // === Other options. ===
+    /// A scratch directory that can be used for ephemeral storage.
+    #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
+    scratch_directory: Option<PathBuf>,
+
+    /// Optional memory limit (bytes) of the cluster replica
+    #[clap(long)]
+    announce_memory_limit: Option<usize>,
 }
 
 #[tokio::main]
@@ -170,20 +191,42 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("clusterd: fatal: {:#}", err);
+        eprintln!("clusterd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
+    let metrics_registry = MetricsRegistry::new();
     let (tracing_handle, _tracing_guard) = args
         .tracing
-        .configure_tracing(StaticTracingConfig {
-            service_name: "clusterd",
-            build_info: BUILD_INFO,
-        })
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "clusterd",
+                build_info: BUILD_INFO,
+            },
+            metrics_registry.clone(),
+        )
         .await?;
+
+    if args.tracing.log_filter.is_some() {
+        halt!(
+            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
+             `log_filter` system variable. In the rare case the filter is needed before the \
+             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
+        )
+    }
+    if args.tracing.opentelemetry_filter.is_some() {
+        halt!(
+            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
+            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
+            is needed before the process has access to the system variable, use \
+            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+        )
+    }
+
+    let tracing_handle = Arc::new(tracing_handle);
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
@@ -193,7 +236,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     emit_boot_diagnostics!(&BUILD_INFO);
 
-    let metrics_registry = MetricsRegistry::new();
     mz_alloc::register_metrics_into(&metrics_registry).await;
 
     let mut _pid_file = None;
@@ -226,31 +268,30 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         mz_http_util::handle_prometheus(&metrics_registry).await
                     }),
                 )
+                .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({
-                        let tracing_handle = tracing_handle.clone();
-                        move |payload| async move {
-                            mz_http_util::handle_reload_tracing_filter(
-                                &tracing_handle,
-                                TracingHandle::reload_opentelemetry_filter,
-                                payload,
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                                Use the `opentelemetry_filter` system variable."
+                                    .to_string(),
                             )
-                            .await
                         }
                     }),
                 )
                 .route(
                     "/api/stderr/config",
                     routing::put({
-                        let tracing_handle = tracing_handle.clone();
-                        move |payload| async move {
-                            mz_http_util::handle_reload_tracing_filter(
-                                &tracing_handle,
-                                TracingHandle::reload_stderr_log_filter,
-                                payload,
+                        move |_: axum::Json<DynamicFilterTarget>| async {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                "This endpoint has been replaced. \
+                                Use the `log_filter` system variable."
+                                    .to_string(),
                             )
-                            .await
                         }
                     }),
                 )
@@ -258,9 +299,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
+    let pubsub_caller_id = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| args.tracing.log_prefix.clone())
+        .unwrap_or_default();
     let persist_clients = Arc::new(PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
+        |persist_cfg, metrics| {
+            let cfg = PersistPubSubClientConfig {
+                url: args.persist_pubsub_url,
+                caller_id: pubsub_caller_id,
+                persist_cfg: persist_cfg.clone(),
+            };
+            GrpcPubSubClient::connect(cfg, metrics)
+        },
     ));
 
     // Start storage server.
@@ -268,13 +321,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_cluster::server::ClusterConfig {
             metrics_registry: metrics_registry.clone(),
             persist_clients: Arc::clone(&persist_clients),
+            tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
         ConnectionContext::from_cli_args(
-            &args.tracing.log_filter.inner,
+            &args.tracing.startup_log_filter,
             args.aws_external_id,
             secrets_reader,
+            None,
         ),
+        StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit)?,
     )?;
     info!(
         "listening for storage controller connections on {}",
@@ -286,7 +342,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             storage_client,
-            ProtoStorageServer::new,
+            |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 
@@ -295,6 +351,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         mz_compute::server::serve(mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
+            tracing_handle,
         })?;
     info!(
         "listening for compute controller connections on {}",
@@ -306,7 +363,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             compute_client,
-            ProtoComputeServer::new,
+            |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 

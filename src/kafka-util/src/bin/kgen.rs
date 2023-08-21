@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -84,9 +82,14 @@ use std::time::Duration;
 use anyhow::bail;
 use chrono::NaiveDateTime;
 use crossbeam::thread;
-use rand::distributions::{
-    uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex,
-};
+use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
+use mz_avro::types::{DecimalValue, Value};
+use mz_avro::Schema;
+use mz_ore::cast::CastFrom;
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::retry::Retry;
+use rand::distributions::uniform::SampleUniform;
+use rand::distributions::{Alphanumeric, Bernoulli, Uniform, WeightedIndex};
 use rand::prelude::{Distribution, ThreadRng};
 use rand::thread_rng;
 use rdkafka::error::KafkaError;
@@ -95,13 +98,6 @@ use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
 use serde_json::Map;
 use url::Url;
-
-use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-use mz_avro::types::{DecimalValue, Value};
-use mz_avro::Schema;
-use mz_ore::cast::CastFrom;
-use mz_ore::cli::{self, CliConfig};
-use mz_ore::retry::Retry;
 
 trait Generator<R>: FnMut(&mut ThreadRng) -> R + Send + Sync {
     fn clone_box(&self) -> Box<dyn Generator<R>>;

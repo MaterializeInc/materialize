@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     parent: 'about'
-    weight: 10
+    weight: 5
 ---
 
 We are continually improving Materialize with new features and bug fixes. We
@@ -23,26 +23,28 @@ and [documentation](https://materialize.com/docs/lts/).
 
 ## Schedule
 
-We release a new version of Materialize approximately every week. Each
-version includes both new features and bug fixes.
+Materialize upgrades all regions to the latest release each week according to
+the following schedule:
 
-On weeks with a scheduled release, we deploy the release to Materialize accounts
-during the scheduled maintenance window on Wednesday from 4-6pm ET.
+Region        | Day of week | Time
+--------------|-------------|-----------------------------
+aws/eu-west-1 | Wednesday   | 2100-2300 [Europe/Dublin]
+aws/us-east-1 | Thursday    | 0500-0700 [America/New_York]
 
-We may occasionally deploy unscheduled releases to fix urgent bugs during
-unplanned maintenance windows. Due to the unexpected nature of these bugs, we
-cannot provide advance notice of these releases.
+{{< note >}}
+Upgrade windows follow any daylight saving time or summer time rules
+for their indicated time zone.
+{{< /note >}}
 
-The deployment of a new release of Materialize causes an interruption in
-service. The length of the service interruption is proportional to the size of
-your sources, sinks, and indexes. We plan to support zero-downtime deployments
-in a future release of Materialize.
+Upgrade windows were chosen to be outside of business hours in the most
+representative time zone for the region.
 
-We announce both planned and unplanned maintenance windows on our [status
-page](https://status.materialize.com).
+Materialize may occasionally deploy unscheduled releases to fix urgent bugs as well.
 
-You can also use our [status page API](https://status.materialize.com/api) to
-programmatically access the information on our status page.
+You can find details about upcoming and current maintenance on the [status
+page](https://status.materialize.com). You can also use the [status page API](https://status.materialize.com/api) to programmatically access this information.
+
+When your region is upgraded, you’ll experience just a few minutes of downtime. After the initial downtime, the new version of Materialize will begin rehydrating your indexes and materialized views. This takes time proportional to data volume and query complexity. Indexes and materialized views with large amounts of data will take longer to rehydrate than indexes and materialized views with small amounts of data. Similarly, indexes and materialized views for complex queries will take longer to rehydrate than indexes and materialized views for simple queries.
 
 ## Versioning
 
@@ -73,7 +75,7 @@ notes](#release-notes).
 There are several aspects of the product that are not considered part of
 Materialize's stable interface:
 
-  * Features that are in alpha (labeled as such in the documentation)
+  * Features that are in private preview (labeled as such in the documentation)
   * The [`EXPLAIN`](/sql/explain) statement
   * Objects in the [`mz_internal` schema](/sql/system-catalog/mz_internal)
   * Any undocumented features or behavior
@@ -82,3 +84,6 @@ These unstable interfaces are not subject to the backwards-compatibility policy.
 If you choose to use these unstable interfaces, you should be aware of the risk
 of backwards-incompatible changes. Backwards-incompatible changes may be made to
 these unstable interfaces at any time and without mention in the release notes.
+
+[America/New_York]: https://time.is/New_York
+[Europe/Dublin]: https://time.is/Dublin

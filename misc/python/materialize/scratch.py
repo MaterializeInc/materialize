@@ -31,7 +31,7 @@ from mypy_boto3_ec2.type_defs import (
 from prettytable import PrettyTable
 from pydantic import BaseModel
 
-from materialize import ROOT, git, spawn, ui, util
+from materialize import MZ_ROOT, git, spawn, ui, util
 
 # Sane defaults for internal Materialize use in the scratch account
 DEFAULT_SECURITY_GROUP_NAME = "scratch-security-group"
@@ -165,8 +165,8 @@ def launch(
             GroupId=security_group_id,
             CidrIp="0.0.0.0/0",
             IpProtocol="tcp",
-            FromPort=1,
-            ToPort=28000,
+            FromPort=22,
+            ToPort=22,
         )
 
     network_interface: InstanceNetworkInterfaceSpecificationTypeDef = {
@@ -176,7 +176,7 @@ def launch(
     }
 
     say(f"launching instance {display_name or '(unnamed)'}")
-    with open(ROOT / "misc" / "scratch" / "provision.bash") as f:
+    with open(MZ_ROOT / "misc" / "scratch" / "provision.bash") as f:
         provisioning_script = f.read()
     kwargs: RunInstancesRequestRequestTypeDef = {
         "MinCount": 1,
@@ -281,7 +281,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
 
     spawn.runv(
         cmd,
-        cwd=ROOT,
+        cwd=MZ_ROOT,
         env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
     )
     mssh(
@@ -398,6 +398,7 @@ def mssh(
     instance: Instance,
     command: str,
     *,
+    extra_ssh_args: List[str] = [],
     input: Optional[bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
@@ -409,9 +410,11 @@ def mssh(
         command = shlex.quote(command)
     else:
         print(f"$ mssh {host}")
+
     subprocess.run(
         [
             *SSH_COMMAND,
+            *extra_ssh_args,
             host,
             command,
         ],

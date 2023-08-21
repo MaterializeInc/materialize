@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -76,11 +74,10 @@
 // END LINT CONFIG
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use mz_repr::strconv;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-
-use mz_repr::strconv;
 
 fn bench_parse_float32(c: &mut Criterion) {
     for s in &["-3.0", "9.7", "NaN", "inFiNiTy"] {

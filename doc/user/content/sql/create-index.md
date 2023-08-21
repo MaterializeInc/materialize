@@ -8,10 +8,10 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/overview/key-concepts/#indexes) on a source, view, or materialized
+`CREATE INDEX` creates an in-memory [index](/get-started/key-concepts/#indexes) on a source, view, or materialized
 view.
 
-Indexes assemble and maintain a query's results in memory within a [cluster](/overview/key-concepts#clusters),
+Indexes assemble and maintain a query's results in memory within a [cluster](/get-started/key-concepts#clusters),
 which provides future queries the data
 they need in a format they can immediately use. In particular, creating indexes
 can be very helpful for the [`JOIN`](../join) operator, which needs to build
@@ -160,6 +160,16 @@ avoid building downstream views to apply the function like the one used in the e
 Take into account that aggregations like `count()` cannot be used as indexed expressions.
 
 For more details on using indexes to optimize queries, see [Optimization](../../ops/optimization/).
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of `obj_name`.
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the index definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 

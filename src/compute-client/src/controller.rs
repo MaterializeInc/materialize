@@ -19,7 +19,7 @@
 //!
 //! The state maintained for a compute instance can be viewed as a partial map from `GlobalId` to
 //! collection. It is an error to use an identifier before it has been "created" with
-//! `create_dataflows()`. Once created, the controller holds a read capability for each output
+//! `create_dataflow()`. Once created, the controller holds a read capability for each output
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
 //! collection is dropped with either `drop_collections()` or by allowing compaction to the empty
 //! frontier.
@@ -29,54 +29,55 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
+use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_expr::RowSetFinishing;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::{GlobalId, Row};
+use mz_storage_client::controller::{ReadPolicy, StorageController};
+use mz_storage_client::types::instances::StorageInstanceId;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 use uuid::Uuid;
 
-use mz_build_info::BuildInfo;
-use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_expr::RowSetFinishing;
-use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::{ReadPolicy, StorageController};
-use mz_storage_client::types::instances::StorageInstanceId;
-
-use crate::logging::{LogVariant, LogView, LoggingConfig};
+use crate::controller::error::{
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
+};
+use crate::controller::instance::{ActiveInstance, Instance};
+use crate::controller::replica::ReplicaConfig;
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 
-use self::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
-};
-use self::instance::{ActiveInstance, Instance};
-use self::replica::ReplicaConfig;
-
 mod instance;
 mod replica;
 
 pub mod error;
 
-/// Identifer of a compute instance.
+/// Identifier of a compute instance.
 pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
-pub type ReplicaId = u64;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
+
+/// Identifier of a replica.
+// TODO(#18377): Replace `ReplicaId` with this type.
+pub type NewReplicaId = mz_cluster_client::NewReplicaId;
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -88,10 +89,6 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-    /// A notification that new resource usage metrics are available for a given replica.
-    ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// A notification that the write frontiers of the replicas have changed.
-    ReplicaWriteFrontiers(BTreeMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 /// Replica configuration
@@ -117,31 +114,12 @@ pub struct ComputeReplicaLogging {
     ///
     /// A `None` value indicates that logging is disabled.
     pub interval: Option<Duration>,
-    /// Log sources of this replica.
-    pub sources: Vec<(LogVariant, GlobalId)>,
-    /// Log views of this replica.
-    pub views: Vec<(LogView, GlobalId)>,
 }
 
 impl ComputeReplicaLogging {
     /// Return whether logging is enabled.
     pub fn enabled(&self) -> bool {
         self.interval.is_some()
-    }
-
-    /// Return all ids of the persisted introspection views contained.
-    pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.views.iter().map(|(_, id)| *id)
-    }
-
-    /// Return all ids of the persisted introspection sources contained.
-    pub fn source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.sources.iter().map(|(_, id)| *id)
-    }
-
-    /// Return all ids of the persisted introspection sources and logs contained.
-    pub fn source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.source_ids().chain(self.view_ids())
     }
 }
 
@@ -157,13 +135,8 @@ pub struct ComputeController<T> {
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
-    replica_metrics: BTreeMap<ReplicaId, Vec<ServiceProcessMetrics>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
-    /// Periodic notification to produce a `ReplicaWriteFrontiers` response.
-    stats_update_ticker: tokio::time::Interval,
-    /// Set to `true` if `process` should produce a `ReplicaWriteFrontiers` next.
-    stats_update_pending: bool,
     /// The compute controller metrics
     metrics: ComputeControllerMetrics,
 }
@@ -175,9 +148,6 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
-        let mut stats_update_ticker = tokio::time::interval(Duration::from_secs(1));
-        stats_update_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
         Self {
             instances: BTreeMap::new(),
             build_info,
@@ -185,10 +155,7 @@ impl<T> ComputeController<T> {
             config: Default::default(),
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
-            replica_metrics: BTreeMap::new(),
             envd_epoch,
-            stats_update_ticker,
-            stats_update_pending: false,
             metrics: ComputeControllerMetrics::new(metrics_registry),
         }
     }
@@ -237,6 +204,23 @@ impl<T> ComputeController<T> {
             compute: self,
             storage,
         }
+    }
+}
+
+impl<T> ComputeController<T>
+where
+    T: Clone,
+{
+    /// Returns the write frontier for each collection installed on each replica.
+    pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
+        let mut result = BTreeMap::new();
+        let collections = self.instances.values().flat_map(|i| i.collections_iter());
+        for (&collection_id, collection) in collections {
+            for (&replica_id, frontier) in &collection.replica_write_frontiers {
+                result.insert((collection_id, replica_id), frontier.clone());
+            }
+        }
+        result
     }
 }
 
@@ -342,21 +326,17 @@ where
             .iter_mut()
             .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
 
-        tokio::select! {
-            ((instance_id, result), _index, _remaining) = future::select_all(receives) => {
-                match result {
-                    Ok((replica_id, resp)) => {
-                        self.replica_heartbeats.insert(replica_id, Utc::now());
-                        self.stashed_response = Some((instance_id, replica_id, resp));
-                    }
-                    Err(_) => {
-                        // There is nothing to do here. `recv` has already added the failed replica to
-                        // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                        // `ActiveComputeController::process`.
-                    }
-                }
-            },
-            _ = self.stats_update_ticker.tick() => { self.stats_update_pending = true }
+        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
+        match result {
+            Ok((replica_id, resp)) => {
+                self.replica_heartbeats.insert(replica_id, Utc::now());
+                self.stashed_response = Some((instance_id, replica_id, resp));
+            }
+            Err(_) => {
+                // There is nothing to do here. `recv` has already added the failed replica to
+                // `instance.failed_replicas`, so it will be rehydrated in the next call to
+                // `ActiveComputeController::process`.
+            }
         }
     }
 
@@ -426,17 +406,6 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
-        let mut sink_logs = BTreeMap::new();
-        for (variant, id) in config.logging.sources {
-            let storage_meta = self
-                .storage
-                .collection(id)
-                .map_err(|_| CollectionMissing(id))?
-                .collection_metadata
-                .clone();
-            sink_logs.insert(variant, (id, storage_meta));
-        }
-
         let idle_arrangement_merge_effort = config
             .idle_arrangement_merge_effort
             .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
@@ -448,9 +417,9 @@ where
                 enable_logging,
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
-                sink_logs,
             },
             idle_arrangement_merge_effort,
+            grpc_client: self.compute.config.grpc_client.clone(),
         };
 
         self.instance(instance_id)?
@@ -475,12 +444,12 @@ where
     /// It installs read dependencies from the outputs to the inputs, so that the input read
     /// capabilities will be held back to the output read capabilities, ensuring that we are
     /// always able to return to a state that can serve the output read capabilities.
-    pub fn create_dataflows(
+    pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance(instance_id)?.create_dataflows(dataflows)?;
+        self.instance(instance_id)?.create_dataflow(dataflow)?;
         Ok(())
     }
 
@@ -520,23 +489,21 @@ where
         Ok(())
     }
 
-    /// Cancel existing peek requests.
+    /// Cancel an existing peek request.
     ///
     /// Canceling a peek is best effort. The caller may see any of the following
     /// after canceling a peek request:
     ///
     ///   * A `PeekResponse::Rows` indicating that the cancellation request did
-    ///    not take effect in time and the query succeeded.
-    ///
+    ///     not take effect in time and the query succeeded.
     ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
-    ///
     ///   * No `PeekResponse` at all.
-    pub fn cancel_peeks(
+    pub fn cancel_peek(
         &mut self,
         instance_id: ComputeInstanceId,
-        uuids: BTreeSet<Uuid>,
+        uuid: Uuid,
     ) -> Result<(), InstanceMissing> {
-        self.instance(instance_id)?.cancel_peeks(uuids);
+        self.instance(instance_id)?.cancel_peek(uuid);
         Ok(())
     }
 
@@ -559,6 +526,11 @@ where
 
     /// Processes the work queued by [`ComputeController::ready`].
     pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
+        // Update controller state metrics.
+        for instance in self.compute.instances.values_mut() {
+            instance.refresh_state_metrics();
+        }
+
         // Rehydrate any failed replicas.
         for instance in self.compute.instances.values_mut() {
             instance.activate(self.storage).rehydrate_failed_replicas();
@@ -578,13 +550,6 @@ where
             ));
         }
 
-        // Process pending replica metrics responses
-        if let Some((replica_id, metrics)) = self.compute.replica_metrics.pop_first() {
-            return Some(ComputeControllerResponse::ReplicaMetrics(
-                replica_id, metrics,
-            ));
-        }
-
         // Process pending responses from replicas.
         if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
             if let Ok(mut instance) = self.instance(instance_id) {
@@ -598,37 +563,7 @@ where
             };
         }
 
-        // Process pending stats updates
-        if self.compute.stats_update_pending {
-            self.compute.stats_update_pending = false;
-
-            let mut replica_frontiers = BTreeMap::new();
-            self.compute
-                .instances
-                .values()
-                .flat_map(|inst| inst.collections_iter())
-                .flat_map(|(coll_id, cs)| {
-                    cs.replica_write_frontiers
-                        .iter()
-                        .filter_map(|(replica_id, frontier)| {
-                            frontier
-                                .elements()
-                                .get(0)
-                                .map(|x| (*replica_id, (*coll_id, x.clone())))
-                        })
-                })
-                .for_each(|(replica_id, frontier)| {
-                    replica_frontiers
-                        .entry(replica_id)
-                        .or_insert_with(Vec::new)
-                        .push(frontier)
-                });
-            Some(ComputeControllerResponse::ReplicaWriteFrontiers(
-                replica_frontiers,
-            ))
-        } else {
-            None
-        }
+        None
     }
 }
 
@@ -648,6 +583,11 @@ impl<T> ComputeInstanceRef<'_, T> {
     /// Return a read-only handle to the indicated collection.
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.instance.collection(id)
+    }
+
+    /// Return an iterator over the installed collections.
+    pub fn collections(&self) -> impl Iterator<Item = (&GlobalId, &CollectionState<T>)> {
+        self.instance.collections_iter()
     }
 }
 

@@ -7,14 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+import subprocess
 from textwrap import dedent
 from typing import Tuple
 
 from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.util.cluster import cluster_pod_name
+from materialize.cloudtest.util.wait import wait
 
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
@@ -86,12 +89,17 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     populate(mz, 1)
 
     [cluster_id, replica_id] = mz.environmentd.sql_query(
-        f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 's1'"
+        "SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 's1'"
     )[0]
-    pod_name = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+    pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd` || true")
+    try:
+        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
+
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 
     validate(mz, 1)
@@ -105,8 +113,8 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 
     def get_replica() -> Tuple[V1Pod, V1StatefulSet]:
         """Find the stateful set for the replica of the default cluster"""
-        compute_pod_name = f"cluster-u1-replica-1-0"
-        ss_name = f"cluster-u1-replica-1"
+        compute_pod_name = "cluster-u1-replica-1-0"
+        ss_name = "cluster-u1-replica-1"
         compute_pod = mz.environmentd.api().read_namespaced_pod(
             compute_pod_name, mz.environmentd.namespace()
         )
@@ -136,6 +144,15 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     populate(mz, 3)
+    mz.testdrive.run(
+        input=dedent(
+            """
+            $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unstable_dependencies = true;
+            """
+        ),
+        no_reset=True,
+    )
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
     mz.environmentd.sql(
         "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_internal.mz_panic(f1) FROM crash_table"

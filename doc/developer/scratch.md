@@ -7,7 +7,7 @@ benchmarks, short-lived side projects, and so on.
 
 Scratch is *not* intended for long-term or mission-critical infrastructure, which we manage in
 the [i2 repo](https://github.com/MaterializeInc/i2). Machines created in scratch are
-therefore automatically deleted after about a week.
+therefore automatically deleted after 36 hours.
 
 ## Permissions
 All members of the engineering org should have full administrative control of
@@ -83,6 +83,12 @@ If you need to, you can install and use the `mssh` command provided by the
 underlying [EC2 connect CLI] directly, but it's usually much easier to go
 through `bin/scratch ssh`.
 
+To make remote ports available locally:
+
+```
+bin/scratch forward INSTANCE_ID port1 port2 ...
+```
+
 #### Visual Studo Code Remote Development
 
 VS Code Remote development allows us to configure common settings and an environment in which materialize can be developed from inside a docker container.
@@ -99,7 +105,7 @@ To use:
 
 This will take a few minutes to build your dev container.
 See the [guide](https://code.visualstudio.com/docs/remote/ssh) for more details.
-Because this is in scratch, it may be deleted after a week.
+Because this is in scratch, it may be deleted after 36 hours.
 If you need a longer term enviroment, use `--max-age-days` when creating the scratch instance.
 
 ### `bin/scratch mine`

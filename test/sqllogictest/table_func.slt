@@ -16,6 +16,16 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE y (a JSONB)
 
@@ -773,6 +783,12 @@ SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb
 {"b":1,"c":3}  NULL
 {"a":1,"c":3}  {"a":1,"c":3}
 
+query TT
+SELECT jsonb_build_array(jsonb_object_keys('{"a":2, "b":3}')), jsonb_build_array(jsonb_object_keys('{"a":2}'));
+----
+["b"]  [null]
+["a"]  ["a"]
+
 query error table functions are not allowed in other table functions
 SELECT jsonb_array_elements(jsonb_array_elements('[[1,2],[3,4]]')), jsonb_array_elements(jsonb_array_elements('[[1],[3,4,5]]')) ORDER BY 1
 
@@ -1294,8 +1310,19 @@ query I
 SELECT generate_subscripts('{1,2,3,4}'::int[], 12345) AS s;
 ----
 
-query error parsing multi-dimensional arrays is not supported
+query T
 SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 1) AS s;
+----
+1
+2
+
+query T
+SELECT generate_subscripts('{{1,2,3,4}, {5,6,7,8}}'::int[], 2) AS s;
+----
+1
+2
+3
+4
 
 query error table functions are not allowed in other table functions
 SELECT generate_subscripts('{1,2,3,4}'::int[], 1), repeat_row(generate_series(1, 1)) AS s
@@ -1390,9 +1417,23 @@ Project (#5, #6)
     Project (#0, #1, #3..=#5)
       Map (coalesce(#2, #4))
         FullOuterJoin (#2 = #4)
-          Map (row_number() over (), #1)
+          Map (row_number() over (order by []), #1)
             CallTable jsonb_object_keys(text_to_jsonb("{\"1\":2}"))
-          Map (row_number() over ())
+          Map (row_number() over (order by []))
             CallTable jsonb_object_keys(text_to_jsonb("{\"3\":4}"))
 
 EOF
+
+# Disallowed table function behaviour
+
+query I
+SELECT generate_series FROM generate_series(1, 3) WHERE (generate_series < 3);
+----
+1
+2
+
+query error Expected right parenthesis, found BY
+SELECT generate_series FROM generate_series(1, 3) OVER (ORDER BY generate_series);
+
+query error Expected right parenthesis, found number "1"
+SELECT generate_series FROM generate_series(DISTINCT 1, 3);

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -85,10 +83,9 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures_core::stream::BoxStream;
+use mz_ore::cast::CastFrom;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use mz_ore::cast::CastFrom;
 
 /// An orchestrator manages services.
 ///
@@ -100,6 +97,16 @@ use mz_ore::cast::CastFrom;
 /// delete, and list the services within their namespace. Namespaces are not
 /// isolated at the network level, however: services in one namespace can
 /// communicate with services in another namespace with no restrictions.
+///
+/// Services **must** be tolerant of running as part of a distributed system. In
+/// particular, services **must** be prepared for the possibility that there are
+/// two live processes with the same identity. This can happen, for example,
+/// when the machine hosting a process *appears* to fail, from the perspective
+/// of the orchestrator, and so the orchestrator restarts the process on another
+/// machine, but in fact the original machine is still alive, just on the
+/// opposite side of a network partition. Be sure to design any communication
+/// with other services (e.g., an external database) to correctly handle
+/// competing communication from another incarnation of the service.
 ///
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
@@ -141,6 +148,8 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
         &self,
         id: &str,
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
+
+    fn update_scheduling_config(&self, config: scheduling_config::ServiceSchedulingConfig);
 }
 
 /// An event describing a status change of an orchestrated service.
@@ -152,13 +161,21 @@ pub struct ServiceEvent {
     pub time: DateTime<Utc>,
 }
 
+/// Why the service is not ready, if known
+#[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
+pub enum NotReadyReason {
+    OomKilled,
+}
+
 /// Describes the status of an orchestrated service.
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {
     /// Service is ready to accept requests.
     Ready,
     /// Service is not ready to accept requests.
-    NotReady,
+    /// The inner element is `None` if the reason
+    /// is unknown
+    NotReady(Option<NotReadyReason>),
 }
 
 impl ServiceStatus {
@@ -166,7 +183,7 @@ impl ServiceStatus {
     pub fn as_kebab_case_str(&self) -> &'static str {
         match self {
             ServiceStatus::Ready => "ready",
-            ServiceStatus::NotReady => "not-ready",
+            ServiceStatus::NotReady(_) => "not-ready",
         }
     }
 }
@@ -184,6 +201,7 @@ pub trait Service: fmt::Debug + Send + Sync {
 pub struct ServiceProcessMetrics {
     pub cpu_nano_cores: Option<u64>,
     pub memory_bytes: Option<u64>,
+    pub disk_usage_bytes: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.
@@ -250,15 +268,29 @@ pub struct ServiceConfig<'a> {
     ///
     /// The orchestrator backend may apply a prefix to the key if appropriate.
     pub labels: BTreeMap<String, String>,
-    /// The availability zone the service should be run in. If no availability
-    /// zone is specified, the orchestrator is free to choose one.
-    pub availability_zone: Option<String>,
-    /// A set of label selectors declaring anti-affinity. If _all_ such selectors
+    /// The availability zones the service can be run in. If no availability
+    /// zones are specified, the orchestrator is free to choose one.
+    pub availability_zones: Option<Vec<String>>,
+    /// A set of label selectors selecting all _other_ services that are replicas of this one.
+    ///
+    /// This may be used to implement anti-affinity. If _all_ such selectors
     /// match for a given service, this service should not be co-scheduled on
     /// a machine with that service.
     ///
     /// The orchestrator backend may or may not actually implement anti-affinity functionality.
-    pub anti_affinity: Option<Vec<LabelSelector>>,
+    pub other_replicas_selector: Vec<LabelSelector>,
+    /// A set of label selectors selecting all services that are replicas of this one,
+    /// including itself.
+    ///
+    /// This may be used to implement placement spread.
+    ///
+    /// The orchestrator backend may or may not actually implement placement spread functionality.
+    pub replicas_selector: Vec<LabelSelector>,
+
+    /// Whether scratch disk space should be allocated for the service.
+    pub disk: bool,
+    /// The maximum amount of scratch disk space that the service is allowed to consume.
+    pub disk_limit: Option<DiskLimit>,
 }
 
 /// A named port associated with a service.
@@ -378,5 +410,126 @@ impl Serialize for CpuLimit {
         S: serde::Serializer,
     {
         <f64 as Serialize>::serialize(&(self.millicpus as f64 / 1000.0), serializer)
+    }
+}
+
+/// Describes a limit on disk usage.
+#[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
+pub struct DiskLimit(pub ByteSize);
+
+impl DiskLimit {
+    pub const MAX: Self = Self(ByteSize(u64::MAX));
+    pub const ARBITRARY: Self = Self(ByteSize::gib(1));
+}
+
+impl<'de> Deserialize<'de> for DiskLimit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        <String as Deserialize>::deserialize(deserializer)
+            .and_then(|s| {
+                ByteSize::from_str(&s).map_err(|_e| {
+                    use serde::de::Error;
+                    D::Error::invalid_value(serde::de::Unexpected::Str(&s), &"valid size in bytes")
+                })
+            })
+            .map(DiskLimit)
+    }
+}
+
+impl Serialize for DiskLimit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        <String as Serialize>::serialize(&self.0.to_string(), serializer)
+    }
+}
+
+/// Configuration for how services are scheduled. These may be ignored by orchestrator
+/// implementations.
+pub mod scheduling_config {
+    #[derive(Debug, Clone)]
+    pub struct ServiceTopologySpreadConfig {
+        /// If `true`, enable spread for replicated services.
+        ///
+        /// Defaults to `true`.
+        pub enabled: bool,
+        /// If `true`, ignore services with `scale` > 1 when expressing
+        /// spread constraints.
+        ///
+        /// Default to `true`.
+        pub ignore_non_singular_scale: bool,
+        /// The `maxSkew` for spread constraints.
+        /// See
+        /// <https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/>
+        /// for more details.
+        ///
+        /// Defaults to `1`.
+        pub max_skew: i32,
+        /// If `true`, make the spread constraints into a preference.
+        ///
+        /// Defaults to `false`.
+        pub soft: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ServiceSchedulingConfig {
+        /// If `Some`, add a affinity preference with the given
+        /// weight for services that horizontally scale.
+        ///
+        /// Defaults to `Some(100)`.
+        pub multi_pod_az_affinity_weight: Option<i32>,
+        /// If `true`, make the node-scope anti-affinity between
+        /// replicated services a preference over a constraint.
+        ///
+        /// Defaults to `false`.
+        pub soften_replication_anti_affinity: bool,
+        /// The weight for `soften_replication_anti_affinity.
+        ///
+        /// Defaults to `100`.
+        pub soften_replication_anti_affinity_weight: i32,
+        /// Configuration for `TopologySpreadConstraint`'s
+        pub topology_spread: ServiceTopologySpreadConfig,
+        /// If `true`, make the az-scope node affinity soft.
+        ///
+        /// Defaults to `false`.
+        pub soften_az_affinity: bool,
+        /// The weight for `soften_replication_anti_affinity.
+        ///
+        /// Defaults to `100`.
+        pub soften_az_affinity_weight: i32,
+    }
+
+    pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
+    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY: bool = false;
+    pub const DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: i32 = 100;
+
+    pub const DEFAULT_TOPOLOGY_SPREAD_ENABLED: bool = true;
+    pub const DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: bool = true;
+    pub const DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW: i32 = 1;
+    pub const DEFAULT_TOPOLOGY_SPREAD_SOFT: bool = false;
+
+    pub const DEFAULT_SOFTEN_AZ_AFFINITY: bool = false;
+    pub const DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT: i32 = 100;
+
+    impl Default for ServiceSchedulingConfig {
+        fn default() -> Self {
+            ServiceSchedulingConfig {
+                multi_pod_az_affinity_weight: DEFAULT_POD_AZ_AFFINITY_WEIGHT,
+                soften_replication_anti_affinity: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
+                soften_replication_anti_affinity_weight:
+                    DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+                topology_spread: ServiceTopologySpreadConfig {
+                    enabled: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
+                    ignore_non_singular_scale: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+                    max_skew: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+                    soft: DEFAULT_TOPOLOGY_SPREAD_SOFT,
+                },
+                soften_az_affinity: DEFAULT_SOFTEN_AZ_AFFINITY,
+                soften_az_affinity_weight: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
+            }
+        }
     }
 }

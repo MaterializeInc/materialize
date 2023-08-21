@@ -1,18 +1,41 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+alter_cluster_set ::=
+  'ALTER' 'CLUSTER' name 'SET' '(' (cluster_option '=' value)* ')'
+alter_cluster_reset ::=
+  'ALTER' 'CLUSTER' name 'RESET' '(' (cluster_option_name)* ')'
 alter_connection ::=
   'ALTER' 'CONNECTION' 'IF EXISTS'? name 'ROTATE' 'KEYS'
+alter_default_privileges ::=
+  'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
+abbreviated_grant ::=
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
+abbreviated_revoke ::=
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
+alter_owner ::=
+  'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
 alter_rename ::=
-  'ALTER' ('CONNECTION' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
+  'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_role ::=
-    'ALTER' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
+    'ALTER' 'ROLE' role_name 'WITH'? 'INHERIT'
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_sink ::=
   'ALTER' 'SINK' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 alter_source ::=
-  'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
+  'ALTER' 'SOURCE' 'IF EXISTS'? name (
+    alter_source_add_clause
+    | alter_source_drop_clause
+    | alter_source_set_clause
+  )
+alter_source_add_clause ::=
+  'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
+alter_source_drop_clause ::=
+  'DROP' ('SUBSOURCE' | 'TABLE') subsrc_name ( ',' subsrc_name )* ('RESTRICT' | 'CASCADE')?
+alter_source_set_clause ::= 'SET' '(' 'SIZE' value ')'
+alter_set_cluster ::=
+  'ALTER' 'MATERIALIZED VIEW' 'IF EXISTS'? name 'SET' 'IN' 'CLUSTER' cluster_name
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -36,6 +59,8 @@ create_cluster ::=
   'CREATE' 'CLUSTER' name (
     'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
   )?
+create_managed_cluster ::=
+  'CREATE' 'CLUSTER' name 'SIZE' '=' value (',' cluster_option '=' value)*
 cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
@@ -78,7 +103,7 @@ create_materialized_view ::=
     ('IN CLUSTER' cluster_name)?
     'AS' select_stmt
 create_role ::=
-    'CREATE' 'ROLE' role_name 'WITH'? ('INHERIT' | 'CREATEROLE' | 'NOCREATEROLE' | 'CREATEDB' | 'NOCREATEDB' | 'CREATECLUSTER' | 'NOCREATECLUSTER')*
+    'CREATE' 'ROLE' role_name 'WITH'? 'INHERIT'
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
@@ -88,13 +113,13 @@ create_sink_kafka ::=
     ('IN CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' kafka_sink_connection
-    ('KEY' '(' key_column ( ',' key_column )* ')')?
+    ('KEY' '(' key_column ( ',' key_column )* ')' 'NOT ENFORCED'?)?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
   ('IN CLUSTER' cluster_name)?
   'FROM' 'KAFKA' 'CONNECTION' connection_name
   '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
@@ -103,20 +128,17 @@ create_source_kafka ::=
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
-create_source_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  ('IN CLUSTER' cluster_name)?
-  'FROM' 'KINESIS ARN' arn with_options?
-  'FORMAT' format_spec
-  ('ENVELOPE NONE')?
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
-  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'TPCH')
+  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'MARKETING' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
-  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+  (
+    'FOR ALL TABLES' |
+    'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')?
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
@@ -127,26 +149,25 @@ create_source_postgres ::=
   ('IN CLUSTER' cluster_name)?
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
-  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+  ('FOR ALL TABLES'
+    | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')'
+    | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
+  )
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
-create_source_s3 ::=
+create_source_webhook ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  ('IN CLUSTER' cluster_name)?
-  'FROM' 'S3' 'DISCOVER OBJECTS'
-  ('MATCHING' pattern)?
-  'USING' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-  ) ( ',' (
-      'BUCKET SCAN' bucket_name |
-      'SQS NOTIFICATIONS' queue_name
-    )
-  )*
-  ('COMPRESSION' ('NONE' | 'GZIP'))?
-  with_options?
-  'FORMAT' format_spec
-  ('ENVELOPE NONE')?
+  'IN CLUSTER' cluster_name
+  'FROM' 'WEBHOOK'
+  'BODY FORMAT' (webhook_body_format)
+  ('INCLUDE HEADERS')?
+  ('CHECK'
+    ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
+    check_expression
+  )?
+webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
+webhook_check_option ::=
+  ('BODY' | 'HEADERS' | 'SECRET' secret_name) ('AS' alias)? ('BYTES')?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
@@ -187,6 +208,8 @@ drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
+drop_owned ::=
+  'DROP' 'OWNED' 'BY' role_name ( ',' role_name )* ('RESTRICT' | 'CASCADE')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_secret ::=
@@ -209,7 +232,7 @@ execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain ::=
   'EXPLAIN'
-  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )?
+  ( ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )? | 'TIMESTAMP' ? )
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
@@ -223,11 +246,15 @@ fetch ::=
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
   'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name key_strat? val_strat? with_options? |
-  'PROTOBUF USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options |
+  'PROTOBUF USING' ('CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options | 'MESSAGE' message_name 'SCHEMA' encoded_schema) |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+grant_privilege ::=
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'TO' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
+grant_role ::=
+  'GRANT' role_name ( ',' role_name )* 'TO' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 key_strat ::=
   'KEY STRATEGY' strat
 val_strat ::=
@@ -236,21 +263,10 @@ strat ::=
   'INLINE' avro_reader_schema |
   'ID' schema_registry_id |
   'LATEST'
-kinesis_format_spec ::=
-  'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
-  'TEXT' |
-  'BYTES'
-s3_format_spec ::=
-  'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
-  'TEXT' |
-  'BYTES'
 sink_format_spec ::=
   'AVRO USING' csr_connection |
   'JSON'
 compression ::= 'COMPRESSION' ('NONE' | 'GZIP')
-key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
     'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'
 func_cast ::=
@@ -285,7 +301,7 @@ func_justify_interval ::=
   'justify_interval' '(' interval ')'
 join_expr ::=
     select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
-	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
+	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ('AS' join_using_alias)? ')' | 'ON' expression ) select_post
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 jsonb_agg ::=
@@ -305,15 +321,27 @@ op_cast ::=
   val '::' type
 prepare ::=
   'PREPARE' name 'AS' statement
+privilege ::=
+  ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE' | 'CREATEROLE' | 'CREATEDB' | 'CREATECLUSTER')
+reassign_owned ::=
+  'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
+reset_session_variable ::=
+  'RESET' variable_name
+reset_system_variable ::=
+  'RESET' variable_name
+revoke_privilege ::=
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
+revoke_role ::=
+  'REVOKE' role_name ( ',' role_name )* 'FROM' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
-  'WITH' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )?
-  'AS' '(' select_stmt ')' ( ',' cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')' )*
-  'SELECT' ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
-  target_elem ( ',' target_elem )*
-  ( 'FROM' table_expr ( ',' table_expr )* )?
-  join_expr?
+  ( select_with_ctes | select_with_recursive_ctes | simple_select_stmt )
+simple_select_stmt ::=
+  'SELECT'
+    ( 'ALL' | 'DISTINCT' ( 'ON' '(' col_ref ( ',' col_ref )* ')' )? )?
+    target_elem ( ',' target_elem )*
+  'FROM' table_expr ( ',' table_expr )* join_expr?
   ( 'WHERE' expr )?
   ( 'GROUP' 'BY' col_ref ( ',' col_ref )* )?
   ( 'OPTIONS' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
@@ -322,6 +350,10 @@ select_stmt ::=
   ( 'LIMIT' integer )?
   ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
+set_session_variable ::=
+  'SET' ( 'SESSION' | 'LOCAL' )? variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
+set_system_variable ::=
+  'ALTER' 'SYSTEM' 'SET' variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' )
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
@@ -354,19 +386,26 @@ show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
 show_indexes ::=
     'SHOW' 'INDEXES'
-    ((('ON') on_name) | ('FROM' schema_name))?
+    ('FROM' schema_name | 'ON' on_name)?
     ('IN CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+show_roles ::=
+  'SHOW' 'ROLES'
+  ('LIKE' 'pattern' | 'WHERE' expr)?
 show_secrets ::=
     'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
+show_variable ::=
+  'SHOW' ( variable_name | 'ALL' )
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
    'SHOW' 'SINKS' ('FROM' schema_name)?
 show_sources ::=
   'SHOW' 'SOURCES' ('FROM' schema_name)?
+show_subsources ::=
+  'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
 show_tables ::=
   'SHOW' 'TABLES' ('FROM' schema_name)?
 show_types ::=
@@ -383,6 +422,9 @@ subscribe_stmt ::=
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
     ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
     ( 'UP' 'TO' timestamp_expression )?
+    ('ENVELOPE' 'UPSERT' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
+    ('ENVELOPE' 'DEBEZIUM' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
+    ('WITHIN' 'TIMESTAMP' 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )*)?
 table_ref ::=
   (
     table_name
@@ -436,7 +478,21 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
-with_options ::= ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+with_ctes ::=
+  'WITH'
+    cte_binding ( ',' cte_binding )*
+    select_stmt
+with_recursive_ctes ::=
+  'WITH MUTUALLY RECURSIVE'
+    ( '(' ('RETURN AT' | 'ERROR AT')? 'RECURSION LIMIT' limit ')' )?
+    recursive_cte_binding ( ',' recursive_cte_binding )*
+    select_stmt
+cte_binding ::=
+  cte_ident ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' '(' select_stmt ')'
+recursive_cte_binding ::=
+  cte_ident '(' col_ident col_type ( ',' col_ident col_type )* ')' 'AS' '(' select_stmt ')'
+with_options ::=
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 with_options_aws ::= 'WITH' '('
     (
       static_credentials

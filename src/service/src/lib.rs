@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -86,6 +84,7 @@ pub mod client;
 pub mod codec;
 pub mod grpc;
 pub mod local;
+pub mod params;
 pub mod retry;
 pub mod secrets;
 pub mod tracing;

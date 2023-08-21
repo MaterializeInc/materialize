@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,7 +79,8 @@ use mz_ore::now::NOW_ZERO;
 use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
 
-#[tokio::test]
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_parameter_type_inference() {
     let test_cases = vec![
         (
@@ -132,11 +131,11 @@ async fn test_parameter_type_inference() {
         ("SELECT coalesce($1, 1)", vec![ScalarType::Int32]),
         (
             "SELECT pg_catalog.substr($1, $2)",
-            vec![ScalarType::String, ScalarType::Int64],
+            vec![ScalarType::String, ScalarType::Int32],
         ),
         (
             "SELECT pg_catalog.substring($1, $2)",
-            vec![ScalarType::String, ScalarType::Int64],
+            vec![ScalarType::String, ScalarType::Int32],
         ),
         (
             "SELECT $1 LIKE $2",
@@ -177,7 +176,7 @@ async fn test_parameter_type_inference() {
     Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
         let catalog = catalog.for_system_session();
         for (sql, types) in test_cases {
-            let stmt = mz_sql::parse::parse(sql).unwrap().into_element();
+            let stmt = mz_sql::parse::parse(sql).unwrap().into_element().ast;
             let (stmt, _) = mz_sql::names::resolve(&catalog, stmt).unwrap();
             let desc = mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[]).unwrap();
             assert_eq!(desc.param_types, types);

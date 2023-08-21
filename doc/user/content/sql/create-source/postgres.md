@@ -12,13 +12,13 @@ aliases:
   - /sql/create-source/postgresql
 ---
 
-{{< warning >}}
-Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
-{{< /warning >}}
-
 {{% create-source/intro %}}
-To connect to a PostgreSQL instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
+Materialize supports PostgreSQL (11+) as a data source. To connect to a PostgreSQL instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
 {{% /create-source/intro %}}
+
+{{< warning >}}
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the integration guide for your PostgreSQL service: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
+{{< /warning >}}
 
 ## Syntax
 
@@ -31,7 +31,9 @@ _src_name_  | The name for the source.
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
+**FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
+**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `CONNECTION` options
 
@@ -52,11 +54,13 @@ Field                                | Value     | Description
 
 This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database — a process also known as _change data capture_.
 
-For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) to get logical replication set up.
+For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in relevant integration guide to get logical replication set up: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
 
 #### Creating a source
 
-To avoid creating multiple replication slots in the upstream PostgreSQL database and minimize the required bandwidth, Materialize ingests the raw replication stream data for either all tables (`FOR ALL TABLES`) or a specified subset of tables (`FOR TABLES`) included in a specific publication.
+To avoid creating multiple replication slots in the upstream PostgreSQL database
+and minimize the required bandwidth, Materialize ingests the raw replication
+stream data for some specific set of tables in your publication.
 
 ```sql
 CREATE SOURCE mz_source
@@ -89,9 +93,10 @@ When you define a source, Materialize will automatically:
     ```nofmt
              name         |   type    |  size
     ----------------------+-----------+---------
+     mz_source            | postgres  | 3xsmall
+     mz_source_progress   | progress  |
      table_1              | subsource |
      table_2              | subsource |
-     mz_source            | postgres  | 3xsmall
     ```
 
     And perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
@@ -123,11 +128,35 @@ CREATE SOURCE mz_source
   WITH (SIZE = '3xsmall');
 ```
 
+### Monitoring source progress
+
+By default, PostgreSQL sources expose progress metadata as a subsource that you
+can use to monitor source **ingestion progress**. The name of the progress
+subsource can be specified when creating a source using the `EXPOSE PROGRESS
+AS` clause; otherwise, it will be named `<src_name>_progress`.
+
+The following metadata is available for each source as a progress subsource:
+
+Field          | Type                                     | Meaning
+---------------|------------------------------------------|--------
+`lsn`          | [`uint8`](/sql/types/uint/#uint8-info)   | The last Log Sequence Number (LSN) consumed from the upstream PostgreSQL replication stream.
+
+And can be queried using:
+
+```sql
+SELECT lsn
+FROM <src_name>_progress;
+```
+
+The reported LSN should increase as Materialize consumes **new** WAL records
+from the upstream PostgreSQL database. For more details on monitoring source
+ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
 ## Known limitations
 
 ##### Schema changes
 
-Materialize does not support changes to schemas for existing publications, and will set the source into an error state if a breaking DDL change is detected upstream. To handle schema changes, you need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
+{{% postgres-direct/postgres-schema-changes %}}
 
 ##### Supported types
 
@@ -148,7 +177,7 @@ DELETE FROM t;
 ## Examples
 
 {{< warning >}}
-Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the integration guide for your PostgreSQL service: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
 ### Creating a connection
@@ -230,6 +259,15 @@ CREATE SOURCE mz_source
     WITH (SIZE = '3xsmall');
 ```
 
+_Create subsources for all tables from specific schemas included in the PostgreSQL publication_
+
+```sql
+CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR SCHEMAS (public, project)
+  WITH (SIZE = '3xsmall');
+```
+
 _Create subsources for specific tables included in the PostgreSQL publication_
 
 ```sql
@@ -250,6 +288,21 @@ CREATE SOURCE mz_source
     TEXT COLUMNS (table.column_of_unsupported_type)
   ) FOR ALL TABLES
   WITH (SIZE = '3xsmall');
+```
+
+### Adding/dropping tables to/from a source
+
+To handle upstream [schema changes](#schema-changes), use the [`ALTER SOURCE...DROP SUBSOURCE`](/sql/alter-source/#context) syntax to drop the affected subsource, and then `ALTER SOURCE...ADD SUBSOURCE` to add the subsource back to the source.
+
+```sql
+-- List all subsources in mz_source
+SHOW SUBSOURCES ON mz_source;
+
+-- Get rid of an outdated or errored subsource
+ALTER SOURCE mz_source DROP SUBSOURCE table_1;
+
+-- Start ingesting the table with the updated schema or fix
+ALTER SOURCE mz_source ADD SUBSOURCE table_1;
 ```
 
 ### Sizing a source
@@ -275,7 +328,12 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source)
+- PostgreSQL integration guides:
+  - [Amazon RDS](/ingest-data/postgres-amazon-rds/)
+  - [Amazon Aurora](/ingest-data/postgres-amazon-aurora/)
+  - [Azure DB](/ingest-data/postgres-azure-db/)
+  - [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/)
+  - [Self-hosted](/ingest-data/postgres-self-hosted/)
 
 [`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html

@@ -7,37 +7,36 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use itertools::Itertools;
-use mz_repr::adt::date::DateError;
-use mz_repr::adt::timestamp::TimestampError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::mem;
 use std::ops::BitOrAssign;
+use std::{fmt, mem};
 
+use itertools::Itertools;
+use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
+use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
-use mz_proto::IntoRustIfSome;
+use mz_ore::str::StrExt;
+use mz_ore::vec::swap_remove_multiple;
+use mz_pgrepr::TypeFromOidError;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::date::DateError;
+use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::range::InvalidRangeError;
+use mz_repr::adt::regex::Regex;
+use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::strconv::{ParseError, ParseHexError};
+use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_lowertest::MzReflect;
-use mz_ore::collections::CollectionExt;
-use mz_ore::iter::IteratorExt;
-use mz_ore::vec::swap_remove_multiple;
-use mz_pgrepr::TypeFromOidError;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::array::InvalidArrayError;
-use mz_repr::adt::datetime::DateTimeUnits;
-use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
-use mz_repr::arb_datum;
-use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
-
-use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-use self::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
-use crate::scalar::func::parse_timezone;
+use crate::scalar::func::{
+    parse_timezone, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
+use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
 
@@ -326,11 +325,16 @@ impl MirScalarExpr {
         }
     }
 
-    /// For a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>` then
-    /// return `(<literal>, false)`. In addition to just trying to match `<expr>` as it is, it also
-    /// tries to remove an invertible function call (such as a cast). If the match match succeeds
-    /// with the inversion, then it returns `(<inverted-literal>, true)`. For more details on the
-    /// inversion, see `invert_casts_on_expr_eq_literal_inner`.
+    /// Try to match a literal equality involving the given expression on one side.
+    /// Return the (non-null) literal and a bool that indicates whether an inversion was needed.
+    ///
+    /// More specifically:
+    /// If `self` is an equality with a `null` literal on any side, then the match fails!
+    /// Otherwise: for a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>`
+    /// then return `Some((<literal>, false))`. In addition to just trying to match `<expr>` as it
+    /// is, we also try to remove an invertible function call (such as a cast). If the match
+    /// succeeds with the inversion, then return `Some((<inverted-literal>, true))`. For more
+    /// details on the inversion, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<(Row, bool)> {
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
@@ -338,6 +342,9 @@ impl MirScalarExpr {
             expr2,
         } = self
         {
+            if expr1.is_literal_null() || expr2.is_literal_null() {
+                return None;
+            }
             if let Some(Ok(lit)) = expr1.as_literal_owned() {
                 return Self::expr_eq_literal_inner(expr, lit, expr1, expr2);
             }
@@ -428,10 +435,10 @@ impl MirScalarExpr {
     /// `<literal> = <expr>`, it tries to simplify the equality by applying the inverse function of
     /// the outermost function call of `<expr>` (if exists):
     ///
-    /// `<literal> = func(<inner_expr>)`, where f is invertible
+    /// `<literal> = func(<inner_expr>)`, where `func` is invertible
     ///  -->
     /// `<func^-1(literal)> = <inner_expr>`
-    /// (if func^-1(literal) doesn't error out)
+    /// if `func^-1(literal)` doesn't error out, and both `func` and `func^-1` preserve uniqueness.
     ///
     /// The return value is the `<inner_expr>` and the literal value that we get by applying the
     /// inverse function.
@@ -452,10 +459,13 @@ impl MirScalarExpr {
         } = expr
         {
             if let Some(inverse_func) = func.inverse() {
-                // We don't want to insert a function call that doesn't preserve
+                // We don't want to remove a function call that doesn't preserve uniqueness, e.g.,
+                // if `f` is a float, we don't want to inverse-cast `f::INT = 0`, because the
+                // inserted int-to-float cast wouldn't be able to invert the rounding.
+                // Also, we don't want to insert a function call that doesn't preserve
                 // uniqueness. E.g., if `a` has an integer type, we don't want to do
                 // a surprise rounding for `WHERE a = 3.14`.
-                if inverse_func.preserves_uniqueness() {
+                if func.preserves_uniqueness() && inverse_func.preserves_uniqueness() {
                     let lit_inv = eval(&MirScalarExpr::CallUnary {
                         func: inverse_func,
                         expr: Box::new(literal.clone()),
@@ -635,6 +645,23 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
+    pub fn contains_error_if_null(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if matches!(
+                expr,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ErrorIfNull,
+                    ..
+                }
+            ) {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
     /// If self is a column, return the column index, otherwise `None`.
     pub fn as_column(&self) -> Option<usize> {
         if let MirScalarExpr::Column(c) = self {
@@ -769,14 +796,15 @@ impl MirScalarExpr {
                             }
                         } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                             if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
-                                let flags = if *case_insensitive { "i" } else { "" };
-                                *e = match func::build_regex(row.unpack_first().unwrap_str(), flags)
-                                {
+                                *e = match Regex::new(
+                                    row.unpack_first().unwrap_str().to_string(),
+                                    *case_insensitive,
+                                ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
-                                        func::IsRegexpMatch(Regex(regex)),
+                                        func::IsRegexpMatch(regex),
                                     )),
                                     Err(err) => MirScalarExpr::literal(
-                                        Err(err),
+                                        Err(err.into()),
                                         e.typ(column_types).scalar_type,
                                     ),
                                 };
@@ -956,23 +984,6 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if let BinaryFunc::TimezoneTime { wall_time } = func {
-                            if expr1.is_literal() {
-                                let tz = expr1.as_literal_str().unwrap();
-                                *e = match parse_timezone(tz) {
-                                    Ok(tz) => MirScalarExpr::CallUnary {
-                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
-                                            tz,
-                                            wall_time: *wall_time,
-                                        }),
-                                        expr: Box::new(expr2.take()),
-                                    },
-                                    Err(err) => MirScalarExpr::literal(
-                                        Err(err),
-                                        e.typ(column_types).scalar_type,
-                                    ),
-                                }
-                            }
                         } else if matches!(*func, BinaryFunc::Eq | BinaryFunc::NotEq)
                             && expr2 < expr1
                         {
@@ -1128,9 +1139,9 @@ impl MirScalarExpr {
                                 _ => "",
                             };
                             *e = match func::build_regex(needle, flags) {
-                                Ok(regex) => mem::take(exprs).into_first().call_unary(
-                                    UnaryFunc::RegexpMatch(func::RegexpMatch(Regex(regex))),
-                                ),
+                                Ok(regex) => mem::take(exprs)
+                                    .into_first()
+                                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(regex))),
                                 Err(err) => MirScalarExpr::literal(
                                     Err(err),
                                     e.typ(column_types).scalar_type,
@@ -1147,6 +1158,28 @@ impl MirScalarExpr {
                             // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
+                        } else if let VariadicFunc::TimezoneTime = func {
+                            if exprs[0].is_literal() && exprs[2].is_literal_ok() {
+                                let tz = exprs[0].as_literal_str().unwrap();
+                                *e = match parse_timezone(tz) {
+                                    Ok(tz) => MirScalarExpr::CallUnary {
+                                        func: UnaryFunc::TimezoneTime(func::TimezoneTime {
+                                            tz,
+                                            wall_time: exprs[2]
+                                                .as_literal()
+                                                .unwrap()
+                                                .unwrap()
+                                                .unwrap_timestamptz()
+                                                .naive_utc(),
+                                        }),
+                                        expr: Box::new(exprs[1].take()),
+                                    },
+                                    Err(err) => MirScalarExpr::literal(
+                                        Err(err),
+                                        e.typ(column_types).scalar_type,
+                                    ),
+                                }
+                            }
                         }
                     }
                     MirScalarExpr::If { cond, then, els } => {
@@ -1787,6 +1820,18 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains a `Column`.
+    pub fn contains_column(&self) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            if let MirScalarExpr::Column(_) = e {
+                contains = true;
+            }
+        });
+        contains
+    }
+
     pub fn size(&self) -> Result<usize, RecursionLimitError> {
         let mut size = 0;
         self.visit_post(&mut |_: &MirScalarExpr| {
@@ -1928,6 +1973,88 @@ impl VisitChildren<Self> for MirScalarExpr {
             }
         }
         Ok(())
+    }
+}
+
+impl MirScalarExpr {
+    /// Iterates through references to child expressions.
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut third = None;
+        let mut variadic = None;
+
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
+                first = Some(&**expr);
+            }
+            CallBinary { expr1, expr2, .. } => {
+                first = Some(&**expr1);
+                second = Some(&**expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                variadic = Some(exprs);
+            }
+            If { cond, then, els } => {
+                first = Some(&**cond);
+                second = Some(&**then);
+                third = Some(&**els);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(third)
+            .chain(variadic.into_iter().flatten())
+    }
+
+    /// Iterates through mutable references to child expressions.
+    pub fn children_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut third = None;
+        let mut variadic = None;
+
+        use MirScalarExpr::*;
+        match self {
+            Column(_) | Literal(_, _) | CallUnmaterializable(_) => (),
+            CallUnary { expr, .. } => {
+                first = Some(&mut **expr);
+            }
+            CallBinary { expr1, expr2, .. } => {
+                first = Some(&mut **expr1);
+                second = Some(&mut **expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                variadic = Some(exprs);
+            }
+            If { cond, then, els } => {
+                first = Some(&mut **cond);
+                second = Some(&mut **then);
+                third = Some(&mut **els);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(third)
+            .chain(variadic.into_iter().flatten())
+    }
+
+    /// Visits all subexpressions in DFS preorder.
+    pub fn visit_pre<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Self),
+    {
+        let mut worklist = vec![self];
+        while let Some(e) = worklist.pop() {
+            f(e);
+            worklist.extend(e.children().rev());
+        }
     }
 }
 
@@ -2077,6 +2204,33 @@ impl FilterCharacteristics {
     pub fn add_literal_equality(&mut self) {
         self.literal_equality = true;
     }
+
+    pub fn worst_case_scaling_factor(&self) -> f64 {
+        let mut factor = 1.0;
+
+        if self.literal_equality {
+            factor *= 0.1;
+        }
+
+        if self.is_null {
+            factor *= 0.1;
+        }
+
+        if self.literal_inequality >= 2 {
+            factor *= 0.25;
+        } else if self.literal_inequality == 1 {
+            factor *= 0.33;
+        }
+
+        // catch various negated filters, treat them pessimistically
+        if !(self.literal_equality || self.is_null || self.literal_inequality > 0)
+            && self.any_filter
+        {
+            factor *= 0.9;
+        }
+
+        factor
+    }
 }
 
 #[derive(
@@ -2128,18 +2282,18 @@ pub enum EvalError {
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
-    Float32OutOfRange,
-    Float64OutOfRange,
-    Int16OutOfRange,
-    Int32OutOfRange,
-    Int64OutOfRange,
-    UInt16OutOfRange,
-    UInt32OutOfRange,
-    UInt64OutOfRange,
-    MzTimestampOutOfRange,
+    Float32OutOfRange(String),
+    Float64OutOfRange(String),
+    Int16OutOfRange(String),
+    Int32OutOfRange(String),
+    Int64OutOfRange(String),
+    UInt16OutOfRange(String),
+    UInt32OutOfRange(String),
+    UInt64OutOfRange(String),
+    MzTimestampOutOfRange(String),
     MzTimestampStepOverflow,
-    OidOutOfRange,
-    IntervalOutOfRange,
+    OidOutOfRange(String),
+    IntervalOutOfRange(String),
     TimestampCannotBeNan,
     TimestampOutOfRange,
     DateOutOfRange,
@@ -2173,6 +2327,7 @@ pub enum EvalError {
     InvalidRegex(String),
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
+    InvalidDatePart(String),
     NegSqrt,
     NullCharacterNotPermitted,
     UnknownUnits(String),
@@ -2200,6 +2355,27 @@ pub enum EvalError {
     },
     TypeFromOid(String),
     InvalidRange(InvalidRangeError),
+    InvalidRoleId(String),
+    InvalidPrivileges(String),
+    LetRecLimitExceeded(String),
+    MultiDimensionalArraySearch,
+    MustNotBeNull(String),
+    InvalidIdentifier {
+        ident: String,
+        detail: Option<String>,
+    },
+    ArrayFillWrongArraySubscripts,
+    // TODO: propagate this check more widly throughout the expr crate
+    MaxArraySizeExceeded(usize),
+    DateDiffOverflow {
+        unit: String,
+        a: String,
+        b: String,
+    },
+    // The error for ErrorIfNull; this should not be used in other contexts as a generic error
+    // printer.
+    IfNullError(String),
+    LengthTooLarge,
 }
 
 impl fmt::Display for EvalError {
@@ -2223,18 +2399,24 @@ impl fmt::Display for EvalError {
             EvalError::FloatOverflow => f.write_str("value out of range: overflow"),
             EvalError::FloatUnderflow => f.write_str("value out of range: underflow"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
-            EvalError::Float32OutOfRange => f.write_str("real out of range"),
-            EvalError::Float64OutOfRange => f.write_str("double precision out of range"),
-            EvalError::Int16OutOfRange => f.write_str("smallint out of range"),
-            EvalError::Int32OutOfRange => f.write_str("integer out of range"),
-            EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
-            EvalError::UInt16OutOfRange => f.write_str("uint2 out of range"),
-            EvalError::UInt32OutOfRange => f.write_str("uint4 out of range"),
-            EvalError::UInt64OutOfRange => f.write_str("uint8 out of range"),
-            EvalError::MzTimestampOutOfRange => f.write_str("mz_timestamp out of range"),
+            EvalError::Float32OutOfRange(val) => write!(f, "{} real out of range", val.quoted()),
+            EvalError::Float64OutOfRange(val) => {
+                write!(f, "{} double precision out of range", val.quoted())
+            }
+            EvalError::Int16OutOfRange(val) => write!(f, "{} smallint out of range", val.quoted()),
+            EvalError::Int32OutOfRange(val) => write!(f, "{} integer out of range", val.quoted()),
+            EvalError::Int64OutOfRange(val) => write!(f, "{} bigint out of range", val.quoted()),
+            EvalError::UInt16OutOfRange(val) => write!(f, "{} uint2 out of range", val.quoted()),
+            EvalError::UInt32OutOfRange(val) => write!(f, "{} uint4 out of range", val.quoted()),
+            EvalError::UInt64OutOfRange(val) => write!(f, "{} uint8 out of range", val.quoted()),
+            EvalError::MzTimestampOutOfRange(val) => {
+                write!(f, "{} mz_timestamp out of range", val.quoted())
+            }
             EvalError::MzTimestampStepOverflow => f.write_str("step mz_timestamp overflow"),
-            EvalError::OidOutOfRange => f.write_str("OID out of range"),
-            EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
+            EvalError::OidOutOfRange(val) => write!(f, "{} OID out of range", val.quoted()),
+            EvalError::IntervalOutOfRange(val) => {
+                write!(f, "{} interval out of range", val.quoted())
+            }
             EvalError::TimestampCannotBeNan => f.write_str("timestamp cannot be NaN"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::DateOutOfRange => f.write_str("date out of range"),
@@ -2276,6 +2458,7 @@ impl fmt::Display for EvalError {
                 "invalid byte sequence '{}' for encoding '{}'",
                 byte_sequence, encoding_name
             ),
+            EvalError::InvalidDatePart(part) => write!(f, "invalid datepart {}", part.quoted()),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::NullCharacterNotPermitted => f.write_str("null character not permitted"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
@@ -2351,6 +2534,36 @@ impl fmt::Display for EvalError {
             }
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
             EvalError::InvalidRange(e) => e.fmt(f),
+            EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
+            EvalError::InvalidPrivileges(privilege) => {
+                write!(f, "unrecognized privilege type: {privilege}")
+            }
+            EvalError::LetRecLimitExceeded(max_iters) => {
+                write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
+                       max_iters)
+            }
+            EvalError::MultiDimensionalArraySearch => write!(
+                f,
+                "searching for elements in multidimensional arrays is not supported"
+            ),
+            EvalError::MustNotBeNull(v) => write!(f, "{v} must not be null"),
+            EvalError::InvalidIdentifier { ident, .. } => {
+                write!(f, "string is not a valid identifier: {}", ident.quoted())
+            }
+            EvalError::ArrayFillWrongArraySubscripts => {
+                f.write_str("wrong number of array subscripts")
+            }
+            EvalError::MaxArraySizeExceeded(max_size) => {
+                write!(
+                    f,
+                    "array size exceeds the maximum allowed ({max_size} bytes)"
+                )
+            }
+            EvalError::DateDiffOverflow { unit, a, b } => {
+                write!(f, "datediff overflow, {unit} of {a}, {b}")
+            }
+            EvalError::IfNullError(s) => f.write_str(s),
+            EvalError::LengthTooLarge => write!(f, "requested length too large"),
         }
     }
 }
@@ -2368,6 +2581,10 @@ impl EvalError {
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
+            EvalError::InvalidIdentifier { detail, .. } => detail.clone(),
+            EvalError::ArrayFillWrongArraySubscripts => {
+                Some("Low bound array has different size than dimensions array.".to_string())
+            }
             _ => None,
         }
     }
@@ -2380,7 +2597,7 @@ impl EvalError {
             EvalError::LikeEscapeTooLong => {
                 Some("Escape string must be empty or one character.".into())
             }
-            EvalError::MzTimestampOutOfRange => Some(
+            EvalError::MzTimestampOutOfRange(_) => Some(
                 "Integer, numeric, and text casts to mz_timestamp must be in the form of whole \
                 milliseconds since the Unix epoch. Values with fractional parts cannot be \
                 converted to mz_timestamp."
@@ -2461,18 +2678,40 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::FloatOverflow => FloatOverflow(()),
             EvalError::FloatUnderflow => FloatUnderflow(()),
             EvalError::NumericFieldOverflow => NumericFieldOverflow(()),
-            EvalError::Float32OutOfRange => Float32OutOfRange(()),
-            EvalError::Float64OutOfRange => Float64OutOfRange(()),
-            EvalError::Int16OutOfRange => Int16OutOfRange(()),
-            EvalError::Int32OutOfRange => Int32OutOfRange(()),
-            EvalError::Int64OutOfRange => Int64OutOfRange(()),
-            EvalError::UInt16OutOfRange => Uint16OutOfRange(()),
-            EvalError::UInt32OutOfRange => Uint32OutOfRange(()),
-            EvalError::UInt64OutOfRange => Uint64OutOfRange(()),
-            EvalError::MzTimestampOutOfRange => MzTimestampOutOfRange(()),
+            EvalError::Float32OutOfRange(val) => Float32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Float64OutOfRange(val) => Float64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int16OutOfRange(val) => Int16OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int32OutOfRange(val) => Int32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::Int64OutOfRange(val) => Int64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::UInt16OutOfRange(val) => Uint16OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::UInt32OutOfRange(val) => Uint32OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::UInt64OutOfRange(val) => Uint64OutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::MzTimestampOutOfRange(val) => MzTimestampOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::MzTimestampStepOverflow => MzTimestampStepOverflow(()),
-            EvalError::OidOutOfRange => OidOutOfRange(()),
-            EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
+            EvalError::OidOutOfRange(val) => OidOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
+            EvalError::IntervalOutOfRange(val) => IntervalOutOfRange(ProtoValueOutOfRange {
+                value: val.to_string(),
+            }),
             EvalError::TimestampCannotBeNan => TimestampCannotBeNan(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
             EvalError::DateOutOfRange => DateOutOfRange(()),
@@ -2511,6 +2750,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRegex(v) => InvalidRegex(v.clone()),
             EvalError::InvalidRegexFlag(v) => InvalidRegexFlag(v.into_proto()),
             EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.clone()),
+            EvalError::InvalidDatePart(part) => InvalidDatePart(part.to_string()),
             EvalError::NegSqrt => NegSqrt(()),
             EvalError::NullCharacterNotPermitted => NullCharacterNotPermitted(()),
             EvalError::UnknownUnits(v) => UnknownUnits(v.clone()),
@@ -2552,6 +2792,28 @@ impl RustType<ProtoEvalError> for EvalError {
             }
             EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
+            EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
+            EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
+            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
+            EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
+            EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
+            EvalError::InvalidIdentifier { ident, detail } => {
+                InvalidIdentifier(ProtoInvalidIdentifier {
+                    ident: ident.clone(),
+                    detail: detail.into_proto(),
+                })
+            }
+            EvalError::ArrayFillWrongArraySubscripts => ArrayFillWrongArraySubscripts(()),
+            EvalError::MaxArraySizeExceeded(max_size) => {
+                MaxArraySizeExceeded(u64::cast_from(*max_size))
+            }
+            EvalError::DateDiffOverflow { unit, a, b } => DateDiffOverflow(ProtoDateDiffOverflow {
+                unit: unit.to_owned(),
+                a: a.to_owned(),
+                b: b.to_owned(),
+            }),
+            EvalError::IfNullError(s) => IfNullError(s.clone()),
+            EvalError::LengthTooLarge => LengthTooLarge(()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2571,18 +2833,18 @@ impl RustType<ProtoEvalError> for EvalError {
                 FloatOverflow(()) => Ok(EvalError::FloatOverflow),
                 FloatUnderflow(()) => Ok(EvalError::FloatUnderflow),
                 NumericFieldOverflow(()) => Ok(EvalError::NumericFieldOverflow),
-                Float32OutOfRange(()) => Ok(EvalError::Float32OutOfRange),
-                Float64OutOfRange(()) => Ok(EvalError::Float64OutOfRange),
-                Int16OutOfRange(()) => Ok(EvalError::Int16OutOfRange),
-                Int32OutOfRange(()) => Ok(EvalError::Int32OutOfRange),
-                Int64OutOfRange(()) => Ok(EvalError::Int64OutOfRange),
-                Uint16OutOfRange(()) => Ok(EvalError::UInt16OutOfRange),
-                Uint32OutOfRange(()) => Ok(EvalError::UInt32OutOfRange),
-                Uint64OutOfRange(()) => Ok(EvalError::UInt64OutOfRange),
-                MzTimestampOutOfRange(()) => Ok(EvalError::MzTimestampOutOfRange),
+                Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value)),
+                Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value)),
+                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value)),
+                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value)),
+                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value)),
+                Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value)),
+                Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value)),
+                Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value)),
+                MzTimestampOutOfRange(val) => Ok(EvalError::MzTimestampOutOfRange(val.value)),
                 MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
-                OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
-                IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
+                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value)),
+                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value)),
                 TimestampCannotBeNan(()) => Ok(EvalError::TimestampCannotBeNan),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
@@ -2615,6 +2877,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRegex(v) => Ok(EvalError::InvalidRegex(v)),
                 InvalidRegexFlag(v) => Ok(EvalError::InvalidRegexFlag(char::from_proto(v)?)),
                 InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v)),
+                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part)),
                 NegSqrt(()) => Ok(EvalError::NegSqrt),
                 NullCharacterNotPermitted(()) => Ok(EvalError::NullCharacterNotPermitted),
                 UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
@@ -2648,6 +2911,26 @@ impl RustType<ProtoEvalError> for EvalError {
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
+                InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
+                InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
+                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
+                MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
+                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
+                InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
+                    ident: v.ident,
+                    detail: v.detail,
+                }),
+                ArrayFillWrongArraySubscripts(()) => Ok(EvalError::ArrayFillWrongArraySubscripts),
+                MaxArraySizeExceeded(max_size) => {
+                    Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
+                }
+                DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
+                    unit: v.unit,
+                    a: v.a,
+                    b: v.b,
+                }),
+                IfNullError(v) => Ok(EvalError::IfNullError(v)),
+                LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
@@ -2669,10 +2952,12 @@ impl RustType<ProtoDims> for (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
 
-    #[test]
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type = vec![
             ScalarType::Int64.nullable(true),
@@ -2779,7 +3064,8 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
             assert!(actual.is_ok());
@@ -2788,7 +3074,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
             let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
             assert!(actual.is_ok());
@@ -2797,7 +3083,8 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
             let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
             assert!(actual.is_ok());

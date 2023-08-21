@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -88,10 +86,14 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
+use mz_persist_types::columnar::{ColumnPush, Schema};
+use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -99,18 +101,20 @@ use timely::progress::Timestamp;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
+use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::BatchFetcher;
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::parse_id;
+use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::rpc::PubSubSender;
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -125,17 +129,18 @@ pub mod cli {
 pub mod critical;
 pub mod error;
 pub mod fetch;
+pub mod internals_bench;
+pub mod metrics {
+    //! Utilities related to metrics.
+    pub use crate::internal::metrics::{encode_ts_metric, Metrics};
+}
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
 }
-pub mod metrics {
-    //! Utilities related to metrics.
-    pub use crate::internal::metrics::encode_ts_metric;
-    pub use crate::internal::metrics::Metrics;
-}
-pub mod internals_bench;
 pub mod read;
+pub mod rpc;
+pub mod stats;
 pub mod usage;
 pub mod write;
 
@@ -149,16 +154,19 @@ mod internal {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod service;
     pub mod state;
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+    pub mod watch;
 
     #[cfg(test)]
     pub mod datadriven;
 }
 
-const BUILD_INFO: BuildInfo = build_info!();
+/// Persist build information.
+pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
@@ -172,6 +180,16 @@ pub struct PersistLocation {
 
     /// Uri string that identifies the consensus system.
     pub consensus_uri: String,
+}
+
+impl PersistLocation {
+    /// Returns a PersistLocation indicating in-mem blob and consensus.
+    pub fn new_in_mem() -> Self {
+        PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        }
+    }
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
@@ -225,6 +243,34 @@ impl ShardId {
     }
 }
 
+/// Additional diagnostic information used within Persist
+/// e.g. for logging, metric labels, etc.
+#[derive(Clone, Debug)]
+pub struct Diagnostics {
+    /// A user-friendly name for the shard.
+    pub shard_name: String,
+    /// A purpose for the handle.
+    pub handle_purpose: String,
+}
+
+impl Diagnostics {
+    /// Create a new `Diagnostics` from `handle_purpose`.
+    pub fn from_purpose(handle_purpose: &str) -> Self {
+        Self {
+            shard_name: "unknown".to_string(),
+            handle_purpose: handle_purpose.to_string(),
+        }
+    }
+
+    /// Create a new `Diagnostics` for testing.
+    pub fn for_tests() -> Self {
+        Self {
+            shard_name: "test-shard-name".to_string(),
+            handle_purpose: "test-purpose".to_string(),
+        }
+    }
+}
+
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
 ///
@@ -239,9 +285,10 @@ impl ShardId {
 /// # let client: mz_persist_client::PersistClient = unimplemented!();
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
+/// # let diagnostics = mz_persist_client::Diagnostics { shard_name: "".into(), handle_purpose: "".into() };
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id, "desc",
-///     Arc::new(StringSchema),Arc::new(StringSchema))).await
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id,
+///     Arc::new(StringSchema),Arc::new(StringSchema),diagnostics)).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
@@ -250,7 +297,9 @@ pub struct PersistClient {
     blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
-    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    isolated_runtime: Arc<IsolatedRuntime>,
+    shared_states: Arc<StateCache>,
+    pubsub_sender: Arc<dyn PubSubSender>,
 }
 
 impl PersistClient {
@@ -264,7 +313,9 @@ impl PersistClient {
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        shared_states: Arc<StateCache>,
+        pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, ExternalError> {
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
@@ -273,8 +324,19 @@ impl PersistClient {
             blob,
             consensus,
             metrics,
-            cpu_heavy_runtime,
+            isolated_runtime,
+            shared_states,
+            pubsub_sender,
         })
+    }
+
+    /// Returns a new in-mem [PersistClient] for tests and examples.
+    pub async fn new_for_tests() -> Self {
+        let cache = PersistClientCache::new_no_metrics();
+        cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid")
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -298,9 +360,9 @@ impl PersistClient {
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -311,12 +373,12 @@ impl PersistClient {
         Ok((
             self.open_writer(
                 shard_id,
-                purpose,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
+                diagnostics.clone(),
             )
             .await?,
-            self.open_leased_reader(shard_id, purpose, key_schema, val_schema)
+            self.open_leased_reader(shard_id, key_schema, val_schema, diagnostics)
                 .await?,
         ))
     }
@@ -333,9 +395,9 @@ impl PersistClient {
     pub async fn open_leased_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -354,21 +416,29 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
-                purpose,
+                &diagnostics.handle_purpose,
                 self.cfg.reader_lease_duration,
                 heartbeat_ts,
             )
             .await;
         maintenance.start_performing(&machine, &gc);
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -376,6 +446,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
+            schemas,
             reader_state.since,
             heartbeat_ts,
         )
@@ -393,8 +464,9 @@ impl PersistClient {
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -408,7 +480,10 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
         );
-        let shard_metrics = self.metrics.shards.shard(&shard_id);
+        let shard_metrics = self
+            .metrics
+            .shards
+            .shard(&shard_id, &diagnostics.shard_name);
 
         // This call ensures that the types match what was used when creating
         // the shard or puts in place the types that we expect for future
@@ -418,11 +493,16 @@ impl PersistClient {
         let _ = state_versions
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
-
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let fetcher = BatchFetcher {
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
+            shard_metrics,
             shard_id,
+            schemas,
             _phantom: PhantomData,
         };
 
@@ -477,7 +557,7 @@ impl PersistClient {
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
-        purpose: &str,
+        diagnostics: Diagnostics,
     ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -497,12 +577,16 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
-            .register_critical_reader::<O>(&reader_id, purpose)
+            .register_critical_reader::<O>(&reader_id, &diagnostics.handle_purpose)
             .await;
         maintenance.start_performing(&machine, &gc);
         let handle = SinceHandle::new(
@@ -528,9 +612,9 @@ impl PersistClient {
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,
-        purpose: &str,
-        _key_schema: Arc<K::Schema>,
-        _val_schema: Arc<V::Schema>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -544,34 +628,34 @@ impl PersistClient {
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
         );
-        let mut machine = Machine::new(
+        let machine = Machine::new(
             self.cfg.clone(),
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
         )
         .await?;
-        let gc = GarbageCollector::new(machine.clone());
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
+        let schemas = Schemas {
+            key: key_schema,
+            val: val_schema,
+        };
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
-                Arc::clone(&self.cpu_heavy_runtime),
+                Arc::clone(&self.isolated_runtime),
                 writer_id.clone(),
+                schemas.clone(),
                 gc.clone(),
             )
         });
-        let heartbeat_ts = (self.cfg.now)();
-        let (shard_upper, _, maintenance) = machine
-            .register_writer(
-                &writer_id,
-                purpose,
-                self.cfg.writer_lease_duration,
-                heartbeat_ts,
-            )
-            .await;
-        maintenance.start_performing(&machine, &gc);
+        let upper = machine.applier.clone_upper();
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -579,13 +663,43 @@ impl PersistClient {
             gc,
             compact,
             Arc::clone(&self.blob),
-            Arc::clone(&self.cpu_heavy_runtime),
+            Arc::clone(&self.isolated_runtime),
             writer_id,
-            shard_upper.0,
-            heartbeat_ts,
+            &diagnostics.handle_purpose,
+            schemas,
+            upper,
         )
         .await;
         Ok(writer)
+    }
+
+    /// Returns the internal state of the shard for debugging and QA.
+    ///
+    /// We'll be thoughtful about making unnecessary changes, but the **output
+    /// of this method needs to be gated from users**, so that it's not subject
+    /// to our backward compatibility guarantees.
+    pub async fn inspect_shard<T: Timestamp + Lattice + Codec64>(
+        &self,
+        shard_id: &ShardId,
+    ) -> Result<impl serde::Serialize, anyhow::Error> {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        // TODO: Don't fetch all live diffs. Feels like we should pull out a new
+        // method in StateVersions for fetching the latest version of State of a
+        // shard that might or might not exist.
+        let versions = state_versions.fetch_all_live_diffs(shard_id).await;
+        if versions.0.is_empty() {
+            return Err(anyhow::anyhow!("{} does not exist", shard_id));
+        }
+        let state = state_versions
+            .fetch_current_state::<T>(shard_id, versions.0)
+            .await;
+        let state = state.check_ts_codec(shard_id)?;
+        Ok(state)
     }
 
     /// Test helper for a [Self::open] call that is expected to succeed.
@@ -605,9 +719,9 @@ impl PersistClient {
     {
         self.open(
             shard_id,
-            "tests",
             Arc::new(K::Schema::default()),
             Arc::new(V::Schema::default()),
+            Diagnostics::for_tests(),
         )
         .await
         .expect("codec mismatch")
@@ -621,28 +735,68 @@ impl PersistClient {
     }
 }
 
+impl Codec for ShardId {
+    type Schema = ShardIdSchema;
+    fn codec_name() -> String {
+        "ShardId".into()
+    }
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        buf.put(self.to_string().as_bytes())
+    }
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
+        shard_id.parse()
+    }
+}
+
+/// An implementation of [Schema] for [ShardId].
+#[derive(Debug)]
+pub struct ShardIdSchema;
+
+impl Schema<ShardId> for ShardIdSchema {
+    type Encoder<'a> = SimpleEncoder<'a, ShardId, String>;
+
+    type Decoder<'a> = SimpleDecoder<'a, ShardId, String>;
+
+    fn columns(&self) -> DynStructCfg {
+        SimpleSchema::<ShardId, String>::columns(&())
+    }
+
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        SimpleSchema::<ShardId, String>::decoder(cols, |val, ret| {
+            *ret = val.parse().expect("should be valid ShardId")
+        })
+    }
+
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        SimpleSchema::<ShardId, String>::push_encoder(cols, |col, val| {
+            ColumnPush::<String>::push(col, &val.to_string())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::panic::AssertUnwindSafe;
     use std::pin::Pin;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::Context;
     use std::time::Duration;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
-    use mz_ore::future::OreFutureExt;
-    use mz_ore::now::NowFn;
+
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use timely::order::{PartialOrder, Product};
+    use timely::progress::timestamp::PathSummary;
     use timely::progress::Antichain;
-    use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
@@ -651,6 +805,68 @@ mod tests {
     use crate::read::ListenEvent;
 
     use super::*;
+
+    /// A product type that fits in Codec64. Used to test persist on partial orders
+    #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    pub(crate) struct CodecProduct(Product<u32, u32>);
+
+    impl CodecProduct {
+        pub(crate) fn new(outer: u32, inner: u32) -> Self {
+            Self(Product::new(outer, inner))
+        }
+    }
+
+    impl Timestamp for CodecProduct {
+        type Summary = <Product<u32, u32> as Timestamp>::Summary;
+
+        fn minimum() -> Self {
+            Self(Product::minimum())
+        }
+    }
+
+    impl PathSummary<CodecProduct> for <Product<u32, u32> as Timestamp>::Summary {
+        fn results_in(&self, src: &CodecProduct) -> Option<CodecProduct> {
+            self.results_in(&src.0).map(CodecProduct)
+        }
+
+        fn followed_by(&self, other: &Self) -> Option<Self> {
+            PathSummary::<Product<u32, u32>>::followed_by(self, other)
+        }
+    }
+
+    impl PartialOrder for CodecProduct {
+        fn less_equal(&self, other: &Self) -> bool {
+            self.0.less_equal(&other.0)
+        }
+    }
+
+    impl Codec64 for CodecProduct {
+        fn codec_name() -> String {
+            "CodecProduct".to_owned()
+        }
+
+        fn encode(&self) -> [u8; 8] {
+            let [a, b, c, d] = u32::to_le_bytes(self.0.outer);
+            let [e, f, g, h] = u32::to_le_bytes(self.0.inner);
+            [a, b, c, d, e, f, g, h]
+        }
+
+        fn decode([a, b, c, d, e, f, g, h]: [u8; 8]) -> Self {
+            let outer = u32::from_le_bytes([a, b, c, d]);
+            let inner = u32::from_le_bytes([e, f, g, h]);
+            Self(Product::new(outer, inner))
+        }
+    }
+
+    impl Lattice for CodecProduct {
+        fn join(&self, other: &Self) -> Self {
+            Self(self.0.join(&other.0))
+        }
+
+        fn meet(&self, other: &Self) -> Self {
+            Self(self.0.meet(&other.0))
+        }
+    }
 
     pub fn new_test_client_cache() -> PersistClientCache {
         // Configure an aggressively small blob_target_size so we get some
@@ -667,10 +883,7 @@ mod tests {
     pub async fn new_test_client() -> PersistClient {
         let cache = new_test_client_cache();
         cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
     }
@@ -727,10 +940,9 @@ mod tests {
         (part, updates)
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn sanity_check() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -776,10 +988,9 @@ mod tests {
     }
 
     // Sanity check that the open_reader and open_writer calls work.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn open_reader_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -791,36 +1002,36 @@ mod tests {
         let mut write1 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut read1 = client
             .open_leased_reader::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut read2 = client
             .open_leased_reader::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
         let mut write2 = client
             .open_writer::<String, String, u64, i64>(
                 shard_id,
-                "",
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
+                Diagnostics::for_tests(),
             )
             .await
             .expect("codec mismatch");
@@ -834,10 +1045,9 @@ mod tests {
         assert_eq!(read1.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn invalid_usage() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -847,7 +1057,7 @@ mod tests {
         let shard_id0 = "s00000000-0000-0000-0000-000000000000"
             .parse::<ShardId>()
             .expect("invalid shard id");
-        let client = new_test_client().await;
+        let mut client = new_test_client().await;
 
         let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
@@ -866,13 +1076,14 @@ mod tests {
                 (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned(), None)
             }
 
+            client.shared_states = Arc::new(StateCache::new_no_metrics());
             assert_eq!(
                 client
                     .open::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -885,9 +1096,9 @@ mod tests {
                 client
                     .open::<String, Vec<u8>, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(VecU8Schema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -900,9 +1111,9 @@ mod tests {
                 client
                     .open::<String, String, i64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -915,9 +1126,9 @@ mod tests {
                 client
                     .open::<String, String, u64, u64>(
                         shard_id0,
-                        "",
                         Arc::new(StringSchema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -934,9 +1145,9 @@ mod tests {
                 client
                     .open_leased_reader::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -949,9 +1160,9 @@ mod tests {
                 client
                     .open_writer::<Vec<u8>, String, u64, i64>(
                         shard_id0,
-                        "",
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
+                        Diagnostics::for_tests(),
                     )
                     .await
                     .unwrap_err(),
@@ -1013,7 +1224,7 @@ mod tests {
                     .await
                     .unwrap_err(),
                 InvalidUsage::UpdateBeyondUpper {
-                    max_ts: 3,
+                    ts: 3,
                     expected_upper: Antichain::from_elem(3),
                 },
             );
@@ -1089,10 +1300,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn multiple_shards() {
-        mz_ore::test::init_logging();
-
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1131,10 +1341,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_upper() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1164,10 +1373,9 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn append_with_invalid_upper() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1229,10 +1437,9 @@ mod tests {
         assert!(is_send_sync(read));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1287,7 +1494,8 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn overlapping_append() {
         mz_ore::test::init_logging_default("info");
 
@@ -1337,10 +1545,9 @@ mod tests {
 
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1386,10 +1593,9 @@ mod tests {
 
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_append_per_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1430,10 +1636,9 @@ mod tests {
 
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_compare_and_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1478,10 +1683,9 @@ mod tests {
 
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_compare_and_append_per_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1512,99 +1716,7 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
     }
 
-    #[tokio::test]
-    async fn writer_heartbeat() {
-        mz_ore::test::init_logging();
-
-        let data = vec![
-            (("1".to_owned(), "one".to_owned()), 1, 1),
-            (("2".to_owned(), "two".to_owned()), 2, 1),
-            (("3".to_owned(), "three".to_owned()), 3, 1),
-        ];
-
-        let shard_id = ShardId::new();
-        let now = Arc::new(AtomicU64::new(0));
-        let now_clone = Arc::clone(&now);
-        let mut cache = new_test_client_cache();
-        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::SeqCst));
-        let (mut write, _) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
-            .await
-            .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
-
-        let lease_duration_ms = u64::try_from(write.cfg.writer_lease_duration.as_millis()).unwrap();
-
-        // we won't heartbeat if enough time hasn't passed
-        let heartbeat = write.last_heartbeat;
-        now.fetch_add(1, Ordering::SeqCst);
-        write.maybe_heartbeat_writer().await;
-        assert_eq!(write.last_heartbeat, heartbeat);
-
-        // but we will heartbeat if we're past half our lease duration
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.maybe_heartbeat_writer().await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // performing a compare_and_append should also heartbeat the writer
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_compare_and_append(&data[0..1], 0, 2).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // preparing a batch should heartbeat if it fills up a full batch part
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_batch(&data[1..3], 1, 4).await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // but a batch operation that doesn't fill up a full batch part should NOT heartbeat.
-        // presumably it didn't take long to prepare <1 full batch part, and it'll be heartbeated
-        // as part of a subsequent compare_and_append
-        let heartbeat = write.last_heartbeat;
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        write.expect_batch(&[], 0, 1).await;
-        assert_eq!(write.last_heartbeat, heartbeat);
-
-        // one more check: failed calls to append should heartbeat
-        now.fetch_add(lease_duration_ms / 2, Ordering::SeqCst);
-        let _failed_append = write
-            .append(
-                &data[3..],
-                Antichain::from_elem(99),
-                Antichain::from_elem(100),
-            )
-            .await;
-        assert_eq!(write.last_heartbeat, now.load(Ordering::SeqCst));
-
-        // and verify that other handles can expire our writer as routine maintenance
-        now.fetch_add(lease_duration_ms * 2, Ordering::SeqCst);
-        let (_, mut read) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
-            .await
-            .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
-
-        let (_, _, maintenance) = read
-            .machine
-            .heartbeat_leased_reader(&read.reader_id, now.load(Ordering::SeqCst))
-            .await;
-        maintenance
-            .perform(&read.machine.clone(), &read.gc.clone())
-            .await;
-        let expired_writer_heartbeat = AssertUnwindSafe(write.maybe_heartbeat_writer())
-            .ore_catch_unwind()
-            .await;
-        assert!(matches!(expired_writer_heartbeat, Err(_)));
-    }
-
-    #[test]
+    #[mz_ore::test]
     fn fmt_ids() {
         assert_eq!(
             format!("{}", ShardId([0u8; 16])),
@@ -1648,7 +1760,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn shard_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct ShardIdContainer {
@@ -1681,10 +1793,9 @@ mod tests {
         assert_eq!(container.shard_id, id);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn concurrency() {
-        mz_ore::test::init_logging();
-
         let data = DataGenerator::small();
 
         const NUM_WRITERS: usize = 2;
@@ -1780,9 +1891,9 @@ mod tests {
     // Regression test for #12131. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_blocking_reads() {
-        mz_ore::test::init_logging();
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
@@ -1852,18 +1963,16 @@ mod tests {
         assert_eq!(snap.await, all_ok(&data[..], 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn heartbeat_task_shutdown() {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
         let mut cache = new_test_client_cache();
         cache.cfg.reader_lease_duration = Duration::from_millis(1);
         cache.cfg.writer_lease_duration = Duration::from_millis(1);
-        let (mut write, mut read) = cache
-            .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
-            })
+        let (_write, mut read) = cache
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
@@ -1872,14 +1981,6 @@ mod tests {
             .heartbeat_task
             .take()
             .expect("handle should have heartbeat task");
-        let write_heartbeat_task = write
-            .heartbeat_task
-            .take()
-            .expect("handle should have heartbeat task");
-        write.expire().await;
-        let () = write_heartbeat_task
-            .await
-            .expect("task should shutdown cleanly");
         read.expire().await;
         let () = read_heartbeat_task
             .await
@@ -1889,7 +1990,8 @@ mod tests {
     /// Regression test for 16743, where the nightly tests found that calling
     /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
     /// would panic.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_16743_heartbeat_tombstone() {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
         let (mut write, mut read) = new_test_client()
@@ -1906,14 +2008,13 @@ mod tests {
         // Verify that heartbeating doesn't panic.
         read.last_heartbeat = 0;
         read.maybe_heartbeat_reader().await;
-        write.last_heartbeat = 0;
-        write.maybe_heartbeat_writer().await;
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
             let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());

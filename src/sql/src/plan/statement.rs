@@ -12,37 +12,42 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, RawObjectName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
+    ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
-use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
+use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
+    SessionCatalog, SystemObjectType,
 };
 use crate::names::{
-    self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
-    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
+    self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options};
-use crate::plan::{Params, Plan, PlanContext, PlanKind};
+use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
+use crate::session::vars::FeatureFlag;
 
+mod acl;
 pub(crate) mod ddl;
 mod dml;
 mod raise;
 mod scl;
 pub(crate) mod show;
 mod tcl;
+mod validate;
 
+use crate::session::vars;
 pub(crate) use ddl::PgConfigOptionExtracted;
+use mz_repr::role_id::RoleId;
 
 /// Describes the output of a SQL statement.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -110,11 +115,13 @@ pub fn describe(
 
     let desc = match stmt {
         // DDL statements.
+        Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
+        Statement::AlterSetCluster(stmt) => ddl::describe_alter_set_cluster(&scx, stmt)?,
         Statement::AlterSink(stmt) => ddl::describe_alter_sink(&scx, stmt)?,
         Statement::AlterSource(stmt) => ddl::describe_alter_source(&scx, stmt)?,
         Statement::AlterSystemSet(stmt) => ddl::describe_alter_system_set(&scx, stmt)?,
@@ -129,6 +136,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
@@ -137,12 +145,19 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
-        Statement::DropClusterReplicas(stmt) => ddl::describe_drop_cluster_replica(&scx, stmt)?,
-        Statement::DropClusters(stmt) => ddl::describe_drop_cluster(&scx, stmt)?,
-        Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
-        Statement::DropRoles(stmt) => ddl::describe_drop_role(&scx, stmt)?,
-        Statement::DropSchema(stmt) => ddl::describe_drop_schema(&scx, stmt)?,
+        Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
+
+        // `ACL` statements.
+        Statement::AlterOwner(stmt) => acl::describe_alter_owner(&scx, stmt)?,
+        Statement::GrantRole(stmt) => acl::describe_grant_role(&scx, stmt)?,
+        Statement::RevokeRole(stmt) => acl::describe_revoke_role(&scx, stmt)?,
+        Statement::GrantPrivileges(stmt) => acl::describe_grant_privileges(&scx, stmt)?,
+        Statement::RevokePrivileges(stmt) => acl::describe_revoke_privileges(&scx, stmt)?,
+        Statement::AlterDefaultPrivileges(stmt) => {
+            acl::describe_alter_default_privileges(&scx, stmt)?
+        }
+        Statement::ReassignOwned(stmt) => acl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -169,14 +184,8 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
         }
-        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(&scx, stmt)?.describe()?
-        }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
-        }
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => {
-            show::show_schemas(&scx, stmt)?.describe()?
         }
 
         // SCL statements.
@@ -210,6 +219,10 @@ pub fn describe(
 
         // Other statements.
         Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
+        Statement::Show(ShowStatement::InspectShard(stmt)) => {
+            scl::describe_inspect_shard(&scx, stmt)?
+        }
+        Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -219,19 +232,28 @@ pub fn describe(
 /// Produces a [`Plan`] from the purified statement `stmt`.
 ///
 /// Planning is a pure, synchronous function and so requires that the provided
-/// `stmt` does does not depend on any external state. Only `CREATE SOURCE`
-/// statements can depend on external state; remove that state prior to calling
-/// this function via [`crate::pure::purify_create_source`].
+/// `stmt` does does not depend on any external state. Statements that rely on
+/// external state must remove that state prior to calling this function via
+/// [`crate::pure::purify_statement`].
+///
+/// TODO: sinks do not currently obey this rule, which is a bug
+/// <https://github.com/MaterializeInc/materialize/issues/20019>
 ///
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
+///
+/// Note that if you want to do something else asynchronously (e.g. validating
+/// connections), these might want to take different code paths than
+/// `purify_statement`. Feel free to rationalize this by thinking of those
+/// statements as not necessarily depending on external state.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
+    resolved_ids: &ResolvedIds,
 ) -> Result<Plan, PlanError> {
     let param_types = params
         .types
@@ -249,13 +271,29 @@ pub fn plan(
         ambiguous_columns: RefCell::new(false),
     };
 
+    if resolved_ids
+        .0
+        .iter()
+        // Filter out items that may not have been created yet, such as sub-sources.
+        .filter_map(|id| catalog.try_get_item(id))
+        .any(|item| {
+            item.func().is_ok()
+                && item.name().qualifiers.schema_spec
+                    == SchemaSpecifier::Id(*catalog.get_mz_internal_schema_id())
+        })
+    {
+        scx.require_feature_flag(&vars::ENABLE_DANGEROUS_FUNCTIONS)?;
+    }
+
     let plan = match stmt {
         // DDL statements.
+        Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
+        Statement::AlterSetCluster(stmt) => ddl::plan_alter_item_set_cluster(scx, stmt),
         Statement::AlterSink(stmt) => ddl::plan_alter_sink(scx, stmt),
         Statement::AlterSource(stmt) => ddl::plan_alter_source(scx, stmt),
         Statement::AlterSystemSet(stmt) => ddl::plan_alter_system_set(scx, stmt),
@@ -270,6 +308,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
@@ -278,12 +317,17 @@ pub fn plan(
         Statement::CreateMaterializedView(stmt) => {
             ddl::plan_create_materialized_view(scx, stmt, params)
         }
-        Statement::DropClusterReplicas(stmt) => ddl::plan_drop_cluster_replica(scx, stmt),
-        Statement::DropClusters(stmt) => ddl::plan_drop_cluster(scx, stmt),
-        Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
-        Statement::DropRoles(stmt) => ddl::plan_drop_role(scx, stmt),
-        Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
+        Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
+
+        // `ACL` statements.
+        Statement::AlterOwner(stmt) => acl::plan_alter_owner(scx, stmt),
+        Statement::GrantRole(stmt) => acl::plan_grant_role(scx, stmt),
+        Statement::RevokeRole(stmt) => acl::plan_revoke_role(scx, stmt),
+        Statement::GrantPrivileges(stmt) => acl::plan_grant_privileges(scx, stmt),
+        Statement::RevokePrivileges(stmt) => acl::plan_revoke_privileges(scx, stmt),
+        Statement::AlterDefaultPrivileges(stmt) => acl::plan_alter_default_privileges(scx, stmt),
+        Statement::ReassignOwned(stmt) => acl::plan_reassign_owned(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
@@ -297,31 +341,27 @@ pub fn plan(
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
-            show::plan_show_create_connection(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_connection(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
-            show::plan_show_create_index(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
-            show::plan_show_create_sink(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
-            show::plan_show_create_source(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_source(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
-            show::plan_show_create_table(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_table(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
-            show::plan_show_create_view(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_view(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
-            show::plan_show_create_materialized_view(scx, stmt).map(Plan::SendRows)
-        }
-        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(scx, stmt)?.plan()
+            show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, stmt)?.plan(),
 
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
@@ -343,6 +383,8 @@ pub fn plan(
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
+        Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
+        Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
     };
 
     if let Ok(plan) = &plan {
@@ -441,7 +483,7 @@ impl<'a> StatementContext<'a> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
     }
 
-    pub fn allocate_full_name(&self, name: PartialObjectName) -> Result<FullObjectName, PlanError> {
+    pub fn allocate_full_name(&self, name: PartialItemName) -> Result<FullItemName, PlanError> {
         let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
         {
             (None, None) => {
@@ -477,7 +519,7 @@ impl<'a> StatementContext<'a> {
             (Some(database), Some(schema)) => (RawDatabaseSpecifier::Name(database), schema),
         };
         let item = name.item;
-        Ok(FullObjectName {
+        Ok(FullItemName {
             database,
             schema,
             item,
@@ -486,8 +528,8 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_qualified_name(
         &self,
-        name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, PlanError> {
+        name: PartialItemName,
+    ) -> Result<QualifiedItemName, PlanError> {
         let full_name = self.allocate_full_name(name)?;
         let database_spec = match full_name.database {
             RawDatabaseSpecifier::Ambient => ResolvedDatabaseSpecifier::Ambient,
@@ -500,8 +542,8 @@ impl<'a> StatementContext<'a> {
             .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema))?
             .id()
             .clone();
-        Ok(QualifiedObjectName {
-            qualifiers: ObjectQualifiers {
+        Ok(QualifiedItemName {
+            qualifiers: ItemQualifiers {
                 database_spec,
                 schema_spec,
             },
@@ -509,18 +551,20 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    pub fn allocate_temporary_full_name(&self, name: PartialObjectName) -> FullObjectName {
-        FullObjectName {
+    pub fn allocate_temporary_full_name(&self, name: PartialItemName) -> FullItemName {
+        FullItemName {
             database: RawDatabaseSpecifier::Ambient,
-            schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
+            schema: name
+                .schema
+                .unwrap_or_else(|| mz_repr::namespaces::MZ_TEMP_SCHEMA.to_owned()),
             item: name.item,
         }
     }
 
     pub fn allocate_temporary_qualified_name(
         &self,
-        name: PartialObjectName,
-    ) -> Result<QualifiedObjectName, PlanError> {
+        name: PartialItemName,
+    ) -> Result<QualifiedItemName, PlanError> {
         if let Some(name) = name.schema {
             if name
                 != self
@@ -535,8 +579,8 @@ impl<'a> StatementContext<'a> {
             }
         }
 
-        Ok(QualifiedObjectName {
-            qualifiers: ObjectQualifiers {
+        Ok(QualifiedItemName {
+            qualifiers: ItemQualifiers {
                 database_spec: ResolvedDatabaseSpecifier::Ambient,
                 schema_spec: SchemaSpecifier::Temporary,
             },
@@ -544,17 +588,17 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    // Creates a `ResolvedObjectName::Object` from a `GlobalId` and an
-    // `UnresolvedObjectName`.
-    pub fn allocate_resolved_object_name(
+    // Creates a `ResolvedItemName::Item` from a `GlobalId` and an
+    // `UnresolvedItemName`.
+    pub fn allocate_resolved_item_name(
         &self,
         id: GlobalId,
-        name: UnresolvedObjectName,
-    ) -> Result<ResolvedObjectName, PlanError> {
-        let partial = normalize::unresolved_object_name(name)?;
+        name: UnresolvedItemName,
+    ) -> Result<ResolvedItemName, PlanError> {
+        let partial = normalize::unresolved_item_name(name)?;
         let qualified = self.allocate_qualified_name(partial.clone())?;
         let full_name = self.allocate_full_name(partial)?;
-        Ok(ResolvedObjectName::Object {
+        Ok(ResolvedItemName::Item {
             id,
             qualifiers: qualified.qualifiers,
             full_name,
@@ -627,17 +671,17 @@ impl<'a> StatementContext<'a> {
         self.catalog.get_schema(database_spec, schema_spec)
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName) -> bool {
         self.catalog.item_exists(name)
     }
 
-    pub fn resolve_item(&self, name: RawObjectName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_item(&self, name: RawItemName) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            RawObjectName::Name(name) => {
-                let name = normalize::unresolved_object_name(name)?;
+            RawItemName::Name(name) => {
+                let name = normalize::unresolved_item_name(name)?;
                 Ok(self.catalog.resolve_item(&name)?)
             }
-            RawObjectName::Id(id, _) => {
+            RawItemName::Id(id, _) => {
                 let gid = id.parse()?;
                 Ok(self.catalog.get_item(&gid))
             }
@@ -650,20 +694,20 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_item_by_resolved_name(
         &self,
-        name: &ResolvedObjectName,
+        name: &ResolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
         match name {
-            ResolvedObjectName::Object { id, .. } => Ok(self.get_item(id)),
-            ResolvedObjectName::Cte { .. } => sql_bail!("non-user item"),
-            ResolvedObjectName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
+            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
 
     pub fn resolve_function(
         &self,
-        name: UnresolvedObjectName,
+        name: UnresolvedItemName,
     ) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::unresolved_object_name(name)?;
+        let name = normalize::unresolved_item_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }
 
@@ -704,14 +748,32 @@ impl<'a> StatementContext<'a> {
         Ok(data_type)
     }
 
-    pub fn unsafe_mode(&self) -> bool {
-        self.catalog.config().unsafe_mode
+    pub fn get_object_type(&self, id: &ObjectId) -> ObjectType {
+        self.catalog.get_object_type(id)
     }
 
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
-        if !self.unsafe_mode() {
-            sql_bail!("{} is unsupported", feature_name)
+    pub fn get_system_object_type(&self, id: &SystemObjectId) -> SystemObjectType {
+        match id {
+            SystemObjectId::Object(id) => SystemObjectType::Object(self.get_object_type(id)),
+            SystemObjectId::System => SystemObjectType::System,
         }
+    }
+
+    /// Returns an error if the named `FeatureFlag` is not set to `on`.
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        flag.enabled(Some(self.catalog.system_vars()), None, None)?;
+        Ok(())
+    }
+
+    /// Equivalent to [`Self::require_feature_flag`] but with the ability for the caller to control
+    /// the error message.
+    pub fn require_feature_flag_w_dynamic_desc(
+        &self,
+        flag: &FeatureFlag,
+        desc: String,
+        detail: String,
+    ) -> Result<(), PlanError> {
+        flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
         Ok(())
     }
 
@@ -778,6 +840,7 @@ impl<'a> StatementContext<'a> {
         desc: &RelationDesc,
     ) -> Result<(Vec<ColumnDef<Aug>>, Vec<TableConstraint<Aug>>), PlanError> {
         let mut columns = vec![];
+        let mut null_cols = BTreeSet::new();
         for (column_name, column_type) in desc.iter() {
             let name = Ident::new(column_name.as_str().to_owned());
 
@@ -785,6 +848,7 @@ impl<'a> StatementContext<'a> {
             let data_type = self.resolve_type(ty)?;
 
             let options = if !column_type.nullable {
+                null_cols.insert(columns.len());
                 vec![mz_sql_parser::ast::ColumnOptionDef {
                     name: None,
                     option: mz_sql_parser::ast::ColumnOption::NotNull,
@@ -805,15 +869,56 @@ impl<'a> StatementContext<'a> {
         for key in desc.typ().keys.iter() {
             let mut col_names = vec![];
             for col_idx in key {
+                if !null_cols.contains(col_idx) {
+                    // Note that alternatively we could support NULL values in keys with `NULLS NOT
+                    // DISTINCT` semantics, which treats `NULL` as a distinct value.
+                    sql_bail!("[internal error] key columns must be NOT NULL when generating table constraints");
+                }
                 col_names.push(columns[*col_idx].name.clone());
             }
             table_constraints.push(TableConstraint::Unique {
                 name: None,
                 columns: col_names,
                 is_primary: false,
+                nulls_not_distinct: false,
             });
         }
 
         Ok((columns, table_constraints))
+    }
+
+    pub fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
+        self.catalog.get_owner_id(id)
+    }
+
+    pub fn humanize_resolved_name(
+        &self,
+        name: &ResolvedItemName,
+    ) -> Result<PartialItemName, PlanError> {
+        let item = self.get_item_by_resolved_name(name)?;
+        Ok(self.catalog.minimal_qualification(item.name()))
+    }
+
+    /// WARNING! This style of name resolution assumes the referred-to objects exists (i.e. panics
+    /// if objects do not exist) so should never be used to handle user input.
+    pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
+        tracing::trace!("dangerous_resolve_name {:?}", name);
+        let name = UnresolvedItemName::qualified(&name);
+        let entry = match self.resolve_item(RawItemName::Name(name.clone())) {
+            Ok(entry) => entry,
+            Err(_) => self
+                .resolve_function(name.clone())
+                .expect("name referred to an existing object"),
+        };
+
+        let partial = normalize::unresolved_item_name(name).unwrap();
+        let full_name = self.allocate_full_name(partial).unwrap();
+
+        ResolvedItemName::Item {
+            id: entry.id(),
+            qualifiers: entry.name().qualifiers.clone(),
+            full_name,
+            print_id: true,
+        }
     }
 }

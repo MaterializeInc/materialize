@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
 use std::iter;
-
-use rand::prelude::{Rng, SmallRng};
-use rand::seq::SliceRandom;
-use rand::SeedableRng;
 
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
 use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
+use rand::prelude::{Rng, SmallRng};
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 
 /// CREATE TABLE organizations
 ///   (
@@ -66,6 +66,9 @@ const ACCOUNTS_OUTPUT: usize = 3;
 const AUCTIONS_OUTPUT: usize = 4;
 const BIDS_OUTPUT: usize = 5;
 
+// Note that this generator never issues retractions; if you change this,
+// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// must be updated.
 impl Generator for Auction {
     fn by_seed(
         &self,
@@ -109,7 +112,8 @@ impl Generator for Auction {
         });
 
         let mut counter = 0;
-        let mut pending: Vec<(usize, Row)> = organizations.chain(users).chain(accounts).collect();
+        let mut pending: VecDeque<(usize, Row)> =
+            organizations.chain(users).chain(accounts).collect();
 
         Box::new(iter::from_fn(move || {
             {
@@ -128,7 +132,7 @@ impl Generator for Auction {
                             .try_into()
                             .expect("timestamp must fit"),
                     )); // end time
-                    pending.push((AUCTIONS_OUTPUT, auction));
+                    pending.push_back((AUCTIONS_OUTPUT, auction));
                     const MAX_BIDS: i64 = 10;
                     for i in 0..rng.gen_range(2..MAX_BIDS) {
                         let bid_id = Datum::Int64(counter * MAX_BIDS + i);
@@ -146,10 +150,11 @@ impl Generator for Auction {
                             )); // bid time
                             bid
                         };
-                        pending.push((BIDS_OUTPUT, bid));
+                        pending.push_back((BIDS_OUTPUT, bid));
                     }
                 }
-                let pend = pending.pop();
+                // Pop from the front so auctions always appear before bids.
+                let pend = pending.pop_front();
                 pend.map(|(output, row)| {
                     // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.
                     let typ = if counter != 0 || pending.is_empty() {

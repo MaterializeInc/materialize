@@ -9,11 +9,46 @@
 
 syntax = "proto3";
 
+import "tracing/src/params.proto";
 import "proto/src/proto.proto";
 import "persist-client/src/cfg.proto";
+import "rocksdb-types/src/config.proto";
+import "service/src/params.proto";
 
 package mz_storage_client.types.parameters;
 
 message ProtoStorageParameters {
+    reserved 2;
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
+    ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
+    uint64 keep_n_source_status_history_entries = 4;
+    mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
+    bool finalize_shards = 6;
+    uint64 keep_n_sink_status_history_entries = 7;
+    mz_tracing.params.ProtoTracingParameters tracing = 8;
+    ProtoUpsertAutoSpillConfig upsert_auto_spill_config = 9;
+    ProtoStorageMaxInflightBytesConfig storage_dataflow_max_inflight_bytes_config = 10;
+    mz_service.params.ProtoGrpcClientParameters grpc_client = 11;
+    bool storage_dataflow_delay_sources_past_rehydration = 12;
+}
+
+
+message ProtoPgReplicationTimeouts {
+    optional mz_proto.ProtoDuration connect_timeout = 1;
+    optional uint32 keepalives_retries = 2;
+    optional mz_proto.ProtoDuration keepalives_idle = 3;
+    optional mz_proto.ProtoDuration keepalives_interval = 4;
+    optional mz_proto.ProtoDuration tcp_user_timeout = 5;
+}
+
+message ProtoUpsertAutoSpillConfig {
+    bool allow_spilling_to_disk = 1;
+    uint64 spill_to_disk_threshold_bytes = 2;
+}
+
+message ProtoStorageMaxInflightBytesConfig {
+    reserved 2, 3, 5;
+    optional uint64 max_in_flight_bytes_default = 1;
+    bool disk_only = 4;
+    optional double max_in_flight_bytes_cluster_size_fraction = 6;
 }

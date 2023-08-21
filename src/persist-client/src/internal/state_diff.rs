@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -19,7 +20,7 @@ use mz_persist_types::Codec64;
 use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
@@ -31,9 +32,9 @@ use crate::internal::state::{
 use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
-use crate::{Metrics, PersistConfig};
+use crate::{Metrics, PersistConfig, ShardId};
 
-use self::StateFieldValDiff::*;
+use StateFieldValDiff::*;
 
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
@@ -177,9 +178,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     f(HollowBlobRef::Batch(&spine_diff.key));
                 }
                 StateFieldValDiff::Update((), ()) => {
-                    // No-op. Logically, we've removed and reinserted the same
-                    // key. We don't see this in practice, so it could also
-                    // easily be a panic, if necessary.
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    panic!("cannot update spine field")
                 }
                 StateFieldValDiff::Delete(()) => {} // No-op
             }
@@ -190,6 +191,31 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     f(HollowBlobRef::Rollup(x));
                 }
                 StateFieldValDiff::Delete(_) => {} // No-op
+            }
+        }
+    }
+
+    pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        for spine_diff in self.spine.iter() {
+            match &spine_diff.val {
+                StateFieldValDiff::Insert(()) => {} // No-op
+                StateFieldValDiff::Update((), ()) => {
+                    // spine fields are always inserted/deleted, this
+                    // would mean we encountered a malformed diff.
+                    panic!("cannot update spine field")
+                }
+                StateFieldValDiff::Delete(()) => {
+                    f(HollowBlobRef::Batch(&spine_diff.key));
+                }
+            }
+        }
+        for rollups_diff in self.rollups.iter() {
+            match &rollups_diff.val {
+                StateFieldValDiff::Insert(_) => {}    // No-op
+                StateFieldValDiff::Update(_, _) => {} // No-op. Should never occur
+                StateFieldValDiff::Delete(x) => {
+                    f(HollowBlobRef::Rollup(x));
+                }
             }
         }
     }
@@ -207,13 +233,15 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         V: mz_persist_types::Codec + std::fmt::Debug,
         D: differential_dataflow::difference::Semigroup + Codec64,
     {
-        use crate::internal::state::ProtoStateDiff;
         use mz_proto::RustType;
         use prost::Message;
 
-        let mut roundtrip_state =
-            from_state.clone(to_state.applier_version.clone(), to_state.hostname.clone());
-        roundtrip_state.walltime_ms = to_state.walltime_ms;
+        use crate::internal::state::ProtoStateDiff;
+
+        let mut roundtrip_state = from_state.clone(
+            from_state.applier_version.clone(),
+            from_state.hostname.clone(),
+        );
         roundtrip_state.apply_diff(metrics, diff.clone())?;
 
         if &roundtrip_state != to_state {
@@ -250,39 +278,47 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
     ) {
         let mut state_seqno = self.seqno;
         let diffs = diffs.into_iter().filter_map(move |x| {
-            if x.seqno == state_seqno {
+            if x.seqno != state_seqno.next() {
                 // No-op.
                 return None;
             }
+            let data = x.data.clone();
             let diff = metrics
                 .codecs
                 .state_diff
-                .decode(|| StateDiff::decode(&cfg.build_version, &x.data));
+                // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
+                .decode(|| StateDiff::decode(&cfg.build_version, x.data.clone()));
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
-            Some(diff)
+            Some((diff, data))
         });
         self.apply_diffs(metrics, diffs);
     }
 }
 
-impl<T: Timestamp + Lattice> State<T> {
-    pub fn apply_diffs<I: IntoIterator<Item = StateDiff<T>>>(
+impl<T: Timestamp + Lattice + Codec64> State<T> {
+    pub fn apply_diffs<I: IntoIterator<Item = (StateDiff<T>, Bytes)>>(
         &mut self,
         metrics: &Metrics,
         diffs: I,
     ) {
-        for diff in diffs {
+        for (diff, data) in diffs {
             // TODO: This could special-case batch apply for diffs where it's
             // more efficient (in particular, spine batches that hit the slow
             // path).
-            let pretty_diff = format!("{:?}", diff);
             match self.apply_diff(metrics, diff) {
                 Ok(()) => {}
-                Err(err) => panic!(
-                    "state diff should apply cleanly: {} diff {} state {:?}",
-                    err, pretty_diff, self
-                ),
+                Err(err) => {
+                    // Having the full diff in the error message is critical for debugging any
+                    // issues that may arise from diff application. We pass along the original
+                    // Bytes it decoded from just so we can decode in this error path, while
+                    // avoiding any extraneous clones in the expected Ok path.
+                    let diff = StateDiff::<T>::decode(&self.applier_version, data);
+                    panic!(
+                        "state diff should apply cleanly: {} diff {:?} state {:?}",
+                        err, diff, self
+                    )
+                }
             }
         }
     }
@@ -290,16 +326,41 @@ impl<T: Timestamp + Lattice> State<T> {
     // Intentionally not even pub(crate) because all callers should use
     // [Self::apply_diffs].
     fn apply_diff(&mut self, metrics: &Metrics, diff: StateDiff<T>) -> Result<(), String> {
-        if self.seqno == diff.seqno_to {
+        // Deconstruct diff so we get a compile failure if new fields are added.
+        let StateDiff {
+            applier_version: diff_applier_version,
+            seqno_from: diff_seqno_from,
+            seqno_to: diff_seqno_to,
+            walltime_ms: diff_walltime_ms,
+            latest_rollup_key: _,
+            rollups: diff_rollups,
+            hostname: diff_hostname,
+            last_gc_req: diff_last_gc_req,
+            leased_readers: diff_leased_readers,
+            critical_readers: diff_critical_readers,
+            writers: diff_writers,
+            since: diff_since,
+            spine: diff_spine,
+        } = diff;
+        if self.seqno == diff_seqno_to {
             return Ok(());
         }
-        if self.seqno != diff.seqno_from {
+        if self.seqno != diff_seqno_from {
             return Err(format!(
                 "could not apply diff {} -> {} to state {}",
-                diff.seqno_from, diff.seqno_to, self.seqno
+                diff_seqno_from, diff_seqno_to, self.seqno
             ));
         }
-        self.seqno = diff.seqno_to;
+        self.seqno = diff_seqno_to;
+        self.applier_version = diff_applier_version;
+        self.walltime_ms = diff_walltime_ms;
+        force_apply_diffs_single(
+            &self.shard_id,
+            diff_seqno_to,
+            "hostname",
+            diff_hostname,
+            &mut self.hostname,
+        )?;
 
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
@@ -312,13 +373,13 @@ impl<T: Timestamp + Lattice> State<T> {
             trace,
         } = &mut self.collections;
 
-        apply_diffs_map("rollups", diff.rollups, rollups)?;
-        apply_diffs_single("last_gc_req", diff.last_gc_req, last_gc_req)?;
-        apply_diffs_map("leased_readers", diff.leased_readers, leased_readers)?;
-        apply_diffs_map("critical_readers", diff.critical_readers, critical_readers)?;
-        apply_diffs_map("writers", diff.writers, writers)?;
+        apply_diffs_map("rollups", diff_rollups, rollups)?;
+        apply_diffs_single("last_gc_req", diff_last_gc_req, last_gc_req)?;
+        apply_diffs_map("leased_readers", diff_leased_readers, leased_readers)?;
+        apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
+        apply_diffs_map("writers", diff_writers, writers)?;
 
-        for x in diff.since {
+        for x in diff_since {
             match x.val {
                 Update(from, to) => {
                     if trace.since() != &from {
@@ -334,7 +395,10 @@ impl<T: Timestamp + Lattice> State<T> {
                 Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
-        apply_diffs_spine(metrics, diff.spine, trace)?;
+        if !diff_spine.is_empty() {
+            apply_diffs_spine(metrics, diff_spine, trace)?;
+            debug_assert_eq!(trace.validate(), Ok(()), "{:?}", trace);
+        }
 
         // There's various sanity checks that this method could run (e.g. since,
         // upper, seqno_since, etc don't regress or that diff.latest_rollup ==
@@ -383,6 +447,48 @@ fn apply_diff_single<X: PartialEq + Debug>(
                     "{} update didn't match: {:?} vs {:?}",
                     name, single, &from
                 ));
+            }
+            *single = to
+        }
+        Insert(_) => return Err(format!("cannot insert {} field", name)),
+        Delete(_) => return Err(format!("cannot delete {} field", name)),
+    }
+    Ok(())
+}
+
+// A hack to force apply a diff, making `single` equal to
+// the Update `to` value, ignoring a mismatch on `from`.
+// Used to migrate forward after writing down incorrect
+// diffs.
+//
+// TODO: delete this once `hostname` has zero mismatches
+fn force_apply_diffs_single<X: PartialEq + Debug>(
+    shard_id: &ShardId,
+    seqno: SeqNo,
+    name: &str,
+    diffs: Vec<StateFieldDiff<(), X>>,
+    single: &mut X,
+) -> Result<(), String> {
+    for diff in diffs {
+        force_apply_diff_single(shard_id, seqno, name, diff, single)?;
+    }
+    Ok(())
+}
+
+fn force_apply_diff_single<X: PartialEq + Debug>(
+    shard_id: &ShardId,
+    seqno: SeqNo,
+    name: &str,
+    diff: StateFieldDiff<(), X>,
+    single: &mut X,
+) -> Result<(), String> {
+    match diff.val {
+        Update(from, to) => {
+            if single != &from {
+                error!(
+                    "{}: update didn't match: {:?} vs {:?}, continuing to force apply diff to {:?} for shard {} and seqno {}",
+                    name, single, &from, &to, shard_id, seqno
+                );
             }
             *single = to
         }
@@ -538,7 +644,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     if let Some(insert) = sniff_insert(&mut diffs, trace.upper()) {
         // Ignore merge_reqs because whichever process generated this diff is
         // assigned the work.
-        let _merge_reqs = trace.push_batch(insert);
+        let () = trace.push_batch_no_merge_reqs(insert);
         // If this insert was the only thing in diffs, then return now instead
         // of falling through to the "no diffs" case in the match so we can inc
         // the apply_spine_fast_path metric.
@@ -569,7 +675,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             {
                 // Ignore merge_reqs because whichever process generated this diff is
                 // assigned the work.
-                let _merge_reqs = trace.push_batch(HollowBatch {
+                let () = trace.push_batch_no_merge_reqs(HollowBatch {
                     desc: Description::new(
                         del.desc.upper().clone(),
                         ins.desc.upper().clone(),
@@ -621,7 +727,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                 for batch in batches {
                     // Ignore merge_reqs because whichever process generated
                     // this diff is assigned the work.
-                    let _merge_reqs = new_trace.push_batch(batch.clone());
+                    let () = new_trace.push_batch_no_merge_reqs(batch.clone());
                 }
                 *trace = new_trace;
                 metrics.state.apply_spine_slow_path_lenient.inc();
@@ -667,7 +773,9 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             // batches.
             let mut reconstructed_spine = Trace::default();
             trace.map_batches(|b| {
-                let _merge_reqs = reconstructed_spine.push_batch(b.clone());
+                // Ignore merge_reqs because whichever process generated this
+                // diff is assigned the work.
+                let () = reconstructed_spine.push_batch_no_merge_reqs(b.clone());
             });
 
             let mut batches = BTreeMap::new();
@@ -682,7 +790,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     for (batch, ()) in batches {
         // Ignore merge_reqs because whichever process generated this diff is
         // assigned the work.
-        let _merge_reqs = new_trace.push_batch(batch);
+        let () = new_trace.push_batch_no_merge_reqs(batch);
     }
     *trace = new_trace;
     Ok(())
@@ -864,10 +972,84 @@ fn apply_compaction_lenient<'a, T: Timestamp + Lattice>(
     Ok(trace)
 }
 
+/// A type that facilitates the proto encoding of a [`ProtoStateFieldDiffs`]
+///
+/// [`ProtoStateFieldDiffs`] is a columnar encoding of [`StateFieldDiff`]s, see
+/// its doc comment for more info. The underlying buffer for a [`ProtoStateFieldDiffs`]
+/// is a [`Bytes`] struct, which is an immutable, shared, reference counted,
+/// buffer of data. Using a [`Bytes`] struct is a very efficient way to manage data
+/// becuase multiple [`Bytes`] can reference different parts of the same underlying
+/// portion of memory. See its doc comment for more info.
+///
+/// A [`ProtoStateFieldDiffsWriter`] maintains a mutable, unique, data buffer, i.e.
+/// a [`BytesMut`], which we use when encoding a [`StateFieldDiff`]. And when
+/// finished encoding, we convert it into a [`ProtoStateFieldDiffs`] by "freezing" the
+/// underlying buffer, converting it into a [`Bytes`] struct, so it can be shared.
+///
+/// [`Bytes`]: bytes::Bytes
+#[derive(Debug)]
+pub struct ProtoStateFieldDiffsWriter {
+    data_buf: BytesMut,
+    proto: ProtoStateFieldDiffs,
+}
+
+impl ProtoStateFieldDiffsWriter {
+    /// Record a [`ProtoStateField`] for our columnar encoding.
+    pub fn push_field(&mut self, field: ProtoStateField) {
+        self.proto.fields.push(i32::from(field));
+    }
+
+    /// Record a [`ProtoStateFieldDiffType`] for our columnar encoding.
+    pub fn push_diff_type(&mut self, diff_type: ProtoStateFieldDiffType) {
+        self.proto.diff_types.push(i32::from(diff_type));
+    }
+
+    /// Encode a message for our columnar encoding.
+    pub fn encode_proto<M: prost::Message>(&mut self, msg: &M) {
+        let len_before = self.data_buf.len();
+        self.data_buf.reserve(msg.encoded_len());
+
+        // Note: we use `encode_raw` as opposed to `encode` because all `encode` does is
+        // check to make sure there's enough bytes in the buffer to fit our message
+        // which we know there are because we just reserved the space. When benchmarking
+        // `encode_raw` does offer a slight performance improvement over `encode`.
+        msg.encode_raw(&mut self.data_buf);
+
+        // Record exactly how many bytes were written.
+        let written_len = self.data_buf.len() - len_before;
+        self.proto.data_lens.push(u64::cast_from(written_len));
+    }
+
+    pub fn into_proto(self) -> ProtoStateFieldDiffs {
+        let ProtoStateFieldDiffsWriter {
+            data_buf,
+            mut proto,
+        } = self;
+
+        // Assert we didn't write into the proto's data_bytes field
+        assert!(proto.data_bytes.is_empty());
+
+        // Move our buffer into the proto
+        let data_bytes = data_buf.freeze();
+        proto.data_bytes = data_bytes;
+
+        proto
+    }
+}
+
 impl ProtoStateFieldDiffs {
-    pub fn push_data(&mut self, mut data: Vec<u8>) {
-        self.data_lens.push(u64::cast_from(data.len()));
-        self.data_bytes.append(&mut data);
+    pub fn into_writer(mut self) -> ProtoStateFieldDiffsWriter {
+        // Create a new buffer which we'll encode data into.
+        let mut data_buf = BytesMut::with_capacity(self.data_bytes.len());
+
+        // Take our existing data, and copy it into our buffer.
+        let existing_data = std::mem::take(&mut self.data_bytes);
+        data_buf.extend(existing_data);
+
+        ProtoStateFieldDiffsWriter {
+            data_buf,
+            proto: self,
+        }
     }
 
     pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {
@@ -1008,7 +1190,7 @@ mod tests {
     // Regression test for the apply_diffs_spine special case that sniffs out an
     // insert, applies it, and then lets the remaining diffs (if any) fall
     // through to the rest of the code. See #15493.
-    #[test]
+    #[mz_ore::test]
     fn regression_15493_sniff_insert() {
         fn hb(lower: u64, upper: u64, len: usize) -> HollowBatch<u64> {
             HollowBatch {
@@ -1107,7 +1289,8 @@ mod tests {
         assert_eq!(actual, batches_after);
     }
 
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn apply_lenient() {
         #[track_caller]
         fn testcase(
@@ -1169,7 +1352,7 @@ mod tests {
         testcase(
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement lower (untouched batch before the split one)
@@ -1197,7 +1380,7 @@ mod tests {
         testcase(
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
-            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, parts: [], len: 1, runs: [] }")
+            Err("overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [] }")
         );
 
         // Split batch at replacement upper (untouched batch after the split one)

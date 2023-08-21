@@ -55,8 +55,7 @@ Unlike the `sqllogictest` driver, `testdrive` will fail the test at the first di
 The easiest way to run testdrive tests is via [mzcompose](mzcompose.md).
 
 The mzcompose configuration will automatically set up all of testdrive's
-dependencies, including Zookeeper, Kafka, the Confluent Schema Registry, and
-mock versions of AWS S3 and Kinesis.
+dependencies, including Zookeeper, Kafka, and the Confluent Schema Registry.
 
 **WARNING:** On ARM-based machines (like M1 Macs), running the Confluent
 Platform in Docker is nearly unusably slow because it runs under QEMU emulation.
@@ -92,13 +91,6 @@ Run testdrive against a single file:
 ./mzcompose --dev run default FILE.td
 ```
 
-Run S3 tests against a real AWS region. This expects actual AWS credentials to
-be available (q.v. [our documentation][aws-creds]).
-
-```
-./mzcompose --dev run default --aws-region=us-east-2 s3.td
-```
-
 ## Running tests locally without mzcompose
 
 Most testdrive scripts live in [test/testdrive](/test/testdrive). To run a
@@ -123,7 +115,7 @@ running [LocalStack][]. To install and run LocalStack:
 
 ```shell
 $ pip install localstack
-$ START_WEB=false SERVICES=iam,sts,kinesis,s3 localstack start
+$ START_WEB=false SERVICES=iam,sts localstack start
 ```
 
 If you've previously installed LocalStack, be sure it is v0.11 or later.
@@ -139,16 +131,6 @@ cargo run --bin testdrive -- --help
 
 [LocalStack]: https://github.com/localstack/localstack
 
-## Running against  AWS S3
-
-To run a test against the actual S3/SQS service at AWS:
-
-```
-export AWS_ACCESS_KEY_ID=XXX
-export AWS_SECRET_ACCESS_KEY=YYY
-target/release/testdrive --aws-region=eu-central-1 --default-timeout=600s test/testdrive/disabled/s3-sqs-notifications.td
-```
-
 # Creating tests
 
 ## Test format
@@ -158,8 +140,6 @@ A `testdrive` `.td` test starts with a copyright header and must not contain tra
 ## Test naming
 
 Tests related to Kafka are named `kafka-*.td`. This allows various CI jobs that deal with Kafka to pick them up, e.g. to run them against different Kafka versions, against Redpanda, etc.
-
-Tests related to S3/SQS are named `s3*.td`. This allows those tests to be skipped in certain specialized CI jobs and environments where AWS or localstack is not available.
 
 ## Test location
 
@@ -191,16 +171,6 @@ Specifies the backoff factor that will be applied to increase the backoff interv
 
 materialized connection string [default: postgres://materialize@localhost:6875]
 
-#### `--aws-endpoint <aws-endpoint>`
-
-Custom AWS endpoint. Default: "http://localhost:4566"
-
-#### `--aws-region <aws-region>`
-
-Named AWS region to target for AWS API requests [default: localstack]
-
-If an actual AWS region is specified, such as `eu-central-1`, all S3/SQS requests will be sent to it.
-
 #### `--cert <PATH>`
 
 Path to TLS certificate keystore. The keystore must be in the PKCS#12 format.
@@ -231,7 +201,7 @@ By default, `testdrive` will clean up the environment and Mz prior to running ea
 
 #### `--no-reset`
 
-By default, `testdrive` will clean up its environment as much as it can before the start of the test, which includes Mz databases, S3 buckets, etc. If two consequtive invocations of `testdrive` need to be able to operate on the same objects, e.g. database tables, the second invocation needs to run with `--no-reset`
+By default, `testdrive` will clean up its environment as much as it can before the start of the test, which includes Mz databases, etc. If two consequtive invocations of `testdrive` need to be able to operate on the same objects, e.g. database tables, the second invocation needs to run with `--no-reset`
 
 #### `--seed <seed>`
 
@@ -719,6 +689,19 @@ Add partitions to an existing topic
 
 Create a Kafka topic
 
+#### `$ kafka-delete-topic-flaky`
+
+Delete a Kafka topic
+
+Even though `kafka-delete-topic-flaky` ensures that the topic no longer exists
+in the broker metadata there is still work to be done asychnronously before
+it's truly gone that must complete before we attempt to recreate it. There is
+no way to observe this work completing so the only option left is sleeping for
+a while after executing this command.
+
+For this reason this command must be used with great care or not at all,
+otherwise there is a risk of introducing flakiness in CI.
+
 #### `$ kafka-ingest topic=... schema=... ...`
 
 Sends the data provided to a kafka topic. This action has many arguments:
@@ -814,43 +797,6 @@ for the specified consumer group, topic, and partition.
 `headers` is a parameter that takes a json map (or list of maps) with string key-value pairs
 sent as headers for every message for the given action.
 
-## Actions on Kinesis
-
-#### `$ kinesis-create-stream`
-
-#### `$ kinesis-update-shards`
-
-#### `$ kinesis-ingest`
-
-#### `$ kinesis-verify`
-
-## Actions on S3/SQS
-
-#### `$ s3-create-bucket bucket=...`
-
-Creates the specified S3 bucket
-
-#### `$ s3-put-object bucket=... key=...`
-
-Uploads the data provided under the key specified in the bucket specified.
-
-#### `$ s3-delete-objects`
-
-Delete the S3 keys provided below the action from the bucket.
-
-```
-$ s3-delete-objects bucket=foo
-1.csv
-2.csv
-3.csv
-```
-
-#### `$ s3-add-notifications bucket=... queue=... sqs-validation-timeout=Nm`
-
-Add an SQS notification to the specified bucket and then validates that SQS works by uploading a key and listening for the SQS notification.
-
-> :warning: `$ s3-add-notifications` uploads a single key in your bucket that remains there , so it will show up in your S3 sources unless you use a `DISCOVER OBJECTS MATCHING` clause to filter it out.
-
 ## Actions on Confluent Schema Registry
 
 #### `$ schema-registry-publish subject=... schema-type=<avro|json|protobuf> [references=subject[,subject...]]`
@@ -899,9 +845,11 @@ Debezium, to upload a particular schema.
 
 ## Actions on REST services
 
-#### `$ http-request method=(GET|POST|PUT) url=... content-type=...`
+#### `$ http-request method=(GET|POST|PUT) url=... content-type=... [accept-additional-status-codes=404,409]`
 
-Issue a HTTP request against a third-party server. The body of the command is used as a body of the request. This is generally used when communicating with REST services such as Debezium and Toxiproxy. See `test/debezium-avro/debezium-postgres.td.initialize` and `test/pg-cdc-resumption/configure-toxiproxy.td`
+Issue an HTTP request against a third-party server. The body of the command is used as a body of the request. This is
+generally used when communicating with REST services such as Debezium and Toxiproxy. See
+`test/debezium-avro/debezium-postgres.td.initialize` and `test/pg-cdc-resumption/configure-toxiproxy.td`
 
 ```
 $ http-request method=POST url=http://example/com content-type=application/json
@@ -910,7 +858,26 @@ $ http-request method=POST url=http://example/com content-type=application/json
 }
 ```
 
-The test will fail unless the HTTP status code of the response is in the 200 range.
+The test will fail unless the HTTP status code of the response is in the 200 range. If further status codes shall be
+accepted, use the parameter `accept-additional-status-codes`, which takes a comma-separated list.
+
+## Actions on Webhook Sources
+
+#### `$ webhook-append name=... [database=...] [schema=...] [status=404] [header_name=header_value, ...]`
+
+Issues an HTTP POST request to a webhook source at `<database>.<schema>.<name>`, by default
+`database` is `materialize` and `schema` is `public`. The body of the command is used as the body
+of the request. You can optionally specify an expected response status code, by default we expect a
+status of 200. Any remaining arguments are appended to the request as headers.
+
+See `webhook.td` for more examples.
+
+```
+$ webhook-append database=materialize schema=public name=webhook_json app_name=test_drive
+{
+  "hello": "world"
+}
+```
 
 ## Actions with `psql`
 
@@ -940,6 +907,15 @@ a version of Materialize that is able to execute the SQL constructs contained th
 $ skip-if
 SELECT mz_version_num() < 2601;
 ```
+
+## Run an action/query conditionally on version
+
+```
+>[version>=5500] SELECT 1;
+1
+```
+
+The `[version>=5500]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-func) and has the same format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.55.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
 
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md

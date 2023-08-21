@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW INDEXES` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax
@@ -16,8 +14,8 @@ menu:
 
 Field | Use
 ------|-----
-_on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the cluster are shown.
-_schema&lowbar;name_ | The schema to show objects from. Defaults to `public` in the current database if neither on&lowbar;name nor cluster&lowbar;name are specified. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path if neither `on_name` nor `cluster_name` are specified. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the schema are shown.
 _cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
 
 ## Details
@@ -36,7 +34,7 @@ Field | Meaning
 ------|--------
 **name** | The name of the index.
 **on** | The name of the table, source, or view the index belongs to.
-**cluster** | The name of the [cluster](/overview/key-concepts/#clusters) containing the index.
+**cluster** | The name of the [cluster](/get-started/key-concepts/#clusters) containing the index.
 **key** | A text array describing the expressions in the index key.
 
 ## Examples

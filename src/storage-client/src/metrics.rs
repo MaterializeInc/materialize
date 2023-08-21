@@ -13,11 +13,12 @@ use std::sync::Arc;
 
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
-use mz_ore::metrics::DeleteOnDropHistogram;
-use mz_ore::metrics::HistogramVecExt;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{
+    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVecExt, MetricsRegistry,
+};
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
+use prometheus::core::AtomicU64;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
 use crate::types::instances::StorageInstanceId;
@@ -96,4 +97,16 @@ impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for RehydratingSt
             ),
         }
     }
+}
+
+/// Metrics used by the `backpressure` operator.
+#[derive(Debug, Clone)]
+pub struct BackpressureMetrics {
+    /// A counter with the number of emitted bytes.
+    pub emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    /// The last count of bytes we are waiting to be retired in the operator. This cannot
+    /// be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
+    pub last_backpressured_bytes: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    /// A counter with the number of bytes retired by downstream processing.
+    pub retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
 }

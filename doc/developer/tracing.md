@@ -43,14 +43,20 @@ see [`tracing`] and [`tracing-subscriber`] for more info!
 
 You may have noticed that log events have [`level`]s. In materialize binaries, we only print
 events that are level `INFO` or more urgent. You can control this level by using the
-`MZ_LOG_FILTER` environment variable to control the level at a _per-crate_, _per-module_ granularity.
+`log_filter` system variable to control the level at a _per-crate_, _per-module_, and
+even _per-span_ granularity.
 
 For example:
 ```
-bin/environmentd -- --log-filter=my_interesting_module::sub_module=trace,error
+ALTER SYSTEM SET log_filter='my_interesting_module::sub_module=trace,error';
 ```
-logs ALL events in the specific module, but only `error` events for everything else. See [`Targets`] for more examples.
+logs ALL events in the specific module, but only `error` events for everything else. See [`EnvFilter`] for more examples.
 
+Like all system variables, it is also possible to set a log filter default when initially invoking `environmentd`:
+
+```
+./bin/environmentd -- --system-parameter-default=log_filter=my_interesting_module::sub_module=trace,error
+```
 
 Note that this value is passed through to all compute and storage instances when running locally.
 In the future, it is possible to add per-service filtering, if deemed useful.

@@ -20,8 +20,10 @@ $ kafka-create-topic topic=resolution-no-publish-writer
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
 \\x00\x00\x00\x00\x01\xf6\x01
 
-> DROP SCHEMA IF EXISTS public CASCADE
-> CREATE SCHEMA public
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+DROP SCHEMA IF EXISTS public CASCADE
+CREATE SCHEMA public
+GRANT CREATE, USAGE ON SCHEMA public TO materialize
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

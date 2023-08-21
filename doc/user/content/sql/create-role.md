@@ -6,26 +6,12 @@ menu:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role.
+`CREATE ROLE` creates a new role, which is a user account in Materialize.
 
-## Conceptual framework
+When you connect to Materialize, you must specify the name of a valid role in
+the system.
 
-A role is a user account in a Materialize instance.
-
-When you [connect to a Materialize instance](/integrations/psql), you must specify
-the name of a valid role in the system.
-
-{{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 677 %}}
-for details.
-{{< /warning >}}
-
-{{< warning >}}
-RBAC is under development: currently no role attributes or privileges will be
-considered when executing statements, although these attributes are saved and
-will be considered in a later release.
-{{< /warning >}}
+{{< private-preview />}}
 
 ## Syntax
 
@@ -33,44 +19,55 @@ will be considered in a later release.
 
 Field               | Use
 --------------------|-------------------------------------------------------------------------
-**INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
-**CREATEROLE**      | Grants the role the ability to create, alter, and delete roles.
-**NOCREATEROLE**    | Denies the role the ability to create, alter, and delete roles.
-**CREATEDB**        | Grants the role the ability to create databases.
-**NOCREATEDB**      | Denies the role the ability to create databases.
-**CREATECLUSTER**   | Grants the role the ability to create clusters.
-**NOCREATECLUSTER** | Denies the role the ability to create clusters.
 _role_name_         | A name for the role.
+**INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
 
 ## Details
 
-Unlike PostgreSQL, materialize derives the `LOGIN` and `SUPERUSER`
+Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
 attributes for a role during authentication, every time that role tries
-to connect to Materialize. Therefore, you cannot specify either
-attribute when creating a new role. Additionally, we do not support
-`CREATE USER` because it implies a `LOGIN` attribute for the role.
+to connect. Therefore, you cannot specify either
+attribute when creating a new role. Additionally, we do not support the
+`CREATE USER` command, because it implies a `LOGIN` attribute for the role.
 
-Unlike PostgreSQL, materialize does not currently support `NOINHERIT`.
+Unlike PostgreSQL, Materialize does not currently support `NOINHERIT`.
 
 You may not specify redundant or conflicting sets of options. For example,
-Materialize will reject the statement `CREATE ROLE ... CREATEDB NOCREATEDB` because
-the `CREATEDB` and `NOCREATEDB` options conflict.
+Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
+
+Unlike PostgreSQL, Materialize does not use role attributes to determine a roles ability to create
+top level objects such as databases and other roles. Instead, Materialize uses system level
+privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
+
+When RBAC is enabled a role must have the `CREATEROLE` system privilege to create another role.
 
 ## Examples
 
 ```sql
-CREATE ROLE rj;
+CREATE ROLE db_reader;
 ```
 ```sql
 SELECT name FROM mz_roles;
 ```
 ```nofmt
-materialize
-rj
+ db_reader
+ mz_system
+ mz_support
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 
 - [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
+- [GRANT ROLE](../grant-role)
+- [REVOKE ROLE](../revoke-role)
+- [ALTER OWNER](../alter-owner)
+- [GRANT PRIVILEGE](../grant-privilege)
+- [REVOKE PRIVILEGE](../revoke-privilege)

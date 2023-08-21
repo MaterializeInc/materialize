@@ -329,8 +329,8 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t1_f1_ind
-  - materialize.public.t2_f1_ind
+  - materialize.public.t1_f1_ind (differential join)
+  - materialize.public.t2_f1_ind (differential join)
 
 EOF
 
@@ -376,20 +376,22 @@ Explained Query:
           %1[#0]Kef » %0:mz_schemas[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #3) // { arity: 2 }
-            Get mz_catalog.mz_schemas // { arity: 4 }
+            Get mz_catalog.mz_schemas // { arity: 6 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           Union // { arity: 3 }
-            Project (#2, #3, #5) // { arity: 3 }
-              Map ("view") // { arity: 6 }
-                Get mz_catalog.mz_views // { arity: 5 }
-            Project (#2, #3, #6) // { arity: 3 }
-              Map ("materialized-view") // { arity: 7 }
-                Get mz_catalog.mz_materialized_views // { arity: 6 }
+            Project (#2, #3, #7) // { arity: 3 }
+              Map ("view") // { arity: 8 }
+                Get mz_catalog.mz_views // { arity: 7 }
+            Project (#2, #3, #8) // { arity: 3 }
+              Map ("materialized-view") // { arity: 9 }
+                Get mz_catalog.mz_materialized_views // { arity: 8 }
 
-Source mz_catalog.mz_views
-  filter=(true)
 Source mz_catalog.mz_materialized_views
   filter=(true)
+
+Used Indexes:
+  - mz_internal.mz_show_schemas_ind (*** full scan ***)
+  - mz_internal.mz_show_views_ind (*** full scan ***)
 
 EOF
 
@@ -433,7 +435,7 @@ Explained Query:
         ArrangeBy keys=[[#0]]
           Get l0
         ArrangeBy keys=[[#0]]
-          TopK group_by=[#0] limit=5 monotonic=false
+          TopK group_by=[#0] limit=5
             Project (#0)
               Join on=(#0 = #1) type=differential
                 ArrangeBy keys=[[#0]]
@@ -458,8 +460,18 @@ EOF
 # One more for https://github.com/MaterializeInc/materialize/issues/16128
 # https://github.com/MaterializeInc/materialize/pull/16147#issuecomment-1322042176
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
 DROP SCHEMA public CASCADE ;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 statement ok
 CREATE SCHEMA public ;
@@ -492,3 +504,393 @@ SELECT * FROM table_f2_f3  JOIN ( table_f3_f4_f5  JOIN table_f4_f5_f6  USING ( f
 1  0  0  NULL  0  1
 1  0  0  NULL  1  0
 1  0  0  NULL  NULL  1
+
+## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
+
+statement ok
+CREATE TABLE init(n int, m int, s string);
+
+statement ok
+INSERT INTO init VALUES (1, 3, 'aaa'), (2, 4, 'bbb');
+
+# Across Let bindings, and within a Let binding.
+# The `WHERE n<5` should be pushed into l0.
+# Furthermore, within l0 it should be pushed down on top of the Gets. The Source should also have it.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0 WHERE n<5
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0 WHERE n<5)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Filter (#0 < 5)
+            Get materialize.public.init
+        Filter (#0 < 5)
+          Get l2
+
+Source materialize.public.init
+  filter=((#0 < 5))
+
+EOF
+
+# Here, a pushdown should NOT happen, because not every use of the Get has the predicate.
+# That is, the `< 5` predicate should stay inside the `cte l1 =`, and shouldn't appear anywhere else.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0 WHERE n<5
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Filter (#0 < 5)
+          Map ((#0 + #0))
+            Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# Same as the previous query, but the predicate should stay inside the `cte l2 =`
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0 WHERE n<5)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return
+    Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Filter (#0 < 5)
+          Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# Similar to the previous two queries, but here one of the uses of `l0` is in the body, so this would catch the error
+# case of forgetting to call PredicatePushdown's `action` on the `body` of the `LetRec`, whose role here is to make the
+# intersection in `get_predicates` empty.
+# The predicate should NOT be pushed into the `cte l0 =`, and should stay in both the `cte l2 =` and the `cte l1 =`.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0 WHERE n<5
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0 WHERE n<5)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM ((SELECT * FROM c2) UNION (SELECT * FROM c0));
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0]
+      Union
+        Get l2
+        Get l0
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Filter (#0 < 5)
+          Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Filter (#0 < 5)
+          Map ((#0 + #0))
+            Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# For now, we can’t push from the body into such a Let binding that is being referenced across
+# iterations (l2).
+# That is, the `> 7` predicate should stay inside the `cte l0 =` and the body.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2 WHERE n>7)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c2 WHERE n>7;
+----
+Explained Query:
+  Return
+    Filter (#0 > 7)
+      Get l2
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Filter (#0 > 7)
+          Get l2
+
+EOF
+
+# We can push down from the body into such a Let binding that is NOT being referenced across
+# iterations (l1).
+# The `> 7` should end up inside the `cte l1 =`, and should disappear from everywhere else.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1 WHERE n>7)
+    UNION ALL
+    (SELECT * FROM c1 WHERE n>7)
+  )
+SELECT * FROM c1 WHERE n>7;
+----
+Explained Query:
+  Return
+    Project (#1)
+      Filter (#1 > 7)
+        Map ((#0 + #0))
+          Get l0
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Filter (#1 > 7)
+          Map ((#0 + #0))
+            Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Get l2
+
+EOF
+
+# Even though the only usage of `l2` has a predicate, we don't push that predicate into `l2`,
+# because `l2` is being referenced across iterations.
+# That is, the `< 3` predicate should stay inside the `cte l0 =`.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(n int) AS (
+    (SELECT n FROM init)
+    UNION ALL
+    (SELECT * FROM c2 WHERE n<3)
+  ),
+  c1(n int) AS (
+    SELECT n+n FROM c0
+  ),
+  c2(n int) AS (
+    (SELECT * FROM c0)
+    UNION ALL
+    (SELECT * FROM c1)
+    UNION ALL
+    (SELECT * FROM c1)
+  )
+SELECT * FROM c1;
+----
+Explained Query:
+  Return
+    Project (#1)
+      Map ((#0 + #0))
+        Get l0
+  With Mutually Recursive
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l0 =
+      Union
+        Project (#0)
+          Get materialize.public.init
+        Filter (#0 < 3)
+          Get l2
+
+EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/19179
+statement ok
+with
+  v1 as (
+    WITH
+            creates AS
+            (
+                SELECT
+                    details ->> 'logical_size' AS size,
+                    details ->> 'replica_id' AS replica_id,
+                    occurred_at
+                FROM mz_catalog.mz_audit_events
+                WHERE
+                    object_type = 'cluster-replica' AND event_type = 'create'
+            )
+        SELECT
+            mz_internal.mz_error_if_null(
+                    mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
+                )
+                AS credits_per_hour
+        FROM
+            creates
+                LEFT JOIN
+                    mz_internal.mz_cluster_replica_sizes
+                    ON mz_cluster_replica_sizes.size = creates.size
+  )
+select * from v1
+WHERE credits_per_hour > credits_per_hour;
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/20199
+
+statement ok
+CREATE ROLE r2;
+
+statement ok
+SELECT
+    member.name AS grantee,
+    role.name AS role_name
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+WHERE pg_has_role('r2', member.oid, 'USAGE');
+
+query error db error: ERROR: role "r555" does not exist
+SELECT
+    member.name AS grantee,
+    role.name AS role_name
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+WHERE pg_has_role('r555', member.oid, 'USAGE');
+
+query error db error: ERROR: role "aaa" does not exist
+select * from (select 'aaa' as aaa) where pg_has_role('r2', aaa, 'USAGE');

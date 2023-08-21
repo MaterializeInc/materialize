@@ -62,7 +62,7 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
     # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
-    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.2.13"/g' .config \
+    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3"/g' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
@@ -91,11 +91,16 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     git \
     gnupg2 \
     jq \
+    lcov \
+    libclang-dev \
     libpq-dev \
     lld \
+    llvm \
     make \
+    npm \
     openssh-client \
     pkg-config \
+    postgresql-client-14 \
     python3 \
     python3-dev \
     python3-pip \
@@ -111,14 +116,26 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
+    && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/buf-Linux-$ARCH_GCC.tar.gz > buf.tar.gz \
+    && tar -xf buf.tar.gz -C /usr/local/bin --strip-components 2 buf/bin \
+    && rm buf.tar.gz \
+    && chmod +x /usr/local/bin/buf /usr/local/bin/protoc-gen-buf-breaking /usr/local/bin/protoc-gen-buf-lint \
+    && curl -fsSL https://github.com/boz/kail/releases/download/v0.16.1/kail_v0.16.1_linux_$ARCH_GO.tar.gz > kail.tar.gz \
+    && tar -xf kail.tar.gz -C /usr/local/bin kail \
+    && rm kail.tar.gz \
+    && chmod +x /usr/local/bin/kail \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.7.0/parca-debuginfo_0.7.0_Linux_$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/").tar.gz \
+    | tar xz -C /usr/local/bin parca-debuginfo
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
 # Install Rust. This is done separately from above because we bump the Rust
-# version frequently, and we want to reuse the cache up through aboe when
+# version frequently, and we want to reuse the cache up through above when
 # possible.
 
 COPY rust.asc .
@@ -148,24 +165,27 @@ RUN mkdir rust \
         PATH=$PATH:/root/.cargo/bin cargo miri setup \
         ;; \
     esac \
-    && rm -rf rust \
-    && cargo install --root /usr/local --version "=0.5.2" cargo-about \
-    && cargo install --root /usr/local --version "=1.40.5" cargo-deb \
-    && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
-    && cargo install --root /usr/local --version ="0.9.18" cargo-hakari \
-    && cargo install --root /usr/local --version "=0.9.44" cargo-nextest \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
+    && rm -rf rust.asc rust.tar.gz rust \
+    && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
+    && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
+    && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
+    && cargo install --root /usr/local --version ="0.9.18" --locked cargo-hakari \
+    && cargo install --root /usr/local --version "=0.9.44" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.5.18" --locked cargo-llvm-cov \
     && `: Until https://github.com/est31/cargo-udeps/pull/147 is released in cargo-udeps` \
-    && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked  cargo-udeps --features=vendored-openssl \
-    && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
+    && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked cargo-udeps --features=vendored-openssl \
+    && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
+    && cargo install --root /usr/local --version "=0.3.6" cargo-binutils \
+    && cargo install --root /usr/local --version "=0.12.1" wasm-pack
 
 # Link the system lld into the cross-compiling sysroot.
 
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
-
-# Install the Antithesis stub instrumentation library.
-
-COPY libvoidstar.so /usr/local/lib/
 
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.

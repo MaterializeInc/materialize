@@ -18,6 +18,13 @@ ssl_key_file = '/share/secrets/postgres.key'
 ssl_ca_file = '/share/secrets/ca.crt'
 hba_file = '/share/conf/pg_hba.conf'
 wal_level = logical
+fsync = off
 max_wal_senders = 20
 max_replication_slots = 20
+shared_preload_libraries = 'pg_cron'
+max_worker_processes = 16
+cron.database_name = 'postgres'
+cron.use_background_workers = on
+cron.log_statement = off
+cron.log_run = off
 EOCONF

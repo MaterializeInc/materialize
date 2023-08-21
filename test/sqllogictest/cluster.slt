@@ -14,14 +14,56 @@ mode cockroach
 # Start from a pristine state
 reset-server
 
-statement error Expected REPLICAS, found EOF
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
+----
+COMPLETE 0
+
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
 CREATE CLUSTER foo
 
 statement ok
 CREATE CLUSTER foo REPLICAS ()
 
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+ALTER CLUSTER foo.bar RENAME TO bar
+
+statement ok
+ALTER CLUSTER foo RENAME TO bar
+
+statement error unknown cluster 'foo'
+ALTER CLUSTER foo RENAME TO bar
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+statement error db error: ERROR: system cluster 'mz_introspection' cannot be modified
+ALTER CLUSTER mz_introspection RENAME TO foo
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
+
+statement ok
+ALTER CLUSTER IF EXISTS bar RENAME TO foo
+
+statement ok
+ALTER CLUSTER IF EXISTS bar RENAME TO foo
+
+statement ok
+CREATE CLUSTER bar REPLICAS ()
+
+statement error stash error: uniqueness violation
+ALTER CLUSTER foo RENAME TO bar
+
 statement ok
 DROP CLUSTER foo
+
+statement ok
+DROP CLUSTER bar
 
 statement error REPLICAS specified more than once
 CREATE CLUSTER foo REPLICAS (), REPLICAS()
@@ -43,25 +85,16 @@ statement ok
 CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
 
 query TT rowsort
-SELECT * FROM mz_clusters
+SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
 s2  mz_introspection
 u1  default
-u3  foo
-u6  bar
+u4  foo
+u7  bar
 
 query T rowsort
-SHOW CLUSTERS
-----
-mz_system
-mz_introspection
-bar
-default
-foo
-
-query T rowsort
-SHOW CLUSTERS LIKE 'd%'
+SELECT name FROM (SHOW CLUSTERS LIKE 'd%')
 ----
 default
 
@@ -152,57 +185,71 @@ FROM
 WHERE clusters.name = 'bar'
 ORDER BY on_name, seq_in_index ASC;
 ----
-bar  mz_active_peeks  mz_active_peeks_u6_primary_idx  1  id  NULL  false
-bar  mz_active_peeks  mz_active_peeks_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_u6_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_u6_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_u6_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_exports  mz_compute_exports_u6_primary_idx  1  export_id  NULL  false
-bar  mz_compute_exports  mz_compute_exports_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_addresses  mz_dataflow_addresses_u6_primary_idx  1  id  NULL  false
-bar  mz_dataflow_addresses  mz_dataflow_addresses_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_u6_primary_idx  1  id  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u6_primary_idx  1  address  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u6_primary_idx  2  port  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u6_primary_idx  3  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u6_primary_idx  4  update_type  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u6_primary_idx  5  time  NULL  true
-bar  mz_dataflow_operators  mz_dataflow_operators_u6_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operators  mz_dataflow_operators_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u6_primary_idx  1  channel_id  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u6_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u6_primary_idx  3  to_worker_id  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u6_primary_idx  1  channel_id  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u6_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u6_primary_idx  3  to_worker_id  NULL  false
-bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u6_primary_idx  1  id  NULL  false
-bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u6_primary_idx  3  duration_ns  NULL  false
-bar  mz_raw_peek_durations  mz_raw_peek_durations_u6_primary_idx  1  worker_id  NULL  false
-bar  mz_raw_peek_durations  mz_raw_peek_durations_u6_primary_idx  2  duration_ns  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u6_primary_idx  1  export_id  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u6_primary_idx  2  import_id  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u6_primary_idx  3  worker_id  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u6_primary_idx  4  delay_ns  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u6_primary_idx  1  id  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u6_primary_idx  1  worker_id  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u6_primary_idx  2  slept_for  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u6_primary_idx  3  requested  NULL  false
-bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u6_primary_idx  1  export_id  NULL  false
-bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u6_primary_idx  2  import_id  NULL  false
-bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u6_primary_idx  3  worker_id  NULL  false
-bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u6_primary_idx  1  export_id  NULL  false
-bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u6_primary_idx  2  worker_id  NULL  false
-bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u6_primary_idx  3  time  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u6_primary_idx  1  export_id  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u6_primary_idx  2  import_id  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u6_primary_idx  3  worker_id  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u6_primary_idx  4  time  NULL  false
+bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u7_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u7_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u7_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u7_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  2  import_id  NULL  false
+bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  4  delay_ns  NULL  false
+bar  mz_compute_dependencies_per_worker  mz_compute_dependencies_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_dependencies_per_worker  mz_compute_dependencies_per_worker_u7_primary_idx  2  import_id  NULL  false
+bar  mz_compute_dependencies_per_worker  mz_compute_dependencies_per_worker_u7_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  3  time  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  2  import_id  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  4  time  NULL  false
+bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  1  id  NULL  false
+bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false
+bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  1  address  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  2  port  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  3  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  4  update_type  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  5  time  NULL  true
+bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
+bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  2  duration_ns  NULL  false
+bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  1  channel_id  NULL  false
+bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u7_primary_idx  1  channel_id  NULL  false
+bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u7_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u7_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  3  to_worker_id  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  2  duration_ns  NULL  false
+bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u7_primary_idx  1  id  NULL  false
+bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
+bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  2  slept_for_ns  NULL  false
+bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  3  requested_ns  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
 query TTTT
@@ -349,11 +396,10 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 
 # Test that introspection source indexes are created and dropped correctly
 
-# There are 19 introspection sources
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-19
+25
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -366,7 +412,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-91
+127
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -374,9 +420,14 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-72
+102
 
-statement error nvalid SIZE: must provide a string value
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER default OWNER TO materialize
+----
+COMPLETE 0
+
+statement error invalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;
 
 statement ok
@@ -412,7 +463,7 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.foo
 
-query error CLUSTER foo has no CLUSTER REPLICA named foo
+query error CLUSTER foo has no CLUSTER REPLICA named "foo"
 DROP CLUSTER REPLICA default.size_1, foo.foo
 
 statement ok
@@ -431,14 +482,50 @@ mz_system r1 1
 statement ok
 CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
 
+statement error db error: ERROR: Expected dot, found RENAME
+ALTER CLUSTER REPLICA default RENAME TO bar_foo
+
+statement ok
+ALTER CLUSTER REPLICA default.foo_bar RENAME TO bar_foo
+
+statement error CLUSTER default has no CLUSTER REPLICA named "foo_bar"
+ALTER CLUSTER REPLICA default.foo_bar RENAME TO bar_foo
+
+statement ok
+ALTER CLUSTER REPLICA IF EXISTS default.bar_foo RENAME TO foo_bar
+
+statement ok
+ALTER CLUSTER REPLICA IF EXISTS default.bar_foo RENAME TO foo_bar
+
+statement ok
+CREATE CLUSTER REPLICA default.bar_foo SIZE '1'
+
+statement error stash error: uniqueness violation
+ALTER CLUSTER REPLICA default.bar_foo RENAME TO foo_bar
+
 statement ok
 DROP CLUSTER REPLICA default.foo_bar
+
+statement ok
+DROP CLUSTER REPLICA default.bar_foo
 
 statement ok
 CREATE CLUSTER REPLICA default."foo-bar" SIZE '1'
 
 statement ok
 DROP CLUSTER REPLICA default."foo-bar"
+
+statement ok
+CREATE CLUSTER "foo-bar" REPLICAS ()
+
+statement ok
+CREATE CLUSTER REPLICA "foo-bar"."foo-bar" SIZE '1'
+
+statement ok
+DROP CLUSTER REPLICA "foo-bar"."foo-bar"
+
+statement ok
+DROP CLUSTER "foo-bar"
 
 statement ok
 CREATE CLUSTER REPLICA default."好-好" SIZE '1'
@@ -461,7 +548,7 @@ statement ok
 SET cluster = empty
 
 query error CLUSTER "empty" has no replicas available to service request
-SELECT 1;
+SELECT generate_series(1, 1);
 
 
 # Phillip's tests
@@ -540,15 +627,15 @@ CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESS
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
 
-query TTTTTT
-SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
+query TTTTTTT
+SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
-r1  1  1  18446744073709000000  18446744073709551615  1
-r1  1  1  18446744073709000000  18446744073709551615  1
-r1  1  1  18446744073709000000  18446744073709551615  1
-size_1  1  1  18446744073709000000  18446744073709551615  1
-size_2_2  2-2  2  18446744073709000000  18446744073709551615  2
-size_32  32  1  18446744073709000000  18446744073709551615  32
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+size_1  1  1  18446744073709000000  18446744073709551615  1  1
+size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
+size_32  32  1  18446744073709000000  18446744073709551615  32  1
 
 statement ok
 DROP CLUSTER foo CASCADE

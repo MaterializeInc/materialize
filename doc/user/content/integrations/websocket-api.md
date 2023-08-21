@@ -4,11 +4,11 @@ description: "How to use Materialize via WebSocket"
 menu:
   main:
     parent: "integrations"
-    weight: 6
+    weight: 30
     name: "WebSocket API"
 ---
 
-{{< alpha enabled-by-default="true" />}}
+{{< private-preview enabled-by-default="true" />}}
 
 You can access Materialize through its interactive WebSocket API endpoint:
 
@@ -31,6 +31,8 @@ The API:
     - `COPY`
     - `DECLARE`
     - `FETCH`
+- Supports specifying run-time configuration parameters ([session variables](https://www.postgresql.org/docs/current/sql-set.html))
+  via the initial authentication message.
 
 ### Transactional semantics
 
@@ -59,8 +61,9 @@ To authenticate using a username and password, send an initial text or binary me
 
 ```
 {
-  "user": "<Your email to access Materialize>"
-	"password": "<Your app password>",
+    "user": "<Your email to access Materialize>",
+    "password": "<Your app password>",
+    "options": { <Optional map of session variables> }
 }
 ```
 
@@ -68,13 +71,18 @@ To authenticate using a token, send an initial text or binary message containing
 
 ```
 {
-	"token": "<Your access token>",
+    "token": "<Your access token>",
+    "options": { <Optional map of session variables> }
 }
 ```
 
-Successful authentication will result in an initial `ReadyForQuery` response from the server.
-Otherwise an error is indicated by a websocket Close message.
+Successful authentication will result in:
 
+- Some `ParameterStatus` messages indicating the values of some initial session settings.
+- One `BackendKeyData` message that can be used for cancellation.
+- One `ReadyForQuery`message, at which point the server is ready to receive requests.
+
+An error during authentication is indicated by a websocket Close message.
 HTTP `Authorization` headers are ignored.
 
 ### Messages
@@ -126,10 +134,13 @@ The response messages are WebSocket Text messages containing a JSON object that 
 ---------------------|------------
 `ReadyForQuery` | Sent at the end of each response batch
 `Notice` | An informational notice.
+`CommandStarting` | A command has executed and response data will be returned.
 `CommandComplete` | Executing a statement succeeded.
 `Error` | Executing a statement resulted in an error.
 `Rows` | A rows-returning statement is executing, and some `Row` messages may follow.
 `Row` | A single row result.
+`ParameterStatus` | Announces the value of a session setting.
+`BackendKeyData` | Information used to cancel queries.
 
 #### `ReadyForQuery`
 
@@ -148,13 +159,44 @@ A notice can appear at any time and contains diagnostic messages that were gener
 The payload has the following structure:
 
 ```
-{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>}
+{
+    "message": <informational message>,
+    "severity": <"warning"|"notice"|"debug"|"info"|"log">,
+    "detail": <optional error detail>,
+    "hint": <optional error hint>,
+}
 ```
 
 #### `Error`
 
 Executing a statement resulted in an error.
-The payload is a `string` containing the error.
+The payload has the following structure:
+
+```
+{
+    "message": <informational message>,
+    "code": <error code>,
+    "detail": <optional error detail>,
+    "hint": <optional error hint>,
+}
+```
+
+#### `CommandStarting`
+
+A statement has executed and response data will be returned.
+This message can be used to know if rows or streaming data will follow.
+The payload has the following structure:
+
+```
+{
+    "has_rows": <boolean>,
+    "is_streaming": <boolean>,
+}
+```
+
+The `has_rows` field is `true` if a `Rows` message will follow.
+The `is_streaming` field is `true` if there is no expectation that a `CommandComplete` message will ever occur.
+This is the case for `SUBSCRIBE` queries.
 
 #### `CommandComplete`
 
@@ -164,8 +206,28 @@ The payload is a `string` containing the statement's tag.
 #### `Rows`
 
 A rows-returning statement is executing and some number (possibly 0) of `Row` messages will follow.
-The payload is an array of `string` containing the column names of the row results.
-Either a `CommandComplete` or `Error` message will always follow indicating there are no more rows and the final result of the statement.
+Either a `CommandComplete` or `Error` message will then follow indicating there are no more rows and the final result of the statement.
+The payload has the following structure:
+
+```
+{
+    "columns":
+        [
+            {
+                "name": <column name>,
+                "type_oid": <type oid>,
+                "type_len": <type len>,
+                "type_mod": <type mod>
+            }
+            ...
+        ]
+}
+```
+
+The inner object's various `type_X` fields are lower-level details that can be used to convert the row results from a string to a more specific data type.
+`type_oid` is the OID of the data type.
+`type_len` is the data size type (see `pg_type.typlen`).
+`type_mod` is the type modifier (see `pg_attribute.atttypmod`).
 
 #### `Row`
 
@@ -173,14 +235,39 @@ A single row result.
 Will only occur after a `Rows` message.
 The payload is an array of JSON values corresponding to the columns from the `Rows` message.
 
+#### `ParameterStatus`
+
+Announces the value of a session setting.
+These are sent during startup and when a statement caused a session parameter to change.
+The payload has the following structure:
+
+```
+{
+    "name": <name of parameter>,
+    "value": <new value of parameter>,
+}
+```
+
+#### `BackendKeyData`
+
+Information used to cancel queries.
+The payload has the following structure:
+
+```
+{
+    "conn_id": <connection id>,
+    "secret_key": <secret key>,
+}
+```
+
 #### TypeScript definition
 
 You can model these with the following TypeScript definitions:
 
 ```typescript
 type Auth =
-    | { user: string; password: string }
-    | { token: string }
+    | { user: string; password: string; options?: { [name: string]: string } }
+    | { token: string; options?: { [name: string]: string } }
     ;
 
 interface Simple {
@@ -199,17 +286,55 @@ interface Extended {
 type SqlRequest = Simple | Extended;
 
 interface Notice {
-    message: string;
-    severity: string;
+	message: string;
+	severity: string;
+	detail?: string;
+	hint?: string;
+}
+
+interface Error {
+	message: string;
+	code: string;
+	detail?: string;
+	hint?: string;
+}
+
+interface ParameterStatus {
+	name: string;
+	value: string;
+}
+
+interface CommandStarting {
+	has_rows: boolean;
+	is_streaming: boolean;
+}
+
+interface BackendKeyData {
+	conn_id: number; // u32
+	secret_key: number; // u32
+}
+
+interface Column {
+    name: string;
+    type_oid: number; // u32
+    type_len: number; // i16
+    type_mod: number; // i32
+}
+
+interface Description {
+	columns: Column[];
 }
 
 type WebSocketResult =
     | { type: "ReadyForQuery"; payload: string }
     | { type: "Notice"; payload: Notice }
     | { type: "CommandComplete"; payload: string }
-    | { type: "Error"; payload: string }
-    | { type: "Rows"; payload: string[] }
+    | { type: "Error"; payload: Error }
+    | { type: "Rows"; payload: Description }
     | { type: "Row"; payload: any[] }
+    | { type: "ParameterStatus"; payload: ParameterStatus }
+    | { type: "CommandStarting"; payload: CommandStarting }
+    | { type: "BackendKeyData"; payload: BackendKeyData }
     ;
 ```
 
@@ -219,10 +344,12 @@ type WebSocketResult =
 
 ```bash
 $ echo '{"query": "select 1,2; values (4), (5)"}' | websocat wss://<MZ host address>/api/experimental/sql
-{"type":"Rows","payload":["?column?","?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1},{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["1","2"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
-{"type":"Rows","payload":["column1"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["4"]}
 {"type":"Row","payload":["5"]}
 {"type":"CommandComplete","payload":"SELECT 2"}

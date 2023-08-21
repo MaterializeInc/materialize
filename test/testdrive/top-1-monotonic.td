@@ -12,6 +12,9 @@
 # "optimize topk when limit=1 and input is monotonic (append-only)"
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
 #
 # Make sure that the general pattern of all queries in this file will use TopK and not some other future operator or optimization
 #
@@ -258,3 +261,39 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 <null>
 <null>
 <null>
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+"Arranged MonotonicTop1 partial"
+DistinctBy
+DistinctBy
+DistinctBy
+DistinctBy
+DistinctByErrorCheck
+DistinctByErrorCheck
+DistinctByErrorCheck
+DistinctByErrorCheck
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -81,11 +79,10 @@
 
 //! The public API for the compute layer.
 
-mod metrics;
-
 pub mod controller;
 pub mod explain;
 pub mod logging;
+pub mod metrics;
 pub mod plan;
 pub mod protocol;
 pub mod service;

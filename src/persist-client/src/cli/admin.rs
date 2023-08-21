@@ -17,24 +17,29 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
+use mz_persist_types::codec_impls::TodoSchema;
 use prometheus::proto::{MetricFamily, MetricType};
 use tracing::{info, warn};
 
-use crate::async_runtime::CpuHeavyRuntime;
+use crate::async_runtime::IsolatedRuntime;
+use crate::cache::StateCache;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
-use crate::{Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
+use crate::{Diagnostics, Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
 
 /// Commands for read-write administration of persist state
 #[derive(Debug, clap::Args)]
@@ -174,28 +179,17 @@ pub async fn force_compaction(
     .await?;
 
     let writer_id = WriterId::new();
-    info!("registering writer {}", writer_id);
-    // We don't bother expiring this writer in various error codepaths, instead
-    // letting it time out. /shrug
-    let _ = machine
-        .register_writer(
-            &writer_id,
-            "persistcli admin force-compaction",
-            cfg.writer_lease_duration,
-            (cfg.now)(),
-        )
-        .await;
 
     let mut attempt = 0;
     'outer: loop {
-        machine.applier.fetch_and_update_state().await;
+        machine.applier.fetch_and_update_state(None).await;
         let reqs = machine.applier.all_fueled_merge_reqs();
         info!("attempt {}: got {} compaction reqs", attempt, reqs.len());
         for (idx, req) in reqs.clone().into_iter().enumerate() {
             let req = CompactReq {
                 shard_id,
                 desc: req.desc,
-                inputs: req.inputs.iter().map(|b| b.as_ref().clone()).collect(),
+                inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
             };
             let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
             let bytes = req
@@ -219,14 +213,19 @@ pub async fn force_compaction(
                 info!("skipping compaction because --commit is not set");
                 continue;
             }
+            let schemas = Schemas {
+                key: Arc::new(TodoSchema::default()),
+                val: Arc::new(TodoSchema::default()),
+            };
             let res =
                 Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    CompactConfig::from(&cfg),
+                    CompactConfig::new(&cfg, &writer_id),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
-                    Arc::new(CpuHeavyRuntime::new()),
+                    Arc::clone(&machine.applier.shard_metrics),
+                    Arc::new(IsolatedRuntime::new()),
                     req,
-                    writer_id.clone(),
+                    schemas,
                 )
                 .await?;
             info!(
@@ -279,7 +278,7 @@ struct ReadOnly<T>(T);
 
 #[async_trait]
 impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         self.0.get(key).await
     }
 
@@ -313,9 +312,9 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
         key: &str,
         _expected: Option<SeqNo>,
         _new: VersionedData,
-    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+    ) -> Result<CaSResult, ExternalError> {
         warn!("ignoring cas({key}) in read-only mode");
-        Ok(Ok(()))
+        Ok(CaSResult::Committed)
     }
 
     async fn scan(
@@ -424,8 +423,12 @@ async fn make_machine(
     let machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
         cfg.clone(),
         shard_id,
-        metrics,
+        Arc::clone(&metrics),
         state_versions,
+        Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
+        Arc::new(NoopPubSubSender),
+        Arc::new(IsolatedRuntime::new()),
+        Diagnostics::from_purpose("admin"),
     )
     .await?;
 
@@ -446,9 +449,9 @@ async fn force_gc(
     let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
     let gc_req = GcReq {
         shard_id,
-        new_seqno_since: machine.applier.state().seqno_since(),
+        new_seqno_since: machine.applier.seqno_since(),
     };
-    let maintenance = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }

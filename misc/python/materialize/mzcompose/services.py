@@ -14,8 +14,15 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import toml
 
-from materialize import ROOT
-from materialize.mzcompose import Service, ServiceConfig, ServiceDependency, loader
+from materialize import MZ_ROOT
+from materialize.mzcompose import (
+    Service,
+    ServiceConfig,
+    ServiceDependency,
+    ServiceHealthcheck,
+    loader,
+)
+from materialize.util import MzVersion
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
@@ -30,10 +37,45 @@ DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
+    "scratch:/scratch",
 ]
 
+DEFAULT_SYSTEM_PARAMETERS = {
+    "persist_sink_minimum_batch_updates": "128",
+    "enable_multi_worker_storage_persist_sink": "true",
+    "storage_persist_sink_minimum_batch_updates": "100",
+    "persist_pubsub_push_diff_enabled": "true",
+    "persist_pubsub_client_enabled": "true",
+    "persist_stats_filter_enabled": "true",
+    "persist_stats_collection_enabled": "true",
+    "persist_stats_audit_percent": "100",
+    "enable_ld_rbac_checks": "true",
+    "enable_rbac_checks": "true",
+    "enable_monotonic_oneshot_selects": "true",
+    "enable_with_mutually_recursive": "true",
+    "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_dangerous_functions": "true",
+    "enable_disk_cluster_replicas": "true",
+    "statement_logging_max_sample_rate": "1.0",
+    "statement_logging_default_sample_rate": "1.0",
+    # Following values are set based on Load Test environment to
+    # reduce CRDB load as we are struggling with it in CI:
+    "persist_next_listen_batch_retryer_clamp": "100ms",
+    "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+}
+
+DEFAULT_CRDB_ENVIRONMENT = [
+    "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=60s",
+    "COCKROACH_LOG_MAX_SYNC_DURATION=60s",
+]
+
+
 # TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
-DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
+DEFAULT_CLOUD_PROVIDER = "mzcompose"
+DEFAULT_CLOUD_REGION = "us-east-1"
+DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_ORDINAL = "0"
+DEFAULT_MZ_ENVIRONMENT_ID = f"{DEFAULT_CLOUD_PROVIDER}-{DEFAULT_CLOUD_REGION}-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 
 
 class Materialized(Service):
@@ -55,17 +97,30 @@ class Materialized(Service):
         propagate_crashes: bool = True,
         external_cockroach: bool = False,
         external_minio: bool = False,
+        unsafe_mode: bool = True,
+        restart: Optional[str] = None,
+        use_default_volumes: bool = True,
+        ports: Optional[List[str]] = None,
+        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
+        soft_assertions: bool = True,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
         environment = [
-            "MZ_SOFT_ASSERTIONS=1",
+            f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
             # TODO(benesch): remove the following environment variables
             # after v0.38 ships, since these environment variables will be
             # baked into the Docker image.
-            f"MZ_ORCHESTRATOR=process",
+            "MZ_ORCHESTRATOR=process",
+            # The following settings can not be baked in the default image, as they
+            # are enabled for testing purposes only
+            "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
+            "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
+            "MZ_BOOTSTRAP_ROLE=materialize",
+            "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -75,9 +130,27 @@ class Materialized(Service):
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
             *environment_extra,
+            *DEFAULT_CRDB_ENVIRONMENT,
         ]
 
-        command = ["--unsafe-mode"]
+        if system_parameter_defaults is None:
+            system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
+
+        if additional_system_parameter_defaults is not None:
+            system_parameter_defaults.update(additional_system_parameter_defaults)
+
+        if len(system_parameter_defaults) > 0:
+            environment += [
+                "MZ_SYSTEM_PARAMETER_DEFAULT="
+                + ";".join(
+                    f"{key}={value}" for key, value in system_parameter_defaults.items()
+                )
+            ]
+
+        command = []
+
+        if unsafe_mode:
+            command += ["--unsafe-mode"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
@@ -93,7 +166,18 @@ class Materialized(Service):
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
 
-        self.default_storage_size = default_size
+        self.default_storage_size = (
+            default_size
+            if image
+            and "latest" not in image
+            and "devel" not in image
+            and "unstable" not in image
+            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
+            else "1"
+            if default_size == 1
+            else f"{default_size}-1"
+        )
+
         self.default_replica_size = (
             "1" if default_size == 1 else f"{default_size}-{default_size}"
         )
@@ -113,6 +197,11 @@ class Materialized(Service):
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
             ]
 
+        command += [
+            "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
+            "--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
+        ]
+
         command += options
 
         config: ServiceConfig = {}
@@ -122,11 +211,19 @@ class Materialized(Service):
         else:
             config["mzbuild"] = "materialized"
 
+        if restart:
+            config["restart"] = restart
+
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
+        volumes = []
+        if use_default_volumes:
+            volumes += DEFAULT_MZ_VOLUMES
+        volumes += volumes_extra
 
         config.update(
             {
@@ -134,7 +231,7 @@ class Materialized(Service):
                 "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
-                "volumes": [*DEFAULT_MZ_VOLUMES, *volumes_extra],
+                "volumes": volumes,
                 "tmpfs": ["/tmp"],
                 "healthcheck": {
                     "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
@@ -144,6 +241,14 @@ class Materialized(Service):
                 },
             }
         )
+
+        if ports:
+            config.update(
+                {
+                    "allow_host_ports": True,
+                    "ports": ports,
+                }
+            )
 
         super().__init__(name=name, config=config)
 
@@ -183,7 +288,7 @@ class Clusterd(Service):
         config.update(
             {
                 "command": command,
-                "ports": [2100, 2101],
+                "ports": [2100, 2101, 6878],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
             }
@@ -239,7 +344,7 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
-        extra_environment: List[str] = [],
+        environment_extra: List[str] = [],
         depends_on_extra: List[str] = [],
         volumes: List[str] = [],
         listener_type: str = "PLAINTEXT",
@@ -248,7 +353,7 @@ class Kafka(Service):
             *environment,
             f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
             f"KAFKA_BROKER_ID={broker_id}",
-            *extra_environment,
+            *environment_extra,
         ]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
@@ -277,7 +382,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v22.3.13",
+        version: str = "v23.1.9",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
@@ -421,40 +526,58 @@ class MySql(Service):
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v22.2.3"
+    DEFAULT_COCKROACH_TAG = "v23.1.5"
 
     def __init__(
         self,
         name: str = "cockroach",
+        aliases: List[str] = ["cockroach"],
         image: Optional[str] = None,
+        command: Optional[List[str]] = None,
         setup_materialize: bool = True,
+        in_memory: bool = False,
+        healthcheck: Optional[ServiceHealthcheck] = None,
+        # Workaround for #19809, should be "no" otherwise
+        restart: str = "on-failure:5",
     ):
         volumes = []
 
         if image is None:
             image = f"cockroachdb/cockroach:{Cockroach.DEFAULT_COCKROACH_TAG}"
 
+        if command is None:
+            command = ["start-single-node", "--insecure"]
+
         if setup_materialize:
             path = os.path.relpath(
-                ROOT / "misc" / "cockroach" / "setup_materialize.sql",
+                MZ_ROOT / "misc" / "cockroach" / "setup_materialize.sql",
                 loader.composition_path,
             )
             volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
+
+        if in_memory:
+            command.append("--store=type=mem,size=2G")
+
+        if healthcheck is None:
+            healthcheck = {
+                # init_success is a file created by the Cockroach container entrypoint
+                "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
+                "interval": "1s",
+                "start_period": "30s",
+            }
+
         super().__init__(
             name=name,
             config={
                 "image": image,
+                "networks": {"default": {"aliases": aliases}},
                 "ports": [26257],
-                "command": ["start-single-node", "--insecure"],
+                "command": command,
                 "volumes": volumes,
                 "init": True,
-                "healthcheck": {
-                    # init_success is a file created by the Cockroach container entrypoint
-                    "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
-                    "timeout": "5s",
-                    "interval": "1s",
-                    "start_period": "30s",
-                },
+                "healthcheck": healthcheck,
+                "restart": restart,
+                "environment": DEFAULT_CRDB_ENVIRONMENT,
             },
         )
 
@@ -478,6 +601,7 @@ class Postgres(Service):
             "max_connections=5000",
         ],
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        volumes: List[str] = [],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
@@ -490,6 +614,7 @@ class Postgres(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+                "volumes": volumes,
             }
         )
         super().__init__(name=name, config=config)
@@ -614,7 +739,7 @@ class Localstack(Service):
     def __init__(
         self,
         name: str = "localstack",
-        image: str = f"localstack/localstack:0.13.1",
+        image: str = "localstack/localstack:0.13.1",
         port: int = 4566,
         environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
         volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
@@ -640,7 +765,7 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = f"minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in
@@ -656,6 +781,7 @@ class Minio(Service):
                 "command": [command],
                 "image": image,
                 "ports": [9000, 9001],
+                "environment": ["MINIO_STORAGE_CLASS_STANDARD=EC:0"],
                 "healthcheck": {
                     "test": [
                         "CMD",
@@ -811,6 +937,13 @@ class SqlLogicTest(Service):
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["cockroach"],
     ) -> None:
+        environment += [
+            "MZ_SYSTEM_PARAMETER_DEFAULT="
+            + ";".join(
+                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+            )
+        ]
+
         super().__init__(
             name=name,
             config={
@@ -866,16 +999,33 @@ class Metabase(Service):
 
 
 class SshBastionHost(Service):
-    def __init__(self, name: str = "ssh-bastion-host") -> None:
+    def __init__(
+        self,
+        name: str = "ssh-bastion-host",
+        max_startups: Optional[str] = None,
+    ) -> None:
+        setup_path = os.path.relpath(
+            MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
+            loader.composition_path,
+        )
         super().__init__(
             name=name,
             config={
                 "image": "panubo/sshd:1.5.0",
+                "init": True,
                 "ports": ["22"],
                 "environment": [
                     "SSH_USERS=mz:1000:1000",
                     "TCP_FORWARDING=true",
+                    *([f"MAX_STARTUPS={max_startups}"] if max_startups else []),
                 ],
+                "volumes": [f"{setup_path}:/etc/entrypoint.d/setup.sh"],
+                "healthcheck": {
+                    "test": "[ -f /var/run/sshd/sshd.pid ]",
+                    "timeout": "5s",
+                    "interval": "1s",
+                    "start_period": "60s",
+                },
             },
         )
 
@@ -887,7 +1037,6 @@ class Mz(Service):
         name: str = "mz",
         region: str = "aws/us-east-1",
         environment: str = "staging",
-        username: str,
         app_password: str,
     ) -> None:
         # We must create the temporary config file in a location
@@ -903,13 +1052,13 @@ class Mz(Service):
         )
         toml.dump(
             {
-                "current_profile": "default",
+                "profile": "default",
                 "profiles": {
                     "default": {
-                        "email": username,
                         "app-password": app_password,
                         "region": region,
-                        "endpoint": f"https://{environment}.cloud.materialize.com/",
+                        "cloud-endpoint": f"https://{environment}.cloud.materialize.com",
+                        "admin-endpoint": f"https://admin.{environment}.cloud.materialize.com",
                     },
                 },
             },
@@ -920,6 +1069,61 @@ class Mz(Service):
             name=name,
             config={
                 "mzbuild": "mz",
-                "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
+                "volumes": [f"{config.name}:/root/.config/materialize/mz.toml"],
+            },
+        )
+
+
+class Prometheus(Service):
+    def __init__(self, name: str = "prometheus") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "prom/prometheus:v2.41.0",
+                "ports": ["9090"],
+                "volumes": [
+                    str(
+                        MZ_ROOT / "misc" / "mzcompose" / "prometheus" / "prometheus.yml"
+                    )
+                    + ":/etc/prometheus/prometheus.yml",
+                    "mzdata:/mnt/mzdata",
+                ],
+            },
+        )
+
+
+class Grafana(Service):
+    def __init__(self, name: str = "grafana") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "grafana/grafana:9.3.2",
+                "ports": ["3000"],
+                "environment": [
+                    "GF_AUTH_ANONYMOUS_ENABLED=true",
+                    "GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
+                ],
+                "volumes": [
+                    str(MZ_ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
+                    + ":/etc/grafana/provisioning/datasources",
+                ],
+            },
+        )
+
+
+class Dbt(Service):
+    def __init__(self, name: str = "dbt") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": "dbt-materialize",
+                "environment": [
+                    "TMPDIR=/share/tmp",
+                ],
+                "volumes": [
+                    ".:/workdir",
+                    "secrets:/secrets",
+                    "tmp:/share/tmp",
+                ],
             },
         )

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -90,12 +88,15 @@ fn main() {
                 "repr/src/row.proto",
                 "repr/src/strconv.proto",
                 "repr/src/relation_and_scalar.proto",
+                "repr/src/role_id.proto",
                 "repr/src/url.proto",
+                "repr/src/explain.proto",
                 "repr/src/adt/array.proto",
                 "repr/src/adt/char.proto",
                 "repr/src/adt/date.proto",
                 "repr/src/adt/datetime.proto",
                 "repr/src/adt/interval.proto",
+                "repr/src/adt/mz_acl_item.proto",
                 "repr/src/adt/numeric.proto",
                 "repr/src/adt/range.proto",
                 "repr/src/adt/regex.proto",

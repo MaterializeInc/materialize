@@ -9,9 +9,13 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:10.21-bullseye
+FROM postgres:15.2-bullseye
 
 ENV POSTGRES_PASSWORD=postgres
+
+RUN apt update
+
+RUN apt install postgresql-15-cron
 
 COPY --chown=postgres --from=certs /secrets/* /share/secrets/
 COPY pg_hba.conf /share/conf/pg_hba.conf

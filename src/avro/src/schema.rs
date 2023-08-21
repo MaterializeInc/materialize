@@ -35,17 +35,14 @@ use digest::Digest;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use serde::{
-    ser::{SerializeMap, SerializeSeq},
-    Serialize, Serializer,
-};
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Serialize, Serializer};
 use serde_json::{self, Map, Value};
 use tracing::{debug, warn};
-use types::{DecimalValue, Value as AvroValue};
 
 use crate::error::Error as AvroError;
 use crate::reader::SchemaResolver;
-use crate::types;
+use crate::types::{self, DecimalValue, Value as AvroValue};
 use crate::util::MapHelper;
 
 pub fn resolve_schemas(
@@ -2257,8 +2254,7 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use types::Record;
-    use types::ToAvro;
+    use crate::types::{Record, ToAvro};
 
     use super::*;
 
@@ -2272,14 +2268,14 @@ mod tests {
         assert_eq!(&expected, schema.top_node().inner);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_primitive_schema() {
         check_schema("\"null\"", SchemaPiece::Null);
         check_schema("\"int\"", SchemaPiece::Int);
         check_schema("\"double\"", SchemaPiece::Double);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_array_schema() {
         check_schema(
             r#"{"type": "array", "items": "string"}"#,
@@ -2287,7 +2283,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_map_schema() {
         check_schema(
             r#"{"type": "map", "values": "double"}"#,
@@ -2295,7 +2291,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_union_schema() {
         check_schema(
             r#"["null", "int"]"#,
@@ -2309,7 +2305,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multi_union_schema() {
         let schema = Schema::from_str(r#"["null", "int", "float", "string", "bytes"]"#);
         assert!(schema.is_ok());
@@ -2345,7 +2341,7 @@ mod tests {
         assert_eq!(variants.next(), None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_record_schema() {
         let schema = r#"
                 {
@@ -2388,7 +2384,7 @@ mod tests {
         check_schema(schema, expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_enum_schema() {
         let schema = r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "jokers"}"#;
 
@@ -2413,7 +2409,7 @@ mod tests {
         assert!(bad_schema.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_fixed_schema() {
         let schema = r#"{"type": "fixed", "name": "test", "size": 16}"#;
 
@@ -2422,7 +2418,7 @@ mod tests {
         check_schema(schema, expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_date_schema() {
         let kinds = &[
             r#"{
@@ -2452,7 +2448,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn new_field_in_middle() {
         let reader = r#"{
             "type": "record",
@@ -2489,7 +2485,7 @@ mod tests {
         assert!(reader.is_empty()); // all bytes should have been consumed
     }
 
-    #[test]
+    #[mz_ore::test]
     fn new_field_at_end() {
         let reader = r#"{
             "type": "record",
@@ -2523,7 +2519,7 @@ mod tests {
         assert!(reader.is_empty()); // all bytes should have been consumed
     }
 
-    #[test]
+    #[mz_ore::test]
     fn default_non_nums() {
         let reader = r#"{
             "type": "record",
@@ -2597,7 +2593,7 @@ mod tests {
         assert!(reader.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_decimal_schemas() {
         let schema = r#"{
                 "type": "fixed",
@@ -2675,7 +2671,7 @@ mod tests {
         assert_eq!(resolved.top_node().inner, &expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_no_documentation() {
         let schema =
             Schema::from_str(r#"{"type": "enum", "name": "Coin", "symbols": ["heads", "tails"]}"#)
@@ -2689,7 +2685,7 @@ mod tests {
         assert!(doc.is_none());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_documentation() {
         let schema = Schema::from_str(
                 r#"{"type": "enum", "name": "Coin", "doc": "Some documentation", "symbols": ["heads", "tails"]}"#
@@ -2703,7 +2699,7 @@ mod tests {
         assert_eq!("Some documentation".to_owned(), doc.unwrap());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_namespaces_and_names() {
         // When name and namespace specified, full name should contain both.
         let schema = Schema::from_str(
@@ -2908,7 +2904,7 @@ mod tests {
 
     // Tests to ensure Schema is Send + Sync. These tests don't need to _do_ anything, if they can
     // compile, they pass.
-    #[test]
+    #[mz_ore::test]
     fn test_schema_is_send() {
         fn send<S: Send>(_s: S) {}
 
@@ -2920,7 +2916,7 @@ mod tests {
         send(schema);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_schema_is_sync() {
         fn sync<S: Sync>(_s: S) {}
 
@@ -2933,7 +2929,8 @@ mod tests {
         sync(schema);
     }
 
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_schema_fingerprint() {
         use sha2::Sha256;
 
@@ -2983,7 +2980,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_make_valid() {
         for (input, expected) in [
             ("foo", "foo"),

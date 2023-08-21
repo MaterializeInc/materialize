@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 DROP TABLE IF EXISTS foo;
 
@@ -142,7 +147,7 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0, #5) // { arity: 2 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]UK
@@ -154,8 +159,8 @@ Explained Query:
           Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.bar_idx (differential join)
 
 EOF
 
@@ -202,9 +207,9 @@ Explained Query:
           Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx
-  - materialize.public.baz_idx
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.bar_idx (differential join)
+  - materialize.public.baz_idx (differential join)
 
 EOF
 
@@ -233,7 +238,7 @@ where nullif(foo.a, 0) = -bar.a
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Filter (#2) IS NOT NULL AND (case when (#0 = 0) then null else #0 end) IS NOT NULL // { arity: 4 }
+    Filter (#2) IS NOT NULL // { arity: 4 }
       Join on=(-(#2) = case when (#0 = 0) then null else #0 end) type=differential // { arity: 4 }
         implementation
           %0:foo[case when (#0 = 0) then null else #0 end]KA » %1:bar[-(#0)]KA
@@ -243,8 +248,8 @@ Explained Query:
           Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx2
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx2 (differential join)
+  - materialize.public.bar_idx2 (differential join)
 
 EOF
 
@@ -288,9 +293,9 @@ Explained Query:
           Get materialize.public.baz // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.baz_idx
-  - materialize.public.bar_idx3
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.baz_idx (differential join)
+  - materialize.public.bar_idx3 (differential join)
 
 EOF
 
@@ -323,8 +328,8 @@ Explained Query:
         Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx (*** full scan ***)
+  - materialize.public.bar_idx2 (*** full scan ***)
 
 EOF
 
@@ -354,8 +359,8 @@ Explained Query:
         Get materialize.public.bar // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx (*** full scan ***)
+  - materialize.public.bar_idx2 (*** full scan ***)
 
 EOF
 
@@ -382,24 +387,25 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#1, #3, #5) // { arity: 3 }
-    Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
-      implementation
-        %0:foo[#0]KA » %1:bar[#0]K » %2:baz[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Get materialize.public.bar // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
-          Get materialize.public.baz // { arity: 2 }
+    Filter (#0) IS NOT NULL // { arity: 6 }
+      Join on=(#0 = #2 AND #4 = (#0 + 4)) type=differential // { arity: 6 }
+        implementation
+          %0:foo[#0]KA » %1:bar[#0]K » %2:baz[#0]K
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get materialize.public.foo // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.bar // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.baz // { arity: 2 }
 
 Source materialize.public.baz
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.foo_idx
-  - materialize.public.bar_idx2
+  - materialize.public.foo_idx (differential join)
+  - materialize.public.bar_idx2 (*** full scan ***)
 
 EOF
 
@@ -592,7 +598,7 @@ t3.x != t3.y AND
 ----
 Explained Query:
   Project (#0..=#14, #0, #16..=#29, #0, #31..=#44, #0, #46..=#59, #0, #61..=#74, #0, #76..=#89, #0, #91..=#104, #0, #106..=#119, #0, #121..=#134, #0, #136..=#149, #0, #151..=#153) // { arity: 154 }
-    Filter (#109) IS NULL AND "a%" ~~(#125) AND (#137 = 71) AND (#95 <= 8) AND (#81 > 5) AND (#95 >= 3) AND NOT("b%" ~~(#69)) AND (#39 != #40) AND (#53 != #54) // { arity: 154 }
+    Filter (#109) IS NULL AND like["a%"](#125) AND (#137 = 71) AND (#95 <= 8) AND (#81 > 5) AND (#95 >= 3) AND NOT(like["b%"](#69)) AND (#39 != #40) AND (#53 != #54) // { arity: 154 }
       Join on=(eq(#0, #15, #30, #45, #60, #75, #90, #105, #120, #135, #150)) type=delta // { arity: 154 }
         implementation
           %0:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %1:big[#1]KA » %10:big[#10]KA
@@ -630,17 +636,17 @@ Explained Query:
           Get materialize.public.big // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a
-  - materialize.public.big_idx_b
-  - materialize.public.big_idx_c
-  - materialize.public.big_idx_d
-  - materialize.public.big_idx_e
-  - materialize.public.big_idx_f
-  - materialize.public.big_idx_g
-  - materialize.public.big_idx_h
-  - materialize.public.big_idx_i
-  - materialize.public.big_idx_j
-  - materialize.public.big_idx_k
+  - materialize.public.big_idx_a (delta join 1st input (full scan))
+  - materialize.public.big_idx_b (delta join lookup)
+  - materialize.public.big_idx_c (delta join lookup)
+  - materialize.public.big_idx_d (delta join lookup)
+  - materialize.public.big_idx_e (delta join lookup)
+  - materialize.public.big_idx_f (delta join lookup)
+  - materialize.public.big_idx_g (delta join lookup)
+  - materialize.public.big_idx_h (delta join lookup)
+  - materialize.public.big_idx_i (delta join lookup)
+  - materialize.public.big_idx_j (delta join lookup)
+  - materialize.public.big_idx_k (delta join lookup)
 
 EOF
 
@@ -658,7 +664,7 @@ t0.s LIKE 'a%'
 ----
 Explained Query:
   Project (#0..=#14, #0, #16..=#27, #29, #30, #0, #32..=#42) // { arity: 42 }
-    Filter "a%" ~~(#13) // { arity: 43 }
+    Filter like["a%"](#13) // { arity: 43 }
       Join on=(eq(#0, #15, #31)) type=delta // { arity: 43 }
         implementation
           %0:big » %1:big[#1]KAe » %2:big[#2]KA
@@ -667,14 +673,14 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 14 }
           Get materialize.public.big // { arity: 14 }
         ArrangeBy keys=[[#1]] // { arity: 15 }
-          ReadExistingIndex materialize.public.big lookup_value=(42)
+          ReadExistingIndex materialize.public.big lookup_value=(42) // { arity: 15 }
         ArrangeBy keys=[[#2]] // { arity: 14 }
           Get materialize.public.big // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a
-  - materialize.public.big_idx_c
-  - materialize.public.big_idx_y
+  - materialize.public.big_idx_a (delta join 1st input (full scan))
+  - materialize.public.big_idx_c (delta join lookup)
+  - materialize.public.big_idx_y (lookup)
 
 EOF
 
@@ -718,9 +724,9 @@ Explained Query:
         Get l0 // { arity: 15 }
   With
     cte l0 =
-      ReadExistingIndex materialize.public.big lookup_value=(5)
+      ReadExistingIndex materialize.public.big lookup_value=(5) // { arity: 15 }
 
 Used Indexes:
-  - materialize.public.big_idx_a
+  - materialize.public.big_idx_a (*** full scan ***, lookup)
 
 EOF

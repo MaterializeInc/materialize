@@ -11,66 +11,90 @@
 //! put in more meaningfully named modules.
 
 use mz_repr::{GlobalId, ScalarType};
-use mz_sql::names::Aug;
+use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
 
-use crate::coord::appends::BuiltinTableUpdateSource;
+use crate::catalog::Catalog;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::describe;
-use crate::{metrics, AdapterError};
+use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
-        &mut self,
-        session: &mut Session,
+        &self,
+        session: &Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
+        resolved_ids: &ResolvedIds,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(Some(pcx), &self.catalog.for_session(session), stmt, params)?;
+        let catalog = self.catalog().for_session(session);
+        let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params, resolved_ids)?;
         Ok(plan)
     }
 
     pub(crate) fn declare(
         &self,
-        session: &mut Session,
+        mut ctx: ExecuteContext,
         name: String,
         stmt: Statement<Raw>,
+        sql: String,
+        param_types: Vec<Option<ScalarType>>,
+    ) {
+        let catalog = self.owned_catalog();
+        mz_ore::task::spawn(|| "coord::declare", async move {
+            let result =
+                Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, param_types)
+                    .map(|()| ExecuteResponse::DeclaredCursor);
+            ctx.retire(result);
+        });
+    }
+
+    fn declare_inner(
+        session: &mut Session,
+        catalog: &Catalog,
+        name: String,
+        stmt: Statement<Raw>,
+        sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
+        let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let logging = session.mint_logging(sql);
         session.set_portal(
             name,
             desc,
             Some(stmt),
+            logging,
             params,
             result_formats,
-            self.catalog.transient_revision(),
+            catalog.transient_revision(),
         )?;
         Ok(())
     }
 
     pub(crate) fn describe(
-        &self,
+        catalog: &Catalog,
         session: &Session,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<StatementDesc, AdapterError> {
         if let Some(stmt) = stmt {
-            describe(&self.catalog, stmt, &param_types, session)
+            describe(catalog, stmt, &param_types, session)
         } else {
             Ok(StatementDesc::new(None))
         }
     }
 
-    /// Verify a prepared statement is still valid.
+    /// Verify a prepared statement is still valid. This will return an error if
+    /// the catalog's revision has changed and the statement now produces a
+    /// different type than its original.
     pub(crate) fn verify_prepared_statement(
-        &self,
+        catalog: &Catalog,
         session: &mut Session,
         name: &str,
     ) -> Result<(), AdapterError> {
@@ -78,9 +102,13 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
-        if let Some(revision) =
-            self.verify_statement_revision(session, ps.sql(), ps.desc(), ps.catalog_revision)?
-        {
+        if let Some(revision) = Self::verify_statement_revision(
+            catalog,
+            session,
+            ps.stmt(),
+            ps.desc(),
+            ps.catalog_revision,
+        )? {
             let ps = session
                 .get_prepared_statement_mut_unverified(name)
                 .expect("known to exist");
@@ -100,7 +128,8 @@ impl Coordinator {
             Some(portal) => portal,
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
-        if let Some(revision) = self.verify_statement_revision(
+        if let Some(revision) = Self::verify_statement_revision(
+            self.catalog(),
             session,
             portal.stmt.as_ref(),
             &portal.desc,
@@ -114,16 +143,21 @@ impl Coordinator {
         Ok(())
     }
 
+    /// If the catalog and portal revisions don't match, re-describe the statement
+    /// and ensure its result type has not changed. Return `Some(x)` with the new
+    /// (valid) revision if its plan has changed. Return `None` if the revisions
+    /// match. Return an error if the plan has changed.
     fn verify_statement_revision(
-        &self,
+        catalog: &Catalog,
         session: &Session,
         stmt: Option<&Statement<Raw>>,
         desc: &StatementDesc,
         catalog_revision: u64,
     ) -> Result<Option<u64>, AdapterError> {
-        let current_revision = self.catalog.transient_revision();
+        let current_revision = catalog.transient_revision();
         if catalog_revision != current_revision {
-            let current_desc = self.describe(
+            let current_desc = Self::describe(
+                catalog,
                 session,
                 stmt.cloned(),
                 desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
@@ -146,13 +180,13 @@ impl Coordinator {
     ) -> TransactionStatus<mz_repr::Timestamp> {
         let conn_meta = self
             .active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(session.conn_id())
             .expect("must exist for active session");
         let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks);
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(session.conn_id()) {
             self.release_read_hold(&txn_reads);
         }
 
@@ -166,11 +200,10 @@ impl Coordinator {
         active_subscribe: ActiveSubscribe,
     ) {
         let update = self
-            .catalog
+            .catalog()
             .state()
             .pack_subscribe_update(id, &active_subscribe, 1);
-        self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
-            .await;
+        self.send_builtin_table_updates(vec![update]).await;
 
         let session_type = metrics::session_type_label_value(&active_subscribe.user);
         self.metrics
@@ -185,11 +218,10 @@ impl Coordinator {
     pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
         if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
             let update = self
-                .catalog
+                .catalog()
                 .state()
                 .pack_subscribe_update(id, &active_subscribe, -1);
-            self.send_builtin_table_updates(vec![update], BuiltinTableUpdateSource::DDL)
-                .await;
+            self.send_builtin_table_updates(vec![update]).await;
 
             let session_type = metrics::session_type_label_value(&active_subscribe.user);
             self.metrics

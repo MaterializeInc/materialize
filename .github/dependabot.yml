@@ -7,7 +7,6 @@ updates:
     day: sunday
     time: "22:00"
   open-pull-requests-limit: 10
-  reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
@@ -16,7 +15,6 @@ updates:
     # of releasing a new version of dbt-materialize when a new version of
     # dbt drops.
     interval: daily
-  reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
 - package-ecosystem: docker
   directory: /misc/images/ubuntu-base
@@ -25,7 +23,6 @@ updates:
     day: sunday
     time: "22:00"
   open-pull-requests-limit: 10
-  reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
 - package-ecosystem: docker
   directory: /ci/builder
@@ -34,7 +31,6 @@ updates:
     day: sunday
     time: "22:00"
   open-pull-requests-limit: 10
-  reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /ci/builder
@@ -43,5 +39,4 @@ updates:
     day: sunday
     time: "22:00"
   open-pull-requests-limit: 10
-  reviewers: [MaterializeInc/dependency-czars]
   labels: [A-dependencies]

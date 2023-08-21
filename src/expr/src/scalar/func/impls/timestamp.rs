@@ -9,18 +9,19 @@
 
 use std::fmt;
 
-use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
+};
+use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{strconv, ColumnType, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 use crate::EvalError;
@@ -51,6 +52,7 @@ sqlfunc!(
     #[sqlname = "timestamp_to_date"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastDateToTimestamp)]
+    #[is_monotone = true]
     fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
         Ok(a.date().try_into()?)
     }
@@ -60,6 +62,7 @@ sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_date"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastDateToTimestampTz)]
+    #[is_monotone = true]
     fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
         Ok(a.naive_utc().date().try_into()?)
     }
@@ -69,6 +72,7 @@ sqlfunc!(
     #[sqlname = "timestamp_to_timestamp_with_time_zone"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastTimestampTzToTimestamp)]
+    #[is_monotone = true]
     fn cast_timestamp_to_timestamp_tz(
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
@@ -82,6 +86,7 @@ sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_timestamp"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastTimestampToTimestampTz)]
+    #[is_monotone = true]
     fn cast_timestamp_tz_to_timestamp(
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
@@ -218,6 +223,19 @@ where
     }
 }
 
+/// Will extracting this unit from the timestamp include the "most significant bits" of
+/// the timestamp?
+pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
+    match unit {
+        DateTimeUnits::Epoch
+        | DateTimeUnits::Millennium
+        | DateTimeUnits::Century
+        | DateTimeUnits::Decade
+        | DateTimeUnits::Year => true,
+        _ => false,
+    }
+}
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -233,6 +251,10 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        most_significant_unit(self.0)
     }
 }
 
@@ -257,6 +279,13 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        // Unlike the timezone-less timestamp, it's not safe to extract the "high-order bits" like
+        // year: year takes timezone into account, and it's quite possible for a different timezone
+        // to be in a previous year while having a later UTC-equivalent time.
+        self.0 == DateTimeUnits::Epoch
     }
 }
 
@@ -362,6 +391,10 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Timestamp.nullable(input.nullable)
     }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
 }
 
 impl fmt::Display for DateTruncTimestamp {
@@ -388,6 +421,10 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::TimestampTz.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 
@@ -428,12 +465,22 @@ pub fn timezone_timestamp(
 
 /// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
 /// For example, `EST` and `2020-11-11T17:39:14Z` would return `2020-11-11T12:39:14`.
-pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> NaiveDateTime {
+pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Result<NaiveDateTime, EvalError> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
         Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
     };
-    utc.naive_utc() + offset
+    checked_add_with_leapsecond(&utc.naive_utc(), &offset).ok_or(EvalError::TimestampOutOfRange)
+}
+
+/// Checked addition that is missing from chrono. Adapt its methods here but add a check.
+fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
+    // extract and temporarily remove the fractional part and later recover it
+    let nanos = lhs.nanosecond();
+    let lhs = lhs.with_nanosecond(0).unwrap();
+    let rhs = rhs.local_minus_utc();
+    lhs.checked_add_signed(chrono::Duration::seconds(i64::from(rhs)))
+        .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
 #[derive(
@@ -476,7 +523,9 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
         &self,
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        timezone_timestamptz(self.0, a.into()).try_into().err_into()
+        timezone_timestamptz(self.0, a.into())?
+            .try_into()
+            .err_into()
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {

@@ -10,41 +10,56 @@
 ws-text
 {"query": "bad sql"}
 ----
-{"type":"Error","payload":"Expected a keyword at the beginning of a statement, found identifier \"bad\""}
+{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "bad sql"}]}
 ----
-{"type":"Error","payload":"Expected a keyword at the beginning of a statement, found identifier \"bad\""}
+{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "select NULL"}
 ----
-{"type":"Rows","payload":["?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":25,"type_len":-1,"type_mod":-1}]}}
 {"type":"Row","payload":[null]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-binary
 {"query": "select 'binary'"}
 ----
-{"type":"Rows","payload":["?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":25,"type_len":-1,"type_mod":-1}]}}
 {"type":"Row","payload":["binary"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "select 1,2; values ('a'), ('b')"}
 ----
-{"type":"Rows","payload":["?column?","?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1},{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1,2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
-{"type":"Rows","payload":["column1"]}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"column1","type_oid":25,"type_len":-1,"type_mod":-1}]}}
 {"type":"Row","payload":["a"]}
 {"type":"Row","payload":["b"]}
 {"type":"CommandComplete","payload":"SELECT 2"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SET application_name TO a"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -60,20 +75,26 @@ ws-text
 ws-text
 {"query": ";;select 1;"}
 ----
-{"type":"Rows","payload":["?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": ";;select 1;; select 2;;"}
 ----
-{"type":"Rows","payload":["?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
-{"type":"Rows","payload":["?column?"]}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -84,47 +105,54 @@ ws-text
 ws-text
 {"queries": [{"query": ""}]}
 ----
-{"type":"Error","payload":"each query must contain exactly 1 statement, but \"\" contains 0"}
+{"type":"Error","payload":{"message":"each query must contain exactly 1 statement, but \"\" contains 0","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1"}]}
 ----
-{"type":"Error","payload":"request supplied 0 parameters, but SELECT $1 requires 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT $1 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": []}]}
 ----
-{"type":"Error","payload":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": ["2"]}]}
 ----
-{"type":"Rows","payload":["int4"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"int4","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[2]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": ["z"]}]}
 ----
-{"type":"Error","payload":"unable to decode parameter: invalid input syntax for type integer: invalid digit found in string: \"z\""}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"unable to decode parameter: invalid input syntax for type integer: invalid digit found in string: \"z\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": [2]}]}
 ----
-{"type":"Error","payload":"data did not match any variant of untagged enum SqlRequest"}
+{"type":"Error","payload":{"message":"data did not match any variant of untagged enum SqlRequest","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": [null]}]}
 ----
-{"type":"Rows","payload":["int4"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"int4","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[null]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 # Test that transactions are preserved across requests.
@@ -132,70 +160,140 @@ ws-text
 ws-text
 {"query": "BEGIN; SELECT 1"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"BEGIN"}
-{"type":"Rows","payload":["?column?"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[1]}
 {"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
+{"type":"ReadyForQuery","payload":"T"}
+
+# Session parameters should get reset when the transaction is rolled back.
+
+ws-text
+{"query": "SET application_name TO b"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"b"}}
 {"type":"ReadyForQuery","payload":"T"}
 
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
-{"type":"Error","payload":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"transaction in read-only mode","code":"25006","detail":"SELECT queries cannot be combined with other query types, including SUBSCRIBE."}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
-{"type":"Error","payload":"current transaction is aborted, commands ignored until end of transaction block"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 
 ws-text
 {"query": "SELECT 2"}
 ----
-{"type":"Error","payload":"current transaction is aborted, commands ignored until end of transaction block"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
 {"query": "ROLLBACK; SELECT 2"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"ROLLBACK"}
-{"type":"Rows","payload":["?column?"]}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":[2]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Session variables local to a transaction should get reset
+
+ws-text
+{"query": "BEGIN"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"BEGIN"}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "SET LOCAL application_name TO c"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"c"}}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "SHOW application_name"}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"application_name","type_oid":25,"type_len":-1,"type_mod":-1}]}}
+{"type":"Row","payload":["c"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "COMMIT"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"COMMIT"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SHOW application_name"}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"application_name","type_oid":25,"type_len":-1,"type_mod":-1}]}}
+{"type":"Row","payload":["a"]}
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "SUBSCRIBE v"}
 ----
-{"type":"Error","payload":"unknown catalog item 'v'"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"unknown catalog item 'v'","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "CREATE TABLE t (i INT)"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"CREATE TABLE"}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "INSERT INTO t VALUES (1), (2), (3), (4)"}
 ----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"CommandComplete","payload":"INSERT 0 4"}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"query": "SUBSCRIBE (VALUES (1)); SELECT 1"}
 ----
-{"type":"Rows","payload":["mz_timestamp","mz_diff","column1"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}
+{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"column1","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["18446744073709551615",1,1]}
 {"type":"CommandComplete","payload":"SUBSCRIBE"}
-{"type":"Error","payload":"SUBSCRIBE in transactions must be the only read statement"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"25000"}}
+{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----
-{"type":"Rows","payload":["mz_timestamp","mz_diff","i"]}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}
+{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["<TIMESTAMP>",1,1]}
 {"type":"Row","payload":["<TIMESTAMP>",1,2]}

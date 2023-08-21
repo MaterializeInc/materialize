@@ -34,8 +34,12 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
-use mz_ore::display::DisplayExt;
-use mz_ore::result::ResultExt;
+use mz_ore::cast::ReinterpretCast;
+use mz_ore::error::ErrorExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
+use mz_ore::str::StrExt;
+use mz_proto::{RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -44,18 +48,14 @@ use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use mz_ore::cast::ReinterpretCast;
-use mz_ore::fmt::FormatBuffer;
-use mz_ore::lex::LexBuf;
-use mz_ore::str::StrExt;
-use mz_proto::{RustType, TryFromProtoError};
-
 use crate::adt::array::ArrayDimension;
 use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
 
@@ -607,6 +607,21 @@ where
     Nestable::MayNeedEscaping
 }
 
+pub fn parse_pg_legacy_name(s: &str) -> String {
+    // To match PostgreSQL, we truncate the string to 64 bytes, while being
+    // careful not to truncate in the middle of any multibyte characters.
+    let mut out = String::new();
+    let mut len = 0;
+    for c in s.chars() {
+        len += c.len_utf8();
+        if len > NAME_MAX_BYTES {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // If the input starts with "\x", then the remaining bytes are hex encoded
     // [0]. Otherwise the bytes use the traditional "escape" format. [1]
@@ -615,7 +630,7 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
     if let Some(remainder) = s.strip_prefix(r"\x") {
         parse_bytes_hex(remainder).map_err(|e| {
-            ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string_alt())
+            ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string_with_causes())
         })
     } else {
         parse_bytes_traditional(s)
@@ -743,13 +758,39 @@ where
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ArrayParsingError {
+    #[error("Array value must start with \"{{\"")]
+    OpeningBraceMissing,
+    #[error("Specifying array lower bounds is not supported")]
+    DimsUnsupported,
+    #[error("{0}")]
+    Generic(String),
+    #[error("Unexpected \"{0}\" character.")]
+    UnexpectedChar(char),
+    #[error("Multidimensional arrays must have sub-arrays with matching dimensions.")]
+    NonRectilinearDims,
+    #[error("Unexpected array element.")]
+    UnexpectedElement,
+    #[error("Junk after closing right brace.")]
+    Junk,
+    #[error("Unexpected end of input.")]
+    EarlyTerm,
+}
+
+impl From<String> for ArrayParsingError {
+    fn from(value: String) -> Self {
+        ArrayParsingError::Generic(value)
+    }
+}
+
 pub fn parse_array<'a, T, E>(
     s: &'a str,
     make_null: impl FnMut() -> T,
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
-) -> Result<Vec<T>, ParseError>
+) -> Result<(Vec<T>, Vec<ArrayDimension>), ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_array_inner(s, make_null, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("array", s).with_details(details))
@@ -759,51 +800,256 @@ fn parse_array_inner<'a, T, E>(
     s: &'a str,
     mut make_null: impl FnMut() -> T,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
-) -> Result<Vec<T>, String>
+) -> Result<(Vec<T>, Vec<ArrayDimension>), ArrayParsingError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
-    let mut elems = vec![];
-    let buf = &mut LexBuf::new(s);
+    use ArrayParsingError::*;
 
-    if !buf.consume('{') {
-        bail!("malformed array literal: missing opening left brace");
+    #[derive(Clone, Debug, Default)]
+    struct Dimension {
+        // If None, still discovering this dimension's permitted width;
+        // otherwise only permits `length` elements per dimension.
+        length: Option<usize>,
+        // Whether this dimension has a staged element that can be committed.
+        // This prevents us from accepting "empty" elements, e.g. `{1,}` or
+        // `{1,,2}`.
+        staged_element: bool,
+        // The total number of elements committed in this dimension since it was
+        // last entered. Zeroed out when exited.
+        committed_element_count: usize,
     }
 
-    let mut gen = |elem| gen_elem(elem).map_err_to_string();
-    let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
-    let is_end_of_literal = |c| matches!(c, ',' | '}');
+    #[derive(Clone, Debug, Default)]
+    struct ArrayBuilder<'a> {
+        // The current character we're operating from.
+        current_command_char: char,
+        // The dimension information, which will get turned into
+        // `ArrayDimensions`.
+        dimensions: Vec<Dimension>,
+        // THe current dimension we're operating on.
+        current_dim: usize,
+        // Whether or not this array may be modified any further.
+        sealed: bool,
+        // The elements extracted from the input str. This is on the array
+        // builder to necessitate using `insert_element` so we understand when
+        // elements are staged.
+        elements: Vec<Option<Cow<'a, str>>>,
+    }
 
-    loop {
-        buf.take_while(|ch| ch.is_ascii_whitespace());
-        match buf.next() {
-            Some('}') => break,
-            _ if elems.len() == 0 => {
-                buf.prev();
+    impl<'a> ArrayBuilder<'a> {
+        fn build(
+            s: &'a str,
+        ) -> Result<(Vec<Option<Cow<'a, str>>>, Vec<ArrayDimension>), ArrayParsingError> {
+            let buf = &mut LexBuf::new(s);
+
+            // TODO: support parsing array dimensions
+            if buf.consume('[') {
+                Err(DimsUnsupported)?;
             }
-            Some(',') => {}
-            Some(c) => bail!("expected ',' or '}}', got '{}'", c),
-            None => bail!("unexpected end of input"),
+
+            buf.take_while(|ch| ch.is_ascii_whitespace());
+
+            if !buf.consume('{') {
+                Err(OpeningBraceMissing)?;
+            }
+
+            let mut dimensions = 1;
+
+            loop {
+                buf.take_while(|ch| ch.is_ascii_whitespace());
+                if buf.consume('{') {
+                    dimensions += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let mut builder = ArrayBuilder {
+                current_command_char: '{',
+                dimensions: vec![Dimension::default(); dimensions],
+                // We enter the builder at the element-bearing dimension, which is the last
+                // dimension.
+                current_dim: dimensions - 1,
+                sealed: false,
+                elements: vec![],
+            };
+
+            let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
+            let is_end_of_literal = |c| matches!(c, ',' | '}');
+
+            loop {
+                buf.take_while(|ch| ch.is_ascii_whitespace());
+
+                // Filter command state from terminal states.
+                match buf.next() {
+                    None if builder.sealed => {
+                        break;
+                    }
+                    None => Err(EarlyTerm)?,
+                    Some(_) if builder.sealed => Err(Junk)?,
+                    Some(c) => builder.current_command_char = c,
+                }
+
+                // Run command char
+                match builder.current_command_char {
+                    '{' => builder.enter_dim()?,
+                    '}' => builder.exit_dim()?,
+                    ',' => builder.commit_element(true)?,
+                    c => {
+                        buf.prev();
+                        let s = match c {
+                            '"' => Some(lex_quoted_element(buf)?),
+                            _ => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
+                        };
+                        builder.insert_element(s)?;
+                    }
+                }
+            }
+
+            if builder.elements.is_empty() {
+                // Per PG, empty arrays are represented by empty dimensions
+                // rather than one dimension with 0 length.
+                return Ok((vec![], vec![]));
+            }
+
+            let dims = builder
+                .dimensions
+                .into_iter()
+                .map(|dim| ArrayDimension {
+                    length: dim
+                        .length
+                        .expect("every dimension must have its length discovered"),
+                    lower_bound: 1,
+                })
+                .collect();
+
+            Ok((builder.elements, dims))
         }
-        buf.take_while(|ch| ch.is_ascii_whitespace());
 
-        let elem = match buf.peek() {
-            Some('"') => gen(lex_quoted_element(buf)?)?,
-            Some('{') => bail!("parsing multi-dimensional arrays is not supported"),
-            Some(_) => match lex_unquoted_element(buf, is_special_char, is_end_of_literal)? {
-                Some(elem) => gen(elem)?,
-                None => make_null(),
-            },
-            None => bail!("unexpected end of input"),
-        };
-        elems.push(elem);
+        /// Descend into another dimension of the array.
+        fn enter_dim(&mut self) -> Result<(), ArrayParsingError> {
+            let d = &mut self.dimensions[self.current_dim];
+            // Cannot enter a new dimension with an uncommitted element.
+            if d.staged_element {
+                return Err(UnexpectedChar(self.current_command_char));
+            }
+
+            self.current_dim += 1;
+
+            // You have exceeded the maximum dimensions.
+            if self.current_dim >= self.dimensions.len() {
+                return Err(NonRectilinearDims);
+            }
+
+            Ok(())
+        }
+
+        /// Insert a new element into the array, ensuring it is in the proper dimension.
+        fn insert_element(&mut self, s: Option<Cow<'a, str>>) -> Result<(), ArrayParsingError> {
+            // Can only insert elements into data-bearing dimension, which is
+            // the last one.
+            if self.current_dim != self.dimensions.len() - 1 {
+                return Err(UnexpectedElement);
+            }
+
+            self.stage_element()?;
+
+            self.elements.push(s);
+
+            Ok(())
+        }
+
+        /// Stage an element to be committed. Only one element can be staged at
+        /// a time and staged elements must be committed before moving onto the
+        /// next element or leaving the dimension.
+        fn stage_element(&mut self) -> Result<(), ArrayParsingError> {
+            let d = &mut self.dimensions[self.current_dim];
+            // Cannot stage two elements at once, i.e. previous element wasn't
+            // followed by committing token (`,` or `}`).
+            if d.staged_element {
+                return Err(UnexpectedElement);
+            }
+            d.staged_element = true;
+            Ok(())
+        }
+
+        /// Commit the currently staged element, which can be made optional.
+        /// This ensures that each element has an appropriate terminal character
+        /// after it.
+        fn commit_element(&mut self, require_staged: bool) -> Result<(), ArrayParsingError> {
+            let d = &mut self.dimensions[self.current_dim];
+            if !d.staged_element {
+                // - , requires a preceding staged element
+                // - } does not require a preceding staged element only when
+                //   it's the close of an empty dimension.
+                return if require_staged || d.committed_element_count > 0 {
+                    Err(UnexpectedChar(self.current_command_char))
+                } else {
+                    // This indicates that we have an empty value in this
+                    // dimension and want to exit before incrementing the
+                    // committed element count.
+                    Ok(())
+                };
+            }
+            d.staged_element = false;
+            d.committed_element_count += 1;
+
+            Ok(())
+        }
+
+        /// Exit the current dimension, committing any currently staged element
+        /// in this dimension, and marking the interior array that this is part
+        /// of as staged itself. If this is the 0th dimension, i.e. the closed
+        /// brace matching the first open brace, seal the builder from further
+        /// modification.
+        fn exit_dim(&mut self) -> Result<(), ArrayParsingError> {
+            // Commit an element of this dimension
+            self.commit_element(false)?;
+
+            let d = &mut self.dimensions[self.current_dim];
+
+            // Ensure that the elements in this dimension conform to the expected shape.
+            match d.length {
+                None => d.length = Some(d.committed_element_count),
+                Some(l) => {
+                    if l != d.committed_element_count {
+                        return Err(NonRectilinearDims);
+                    }
+                }
+            }
+
+            // Reset this dimension's counter in case it's re-entered.
+            d.committed_element_count = 0;
+
+            // If we closed the last dimension, this array may not be modified
+            // any longer.
+            if self.current_dim == 0 {
+                self.sealed = true;
+            } else {
+                self.current_dim -= 1;
+                // This object is an element of a higher dimension.
+                self.stage_element()?;
+            }
+
+            Ok(())
+        }
     }
 
-    if buf.next().is_some() {
-        bail!("malformed array literal: junk after closing right brace");
+    let (raw_elems, dims) = ArrayBuilder::build(s)?;
+
+    let mut elems = Vec::with_capacity(raw_elems.len());
+
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
+
+    for elem in raw_elems.into_iter() {
+        elems.push(match elem {
+            Some(elem) => gen(elem)?,
+            None => make_null(),
+        });
     }
 
-    Ok(elems)
+    Ok((elems, dims))
 }
 
 pub fn parse_list<'a, T, E>(
@@ -813,7 +1059,7 @@ pub fn parse_list<'a, T, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_list_inner(s, is_element_type_list, make_null, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("list", s).with_details(details))
@@ -828,7 +1074,7 @@ fn parse_list_inner<'a, T, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
@@ -845,7 +1091,7 @@ where
     }
 
     // Simplifies calls to `gen_elem` by handling errors
-    let mut gen = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -903,7 +1149,7 @@ pub fn parse_legacy_vector<'a, T, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_legacy_vector_inner(s, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("int2vector", s).with_details(details))
@@ -914,12 +1160,12 @@ pub fn parse_legacy_vector_inner<'a, T, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
 
-    let mut gen = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     loop {
         buf.take_while(|ch| ch.is_ascii_whitespace());
@@ -1058,7 +1304,7 @@ pub fn parse_map<'a, V, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_map_inner(s, is_value_type_map, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("map", s).with_details(details))
@@ -1070,7 +1316,7 @@ fn parse_map_inner<'a, V, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut map = BTreeMap::new();
     let buf = &mut LexBuf::new(s);
@@ -1094,7 +1340,7 @@ where
             None => Err("expected key".to_owned()),
         }
     };
-    let mut gen_value = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen_value = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '"' | '=' | '>' | '\\');
     let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 
@@ -1187,7 +1433,7 @@ pub fn parse_range<'a, V, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<Range<V>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     Ok(Range {
         inner: parse_range_inner(s, gen_elem).map_err(|details| {
@@ -1201,7 +1447,7 @@ fn parse_range_inner<'a, V, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<Option<RangeInner<V>>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let buf = &mut LexBuf::new(s);
 
@@ -1226,7 +1472,7 @@ where
         Some(',') => None,
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ','));
-            let v = gen_elem(Cow::from(v)).map_err_to_string()?;
+            let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
             Some(v)
         }
         None => bail!("Unexpected end of input."),
@@ -1242,7 +1488,7 @@ where
         Some(']' | ')') => None,
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ')' | ']'));
-            let v = gen_elem(Cow::from(v)).map_err_to_string()?;
+            let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
             Some(v)
         }
         None => bail!("Unexpected end of input."),
@@ -1353,6 +1599,14 @@ pub fn format_array<F, T, E>(
 where
     F: FormatBuffer,
 {
+    if dims.iter().any(|dim| dim.lower_bound != 1) {
+        for d in dims.iter() {
+            let (lower, upper) = d.dimension_bounds();
+            write!(buf, "[{}:{}]", lower, upper);
+        }
+        buf.write_char('=');
+    }
+
     format_array_inner(buf, dims, &mut elems.into_iter(), &mut format_elem)?;
     Ok(Nestable::Yes)
 }
@@ -1438,6 +1692,38 @@ where
         }
     }
     Ok(())
+}
+
+/// Writes an `mz_acl_item` to `buf`.
+pub fn format_mz_acl_item<F>(buf: &mut F, mz_acl_item: MzAclItem) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{mz_acl_item}");
+    Nestable::Yes
+}
+
+/// Parses an MzAclItem from `s`.
+pub fn parse_mz_acl_item(s: &str) -> Result<MzAclItem, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("mz_aclitem", s).with_details(e))
+}
+
+/// Writes an `acl_item` to `buf`.
+pub fn format_acl_item<F>(buf: &mut F, acl_item: AclItem) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{acl_item}");
+    Nestable::Yes
+}
+
+/// Parses an AclItem from `s`.
+pub fn parse_acl_item(s: &str) -> Result<AclItem, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("aclitem", s).with_details(e))
 }
 
 pub trait ElementEscaper {
@@ -1779,6 +2065,7 @@ pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,
 }
+impl Error for ParseHexError {}
 
 impl fmt::Display for ParseHexError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -1820,12 +2107,14 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use super::*;
+
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn parse_error_protobuf_roundtrip(expect in any::<ParseError>()) {
             let actual = protobuf_roundtrip::<_, ProtoParseError>(&expect);
             assert!(actual.is_ok());
@@ -1834,7 +2123,8 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn parse_hex_error_protobuf_roundtrip(expect in any::<ParseHexError>()) {
             let actual = protobuf_roundtrip::<_, ProtoParseHexError>(&expect);
             assert!(actual.is_ok());
@@ -1842,7 +2132,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_format_nanos_to_micros() {
         let cases: Vec<(u32, &str)> = vec![
             (0, ""),
@@ -1860,5 +2150,24 @@ mod tests {
             format_nanos_to_micros(&mut buf, nanos);
             assert_eq!(&buf, expect);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_pg_legacy_name() {
+        let s = "hello world";
+        assert_eq!(s, parse_pg_legacy_name(s));
+
+        let s = "x".repeat(63);
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = "x".repeat(64);
+        assert_eq!("x".repeat(63), parse_pg_legacy_name(&s));
+
+        // The Hebrew character Aleph (א) has a length of 2 bytes.
+        let s = format!("{}{}", "x".repeat(61), "א");
+        assert_eq!(s, parse_pg_legacy_name(&s));
+
+        let s = format!("{}{}", "x".repeat(62), "א");
+        assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
     }
 }

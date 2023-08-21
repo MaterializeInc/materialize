@@ -12,19 +12,18 @@
 use std::sync::Arc;
 use std::thread::Thread;
 
-use timely::communication::initialize::WorkerGuards;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_storage_client::client::StorageClient;
-use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
+use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::Worker;
+use crate::storage_state::{StorageInstanceContext, Worker};
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
@@ -34,6 +33,8 @@ pub struct Config {
     pub now: NowFn,
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
+    /// Other configuration for storage instances.
+    pub instance_context: StorageInstanceContext,
 
     /// Metrics for sources.
     pub source_metrics: SourceBaseMetrics,
@@ -55,6 +56,7 @@ pub fn serve(
     generic_config: mz_cluster::server::ClusterConfig,
     now: NowFn,
     connection_context: ConnectionContext,
+    instance_context: StorageInstanceContext,
 ) -> Result<
     (
         TimelyContainerRef<StorageCommand, StorageResponse, Thread>,
@@ -70,6 +72,7 @@ pub fn serve(
     let config = Config {
         now,
         connection_context,
+        instance_context,
         source_metrics,
         sink_metrics,
         decode_metrics,
@@ -101,6 +104,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
@@ -110,7 +114,9 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.sink_metrics,
             config.now.clone(),
             config.connection_context,
+            config.instance_context,
             persist_clients,
+            tracing_handle,
         )
         .run();
     }

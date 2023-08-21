@@ -21,9 +21,12 @@ _alias_ | Only permit references to _table_name_ as _alias_.
 
 ## Details
 
-`UPDATE` cannot currently...
-- Be used inside [transactions](../begin)
-- Reference other tables
+### Known limitations
+
+* `UPDATE` cannot be used inside [transactions](../begin).
+* `UPDATE` can reference [user-created tables](../create-table) but not [sources](../create-source).
+* **Low performance.** While processing an `UPDATE` statement, Materialize cannot
+  process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
 ## Examples
 
@@ -49,6 +52,18 @@ SELECT * FROM update_me;
  2 | aloha
  3 | aloha
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `UPDATE` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 

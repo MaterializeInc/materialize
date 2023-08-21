@@ -7,7 +7,7 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters),
+`CREATE CLUSTER` creates a logical [cluster](/get-started/key-concepts#clusters),
 which contains dataflow-powered objects. By default, a cluster named `default`
 with a single cluster replica will exist in every environment.
 
@@ -36,7 +36,7 @@ We plan to remove this restriction in a future version of Materialize.
 {{< /warning >}}
 
 Importantly, clusters are strictly a logical component; they rely on [cluster
-replicas](/overview/key-concepts#cluster-replicas) to run dataflows. Said a
+replicas](/get-started/key-concepts#cluster-replicas) to run dataflows. Said a
 slightly different way, a cluster with no replicas does no computation. For
 example, if you create an index on a cluster with no replicas, you cannot select
 from that index because there is no physical representation of the index to read
@@ -55,7 +55,39 @@ Clusters containing sources and sinks can have at most one replica.
 We plan to remove this restriction in a future version of Materialize.
 {{< /warning >}}
 
-## Syntax
+## Managed and unmanaged clusters
+
+A managed cluster is one with a declared size and replication factor, where
+Materialize is responsible for ensuring the replica set matches the declared
+size and replication factor. The replicas of a managed cluster are visible in
+the system catalog, but cannot be directly modified by users.
+
+An unmanaged cluster requires you to manage replicas manually, by creating and
+dropping replicas to achieve the desired replication factor and replica size.
+The replicas of unmanaged clusters appear in the system catalog and can be
+modified by users.
+
+
+{{< warning >}}
+Managed clusters with sources and sinks only support a replication factor of zero or one.
+
+We plan to remove this restriction in a future version of Materialize.
+{{< /warning >}}
+
+### Managed clusters
+
+### Syntax
+
+
+{{< diagram "create-managed-cluster.svg" >}}
+
+#### `CLUSTER` options
+
+{{% cluster-options %}}
+
+## Unmanaged clusters
+
+### Syntax
 
 {{< diagram "create-cluster.svg" >}}
 
@@ -73,6 +105,22 @@ _replica_name_ | A name for a cluster replica.
 
 {{% replica-options %}}
 
+## Availability zone assignment
+
+When assigning replicas of a [managed cluster](#managed-clusters) to
+availability zones, Materialize makes the following guarantees, within each
+cluster:
+
+{{< warning >}}
+These guarantees do not apply to [unmanaged clusters](#unmanaged-clusters).
+{{< /warning >}}
+
+- Different replicas are _never_ scheduled on the same node.
+- Different replicas are _always_ spread evenly across availability
+  zones. **Known limitation:** replicas with more than 1 process are excluded
+  from this constraint. See [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes)
+  to determine if that is the case for your replicas.
+
 ## Details
 
 ### Deployment options
@@ -88,7 +136,13 @@ Adding replicas to clusters | See [Cluster replica scaling](/sql/create-cluster#
 
 ### Basic
 
-Create a cluster with two medium replicas:
+Create a managed cluster with two medium replicas:
+
+```sql
+CREATE CLUSTER c1 SIZE = 'medium', REPLICATION FACTOR = 2;
+```
+
+Alternatively, you can create an unmanaged cluster:
 
 ```sql
 CREATE CLUSTER c1 REPLICAS (
@@ -99,7 +153,13 @@ CREATE CLUSTER c1 REPLICAS (
 
 ### Introspection disabled
 
-Create a cluster with a single replica with introspection disabled:
+Create a managed cluster with a single replica with introspection disabled:
+
+```sql
+CREATE CLUSTER c  SIZE = 'xsmall', INTROSPECTION INTERVAL = 0;
+```
+
+Alternatively, you can create an unmanaged cluster:
 
 ```sql
 CREATE CLUSTER c REPLICAS (
@@ -113,13 +173,34 @@ that cluster replica.
 
 ### Empty
 
-Create a cluster with no replicas:
+Create a managed cluster with no replicas:
+
+```sql
+CREATE CLUSTER c1 SIZE 'xsmall', REPLICATION FACTOR 0;
+```
+
+You can later add replicas to this managed cluster with [`ALTER CLUSTER`](/sql/alter-cluster/.
+)
+
+Alternatively, you can create an unmanaged cluster:
 
 ```sql
 CREATE CLUSTER c1 REPLICAS ();
 ```
 
-You can later add replicas to this cluster with [`CREATE CLUSTER
+You can later add replicas to this unmanaged cluster with [`CREATE CLUSTER
 REPLICA`](../create-cluster-replica).
 
-[AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATECLUSTER` privileges on the system.
+
+## See also
+
+- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
+- [`ALTER CLUSTER`](/sql/alter-cluster/)
+- [`DROP CLUSTER`](/sql/drop-cluster/)
+
+[AWS availability zone IDs]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

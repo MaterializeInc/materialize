@@ -22,7 +22,7 @@ use std::fmt::{Debug, Display};
 
 mod hash;
 
-pub use self::hash::{HashMap, HashSet};
+pub use crate::collections::hash::{HashMap, HashSet};
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>: Sized
@@ -43,7 +43,7 @@ where
     ///
     /// This method panics if the collection does not have exactly one element.
     fn into_element(self) -> T::Item {
-        self.expect_element(|| "into_element called on collection with more than one element")
+        self.expect_element(|| "into_element called on collection without exactly one element")
     }
 
     /// Consumes the collection and returns its only element.

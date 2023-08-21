@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -151,10 +149,27 @@ macro_rules! bail_unsupported {
 }
 
 macro_rules! bail_never_supported {
+    ($feature:expr, $docs:expr, $details:expr) => {
+        return Err(crate::plan::error::PlanError::NeverSupported {
+            feature: $feature.to_string(),
+            documentation_link: Some($docs.to_string()),
+            details: Some($details.to_string()),
+        }
+        .into())
+    };
     ($feature:expr, $docs:expr) => {
         return Err(crate::plan::error::PlanError::NeverSupported {
             feature: $feature.to_string(),
-            documentation_link: $docs.to_string(),
+            documentation_link: Some($docs.to_string()),
+            details: None,
+        }
+        .into())
+    };
+    ($feature:expr) => {
+        return Err(crate::plan::error::PlanError::NeverSupported {
+            feature: $feature.to_string(),
+            documentation_link: None,
+            details: None,
         }
         .into())
     };
@@ -184,3 +199,4 @@ pub mod normalize;
 pub mod parse;
 pub mod plan;
 pub mod pure;
+pub mod session;

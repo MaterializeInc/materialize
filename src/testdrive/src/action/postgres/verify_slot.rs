@@ -11,7 +11,6 @@ use std::cmp;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-
 use mz_ore::retry::Retry;
 
 use crate::action::{ControlFlow, State};

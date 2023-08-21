@@ -34,6 +34,18 @@ SELECT sum(n) FROM t;
 ----
 5050
 
+## Same as above, but with a non-erroring RECURSION LIMIT
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t
+    )
+SELECT sum(n) FROM t;
+----
+5050
+
 ## Test a straightforward mutually recursive query.
 query I
 WITH MUTUALLY RECURSIVE
@@ -199,117 +211,15 @@ WITH MUTUALLY RECURSIVE
     bar (a int) as (SELECT a FROM foo)
 SELECT a FROM foo, bar;
 
-## Test Explain plans:
+## Test incompatible declared and inferred types
+statement error db error: ERROR: declared type \(integer, text\) of WITH MUTUALLY RECURSIVE query "forever" did not match inferred type \(bigint, text\)
+WITH MUTUALLY RECURSIVE
+  forever (i int, y text) as (
+    SELECT COUNT(*), 'oops' FROM mz_views UNION (SELECT i + 1, 'oops' FROM forever)
+  )
+SELECT * FROM forever;
 
-## Test a plausibly correct recursive query.
-query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
-    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
-    bar (a int) as (SELECT a FROM foo)
-SELECT * FROM bar;
-----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Project (#0)
-        Distinct group_by=[#0, #1]
-          Union
-            Map (1, 2)
-              Constant
-                - ()
-            Map (7)
-              Get l0
-
-EOF
-
-## Test a nested recursive query.
-query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
-    foo (a int8) AS (
-        WITH MUTUALLY RECURSIVE
-            bar (b int8) AS (
-                SELECT * FROM (SELECT * FROM foo UNION ALL SELECT * FROM bar)
-            )
-        SELECT * FROM (SELECT * FROM foo EXCEPT ALL SELECT * FROM bar)
-    )
-SELECT * FROM foo;
-----
-Explained Query:
-  Return
-    Get l1
-  With Mutually Recursive
-    cte l1 =
-      Return
-        Threshold
-          Union
-            Get l1
-            Negate
-              Get l0
-      With Mutually Recursive
-        cte l0 =
-          Union
-            Get l1
-            Get l0
-
-EOF
-
-## Test consolidation of not-really nested recursive query.
-query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
-    foo (a int8) AS (
-        WITH MUTUALLY RECURSIVE
-            bar (b int8) AS (
-                SELECT * FROM foo
-            )
-        SELECT * FROM (SELECT * FROM foo EXCEPT ALL SELECT * FROM bar)
-    )
-SELECT * FROM foo;
-----
-Explained Query:
-  Return
-    Get l0
-  With Mutually Recursive
-    cte l0 =
-      Threshold
-        Union
-          Get l0
-          Negate
-            Get l0
-
-EOF
-
-## Test consolidation of independent recursive query blocks.
-query T multiline
-EXPLAIN SELECT * FROM (
-    WITH MUTUALLY RECURSIVE
-        foo (a int8) AS (SELECT DISTINCT a FROM foo)
-    SELECT * FROM foo
-)
-UNION ALL
-SELECT * FROM (
-    WITH MUTUALLY RECURSIVE
-        bar (a int8) AS (SELECT DISTINCT a FROM bar)
-    SELECT * FROM bar
-);
-----
-Explained Query:
-  Return
-    Union
-      Get l0
-      Get l1
-  With Mutually Recursive
-    cte l1 =
-      Distinct group_by=[#0]
-        Get l1
-    cte l0 =
-      Distinct group_by=[#0]
-        Get l0
-
-EOF
-
-## Tests for nested WITH MUTUALLY RECURSIVE
+# Tests for nested WITH MUTUALLY RECURSIVE
 
 statement ok
 CREATE TABLE edges (src int, dst int);
@@ -434,3 +344,264 @@ SELECT round, COUNT(*) FROM (
 GROUP BY round;
 ----
 0  10
+
+## Regression test for https://github.com/MaterializeInc/materialize/issues/18759
+## Test a WMR query with a delta join.
+query III
+WITH MUTUALLY RECURSIVE
+    c1 (f1 INTEGER, f2 INTEGER, f3 INTEGER) AS (
+        SELECT * FROM (VALUES (0, 0, 0))
+        UNION ALL (
+            SELECT
+                a1.f1 + 1 AS f1,
+                a1.f2 + 1 AS f2,
+                a1.f3 + 1 AS f3
+            FROM
+                c1 AS a1,
+                (
+                    SELECT *
+                    FROM c1 AS a1
+                    LEFT JOIN c1 AS a2 USING (f2)
+                    WHERE a1.f1 < 100 AND a2.f2 IS NULL
+                ) AS a2
+            WHERE a1 . f1 < 100
+        )
+    )
+SELECT * FROM c1;
+----
+0  0  0
+
+## Regression test for https://github.com/MaterializeInc/materialize/issues/18949
+## Test the situation when a WMR cte has an inner WMR whose body ends with an arrangement.
+query I
+WITH MUTUALLY RECURSIVE
+  cnt (i int) AS (
+    (WITH MUTUALLY RECURSIVE
+       cnt (i int) AS (
+         SELECT 1 AS i
+         UNION
+         SELECT i+1 FROM cnt WHERE i < 3)
+       SELECT i FROM cnt
+    )
+    UNION
+    SELECT i+100 FROM cnt WHERE i < 500)
+SELECT i FROM cnt;
+----
+1
+2
+3
+301
+302
+303
+101
+102
+103
+401
+402
+403
+201
+202
+203
+501
+502
+503
+
+## Tests for RECURSION LIMIT
+## (See plans in `normalize_lets.slt`)
+
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+1
+2
+3
+
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+1
+2
+3
+
+query error db error: ERROR: Evaluation error: Recursive query exceeded the recursion limit 3\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
+WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+query II
+(WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT -10, i FROM cnt)
+UNION
+(WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 5)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT -20, i FROM cnt)
+----
+-20  1
+-20  2
+-20  3
+-20  4
+-20  5
+-10  1
+-10  2
+-10  3
+
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
+    t0 (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t0
+    ),
+    t1 (n int) AS (
+        VALUES (-1)
+        UNION ALL
+        SELECT n+1 FROM t1
+    )
+SELECT (SELECT sum(n) FROM t0) - (SELECT sum(n) FROM t1);
+----
+200
+
+query I
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 6)
+  cnt (i int) AS (
+    (WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 3)
+       cnt (i int) AS (
+         SELECT 1 AS i
+         UNION
+         SELECT i+1 FROM cnt)
+       SELECT i FROM cnt
+    )
+    UNION
+    SELECT i+100 FROM cnt)
+SELECT i FROM cnt;
+----
+1
+2
+3
+301
+302
+303
+101
+102
+103
+401
+402
+403
+201
+202
+203
+501
+502
+503
+
+query error db error: ERROR: Evaluation error: Recursive query exceeded the recursion limit 100\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
+(WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t
+    )
+SELECT sum(n) FROM t)
+UNION ALL
+(WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 100)
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t
+    )
+SELECT sum(n) FROM t);
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER);
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 2)
+  cnt (f1 INTEGER) AS (
+    SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt
+  )
+SELECT * FROM cnt;
+
+statement ok
+INSERT INTO t1 VALUES (1);
+
+query I
+SELECT * FROM v1;
+----
+1
+2
+
+statement ok
+UPDATE t1 SET f1 = 2;
+
+query I
+SELECT * FROM v1;
+----
+2
+3
+
+statement error db error: ERROR: invalid RECURSION LIMIT: must provide an unsigned integer value
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Expected one of RECURSION or RETURN or ERROR, found right parenthesis
+WITH MUTUALLY RECURSIVE ()
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: invalid RECURSION LIMIT: cannot use value as number
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT aaaaaaa)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: invalid RECURSION LIMIT: invalid unsigned numeric value: invalid digit found in string
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT -3)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: RECURSION LIMIT specified more than once
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, ERROR AT RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, RETURN AT RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3, RETURN AT RECURSION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+# It's important that we error out for RECURSION LIMIT 0, because we are NOT handling this case in some optimizer transforms.
+statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. Recursion limit has to be greater than 0\.
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 0)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;

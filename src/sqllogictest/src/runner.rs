@@ -26,18 +26,14 @@
 //!       if wrong, record the error
 
 use std::collections::BTreeMap;
-use std::env;
 use std::error::Error;
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::ops;
+use std::net::SocketAddr;
 use std::path::Path;
-use std::str;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
+use std::{env, fmt, ops, str, thread};
 
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;
@@ -45,23 +41,10 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
-use once_cell::sync::Lazy;
-use postgres_protocol::types;
-use regex::Regex;
-use tempfile::TempDir;
-use tokio::runtime::Runtime;
-use tokio::sync::oneshot;
-use tokio_postgres::types::FromSql;
-use tokio_postgres::types::Kind as PgKind;
-use tokio_postgres::types::Type as PgType;
-use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
-use tower_http::cors::AllowOrigin;
-use tracing::{error, info};
-use uuid::Uuid;
-
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::cast::ReinterpretCast;
+use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
@@ -70,20 +53,38 @@ use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
+use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
+use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql_parser::{
-    ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
-    parser,
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{
+    CreateIndexStatement, CreateViewStatement, CteBlock, Distinct, DropObjectsStatement, Ident,
+    IfExistsBehavior, ObjectType, OrderByExpr, Query, RawItemName, Select, SelectItem,
+    SelectStatement, SetExpr, Statement as AstStatement, TableFactor, TableWithJoins,
+    UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
 };
+use mz_sql_parser::parser;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use postgres_protocol::types;
+use regex::Regex;
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
+use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
+use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
+use tower_http::cors::AllowOrigin;
+use tracing::{error, info};
+use uuid::fmt::Simple;
+use uuid::Uuid;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -127,14 +128,24 @@ pub enum Outcome<'a> {
         actual_output: Output,
         location: Location,
     },
+    InconsistentViewOutcome {
+        query_outcome: Box<Outcome<'a>>,
+        view_outcome: Box<Outcome<'a>>,
+        location: Location,
+    },
     Bail {
+        cause: Box<Outcome<'a>>,
+        location: Location,
+    },
+    Warning {
         cause: Box<Outcome<'a>>,
         location: Location,
     },
     Success,
 }
 
-const NUM_OUTCOMES: usize = 10;
+const NUM_OUTCOMES: usize = 12;
+const WARNING_OUTCOME: usize = NUM_OUTCOMES - 2;
 const SUCCESS_OUTCOME: usize = NUM_OUTCOMES - 1;
 
 impl<'a> Outcome<'a> {
@@ -148,13 +159,19 @@ impl<'a> Outcome<'a> {
             Outcome::WrongColumnCount { .. } => 5,
             Outcome::WrongColumnNames { .. } => 6,
             Outcome::OutputFailure { .. } => 7,
-            Outcome::Bail { .. } => 8,
-            Outcome::Success => 9,
+            Outcome::InconsistentViewOutcome { .. } => 8,
+            Outcome::Bail { .. } => 9,
+            Outcome::Warning { .. } => 10,
+            Outcome::Success => 11,
         }
     }
 
     fn success(&self) -> bool {
         matches!(self, Outcome::Success)
+    }
+
+    fn failure(&self) -> bool {
+        !matches!(self, Outcome::Success) && !matches!(self, Outcome::Warning { .. })
     }
 
     /// Returns an error message that will match self. Appropriate for
@@ -183,9 +200,19 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{:#}", location, error),
+            Unsupported { error, location } => write!(
+                f,
+                "Unsupported:{}:\n{}",
+                location,
+                error.display_with_causes()
+            ),
             ParseFailure { error, location } => {
-                write!(f, "ParseFailure:{}:\n{:#}", location, error)
+                write!(
+                    f,
+                    "ParseFailure:{}:\n{}",
+                    location,
+                    error.display_with_causes()
+                )
             }
             PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
             UnexpectedPlanSuccess {
@@ -245,7 +272,17 @@ impl fmt::Display for Outcome<'_> {
                 "OutputFailure:{}{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
+            InconsistentViewOutcome {
+                query_outcome,
+                view_outcome,
+                location,
+            } => write!(
+                f,
+                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
+                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+            ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
+            Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
             Success => f.write_str("Success"),
         }
     }
@@ -263,7 +300,7 @@ impl ops::AddAssign<Outcomes> for Outcomes {
 }
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
+        self.0[SUCCESS_OUTCOME] + self.0[WARNING_OUTCOME] < self.0.iter().sum::<usize>()
     }
 
     pub fn as_json(&self) -> serde_json::Value {
@@ -276,8 +313,10 @@ impl Outcomes {
             "wrong_column_count": self.0[5],
             "wrong_column_names": self.0[6],
             "output_failure": self.0[7],
-            "bail": self.0[8],
-            "success": self.0[9],
+            "inconsistent_view_outcome": self.0[8],
+            "bail": self.0[9],
+            "warning": self.0[10],
+            "success": self.0[11],
         })
     }
 
@@ -300,7 +339,7 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
         write!(
             f,
             "{}:",
-            if self.inner.0[SUCCESS_OUTCOME] == total {
+            if self.inner.0[SUCCESS_OUTCOME] + self.inner.0[WARNING_OUTCOME] == total {
                 "PASS"
             } else if self.no_fail {
                 "FAIL-IGNORE"
@@ -318,7 +357,9 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "wrong-column-count",
                 "wrong-column-names",
                 "output-failure",
+                "inconsistent-view-outcome",
                 "bail",
+                "warning",
                 "success",
                 "total",
             ]
@@ -332,18 +373,34 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
-pub struct Runner<'a> {
-    config: &'a RunConfig<'a>,
-    inner: Option<RunnerInner>,
+struct QueryInfo {
+    is_select: bool,
+    num_attributes: Option<usize>,
 }
 
-pub struct RunnerInner {
+enum PrepareQueryOutcome<'a> {
+    QueryPrepared(QueryInfo),
+    Outcome(Outcome<'a>),
+}
+
+pub struct Runner<'a> {
+    config: &'a RunConfig<'a>,
+    inner: Option<RunnerInner<'a>>,
+}
+
+pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
+    system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
+    auto_index_selects: bool,
+    auto_transactions: bool,
+    enable_table_keys: bool,
+    verbosity: usize,
+    stdout: &'a dyn WriteFmt,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -358,6 +415,9 @@ impl<'a> FromSql<'a> for Slt {
         mut raw: &'a [u8],
     ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
         Ok(match *ty {
+            PgType::ACLITEM => Self(Value::AclItem(AclItem::decode_binary(
+                types::bytea_from_sql(raw),
+            )?)),
             PgType::BOOL => Self(Value::Bool(types::bool_from_sql(raw)?)),
             PgType::BYTEA => Self(Value::Bytea(types::bytea_from_sql(raw).to_vec())),
             PgType::CHAR => Self(Value::Char(u8::from_be_bytes(
@@ -373,6 +433,7 @@ impl<'a> FromSql<'a> for Slt {
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
             PgType::INTERVAL => Self(Value::Interval(Interval::from_sql(ty, raw)?)),
             PgType::JSONB => Self(Value::Jsonb(Jsonb::from_sql(ty, raw)?)),
+            PgType::NAME => Self(Value::Name(types::text_from_sql(raw)?.to_string())),
             PgType::NUMERIC => Self(Value::Numeric(Numeric::from_sql(ty, raw)?)),
             PgType::OID => Self(Value::Oid(types::oid_from_sql(raw)?)),
             PgType::REGCLASS => Self(Value::Oid(types::oid_from_sql(raw)?)),
@@ -428,15 +489,15 @@ impl<'a> FromSql<'a> for Slt {
                         // Map a Vec<Option<Slt>> to Vec<Option<Value>>.
                         .map(|v| v.map(|v| v.0))
                         .collect();
-                    // TODO(benesch): rewrite to avoid `as`.
-                    #[allow(clippy::as_conversions)]
+
                     Self(Value::Array {
                         dims: arr
                             .dimensions()
                             .map(|d| {
                                 Ok(mz_repr::adt::array::ArrayDimension {
-                                    lower_bound: d.lower_bound as usize,
-                                    length: d.len as usize,
+                                    lower_bound: isize::cast_from(d.lower_bound),
+                                    length: usize::try_from(d.len)
+                                        .expect("cannot have negative length"),
                                 })
                             })
                             .collect()?,
@@ -452,6 +513,9 @@ impl<'a> FromSql<'a> for Slt {
                         let t: mz_repr::Timestamp = s.parse()?;
                         Self(Value::MzTimestamp(t))
                     }
+                    oid::TYPE_MZ_ACL_ITEM_OID => Self(Value::MzAclItem(MzAclItem::decode_binary(
+                        types::bytea_from_sql(raw),
+                    )?)),
                     _ => unreachable!(),
                 },
             },
@@ -466,12 +530,14 @@ impl<'a> FromSql<'a> for Slt {
             oid::TYPE_UINT2_OID
             | oid::TYPE_UINT4_OID
             | oid::TYPE_UINT8_OID
-            | oid::TYPE_MZ_TIMESTAMP_OID => return true,
+            | oid::TYPE_MZ_TIMESTAMP_OID
+            | oid::TYPE_MZ_ACL_ITEM_OID => return true,
             _ => {}
         }
         matches!(
             *ty,
-            PgType::BOOL
+            PgType::ACLITEM
+                | PgType::BOOL
                 | PgType::BYTEA
                 | PgType::CHAR
                 | PgType::DATE
@@ -482,6 +548,7 @@ impl<'a> FromSql<'a> for Slt {
                 | PgType::INT8
                 | PgType::INTERVAL
                 | PgType::JSONB
+                | PgType::NAME
                 | PgType::NUMERIC
                 | PgType::OID
                 | PgType::REGCLASS
@@ -629,7 +696,7 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
     }
 }
 
-fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String> {
+fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     let mut formatted: Vec<String> = vec![];
     for i in 0..row.len() {
         let t: Option<Slt> = row.get::<usize, Option<Slt>>(i);
@@ -639,19 +706,8 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
             None => "NULL".into(),
         });
     }
-    if mode == Mode::Cockroach && sort.yes() {
-        formatted
-            .iter()
-            .flat_map(|s| {
-                crate::parser::split_cols(s, types.len())
-                    .into_iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    } else {
-        formatted
-    }
+
+    formatted
 }
 
 impl<'a> Runner<'a> {
@@ -676,6 +732,7 @@ impl<'a> Runner<'a> {
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,
+        in_transaction: &mut bool,
     ) -> Result<Outcome<'r>, anyhow::Error> {
         if let Record::ResetServer = record {
             self.reset().await?;
@@ -684,7 +741,7 @@ impl<'a> Runner<'a> {
             self.inner
                 .as_mut()
                 .expect("RunnerInner missing")
-                .run_record(record)
+                .run_record(record, in_transaction)
                 .await
         }
     }
@@ -692,8 +749,10 @@ impl<'a> Runner<'a> {
     async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
         let inner = self.inner.as_mut().expect("RunnerInner missing");
 
+        inner.client.batch_execute("ROLLBACK;").await?;
+
         inner
-            .client
+            .system_client
             .batch_execute(
                 "ROLLBACK;
                  SET cluster = mz_introspection;
@@ -701,20 +760,25 @@ impl<'a> Runner<'a> {
             )
             .await?;
 
+        inner
+            .system_client
+            .batch_execute("ALTER SYSTEM RESET ALL")
+            .await?;
+
         // Drop all databases, then recreate the `materialize` database.
         for row in inner
-            .client
+            .system_client
             .query("SELECT name FROM mz_databases", &[])
             .await?
         {
             let name: &str = row.get("name");
             inner
-                .client
+                .system_client
                 .batch_execute(&format!("DROP DATABASE {name}"))
                 .await?;
         }
         inner
-            .client
+            .system_client
             .batch_execute("CREATE DATABASE materialize")
             .await?;
 
@@ -723,7 +787,7 @@ impl<'a> Runner<'a> {
         // on a cluster replica is exceptionally slow.
         let mut needs_default_cluster = true;
         for row in inner
-            .client
+            .system_client
             .query("SELECT name FROM mz_clusters WHERE id LIKE 'u%'", &[])
             .await?
         {
@@ -731,7 +795,7 @@ impl<'a> Runner<'a> {
                 "default" => needs_default_cluster = false,
                 name => {
                     inner
-                        .client
+                        .system_client
                         .batch_execute(&format!("DROP CLUSTER {name}"))
                         .await?
                 }
@@ -739,13 +803,13 @@ impl<'a> Runner<'a> {
         }
         if needs_default_cluster {
             inner
-                .client
+                .system_client
                 .batch_execute("CREATE CLUSTER default REPLICAS ()")
                 .await?;
         }
         let mut needs_default_replica = true;
         for row in inner
-            .client
+            .system_client
             .query(
                 "SELECT name, size FROM mz_cluster_replicas
                  WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'default')",
@@ -757,29 +821,69 @@ impl<'a> Runner<'a> {
                 ("r1", "1") => needs_default_replica = false,
                 (name, _) => {
                     inner
-                        .client
-                        .batch_execute(&format!("DROP CLUSTER REPLICA {name}"))
+                        .system_client
+                        .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
                         .await?
                 }
             }
         }
         if needs_default_replica {
             inner
-                .client
+                .system_client
                 .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
                 .await?;
         }
 
+        // Grant initial privileges.
+        inner
+            .system_client
+            .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT CREATE ON DATABASE materialize TO materialize")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT CREATE ON SCHEMA materialize.public TO materialize")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT USAGE ON CLUSTER default TO PUBLIC")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT CREATE ON CLUSTER default TO materialize")
+            .await?;
+
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
+        inner
+            .system_client
+            .simple_query("ALTER SYSTEM SET max_tables = 100")
+            .await?;
+
+        if inner.enable_table_keys {
+            inner
+                .system_client
+                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
+                .await?;
+        }
+
+        inner.ensure_fixed_features().await?;
+
         inner.client = connect(inner.server_addr, None).await;
+        inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
 
         Ok(())
     }
 }
 
-impl RunnerInner {
-    pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
+impl<'a> RunnerInner<'a> {
+    pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
@@ -803,10 +907,9 @@ impl RunnerInner {
             });
             client
                 .batch_execute(
-                    "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
-                     DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
+                    "DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
-                     CREATE SCHEMA sqllogictest_consensus;
+                     CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
                 )
@@ -818,15 +921,20 @@ impl RunnerInner {
             )
         };
 
+        let secrets_dir = temp_dir.path().join("secrets");
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
-                secrets_dir: temp_dir.path().join("secrets"),
-                command_wrapper: vec![],
+                secrets_dir: secrets_dir.clone(),
+                command_wrapper: config
+                    .orchestrator_process_wrapper
+                    .as_ref()
+                    .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
+                scratch_directory: scratch_dir.path().to_path_buf(),
             })
             .await?,
         );
@@ -835,11 +943,13 @@ impl RunnerInner {
         let persist_clients = PersistClientCache::new(
             PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
             &metrics_registry,
+            |_, _| PubSubClientConnection::noop(),
         );
         let persist_clients = Arc::new(persist_clients);
         let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -848,7 +958,10 @@ impl RunnerInner {
                 clusterd_image: "clusterd".into(),
                 init_container_image: None,
                 persist_location: PersistLocation {
-                    blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                    blob_uri: format!(
+                        "file://{}/persist/blob",
+                        config.persist_dir.path().display()
+                    ),
                     consensus_uri,
                 },
                 persist_clients,
@@ -856,27 +969,30 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
+                persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
+                secrets_args: mz_service::secrets::SecretsReaderCliArgs {
+                    secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_reader_local_file_dir: Some(secrets_dir),
+                    secrets_reader_kubernetes_context: None,
+                    secrets_reader_aws_region: None,
+                    secrets_reader_aws_prefix: None,
+                },
             },
             secrets_controller,
             cloud_resource_controller: None,
-            // Setting the port to 0 means that the OS will automatically
-            // allocate an available port.
-            sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
+            concurrent_webhook_req_count: None,
             unsafe_mode: true,
-            persisted_introspection: config.persisted_introspection,
+            all_features: false,
             metrics_registry,
             now,
             environment_id,
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: config.system_parameter_defaults.clone(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
@@ -890,6 +1006,8 @@ impl RunnerInner {
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
             config_sync_loop_interval: None,
+            bootstrap_role: Some("materialize".into()),
+            deploy_generation: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -909,7 +1027,7 @@ impl RunnerInner {
                     return;
                 }
             };
-            let server = match runtime.block_on(mz_environmentd::serve(server_config)) {
+            let server = match runtime.block_on(listeners.serve(server_config)) {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
@@ -929,33 +1047,58 @@ impl RunnerInner {
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
 
+        let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
 
-        // Some sqllogic tests require more than the default amount of tables, so we increase the
-        // limit for all tests.
-        {
-            let system_client = connect(internal_server_addr, Some("mz_system")).await;
-            system_client
-                .simple_query("ALTER SYSTEM SET max_tables = 100")
-                .await
-                .unwrap();
-        }
-
-        Ok(RunnerInner {
+        let inner = RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
             client,
+            system_client,
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
-        })
+            auto_index_selects: config.auto_index_selects,
+            auto_transactions: config.auto_transactions,
+            enable_table_keys: config.enable_table_keys,
+            verbosity: config.verbosity,
+            stdout: config.stdout,
+        };
+        inner.ensure_fixed_features().await?;
+
+        Ok(inner)
+    }
+
+    /// Set features that should be enabled regardless of whether reset-server was
+    /// called. These features may be set conditionally depending on the run configuration.
+    async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
+        // We turn on enable_monotonic_oneshot_selects and enable_with_mutually_recursive,
+        // as these two features have reached enough maturity to do so.
+        // TODO(vmarcos): Remove this code when we retire these feature flags.
+        self.system_client
+            .execute(
+                "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
+                &[],
+            )
+            .await?;
+
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_with_mutually_recursive = on", &[])
+            .await?;
+
+        // Dangerous functions are useful for tests so we enable it for all tests.
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_dangerous_functions = on", &[])
+            .await?;
+        Ok(())
     }
 
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,
+        in_transaction: &mut bool,
     ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
             Record::Statement {
@@ -964,6 +1107,10 @@ impl RunnerInner {
                 sql,
                 location,
             } => {
+                if self.auto_transactions && *in_transaction {
+                    self.client.execute("COMMIT", &[]).await?;
+                    *in_transaction = false;
+                }
                 match self
                     .run_statement(*expected_error, *rows_affected, sql, location.clone())
                     .await?
@@ -996,7 +1143,10 @@ impl RunnerInner {
                 sql,
                 output,
                 location,
-            } => self.run_query(sql, output, location.clone()).await,
+            } => {
+                self.run_query(sql, output, location.clone(), in_transaction)
+                    .await
+            }
             Record::Simple {
                 conn,
                 user,
@@ -1026,13 +1176,13 @@ impl RunnerInner {
         }
     }
 
-    async fn run_statement<'a>(
-        &mut self,
-        expected_error: Option<&'a str>,
+    async fn run_statement<'r>(
+        &self,
+        expected_error: Option<&'r str>,
         expected_rows_affected: Option<u64>,
-        sql: &'a str,
+        sql: &'r str,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         static UNSUPPORTED_INDEX_STATEMENT_REGEX: Lazy<Regex> =
             Lazy::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
         if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
@@ -1077,51 +1227,85 @@ impl RunnerInner {
         }
     }
 
-    async fn run_query<'a>(
-        &mut self,
-        sql: &'a str,
-        output: &'a Result<QueryOutput<'_>, &'a str>,
+    async fn prepare_query<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+        in_transaction: &mut bool,
+    ) -> Result<PrepareQueryOutcome<'r>, anyhow::Error> {
         // get statement
         let statements = match mz_sql::parse::parse(sql) {
             Ok(statements) => statements,
             Err(e) => match output {
                 Ok(_) => {
-                    return Ok(Outcome::ParseFailure {
+                    return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
                         error: e.into(),
                         location,
-                    });
+                    }));
                 }
                 Err(expected_error) => {
                     if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
-                        return Ok(Outcome::Success);
+                        return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
-                        return Ok(Outcome::ParseFailure {
+                        return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
                             error: e.into(),
                             location,
-                        });
+                        }));
                     }
                 }
             },
         };
         let statement = match &*statements {
             [] => bail!("Got zero statements?"),
-            [statement] => statement,
+            [statement] => &statement.ast,
             _ => bail!("Got multiple statements: {:?}", statements),
         };
-        match statement {
-            Statement::CreateView { .. }
-            | Statement::Select { .. }
-            | Statement::Show(ShowStatement::ShowObjects(..)) => (),
-            _ => {
-                if output.is_err() {
-                    // We're not interested in testing our hacky handling of INSERT etc
-                    return Ok(Outcome::Success);
+        let (is_select, num_attributes) = match statement {
+            Statement::Select(stmt) => (true, derive_num_attributes(&stmt.query.body)),
+            _ => (false, None),
+        };
+
+        match output {
+            Ok(_) => {
+                if self.auto_transactions && !*in_transaction {
+                    // No ISOLATION LEVEL SERIALIZABLE because of #18136
+                    self.client.execute("BEGIN", &[]).await?;
+                    *in_transaction = true;
+                }
+            }
+            Err(_) => {
+                if self.auto_transactions && *in_transaction {
+                    self.client.execute("COMMIT", &[]).await?;
+                    *in_transaction = false;
                 }
             }
         }
 
+        // `SHOW` commands reference catalog schema, thus are not in the same timedomain and not
+        // allowed in the same transaction, see:
+        // https://materialize.com/docs/sql/begin/#same-timedomain-error
+        match statement {
+            Statement::Show(..) => {
+                if self.auto_transactions && *in_transaction {
+                    self.client.execute("COMMIT", &[]).await?;
+                    *in_transaction = false;
+                }
+            }
+            _ => (),
+        }
+        Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo {
+            is_select,
+            num_attributes,
+        }))
+    }
+
+    async fn execute_query<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
@@ -1202,7 +1386,7 @@ impl RunnerInner {
                     location,
                 });
             }
-            let row = format_row(row, expected_types, *mode, sort);
+            let row = format_row(row, expected_types, *mode);
             formatted_rows.push(row);
         }
 
@@ -1254,6 +1438,155 @@ impl RunnerInner {
         Ok(Outcome::Success)
     }
 
+    async fn execute_view_inner<'r>(
+        &self,
+        sql: &str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
+        print_sql_if(self.stdout, sql, self.verbosity >= 2);
+        let sql_result = self.client.execute(sql, &[]).await;
+
+        // Evaluate if we already reached an outcome or not.
+        let tentative_outcome = if let Err(view_error) = sql_result {
+            if let Err(expected_error) = output {
+                if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error)) {
+                    Some(Outcome::Success)
+                } else {
+                    Some(Outcome::PlanFailure {
+                        error: view_error.into(),
+                        location: location.clone(),
+                    })
+                }
+            } else {
+                Some(Outcome::PlanFailure {
+                    error: view_error.into(),
+                    location: location.clone(),
+                })
+            }
+        } else {
+            None
+        };
+        Ok(tentative_outcome)
+    }
+
+    async fn execute_view<'r>(
+        &self,
+        sql: &str,
+        num_attributes: Option<usize>,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        // Create indexed view SQL commands and execute `CREATE VIEW`.
+        let expected_column_names = if let Ok(QueryOutput { column_names, .. }) = output {
+            column_names.clone()
+        } else {
+            None
+        };
+        let (create_view, create_index, view_sql, drop_view) = generate_view_sql(
+            sql,
+            Uuid::new_v4().as_simple(),
+            num_attributes,
+            expected_column_names,
+        );
+        let tentative_outcome = self
+            .execute_view_inner(create_view.as_str(), output, location.clone())
+            .await?;
+
+        // Either we already have an outcome or alternatively,
+        // we proceed to index and query the view.
+        if let Some(view_outcome) = tentative_outcome {
+            return Ok(view_outcome);
+        }
+
+        let tentative_outcome = self
+            .execute_view_inner(create_index.as_str(), output, location.clone())
+            .await?;
+
+        let view_outcome;
+        if let Some(outcome) = tentative_outcome {
+            view_outcome = outcome;
+        } else {
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            view_outcome = self
+                .execute_query(view_sql.as_str(), output, location.clone())
+                .await?;
+        }
+
+        // Remember to clean up after ourselves by dropping the view.
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
+        self.client.execute(drop_view.as_str(), &[]).await?;
+
+        Ok(view_outcome)
+    }
+
+    async fn run_query<'r>(
+        &self,
+        sql: &'r str,
+        output: &'r Result<QueryOutput<'_>, &'r str>,
+        location: Location,
+        in_transaction: &mut bool,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        let prepare_outcome = self
+            .prepare_query(sql, output, location.clone(), in_transaction)
+            .await?;
+        match prepare_outcome {
+            PrepareQueryOutcome::QueryPrepared(QueryInfo {
+                is_select,
+                num_attributes,
+            }) => {
+                let query_outcome = self.execute_query(sql, output, location.clone()).await?;
+                if is_select && self.auto_index_selects {
+                    let view_outcome = self
+                        .execute_view(sql, None, output, location.clone())
+                        .await?;
+
+                    // We compare here the query-based and view-based outcomes.
+                    // We only produce a test failure if the outcomes are of different
+                    // variant types, thus accepting smaller deviations in the details
+                    // produced for each variant.
+                    if std::mem::discriminant::<Outcome>(&query_outcome)
+                        != std::mem::discriminant::<Outcome>(&view_outcome)
+                    {
+                        // Before producing a failure outcome, we try to obtain a new
+                        // outcome for view-based execution exploiting analysis of the
+                        // number of attributes. This two-level strategy can avoid errors
+                        // produced by column ambiguity in the `SELECT`.
+                        let view_outcome = if num_attributes.is_some() {
+                            self.execute_view(sql, num_attributes, output, location.clone())
+                                .await?
+                        } else {
+                            view_outcome
+                        };
+
+                        if std::mem::discriminant::<Outcome>(&query_outcome)
+                            != std::mem::discriminant::<Outcome>(&view_outcome)
+                        {
+                            let inconsistent_view_outcome = Outcome::InconsistentViewOutcome {
+                                query_outcome: Box::new(query_outcome),
+                                view_outcome: Box::new(view_outcome),
+                                location: location.clone(),
+                            };
+                            // Determine if this inconsistent view outcome should be reported
+                            // as an error or only as a warning.
+                            let outcome = if should_warn(&inconsistent_view_outcome) {
+                                Outcome::Warning {
+                                    cause: Box::new(inconsistent_view_outcome),
+                                    location: location.clone(),
+                                }
+                            } else {
+                                inconsistent_view_outcome
+                            };
+                            return Ok(outcome);
+                        }
+                    }
+                }
+                Ok(query_outcome)
+            }
+            PrepareQueryOutcome::Outcome(outcome) => Ok(outcome),
+        }
+    }
+
     async fn get_conn(
         &mut self,
         name: Option<&str>,
@@ -1263,7 +1596,7 @@ impl RunnerInner {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let addr = if matches!(user, Some("mz_system")) {
+                    let addr = if matches!(user, Some("mz_system") | Some("mz_introspection")) {
                         self.internal_server_addr
                     } else {
                         self.server_addr
@@ -1276,14 +1609,14 @@ impl RunnerInner {
         }
     }
 
-    async fn run_simple<'a>(
+    async fn run_simple<'r>(
         &mut self,
-        conn: Option<&'a str>,
-        user: Option<&'a str>,
-        sql: &'a str,
-        output: &'a Output,
+        conn: Option<&'r str>,
+        user: Option<&'r str>,
+        sql: &'r str,
+        output: &'r Output,
         location: Location,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         let client = self.get_conn(conn, user).await;
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
@@ -1351,15 +1684,76 @@ pub struct RunConfig<'a> {
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,
-    pub persisted_introspection: bool,
+    pub auto_index_selects: bool,
+    pub auto_transactions: bool,
+    pub enable_table_keys: bool,
+    pub orchestrator_process_wrapper: Option<String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Persist state is handled specially because:
+    /// - Persist background workers do not necessarily shut down immediately once the server is
+    ///   shut down, and may panic if their storage is delete out from under them.
+    /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
+    pub persist_dir: TempDir,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
-        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
-            writeln!(config.stdout, "{}", crate::util::indent(sql, 4))
-        }
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => print_sql(config.stdout, sql),
         _ => (),
+    }
+}
+
+fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
+    if cond {
+        print_sql(stdout, sql)
+    }
+}
+
+fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
+    writeln!(stdout, "{}", crate::util::indent(sql, 4))
+}
+
+/// Regular expressions for matching error messages that should force a plan failure
+/// in an inconsistent view outcome into a warning if the corresponding query succeeds.
+const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
+    // The following are unfixable errors in indexed views given our
+    // current constraints.
+    "cannot materialize call to",
+    "SHOW commands are not allowed in views",
+    "cannot create view with unstable dependencies",
+    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects",
+    "no schema has been selected to create in",
+    r#"system schema '\w+' cannot be modified"#,
+    r#"permission denied for (SCHEMA|CLUSTER) "(\w+\.)?\w+""#,
+    // NOTE(vmarcos): Column ambiguity that could not be eliminated by our
+    // currently implemented syntactic rewrites is considered unfixable.
+    // In addition, if some column cannot be dealt with, e.g., in `ORDER BY`
+    // references, we treat this condition as unfixable as well.
+    r#"column "[\w\?]+" specified more than once"#,
+    r#"column "(\w+\.)?\w+" does not exist"#,
+];
+
+/// Evaluates if the given outcome should be returned directly or if it should
+/// be wrapped as a warning. Note that this function should be used for outcomes
+/// that can be judged in a context-independent manner, i.e., the outcome itself
+/// provides enough information as to whether a warning should be emitted or not.
+fn should_warn(outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::InconsistentViewOutcome {
+            query_outcome,
+            view_outcome,
+            ..
+        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
+            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+                INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
+                    Regex::new(s)
+                        .expect("unexpected error in regular expression parsing")
+                        .is_match(&format!("{:#}", error))
+                })
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -1372,6 +1766,9 @@ pub async fn run_string(
 
     let mut outcomes = Outcomes::default();
     let mut parser = crate::parser::Parser::new(source, input);
+    // Transactions are currently relatively slow. Since sqllogictest runs in a single connection
+    // there should be no difference in having longer running transactions.
+    let mut in_transaction = false;
     writeln!(runner.config.stdout, "==> {}", source);
 
     for record in parser.parse_records()? {
@@ -1383,12 +1780,12 @@ pub async fn run_string(
         }
 
         let outcome = runner
-            .run_record(&record)
+            .run_record(&record, &mut in_transaction)
             .await
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
-        // Print failures in verbose mode.
+        // Print warnings and failures in verbose mode.
         if runner.config.verbosity >= 1 && !outcome.success() {
             if runner.config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
@@ -1397,14 +1794,23 @@ pub async fn run_string(
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
+                if !outcome.failure() {
+                    writeln!(
+                        runner.config.stdout,
+                        "{}",
+                        util::indent("Warning detected for: ", 4)
+                    );
+                }
                 print_record(runner.config, &record);
             }
-            writeln!(
-                runner.config.stdout,
-                "{}",
-                util::indent(&outcome.to_string(), 4)
-            );
-            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            if runner.config.verbosity >= 2 || outcome.failure() {
+                writeln!(
+                    runner.config.stdout,
+                    "{}",
+                    util::indent(&outcome.to_string(), 4)
+                );
+                writeln!(runner.config.stdout, "{}", util::indent("----", 4));
+            }
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -1413,7 +1819,7 @@ pub async fn run_string(
             break;
         }
 
-        if runner.config.fail_fast && !outcome.success() {
+        if runner.config.fail_fast && outcome.failure() {
             break;
         }
     }
@@ -1438,9 +1844,11 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
 
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     writeln!(runner.config.stdout, "==> {}", filename.display());
+    let mut in_transaction = false;
+
     for record in parser.parse_records()? {
         let record = record;
-        let outcome = runner.run_record(&record).await?;
+        let outcome = runner.run_record(&record, &mut in_transaction).await?;
 
         match (&record, &outcome) {
             // If we see an output failure for a query, rewrite the expected output
@@ -1644,19 +2052,311 @@ impl<'a> RewriteBuffer<'a> {
     }
 }
 
+/// Generates view creation, view indexing, view querying, and view
+/// dropping SQL commands for a given `SELECT` query. If the number
+/// of attributes produced by the query is known, the view commands
+/// are specialized to avoid issues with column ambiguity. This
+/// function is a helper for `--auto_index_selects` and assumes that
+/// the provided input SQL has already been run through the parser,
+/// resulting in a valid `SELECT` statement.
+fn generate_view_sql(
+    sql: &str,
+    view_uuid: &Simple,
+    num_attributes: Option<usize>,
+    expected_column_names: Option<Vec<ColumnName>>,
+) -> (String, String, String, String) {
+    // To create the view, re-parse the sql; note that we must find exactly
+    // one statement and it must be a `SELECT`.
+    // NOTE(vmarcos): Direct string manipulation was attempted while
+    // prototyping the code below, which avoids the extra parsing and
+    // data structure cloning. However, running DDL is so slow that
+    // it did not matter in terms of runtime. We can revisit this if
+    // DDL cost drops dramatically in the future.
+    let stmts = parser::parse_statements(sql).unwrap_or_default();
+    assert!(stmts.len() == 1);
+    let (query, query_as_of) = match &stmts[0].ast {
+        Statement::Select(stmt) => (&stmt.query, &stmt.as_of),
+        _ => unreachable!("This function should only be called for SELECTs"),
+    };
+
+    // Prior to creating the view, process the `ORDER BY` clause of
+    // the `SELECT` query, if any. Ordering is not preserved when a
+    // view includes an `ORDER BY` clause and must be re-enforced by
+    // an external `ORDER BY` clause when querying the view.
+    let (view_order_by, extra_columns, distinct) = if num_attributes.is_none() {
+        (query.order_by.clone(), vec![], None)
+    } else {
+        derive_order_by(&query.body, &query.order_by)
+    };
+
+    // Since one-shot SELECT statements may contain ambiguous column names,
+    // we either use the expected column names, if that option was
+    // provided, or else just rename the output schema of the view
+    // using numerically increasing attribute names, whenever possible.
+    // This strategy makes it possible to use `CREATE INDEX`, thus
+    // matching the behavior of the option `auto_index_tables`. However,
+    // we may be presented with a `SELECT *` query, in which case the parser
+    // does not produce sufficient information to allow us to compute
+    // the number of output columns. In the latter case, we are supplied
+    // with `None` for `num_attributes` and just employ the command
+    // `CREATE DEFAULT INDEX` instead. Additionally, the view is created
+    // without schema renaming. This strategy is insufficient to dodge
+    // column name ambiguity in all cases, but we assume here that we
+    // can adjust the (hopefully) small number of tests that eventually
+    // challenge us in this particular way.
+    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", view_uuid))]);
+    let projection = expected_column_names.map_or(
+        num_attributes.map_or(vec![], |n| {
+            (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
+        }),
+        |cols| cols.iter().map(|c| Ident::new(c.as_str())).collect(),
+    );
+    let columns: Vec<Ident> = projection
+        .iter()
+        .cloned()
+        .chain(extra_columns.iter().map(|item| {
+            if let SelectItem::Expr {
+                expr: _,
+                alias: Some(ident),
+            } = item
+            {
+                ident.clone()
+            } else {
+                unreachable!("alias must be given for extra column")
+            }
+        }))
+        .collect();
+
+    // Build a `CREATE VIEW` with the columns computed above.
+    let mut query = query.clone();
+    if extra_columns.len() > 0 {
+        match &mut query.body {
+            SetExpr::Select(stmt) => stmt.projection.extend(extra_columns.iter().cloned()),
+            _ => unimplemented!("cannot yet rewrite projections of nested queries"),
+        }
+    }
+    let create_view = AstStatement::<Raw>::CreateView(CreateViewStatement {
+        if_exists: IfExistsBehavior::Error,
+        temporary: false,
+        definition: ViewDefinition {
+            name: name.clone(),
+            columns: columns.clone(),
+            query,
+        },
+    })
+    .to_ast_string_stable();
+
+    // We then create either a `CREATE INDEX` or a `CREATE DEFAULT INDEX`
+    // statement, depending on whether we could obtain the number of
+    // attributes from the original `SELECT`.
+    let create_index = AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
+        name: None,
+        in_cluster: None,
+        on_name: RawItemName::Name(name.clone()),
+        key_parts: if columns.len() == 0 {
+            None
+        } else {
+            Some(
+                columns
+                    .iter()
+                    .map(|ident| Expr::Identifier(vec![ident.clone()]))
+                    .collect(),
+            )
+        },
+        with_options: Vec::new(),
+        if_not_exists: false,
+    })
+    .to_ast_string_stable();
+
+    // Assert if DISTINCT semantics are unchanged from view
+    let distinct_unneeded = extra_columns.len() == 0
+        || match distinct {
+            None | Some(Distinct::On(_)) => true,
+            Some(Distinct::EntireRow) => false,
+        };
+    let distinct = if distinct_unneeded { None } else { distinct };
+
+    // `SELECT [* | {projection}] FROM {name} [ORDER BY {view_order_by}]`
+    let view_sql = AstStatement::<Raw>::Select(SelectStatement {
+        query: Query {
+            ctes: CteBlock::Simple(vec![]),
+            body: SetExpr::Select(Box::new(Select {
+                distinct,
+                projection: if projection.len() == 0 {
+                    vec![SelectItem::Wildcard]
+                } else {
+                    projection
+                        .iter()
+                        .map(|ident| SelectItem::Expr {
+                            expr: Expr::Identifier(vec![ident.clone()]),
+                            alias: None,
+                        })
+                        .collect()
+                },
+                from: vec![TableWithJoins {
+                    relation: TableFactor::Table {
+                        name: RawItemName::Name(name.clone()),
+                        alias: None,
+                    },
+                    joins: vec![],
+                }],
+                selection: None,
+                group_by: vec![],
+                having: None,
+                options: vec![],
+            })),
+            order_by: view_order_by,
+            limit: None,
+            offset: None,
+        },
+        as_of: query_as_of.clone(),
+    })
+    .to_ast_string_stable();
+
+    // `DROP VIEW {name}`
+    let drop_view = AstStatement::<Raw>::DropObjects(DropObjectsStatement {
+        object_type: ObjectType::View,
+        if_exists: false,
+        names: vec![UnresolvedObjectName::Item(name)],
+        cascade: false,
+    })
+    .to_ast_string_stable();
+
+    (create_view, create_index, view_sql, drop_view)
+}
+
+/// Analyzes the provided query `body` to derive the number of
+/// attributes in the query. We only consider syntactic cues,
+/// so we may end up deriving `None` for the number of attributes
+/// as a conservative approximation.
+fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
+    let Some((projection, _)) = find_projection(body) else { return None };
+    derive_num_attributes_from_projection(projection)
+}
+
+/// Analyzes a query's `ORDER BY` clause to derive an `ORDER BY`
+/// clause that makes numeric references to any expressions in
+/// the projection and generated-attribute references to expressions
+/// that need to be added as extra columns to the projection list.
+/// The rewritten `ORDER BY` clause is then usable when querying a
+/// view that contains the same `SELECT` as the given query.
+/// This function returns both the rewritten `ORDER BY` clause
+/// as well as a list of extra columns that need to be added
+/// to the query's projection for the `ORDER BY` clause to
+/// succeed.
+fn derive_order_by(
+    body: &SetExpr<Raw>,
+    order_by: &Vec<OrderByExpr<Raw>>,
+) -> (
+    Vec<OrderByExpr<Raw>>,
+    Vec<SelectItem<Raw>>,
+    Option<Distinct<Raw>>,
+) {
+    let Some((projection, distinct)) = find_projection(body) else { return (vec![], vec![], None) };
+    let (view_order_by, extra_columns) = derive_order_by_from_projection(projection, order_by);
+    (view_order_by, extra_columns, distinct.clone())
+}
+
+/// Finds the projection list in a `SELECT` query body.
+fn find_projection(body: &SetExpr<Raw>) -> Option<(&Vec<SelectItem<Raw>>, &Option<Distinct<Raw>>)> {
+    // Iterate to peel off the query body until the query's
+    // projection list is found.
+    let mut set_expr = body;
+    loop {
+        match set_expr {
+            SetExpr::Select(select) => {
+                return Some((&select.projection, &select.distinct));
+            }
+            SetExpr::SetOperation { left, .. } => set_expr = left.as_ref(),
+            SetExpr::Query(query) => set_expr = &query.body,
+            _ => return None,
+        }
+    }
+}
+
+/// Computes the number of attributes that are obtained by the
+/// projection of a `SELECT` query. The projection may include
+/// wildcards, in which case the analysis just returns `None`.
+fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
+    let mut num_attributes = 0usize;
+    for item in projection.iter() {
+        let SelectItem::Expr { expr, .. } = item else { return None };
+        match expr {
+            Expr::QualifiedWildcard(..) | Expr::WildcardAccess(..) => {
+                return None;
+            }
+            _ => {
+                num_attributes += 1;
+            }
+        }
+    }
+    Some(num_attributes)
+}
+
+/// Computes an `ORDER BY` clause with only numeric references
+/// from given projection and `ORDER BY` of a `SELECT` query.
+/// If the derivation fails to match a given expression, the
+/// matched prefix is returned. Note that this could be empty.
+fn derive_order_by_from_projection(
+    projection: &Vec<SelectItem<Raw>>,
+    order_by: &Vec<OrderByExpr<Raw>>,
+) -> (Vec<OrderByExpr<Raw>>, Vec<SelectItem<Raw>>) {
+    let mut view_order_by: Vec<OrderByExpr<Raw>> = vec![];
+    let mut extra_columns: Vec<SelectItem<Raw>> = vec![];
+    for order_by_expr in order_by.iter() {
+        let query_expr = &order_by_expr.expr;
+        let view_expr = match query_expr {
+            Expr::Value(mz_sql_parser::ast::Value::Number(_)) => query_expr.clone(),
+            _ => {
+                // Find expression in query projection, if we can.
+                if let Some(i) = projection.iter().position(|item| match item {
+                    SelectItem::Expr { expr, alias } => {
+                        expr == query_expr
+                            || match query_expr {
+                                Expr::Identifier(ident) => {
+                                    ident.len() == 1 && Some(&ident[0]) == alias.as_ref()
+                                }
+                                _ => false,
+                            }
+                    }
+                    SelectItem::Wildcard => false,
+                }) {
+                    Expr::Value(mz_sql_parser::ast::Value::Number((i + 1).to_string()))
+                } else {
+                    // If the expression is not found in the
+                    // projection, add extra column.
+                    let ident =
+                        Ident::new(format!("a{}", (projection.len() + extra_columns.len() + 1)));
+                    extra_columns.push(SelectItem::Expr {
+                        expr: query_expr.clone(),
+                        alias: Some(ident.clone()),
+                    });
+                    Expr::Identifier(vec![ident])
+                }
+            }
+        };
+        view_order_by.push(OrderByExpr {
+            expr: view_expr,
+            asc: order_by_expr.asc,
+            nulls_last: order_by_expr.nulls_last,
+        });
+    }
+    (view_order_by, extra_columns)
+}
+
 /// Returns extra statements to execute after `stmt` is executed.
 fn mutate(sql: &str) -> Vec<String> {
     let stmts = parser::parse_statements(sql).unwrap_or_default();
     let mut additional = Vec::new();
     for stmt in stmts {
-        match stmt {
+        match stmt.ast {
             AstStatement::CreateTable(stmt) => additional.push(
                 // CREATE TABLE -> CREATE INDEX. Specify all columns manually in case CREATE
                 // DEFAULT INDEX ever goes away.
                 AstStatement::<Raw>::CreateIndex(CreateIndexStatement {
                     name: None,
                     in_cluster: None,
-                    on_name: RawObjectName::Name(stmt.name.clone()),
+                    on_name: RawItemName::Name(stmt.name.clone()),
                     key_parts: Some(
                         stmt.columns
                             .iter()
@@ -1674,7 +2374,92 @@ fn mutate(sql: &str) -> Vec<String> {
     additional
 }
 
-#[test]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_generate_view_sql() {
+    let uuid = Uuid::parse_str("67e5504410b1426f9247bb680e5fe0c8").unwrap();
+    let cases = vec![
+        (("SELECT * FROM t", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM "t""#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, c FROM t1, t2", Some(3), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c")])),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c")"#.to_string(),
+            r#"SELECT "a", "b", "c" FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, c FROM t1, t2", Some(3), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "b", "c" FROM "t1", "t2""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2", "a3" FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        // A case with ambiguity that is accepted by the function, illustrating that
+        // our measures to dodge this issue are imperfect.
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a)", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a")"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, b, b + d AS c, a + b AS d FROM t1, t2 ORDER BY a, c, a + b", Some(4), Some(vec![ColumnName::from("a"), ColumnName::from("b"), ColumnName::from("c"), ColumnName::from("d")])),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d") AS SELECT "a", "b", "b" + "d" AS "c", "a" + "b" AS "d" FROM "t1", "t2" ORDER BY "a", "c", "a" + "b""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a", "b", "c", "d")"#.to_string(),
+            r#"SELECT "a", "b", "c", "d" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, 3, 4"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("((SELECT 1 AS a UNION SELECT 2 AS b) UNION SELECT 3 AS c) ORDER BY a", Some(1), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1") AS (SELECT 1 AS "a" UNION SELECT 2 AS "b") UNION SELECT 3 AS "c" ORDER BY "a""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1")"#.to_string(),
+            r#"SELECT "a1" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY 1", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY 1"#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT * FROM (SELECT a, sum(b) AS a FROM t GROUP BY a) ORDER BY a", None, None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" AS SELECT * FROM (SELECT "a", "sum"("b") AS "a" FROM "t" GROUP BY "a") ORDER BY "a""#.to_string(),
+            r#"CREATE DEFAULT INDEX ON "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+            r#"SELECT * FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY "a""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, sum(b) AS a FROM t GROUP BY a, c ORDER BY a, c", Some(2), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "sum"("b") AS "a", "c" AS "a3" FROM "t" GROUP BY "a", "c" ORDER BY "a", "c""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY 1, "a3""#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+        (("SELECT a, sum(b) AS a FROM t GROUP BY a, c ORDER BY c, a", Some(2), None),
+        (
+            r#"CREATE VIEW "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3") AS SELECT "a", "sum"("b") AS "a", "c" AS "a3" FROM "t" GROUP BY "a", "c" ORDER BY "c", "a""#.to_string(),
+            r#"CREATE INDEX ON "v67e5504410b1426f9247bb680e5fe0c8" ("a1", "a2", "a3")"#.to_string(),
+            r#"SELECT "a1", "a2" FROM "v67e5504410b1426f9247bb680e5fe0c8" ORDER BY "a3", 1"#.to_string(),
+            r#"DROP VIEW "v67e5504410b1426f9247bb680e5fe0c8""#.to_string(),
+        )),
+    ];
+    for ((sql, num_attributes, expected_column_names), expected) in cases {
+        let view_sql =
+            generate_view_sql(sql, uuid.as_simple(), num_attributes, expected_column_names);
+        assert_eq!(expected, view_sql);
+    }
+}
+
+#[mz_ore::test]
 fn test_mutate() {
     let cases = vec![
         ("CREATE TABLE t ()", vec![r#"CREATE INDEX ON "t" ()"#]),

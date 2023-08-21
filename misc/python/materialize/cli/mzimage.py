@@ -13,13 +13,13 @@ import argparse
 import sys
 from typing import Any
 
-from materialize import ROOT, mzbuild, ui
+from materialize import MZ_ROOT, mzbuild, ui
 
 
 def main() -> int:
     args = _parse_args()
     ui.Verbosity.init_from_env(explicit=None)
-    repo = mzbuild.Repository.from_arguments(ROOT, args)
+    repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
 
     if args.command == "list":
         for image in repo:

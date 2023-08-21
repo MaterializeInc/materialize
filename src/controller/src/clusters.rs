@@ -16,30 +16,29 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{BoxStream, StreamExt, TryStreamExt};
-use mz_ore::halt;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tracing::{error, warn};
-
+use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
+pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{
-    CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
+    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
+use mz_ore::halt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tracing::{error, warn};
 
 use crate::Controller;
-
-pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 
 /// Identifies a cluster.
 pub type ClusterId = ComputeInstanceId;
@@ -57,10 +56,10 @@ pub struct ClusterConfig {
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Identifies a cluster replica.
-pub type ReplicaId = mz_compute_client::controller::ReplicaId;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Configures a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ReplicaConfig {
     /// The location of the replica.
     pub location: ReplicaLocation,
@@ -75,14 +74,37 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The disk limit for each process in the replica.
+    pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
     pub scale: u16,
     /// The number of worker threads in the replica.
     pub workers: usize,
+    /// The number of credits per hour that the replica consumes.
+    #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
+    pub credits_per_hour: Numeric,
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+// We test this particularly because we deserialize values from strings.
+fn test_replica_allocation_deserialization() {
+    let data = r#"
+        {
+            "cpu_limit": 1.0,
+            "memory_limit": "10GiB",
+            "disk_limit": "100MiB",
+            "scale": 16,
+            "workers": 1,
+            "credits_per_hour": "16"
+        }"#;
+
+    let _: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
 }
 
 /// Configures the location of a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum ReplicaLocation {
     /// An unmanaged replica.
     Unmanaged(UnmanagedReplicaLocation),
@@ -91,15 +113,6 @@ pub enum ReplicaLocation {
 }
 
 impl ReplicaLocation {
-    /// Returns the availability zone specified by this replica location, if
-    /// any.
-    pub fn availability_zone(&self) -> Option<&str> {
-        match self {
-            ReplicaLocation::Unmanaged(_) => None,
-            ReplicaLocation::Managed(m) => Some(&m.availability_zone),
-        }
-    }
-
     /// Returns the number of processes specified by this replica location.
     pub fn num_processes(&self) -> usize {
         match self {
@@ -147,18 +160,42 @@ pub struct UnmanagedReplicaLocation {
     pub workers: usize,
 }
 
+/// Information about availability zone constraints for replicas.
+#[derive(Clone, Debug)]
+pub enum ManagedReplicaAvailabilityZones {
+    /// Specified if the `Replica` is from `MANAGED` cluster,
+    /// and specifies if there is an `AVAILABILITY ZONES`
+    /// constraint. Empty lists are represented as `None`.
+    FromCluster(Option<Vec<String>>),
+    /// Specified if the `Replica` is from a non-`MANAGED` cluster,
+    /// and specifies if there is a specific `AVAILABILITY ZONE`.
+    FromReplica(Option<String>),
+}
+
 /// The location of a managed replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagedReplicaLocation {
     /// The resource allocation for the replica.
     pub allocation: ReplicaAllocation,
     /// SQL size parameter used for allocation
     pub size: String,
-    /// The replica's availability zone
-    pub availability_zone: String,
-    /// `true` if the AZ was specified by the user and must be respected;
-    /// `false` if it was picked arbitrarily by Materialize.
-    pub az_user_specified: bool,
+    /// The replica's availability zones, if specified.
+    ///
+    /// This is either the replica's specific `AVAILABILITY ZONE`,
+    /// or the zones placed here during replica concretization
+    /// from the `MANAGED` cluster config.
+    ///
+    /// We skip serialization (which is used for some validation
+    /// in tests) as the latter case is a "virtual" piece of information,
+    /// that exists only at runtime.
+    ///
+    /// An empty list of availability zones is concretized as `None`,
+    /// as the on-disk serialization of `MANAGED CLUSTER AVAILABILITY ZONES`
+    /// is an empty list if none are specified
+    #[serde(skip)]
+    pub availability_zones: ManagedReplicaAvailabilityZones,
+    /// Whether the replica needs scratch disk space.
+    pub disk: bool,
 }
 
 /// Configures logging for a cluster replica.
@@ -175,6 +212,15 @@ pub struct ClusterEvent {
     pub process_id: ProcessId,
     pub status: ClusterStatus,
     pub time: DateTime<Utc>,
+}
+
+/// A struct describing a replica that needs to be created,
+/// using `Controller::create_replicas`.
+pub struct CreateReplicaConfig {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub role: ClusterRole,
+    pub config: ReplicaConfig,
 }
 
 impl<T> Controller<T>
@@ -215,13 +261,30 @@ where
     /// always wrong to do anything but abort the process on `Err`.
     pub async fn create_replicas(
         &mut self,
-        replicas: Vec<(ClusterId, ReplicaId, ClusterRole, ReplicaConfig)>,
+        replicas: Vec<CreateReplicaConfig>,
     ) -> Result<(), anyhow::Error> {
+        /// A intermediate struct to hold info about a replica, to avoid
+        /// a large tuple.
+        struct ReplicaInfo {
+            replica_id: ReplicaId,
+            compute_config: ComputeReplicaConfig,
+            storage_location: ClusterReplicaLocation,
+            compute_location: ClusterReplicaLocation,
+            metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
+        }
+
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
         // this stream cannot all have exclusive access.
         let this = &*self;
-        let replicas: Vec<_> = futures::stream::iter(replicas)
-            .map(|(cluster_id, replica_id, role, config)| async move {
+        let mut replica_stream = futures::stream::iter(replicas)
+            .map(|config| async move {
+                let CreateReplicaConfig {
+                    cluster_id,
+                    replica_id,
+                    role,
+                    config,
+                } = config;
+
                 match config.location {
                     // This branch doesn't do any async work, so there is a slight performance
                     // opportunity to serially process it, but it makes the code worse to read.
@@ -246,11 +309,13 @@ where
 
                         Ok::<_, anyhow::Error>((
                             cluster_id,
-                            replica_id,
-                            config.compute,
-                            storage_location,
-                            compute_location,
-                            None,
+                            ReplicaInfo {
+                                replica_id,
+                                compute_config: config.compute,
+                                storage_location,
+                                compute_location,
+                                metrics_task_join_handle: None,
+                            },
                         ))
                     }
                     ReplicaLocation::Managed(m) => {
@@ -270,42 +335,63 @@ where
                         };
                         Ok((
                             cluster_id,
-                            replica_id,
-                            config.compute,
-                            storage_location,
-                            compute_location,
-                            Some(metrics_task_join_handle),
+                            ReplicaInfo {
+                                replica_id,
+                                compute_config: config.compute,
+                                storage_location,
+                                compute_location,
+                                metrics_task_join_handle: Some(metrics_task_join_handle),
+                            },
                         ))
                     }
                 }
             })
             // TODO(guswynn): make this configurable.
-            .buffer_unordered(50)
-            // `try_collect` and `collect` are the only safe ways to process a
-            // `buffer_unordered`. See the docs in `mz_storage_client::controller` for more
-            // details.
-            .try_collect()
-            .await?;
+            .buffer_unordered(50);
 
-        for (
-            cluster_id,
-            replica_id,
-            compute_config,
-            storage_location,
-            compute_location,
-            metrics_task_join_handle,
-        ) in replicas
-        {
-            if let Some(jh) = metrics_task_join_handle {
-                self.metrics_tasks.insert(replica_id, jh);
-            }
-            self.storage.connect_replica(cluster_id, storage_location);
-            self.active_compute().add_replica_to_instance(
+        // _Usually_ `try_collect` and `collect` are the only safe ways to process a
+        // `buffer_unordered`, but if we ensure we don't do
+        // any async work in this loop, we are fine.
+        //
+        // If we do do async work in the loop, we could starve the stream itself of
+        // polls, which can cause errors.
+        // See the docs in `mz_storage_client::controller` for more info.
+        let mut replicas: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        while let Some(res) = replica_stream.next().await {
+            let (cluster_id, replica_info) = res?;
+
+            replicas.entry(cluster_id).or_default().push(replica_info);
+        }
+        drop(replica_stream);
+
+        for (cluster_id, replicas) in replicas {
+            let last_replica = replicas.last().unwrap();
+            // We only connect to the last replica (chosen arbitrarily)
+            // for storage, until we support multi-replica storage objects
+            self.storage.connect_replica(
                 cluster_id,
+                last_replica.replica_id,
+                last_replica.storage_location.clone(),
+            );
+
+            for ReplicaInfo {
                 replica_id,
-                compute_location,
                 compute_config,
-            )?;
+                storage_location: _,
+                compute_location,
+                metrics_task_join_handle,
+            } in replicas
+            {
+                if let Some(jh) = metrics_task_join_handle {
+                    self.metrics_tasks.insert(replica_id, jh);
+                }
+                self.active_compute().add_replica_to_instance(
+                    cluster_id,
+                    replica_id,
+                    compute_location,
+                    compute_config,
+                )?;
+            }
         }
 
         Ok(())
@@ -324,9 +410,8 @@ where
         self.deprovision_replica(cluster_id, replica_id).await?;
         self.metrics_tasks.remove(&replica_id);
 
-        // Storage does not support active-active replication and so does not
-        // have an API for dropping replicas.
         self.active_compute().drop_replica(cluster_id, replica_id)?;
+        self.storage.drop_replica(cluster_id, replica_id);
         Ok(())
     }
 
@@ -393,7 +478,6 @@ where
 
         Box::pin(stream)
     }
-
     /// Provisions a replica with the service orchestrator.
     async fn provision_replica(
         &self,
@@ -408,6 +492,8 @@ where
             ClusterRole::System => "system",
             ClusterRole::User => "user",
         };
+        let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let secrets_args = self.secrets_args.to_flags();
         let service = self
             .orchestrator
             .ensure_service(
@@ -416,7 +502,7 @@ where
                     image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
-                        vec![
+                        let mut args = vec![
                             format!(
                                 "--storage-controller-listen-addr={}",
                                 assigned["storagectl"]
@@ -428,7 +514,18 @@ where
                             format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
-                        ]
+                            format!("--persist-pubsub-url={}", persist_pubsub_url),
+                        ];
+                        if let Some(memory_limit) = location.allocation.memory_limit {
+                            args.push(format!(
+                                "--announce-memory-limit={}",
+                                memory_limit.0.as_u64()
+                            ));
+                        }
+
+                        args.extend(secrets_args.clone());
+
+                        args
                     },
                     ports: vec![
                         ServicePort {
@@ -463,30 +560,40 @@ where
                         ("cluster-id".into(), cluster_id.to_string()),
                         ("type".into(), "cluster".into()),
                         ("replica-role".into(), role_label.into()),
+                        ("workers".into(), location.allocation.workers.to_string()),
+                        ("size".into(), location.size.to_string()),
                     ]),
-                    availability_zone: Some(location.availability_zone),
-                    // This constrains the orchestrator (for those orchestrators that support
-                    // anti-affinity, today just k8s) to never schedule pods for different replicas
-                    // of the same cluster on the same node. Pods from the _same_ replica are fine;
-                    // pods from different clusters are also fine.
-                    //
-                    // The point is that if pods of two replicas are on the same node, that node
-                    // going down would kill both replicas, and so the replication factor of the
-                    // cluster in question is illusory.
-                    anti_affinity: Some(vec![
+                    availability_zones: match location.availability_zones {
+                        ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
+                        ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+                    },
+                    // This provides the orchestrator with some label selectors that
+                    // are used to constraint the scheduling of replicas, based on
+                    // its internal configuration.
+                    other_replicas_selector: vec![
                         LabelSelector {
                             label_name: "cluster-id".to_string(),
                             logic: LabelSelectionLogic::Eq {
                                 value: cluster_id.to_string(),
                             },
                         },
+                        // Select other replicas (but not oneself)
                         LabelSelector {
                             label_name: "replica-id".into(),
                             logic: LabelSelectionLogic::NotEq {
                                 value: replica_id.to_string(),
                             },
                         },
-                    ]),
+                    ],
+                    replicas_selector: vec![LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    }],
+                    disk_limit: location.allocation.disk_limit,
+                    disk: location.disk,
                 },
             )
             .await?;
@@ -496,7 +603,7 @@ where
             let orchestrator = Arc::clone(&self.orchestrator);
             let service_name = service_name.clone();
             async move {
-                const METRICS_INTERVAL: Duration = Duration::from_secs(10);
+                const METRICS_INTERVAL: Duration = Duration::from_secs(60);
 
                 // TODO[btv] -- I tried implementing a `watch_metrics` function,
                 // similar to `watch_services`, but it crashed due to

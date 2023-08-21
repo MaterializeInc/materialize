@@ -14,17 +14,16 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use dec::{Context as DecimalContext, OrderedDecimal};
-use once_cell::sync::Lazy;
-use rand::distributions::{Alphanumeric, DistString};
-use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
-
 use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
 use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
+use once_cell::sync::Lazy;
+use rand::distributions::{Alphanumeric, DistString};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 
 #[derive(Clone, Debug)]
 pub struct Tpch {

@@ -82,16 +82,16 @@
       `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
 
   - signature: 'variance(x: T) -> U'
-    description: Historical alias for `variance_samp`. *(imprecise)*
+    description: Historical alias for `var_samp`. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
-  - signature: 'variance_pop(x: T) -> U'
+  - signature: 'var_pop(x: T) -> U'
     description: Population variance of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
-  - signature: 'variance_samp(x: T) -> U'
+  - signature: 'var_samp(x: T) -> U'
     description: Sample variance of `T`'s values. *(imprecise)*
       <br><br>
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
@@ -101,7 +101,7 @@
   description: List functions take [`list`](../types/list) arguments, and are [polymorphic](../types/list/#polymorphism).
   functions:
     - signature: 'list_agg(x: any) -> L'
-      description: Aggregate values (including nulls) as a list. [(docs)](/sql/functions/list_agg)
+      description: Aggregate values (including nulls) as a list. ([docs](/sql/functions/list_agg))
 
     - signature: 'list_append(l: listany, e: listelementany) -> L'
       description: Appends `e` to `l`.
@@ -231,7 +231,7 @@
   - signature: 'tan(x: double precision) -> double precision'
     description: The tangent of `x`, with `x` in radians.
 
-  - signature: 'asin(x: double precision) -> double precision'
+  - signature: 'atan(x: double precision) -> double precision'
     description: The inverse tangent of `x`, result in radians.
 
   - signature: 'tanh(x: double precision) -> double precision'
@@ -271,6 +271,12 @@
       Character with the given Unicode codepoint.
       Only supports codepoints that can be encoded in UTF-8.
       The NULL (0) character is not allowed.
+
+  - signature: 'concat(f: any, r: any...) -> text'
+    description: Concatenates the text representation of non-NULL arguments`.
+
+  - signature: 'concat_ws(sep: str, f: any, r: any...) -> text'
+    description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`.
 
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
@@ -324,6 +330,14 @@
   - signature: 'octet_length(b: bytea) -> int'
     description: Number of bytes in `b`
 
+  - signature: 'parse_ident(ident: str[, strict_mode: bool]) -> str[]'
+    description: >-
+      Splits a qualified identifier into an array of identifiers, removing any quoting of
+      individual identifiers. Extra characters after the last identifier are considered an error,
+      unless `strict_mode` is `false` or elided, then such extra characters are ignored. (This
+      behavior is useful for parsing names for objects like functions.) Note that this function does
+      not truncate over-length identifiers. (From [PG](https://www.postgresql.org/docs/current/functions-string.html))
+
   - signature: 'position(sub: str IN s: str) -> int'
     description: The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
 
@@ -364,10 +378,21 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
+  - signature: "translate(s: str, from: str, to: str) -> str"
+    description: >-
+      Any character in `s` that matches a character in `from` is replaced by the corresponding character in `to`.
+      If `from` is longer than `to`, occurrences of the extra characters in `from` are removed.
+
   - signature: "trim([BOTH | LEADING | TRAILING]? ['c'? FROM]? 's') -> str"
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
+
+  - signature: 'try_parse_monotonic_iso8601_timestamp(s: str) -> timestamp'
+    description: >-
+      Parses a specific subset of ISO8601 timestamps, returning `NULL` instead of
+      error on failure: `YYYY-MM-DDThh:mm:ss.sssZ`
+    url: pushdown
 
   - signature: 'upper(s: str) -> str'
     description: Convert `s` to uppercase.
@@ -432,6 +457,9 @@
   description: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
     [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
   functions:
+  - signature: 'age(timestamp, timestamp) -> interval'
+    description: 'Subtracts one timestamp from another, producing a "symbolic" result that uses years and months, rather than just days.'
+
   - signature: current_timestamp() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.'
     unmaterializable: true
@@ -508,16 +536,17 @@
 
 - type: UUID
   functions:
-  - signature: mz_environment_id() -> text
-    description: A string containing a `uuid` uniquely identifying this Materialize environment.
-    unmaterializable: true
 
   - signature: 'uuid_generate_v5(namespace: uuid, name: text) -> uuid'
-    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (using SHA-1) in the given namespace using
+    description: 'Generates a [version 5 UUID](https://www.rfc-editor.org/rfc/rfc4122#page-7) (SHA-1) in the given namespace using
       the specified input name.'
 
 - type: JSON
   functions:
+  - signature: jsonb_agg(expression) -> jsonb
+    description: Aggregate values (including nulls) as a jsonb array.
+    url:  /docs/sql/functions/jsonb_agg
+
   - signature: 'jsonb_array_elements(j: jsonb) -> Col<jsonb>'
     description: "`j`'s elements if `j` is an array."
     url: "/docs/sql/types/jsonb/#jsonb_array_elements"
@@ -531,7 +560,7 @@
     url: "/docs/sql/types/jsonb/#jsonb_array_length"
 
   - signature: 'jsonb_build_array(x: ...) -> jsonb'
-    description: The elements of `x` in a `jsonb` array. Elements can be of heterogenous
+    description: Output each element of `x` as a `jsonb` array. Elements can be of heterogenous
       types.
     url: "/docs/sql/types/jsonb/#jsonb_build_array"
 
@@ -547,6 +576,10 @@
   - signature: 'jsonb_each_text(j: jsonb) -> Col<(key: string, value: string)>'
     description: "`j`'s outermost elements if `j` is an object."
     url: "/docs/sql/types/jsonb/#jsonb_each_text"
+
+  - signature: jsonb_object_agg(keys, values) -> jsonb
+    description: Aggregate keys and values (including nulls) as a `jsonb` object.
+    url: "/docs/sql/functions/jsonb_object_agg"
 
   - signature: 'jsonb_object_keys(j: jsonb) -> Col<string>'
     description: "`j`'s outermost keys if `j` is an object."
@@ -594,6 +627,12 @@
   functions:
   - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
     description: 'Concatenates `a1` and `a2`.'
+  - signature: 'array_fill(anyelement, int[], [, int[]]) -> anyarray'
+    description: 'Returns an array initialized with supplied value and dimensions, optionally with lower bounds other than 1. (From [PG](https://www.postgresql.org/docs/current/functions-array.html))'
+  - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible) -> int'
+    description: 'Returns the subscript of `needle` in `haystack`. Returns `null` if not found.'
+  - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible, skip: int) -> int'
+    description: 'Returns the subscript of `needle` in `haystack`, skipping the first `skip` elements. Returns `null` if not found.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: >-
       Concatenates the elements of `array` together separated by `sep`.
@@ -644,7 +683,9 @@
   description: Window functions compute values across sets of rows related to the current query.
   functions:
   - signature: 'dense_rank() -> int'
-    description: Returns the rank of the current row within its partition without gaps, counting from 1.
+    description: >-
+      Returns the rank of the current row within its partition without gaps, counting from 1.
+      Rows that compare equal will have the same rank.
   - signature: 'first_value(value anycompatible) -> anyelement'
     description: >-
       Returns `value` evaluated at the first row of the window frame. The default window frame is
@@ -667,12 +708,22 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+  - signature: 'rank() -> int'
+    description: >-
+      Returns the rank of the current row within its partition with gaps (counting from 1):
+      rows that compare equal will have the same rank, and then the rank is incremented by the number of rows that
+      compared equal.
   - signature: 'row_number() -> int'
-    description: Returns the number of the current row within its partition, counting from 1.
+    description: >-
+      Returns the number of the current row within its partition, counting from 1.
+      Rows that compare equal will be ordered in an unspecified way.
 
 - type: System information
-  description: Functions that return information about the system
+  description: Functions that return information about the system.
   functions:
+  - signature: 'mz_environment_id() -> text'
+    description: Returns a string containing a `uuid` uniquely identifying the Materialize environment.
+    unmaterializable: true
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
     unmaterializable: true
@@ -696,7 +747,7 @@
     unmaterializable: true
   - signature: 'session_user() -> text'
     description: >-
-      Returns the name of the user who executed the containing query.
+      Returns the name of the user who initiated the database connection.
     unmaterializable: true
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
@@ -729,6 +780,11 @@
   - signature: 'pg_backend_pid() -> int'
     description: Returns the internal connection ID.
     unmaterializable: true
+  - signature: 'pg_cancel_backend(connection_id: int) -> bool'
+    description: >-
+      Cancels an in-progress query on the specified connection ID.
+      Returns whether the connection ID existed (not if it cancelled a query).
+    side_effecting: true
   - signature: 'pg_column_size(expr: any) -> int'
     description: Returns the number of bytes used to store any individual data value.
   - signature: 'pg_get_constraintdef(oid: oid[, pretty: bool]) -> text'
@@ -740,14 +796,28 @@
       Reconstructs the creating command for an index. (This is a decompiled
       reconstruction, not the original text of the command.) If column is
       supplied and is not zero, only the definition of that column is reconstructed.
+  - signature: 'pg_get_ruledef(rule_oid: oid[, pretty bool]) -> text'
+    description: >-
+      Reconstructs the creating command for a rule. This function
+      always returns NULL because Materialize does not support rules.
+  - signature: 'pg_get_userbyid(role: oid) -> text'
+    description: >-
+      Returns the role (user) name for the given `oid`. If no role matches the
+      specified OID, the string `unknown (OID=oid)` is returned.
   - signature: 'pg_get_viewdef(view_name: text[, pretty: bool]) -> text'
     description: Returns the underlying SELECT command for the given view.
   - signature: 'pg_get_viewdef(view_oid: oid[, pretty: bool]) -> text'
     description: Returns the underlying SELECT command for the given view.
   - signature: 'pg_get_viewdef(view_oid: oid[, wrap_column: integer]) -> text'
     description: Returns the underlying SELECT command for the given view.
+  - signature: 'pg_has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
+    description: Alias for `has_role` for PostgreSQL compatibility.
+  - signature: 'pg_is_in_recovery() -> bool'
+    description: Returns if the a recovery is still in progress.
   - signature: 'pg_table_is_visible(relation: oid) -> boolean'
     description: Reports whether the relation with the specified OID is visible in the search path.
+  - signature: 'pg_tablespace_location(tablespace: oid) -> text'
+    description: Returns the path in the file system that the provided tablespace is on.
   - signature: 'pg_type_is_visible(relation: oid) -> boolean'
     description: Reports whether the type with the specified OID is visible in the search path.
   - signature: 'pg_function_is_visible(relation: oid) -> boolean'
@@ -759,6 +829,71 @@
   - signature: 'pg_postmaster_start_time() -> timestamptz'
     description: Returns the time when the server started.
     unmaterializable: true
+  - signature: 'pg_relation_size(relation: regclass[, fork: text]) -> bigint'
+    description: >-
+      Disk space used by the specified fork ('main', 'fsm', 'vm', or 'init')
+      of the specified table or index. If no fork is specified, it defaults
+      to 'main'. This function always returns -1 because Materialize does
+      not store tables and indexes on local disk.
+  - signature: 'pg_stat_get_numscans(oid: oid) -> bigint'
+    description: >-
+       Number of sequential scans done when argument is a table,
+       or number of index scans done when argument is an index.
+       This function always returns -1 because Materialize does
+       not collect statistics.
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
     unmaterializable: true
+
+- type: Access privilege inquiry
+  description: |
+    Functions that allow querying object access privileges. All of the following functions have
+    limitations involved in resolving the text names passed in. None of the object names can have
+    any schema or database qualifiers. For example, `has_table_privilege('public.t', 'SELECT')`
+    will not work properly. Additionally, the name lookup does not consider the current search path
+    or active database.
+  functions:
+    - signature: 'has_cluster_privilege([role: text or oid,] cluster: text, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the cluster with the specified cluster name. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_connection_privilege([role: text or oid,] connection: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the connection with the specified connection name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_database_privilege([role: text or oid,] database: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the database with the specified database name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_schema_privilege([role: text or oid,] schema: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the schema with the specified schema name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the `user` has the privilege for `role`. `privilege` can either be `MEMBER`
+        or `USAGE`, however currently this value is ignored. The `PUBLIC` pseudo-role cannot be used
+        for the `user` nor the `role`. If the `user` is omitted then the `current_role` is assumed.
+    - signature: 'has_secret_privilege([role: text or oid,] secret: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the secret with the specified secret name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_system_privilege([role: text or oid,] privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the system privilege.
+        If the role is omitted then the `current_role` is assumed.
+    - signature: 'has_table_privilege([role: text or oid,] relation: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the relation with the specified relation name or OID. If the role is omitted then
+        the `current_role` is assumed.
+    - signature: 'has_type_privilege([role: text or oid,] type: text or oid, privilege: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privilege on
+        the type with the specified type name or OID. If the role is omitted then
+        the `current_role` is assumed.

@@ -165,7 +165,7 @@ contains:test5 is a view, which cannot be exported as a sink
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
 > EXPLAIN SELECT * FROM test5;
-"Explained Query (fast path):  ReadExistingIndex materialize.public.test5_primary_idxUsed Indexes:  - materialize.public.test5_primary_idx"
+"Explained Query (fast path):  ReadExistingIndex materialize.public.test5_primary_idxUsed Indexes:  - materialize.public.test5_primary_idx (*** full scan ***)"
 
 > SELECT * FROM test5
 b  c
@@ -187,7 +187,7 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 > DROP INDEX test5_primary_idx
 
 > EXPLAIN SELECT * FROM test5
-"Explained Query (fast path):  Project (#1, #0)    ReadExistingIndex materialize.public.idx1Used Indexes:  - materialize.public.idx1"
+"Explained Query (fast path):  Project (#1, #0)    ReadExistingIndex materialize.public.idx1Used Indexes:  - materialize.public.idx1 (*** full scan ***)"
 
 > SELECT * from test5
 b  c
@@ -338,9 +338,9 @@ a  b
 name     type    size
 ---------------------
 data              kafka     ${arg.default-storage-size}
-data_progress     subsource <null>
+data_progress     progress  <null>
 mat_data          kafka     ${arg.default-storage-size}
-mat_data_progress subsource <null>
+mat_data_progress progress  <null>
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the
@@ -437,3 +437,30 @@ c    d
 0    1
 -4   0
 -2  -1
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+AccumulableErrorCheck
+AccumulableErrorCheck
+AccumulableErrorCheck
+ArrangeAccumulable
+ArrangeAccumulable
+ArrangeAccumulable
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
+"ArrangeBy[[Column(0), Column(1)]]-errors"
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(1)]]
+ArrangeBy[[Column(1)]]-errors
+ArrangeMonotonic
+ArrangeMonotonic
+ReduceAccumulable
+ReduceAccumulable
+ReduceAccumulable
+ReduceMonotonic
+ReduceMonotonic

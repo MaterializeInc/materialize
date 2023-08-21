@@ -50,9 +50,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+
+use crate::TransformArgs;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
@@ -163,7 +164,7 @@ fn try_push_reduce_through_join(
     group_key: &Vec<MirScalarExpr>,
     aggregates: &Vec<AggregateExpr>,
     monotonic: bool,
-    expected_group_size: Option<usize>,
+    expected_group_size: Option<u64>,
 ) -> Option<MirRelationExpr> {
     // Variable name details:
     // The goal is to turn `old` (`Reduce { Join { <inputs> }}`) into
@@ -453,7 +454,7 @@ impl ReduceBuilder {
     fn construct_reduce(
         self,
         monotonic: bool,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> MirRelationExpr {
         MirRelationExpr::Reduce {
             input: Box::new(self.input),

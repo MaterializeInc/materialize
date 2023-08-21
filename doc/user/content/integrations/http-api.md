@@ -4,7 +4,7 @@ description: "How to use Materialize via HTTP"
 menu:
   main:
     parent: "integrations"
-    weight: 6
+    weight: 25
     name: "HTTP API"
 ---
 
@@ -34,6 +34,8 @@ The API:
     - `DECLARE`
     - `FETCH`
     - `SUBSCRIBE`
+- Supports specifying run-time configuration parameters ([session variables](https://www.postgresql.org/docs/current/sql-set.html))
+  via URL query parameters.
 
 ### Transactional semantics
 
@@ -62,6 +64,26 @@ Accessing the endpoint requires [basic authentication](https://developer.mozilla
 
 * **User ID:** Your email to access Materialize.
 * **Password:** Your app password.
+
+#### Query parameters
+
+You can optionally specify session variables for each request, as a URL-encoded JSON object, with the `options` query parameter:
+
+```
+https://<MZ host address>/api/sql?options=<object>
+```
+
+For example, this is how you could specify the `application_name` session variable with JavaScript:
+
+```javascript
+// Create and encode our parameters object.
+const options = { application_name: "my_app" };
+const encoded = encodeURIComponent(JSON.stringify(options));
+
+// Add the object to our URL as the "options" query parameter.
+const url = new URL(`https://${mzHostAddress}/api/sql`);
+url.searchParams.append("options", encoded);
+```
 
 ### Input format
 
@@ -104,8 +126,8 @@ an array of the following:
 
 Result | JSON value
 ---------------------|------------
-Rows | `{"rows": <2D array of JSON-ified results>, "col_names": <array of text>, "notices": <array of notices>}`
-Error | `{"error": <Error string from execution>, "notices": <array of notices>}`
+Rows | `{"rows": <2D array of JSON-ified results>, "desc": <array of column descriptions>, "notices": <array of notices>}`
+Error | `{"error": <Error object from execution>, "notices": <array of notices>}`
 Ok | `{"ok": <tag>, "notices": <array of notices>}`
 
 Each committed statement returns exactly one of these values; e.g. in the case
@@ -124,6 +146,8 @@ Note that the returned values include the results of statements which were
 ultimately rolled back because of an error in a later part of the transaction.
 You must parse the results to understand which statements ultimately reflect
 the resultant state.
+
+Column descriptions contain the name, oid, data type size and type modifier of a returned column.
 
 #### TypeScript definition
 
@@ -148,19 +172,39 @@ type SqlRequest = Simple | Extended;
 interface Notice {
 	message: string;
 	severity: string;
+	detail?: string;
+	hint?: string;
+}
+
+interface Error {
+	message: string;
+	code: string;
+	detail?: string;
+	hint?: string;
+}
+
+interface Column {
+    name: string;
+    type_oid: number; // u32
+    type_len: number; // i16
+    type_mod: number; // i32
+}
+
+interface Description {
+	columns: Column[];
 }
 
 type SqlResult =
   | {
 	tag: string;
 	rows: any[][];
-	col_names: string[];
+	desc: Description;
 	notices: Notice[];
 } | {
 	ok: string;
 	notices: Notice[];
 } | {
-	error: string;
+	error: Error;
 	notices: Notice[];
 };
 ```
@@ -220,21 +264,38 @@ Response:
 {
   "results": [
     {
-        "tag": "SELECT 4",
-        "rows": [[null],[null],[109],[209]],
-        "col_names": ["cross_add"],
-        "notices": []
+      "desc": {
+        "columns": [
+          {
+            "name": "cross_add",
+            "type_len": 4,
+            "type_mod": -1,
+            "type_oid": 23
+          }
+        ]
+      },
+      "notices": [],
+      "rows": [],
+      "tag": "SELECT 0"
     },
     {
-        "tag": "SELECT 2",
-        "rows":[[100],[200]],
-        "col_names":["a"],
-        "notices": []
+      "desc": {
+        "columns": [
+          {
+            "name": "a",
+            "type_len": 4,
+            "type_mod": -1,
+            "type_oid": 23
+          }
+        ]
+      },
+      "notices": [],
+      "rows": [],
+      "tag": "SELECT 0"
     }
   ]
 }
 ```
-
 
 ## See also
 - [SQL Clients](../sql-clients)

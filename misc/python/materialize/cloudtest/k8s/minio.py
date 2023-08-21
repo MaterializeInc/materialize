@@ -7,11 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.cloudtest.k8s import K8sResource
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class Minio(K8sResource):
+    def __init__(
+        self,
+        namespace: str = DEFAULT_K8S_NAMESPACE,
+    ) -> None:
+        super().__init__(namespace)
+
     def create(self) -> None:
         self.kubectl(
             "delete",
@@ -32,7 +38,7 @@ class Minio(K8sResource):
                 f"https://raw.githubusercontent.com/kubernetes/examples/master/staging/storage/minio/{yaml}.yaml",
             )
 
-        wait(
+        self.wait(
             resource="deployment.apps/minio-deployment",
             condition="condition=Available=True",
         )
@@ -51,9 +57,14 @@ class Minio(K8sResource):
             "-c",
             ";".join(
                 [
-                    "mc config host add myminio http://minio-service.default:9000 minio minio123",
+                    f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123",
                     f"mc rm -r --force myminio/{bucket}",
                     f"mc mb myminio/{bucket}",
                 ]
             ),
+        )
+
+        self.wait(
+            resource="pod/minio",
+            condition="jsonpath={.status.containerStatuses[0].state.terminated.reason}=Completed",
         )

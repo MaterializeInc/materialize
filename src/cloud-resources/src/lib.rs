@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -78,13 +76,15 @@
 //! Abstractions for management of cloud resources that have no equivalent when running
 //! locally, like AWS PrivateLink endpoints.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use mz_repr::GlobalId;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::GlobalId;
+use crate::crd::vpc_endpoint::v1::VpcEndpointStatus;
 
 pub mod crd;
 
@@ -135,7 +135,7 @@ pub struct VpcEndpointConfig {
 }
 
 #[async_trait]
-pub trait CloudResourceController: Debug + Send + Sync {
+pub trait CloudResourceController: CloudResourceReader {
     /// Creates or updates the specified `VpcEndpoint` Kubernetes object.
     async fn ensure_vpc_endpoint(
         &self,
@@ -147,7 +147,18 @@ pub trait CloudResourceController: Debug + Send + Sync {
     async fn delete_vpc_endpoint(&self, id: GlobalId) -> Result<(), anyhow::Error>;
 
     /// Lists existing `VpcEndpoint` Kubernetes objects.
-    async fn list_vpc_endpoints(&self) -> Result<BTreeSet<GlobalId>, anyhow::Error>;
+    async fn list_vpc_endpoints(
+        &self,
+    ) -> Result<BTreeMap<GlobalId, VpcEndpointStatus>, anyhow::Error>;
+
+    /// Returns a reader for the resources managed by this controller.
+    fn reader(&self) -> Arc<dyn CloudResourceReader>;
+}
+
+#[async_trait]
+pub trait CloudResourceReader: Debug + Send + Sync {
+    /// Reads the specified `VpcEndpoint` Kubernetes object.
+    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error>;
 }
 
 /// Returns the name to use for the VPC endpoint with the given ID.

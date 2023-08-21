@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -77,24 +75,41 @@
 
 //! PostgreSQL utility library.
 
-use std::time::Duration;
-
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use tokio::net::TcpStream as TokioTcpStream;
-use tokio_postgres::config::{Host, ReplicationMode, SslMode};
-use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::Client;
+use tokio_postgres::config::SslMode;
+use tracing::warn;
 
-use mz_ore::task;
-use mz_repr::GlobalId;
-use mz_ssh_util::tunnel::SshTunnelConfig;
+macro_rules! bail_generic {
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err(PostgresError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
+    };
+    ($err:expr $(,)?) => {
+        return Err(PostgresError::Generic(anyhow::anyhow!($err)))
+    };
+}
 
-use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
-
+#[cfg(feature = "privileges")]
+pub mod privileges;
+#[cfg(feature = "privileges")]
+pub use privileges::check_table_privileges;
+#[cfg(feature = "schemas")]
 pub mod desc;
+#[cfg(feature = "schemas")]
+pub mod schemas;
+#[cfg(feature = "schemas")]
+pub use schemas::{get_schemas, publication_info};
+#[cfg(feature = "tunnel")]
+pub mod tunnel;
+#[cfg(feature = "tunnel")]
+pub use tunnel::{
+    drop_replication_slots, Config, ReplicationTimeouts, TunnelConfig,
+    DEFAULT_REPLICATION_CONNECT_TIMEOUT, DEFAULT_REPLICATION_KEEPALIVE_IDLE,
+    DEFAULT_REPLICATION_KEEPALIVE_INTERVAL, DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
+    DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
+};
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +118,7 @@ pub enum PostgresError {
     #[error(transparent)]
     Generic(#[from] anyhow::Error),
     /// Error using ssh.
+    #[cfg(feature = "tunnel")]
     #[error(transparent)]
     Ssh(#[from] openssh::Error),
     /// Error doing io to setup an ssh connection.
@@ -114,15 +130,6 @@ pub enum PostgresError {
     /// Error setting up postgres ssl.
     #[error(transparent)]
     PostgresSsl(#[from] openssl::error::ErrorStack),
-}
-
-macro_rules! bail_generic {
-    ($fmt:expr, $($arg:tt)*) => {
-        return Err(PostgresError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
-    };
-    ($err:expr $(,)?) => {
-        return Err(PostgresError::Generic(anyhow::anyhow!($err)))
-    };
 }
 
 /// Creates a TLS connector for the given [`Config`].
@@ -184,239 +191,4 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
     }
 
     Ok(tls_connector)
-}
-
-/// Fetches table schema information from an upstream Postgres source for all
-/// tables that are part of a publication, given a connection string and the
-/// publication name.
-///
-/// # Errors
-///
-/// - Invalid connection string, user information, or user permissions.
-/// - Upstream publication does not exist or contains invalid values.
-pub async fn publication_info(
-    config: &Config,
-    publication: &str,
-) -> Result<Vec<PostgresTableDesc>, PostgresError> {
-    let client = config.connect("postgres_publication_info").await?;
-
-    client
-        .query(
-            "SELECT oid FROM pg_publication WHERE pubname = $1",
-            &[&publication],
-        )
-        .await?
-        .get(0)
-        .ok_or_else(|| anyhow::anyhow!("publication {:?} does not exist", publication))?;
-
-    let tables = client
-        .query(
-            "SELECT
-                c.oid, p.schemaname, p.tablename
-            FROM
-                pg_catalog.pg_class AS c
-                JOIN pg_namespace AS n ON c.relnamespace = n.oid
-                JOIN pg_publication_tables AS p ON
-                        c.relname = p.tablename AND n.nspname = p.schemaname
-            WHERE
-                p.pubname = $1",
-            &[&publication],
-        )
-        .await?;
-
-    let mut table_infos = vec![];
-    for row in tables {
-        let oid = row.get("oid");
-
-        let columns = client
-            .query(
-                "SELECT
-                        a.attname AS name,
-                        a.atttypid AS typoid,
-                        a.atttypmod AS typmod,
-                        a.attnotnull AS not_null,
-                        b.oid IS NOT NULL AS primary_key
-                    FROM pg_catalog.pg_attribute a
-                    LEFT JOIN pg_catalog.pg_constraint b
-                        ON a.attrelid = b.conrelid
-                        AND b.contype = 'p'
-                        AND a.attnum = ANY (b.conkey)
-                    WHERE a.attnum > 0::pg_catalog.int2
-                        AND NOT a.attisdropped
-                        AND a.attrelid = $1
-                    ORDER BY a.attnum",
-                &[&oid],
-            )
-            .await?
-            .into_iter()
-            .map(|row| {
-                let name: String = row.get("name");
-                let type_oid = row.get("typoid");
-                let type_mod: i32 = row.get("typmod");
-                let not_null: bool = row.get("not_null");
-                let primary_key = row.get("primary_key");
-                Ok(PostgresColumnDesc {
-                    name,
-                    type_oid,
-                    type_mod,
-                    nullable: !not_null,
-                    primary_key,
-                })
-            })
-            .collect::<Result<Vec<_>, PostgresError>>()?;
-
-        table_infos.push(PostgresTableDesc {
-            oid,
-            namespace: row.get("schemaname"),
-            name: row.get("tablename"),
-            columns,
-        });
-    }
-
-    Ok(table_infos)
-}
-
-pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), PostgresError> {
-    let client = config.connect("postgres_drop_replication_slots").await?;
-    let replication_client = config.connect_replication().await?;
-    for slot in slots {
-        let rows = client
-            .query(
-                "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
-                &[&slot],
-            )
-            .await?;
-        match rows.len() {
-            0 => {
-                // DROP_REPLICATION_SLOT will error if the slot does not exist
-                // todo@jldlaughlin: don't let invalid Postgres sources ship!
-                continue;
-            }
-            1 => {
-                replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
-                    .await?;
-            }
-            _ => {
-                return Err(PostgresError::Generic(anyhow::anyhow!(
-                    "multiple pg_replication_slots entries for slot {}",
-                    &slot
-                )))
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Configures an optional tunnel for use when connecting to a PostgreSQL
-/// database.
-#[derive(Debug, PartialEq, Clone)]
-pub enum TunnelConfig {
-    /// Establish a direct TCP connection to the database host.
-    Direct,
-    /// Establish a TCP connection to the database via an SSH tunnel.
-    /// This means first establishing an SSH connection to a bastion host,
-    /// and then opening a separate connection from that host to the database.
-    /// This is commonly referred by vendors as a "direct SSH tunnel", in
-    /// opposition to "reverse SSH tunnel", which is currently unsupported.
-    Ssh(SshTunnelConfig),
-    /// Establish a TCP connection to the database via an AWS PrivateLink
-    /// service.
-    AwsPrivatelink {
-        /// The ID of the AWS PrivateLink service.
-        connection_id: GlobalId,
-    },
-}
-
-/// Configuration for PostgreSQL connections.
-///
-/// This wraps [`tokio_postgres::Config`] to allow the configuration of a
-/// tunnel via a [`TunnelConfig`].
-#[derive(Debug, PartialEq, Clone)]
-pub struct Config {
-    inner: tokio_postgres::Config,
-    tunnel: TunnelConfig,
-}
-
-impl Config {
-    pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, PostgresError> {
-        let config = Self { inner, tunnel };
-
-        // Early validate that the configuration contains only a single TCP
-        // server.
-        config.address()?;
-
-        Ok(config)
-    }
-
-    /// Connects to the configured PostgreSQL database.
-    pub async fn connect(&self, task_name: &str) -> Result<Client, PostgresError> {
-        self.connect_internal(task_name, |_| ()).await
-    }
-
-    /// Starts a replication connection to the configured PostgreSQL database.
-    pub async fn connect_replication(&self) -> Result<Client, PostgresError> {
-        self.connect_internal("postgres_connect_replication", |config| {
-            config
-                .replication_mode(ReplicationMode::Logical)
-                .connect_timeout(Duration::from_secs(30))
-                .keepalives_idle(Duration::from_secs(10 * 60));
-        })
-        .await
-    }
-
-    fn address(&self) -> Result<(&str, u16), PostgresError> {
-        match (self.inner.get_hosts(), self.inner.get_ports()) {
-            ([Host::Tcp(host)], [port]) => Ok((host, *port)),
-            _ => bail_generic!("only TCP connections to a single PostgreSQL server are supported"),
-        }
-    }
-
-    async fn connect_internal<F>(
-        &self,
-        task_name: &str,
-        configure: F,
-    ) -> Result<Client, PostgresError>
-    where
-        F: FnOnce(&mut tokio_postgres::Config),
-    {
-        let mut postgres_config = self.inner.clone();
-        configure(&mut postgres_config);
-        let mut tls = make_tls(&postgres_config)?;
-        match &self.tunnel {
-            TunnelConfig::Direct => {
-                let (client, connection) = postgres_config.connect(tls).await?;
-                task::spawn(|| task_name, connection);
-                Ok(client)
-            }
-            TunnelConfig::Ssh(tunnel) => {
-                let (host, port) = self.address()?;
-                let (session, local_port) = tunnel.connect(host, port).await?;
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
-                let tcp_stream = TokioTcpStream::connect(("localhost", local_port)).await?;
-                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
-                task::spawn(|| task_name, async {
-                    _ = connection
-                        .await
-                        .err()
-                        .map(|e| tracing::error!("Postgres connection failed: {e}"));
-                    _ = session
-                        .close()
-                        .await
-                        .err()
-                        .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
-                });
-                Ok(client)
-            }
-            TunnelConfig::AwsPrivatelink { connection_id } => {
-                let (host, port) = self.address()?;
-                let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
-                let tcp_stream = TokioTcpStream::connect((privatelink_host, port)).await?;
-                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
-                task::spawn(|| task_name, connection);
-                Ok(client)
-            }
-        }
-    }
 }

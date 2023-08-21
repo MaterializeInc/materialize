@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -87,7 +85,10 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_pgrepr::{Numeric, Record};
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -96,15 +97,11 @@ use postgres_array::{Array, Dimension};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use mz_ore::collections::CollectionExt;
-use mz_ore::task;
-use mz_pgrepr::{Numeric, Record};
-
 use crate::util::PostgresErrorExt;
 
 pub mod util;
 
-#[test]
+#[mz_ore::test]
 #[ignore]
 fn test_bind_params() {
     let config = util::Config::default().unsafe_mode();
@@ -173,7 +170,7 @@ fn test_bind_params() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_partial_read() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -199,7 +196,7 @@ fn test_partial_read() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_read_many_rows() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -213,7 +210,7 @@ fn test_read_many_rows() {
     assert_eq!(rows.len(), 3, "row len should be all values");
 }
 
-#[test]
+#[mz_ore::test]
 fn test_conn_startup() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -361,7 +358,7 @@ fn test_conn_startup() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_conn_user() {
     let server = util::start_server(util::Config::default()).unwrap();
 
@@ -395,7 +392,7 @@ fn test_conn_user() {
     assert_eq!(row.get::<_, String>(0), "rj");
 }
 
-#[test]
+#[mz_ore::test]
 fn test_simple_query_no_hang() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -404,7 +401,7 @@ fn test_simple_query_no_hang() {
     assert!(client.simple_query("SELECT 1").is_ok());
 }
 
-#[test]
+#[mz_ore::test]
 fn test_copy() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -453,7 +450,7 @@ fn test_copy() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_arrays() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -500,7 +497,7 @@ fn test_arrays() {
     }
 }
 
-#[test]
+#[mz_ore::test]
 fn test_record_types() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -548,10 +545,11 @@ fn test_record_types() {
     assert_eq!(rows.len(), 2);
 }
 
-fn pg_test_inner(dir: PathBuf) {
+fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
         let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+        server.enable_feature_flags(flags);
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {
@@ -560,21 +558,28 @@ fn pg_test_inner(dir: PathBuf) {
             _ => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
-        let timeout = Duration::from_secs(60);
+        let timeout = Duration::from_secs(120);
 
         mz_pgtest::run_test(tf, addr, user.to_string(), timeout);
     });
 }
 
-#[test]
+#[mz_ore::test]
 fn test_pgtest() {
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir);
+    pg_test_inner(dir, &[]);
 }
 
-#[test]
+#[mz_ore::test]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() {
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
-    pg_test_inner(dir);
+    pg_test_inner(
+        dir,
+        &[
+            "enable_raise_statement",
+            "enable_unmanaged_cluster_replicas",
+            "enable_dangerous_functions",
+        ],
+    );
 }

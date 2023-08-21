@@ -168,7 +168,7 @@ class TestDocsGenerateMaterialize(BaseDocsGenerate):
     def expected_catalog(self, project, profile_user):
         return base_expected_catalog(
             project,
-            role=None,
+            role="materialize",
             id_type="integer",
             text_type="text",
             time_type="timestamp",
@@ -183,7 +183,7 @@ class TestDocsGenReferencesMaterialize(BaseDocsGenReferences):
     def expected_catalog(self, project, profile_user):
         return expected_references_catalog(
             project,
-            role=None,
+            role="materialize",
             id_type="integer",
             text_type="text",
             time_type="timestamp",

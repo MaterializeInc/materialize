@@ -11,13 +11,12 @@ use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
+use mz_expr::{EvalError, PartitionId};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, Row};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
-
-use mz_expr::EvalError;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, Row};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -29,23 +28,23 @@ include!(concat!(
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
-    pub raw: Option<Vec<u8>>,
+    pub raw: Vec<u8>,
 }
 
 impl RustType<ProtoDecodeError> for DecodeError {
     fn into_proto(&self) -> ProtoDecodeError {
         ProtoDecodeError {
             kind: Some(RustType::into_proto(&self.kind)),
-            raw: self.raw.clone(),
+            raw: Some(self.raw.clone()),
         }
     }
 
     fn from_proto(proto: ProtoDecodeError) -> Result<Self, TryFromProtoError> {
-        let ProtoDecodeError { kind, raw } = proto;
-        let kind = match kind {
+        let kind = match proto.kind {
             Some(kind) => RustType::from_proto(kind)?,
             None => return Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         };
+        let raw = proto.raw.into_rust_if_some("raw")?;
         Ok(Self { kind, raw })
     }
 }
@@ -68,16 +67,14 @@ impl DecodeError {
 
 impl Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.raw {
-            None => write!(f, "{}", self.kind),
-            Some(raw) => write!(f, "{} (original bytes: {:x?})", self.kind, raw),
-        }
+        write!(f, "{} (original bytes: {:x?})", self.kind, self.raw)
     }
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeErrorKind {
     Text(String),
+    Bytes(String),
 }
 
 impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
@@ -86,6 +83,7 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         ProtoDecodeErrorKind {
             kind: Some(match self {
                 DecodeErrorKind::Text(v) => Text(v.clone()),
+                DecodeErrorKind::Bytes(v) => Bytes(v.clone()),
             }),
         }
     }
@@ -94,6 +92,7 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         use proto_decode_error_kind::Kind::*;
         match proto.kind {
             Some(Text(v)) => Ok(DecodeErrorKind::Text(v)),
+            Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v)),
             None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         }
     }
@@ -103,6 +102,7 @@ impl Display for DecodeErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DecodeErrorKind::Text(e) => write!(f, "Text: {}", e),
+            DecodeErrorKind::Bytes(e) => write!(f, "Bytes: {}", e),
         }
     }
 }
@@ -203,6 +203,50 @@ impl Display for UpsertValueError {
     }
 }
 
+/// A source contained a record with a NULL key, which we don't support.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct UpsertNullKeyError {
+    partition_id: Option<PartitionId>,
+}
+
+impl UpsertNullKeyError {
+    pub fn with_partition_id(partition_id: PartitionId) -> Self {
+        Self {
+            partition_id: Some(partition_id),
+        }
+    }
+}
+
+impl RustType<ProtoUpsertNullKeyError> for UpsertNullKeyError {
+    fn into_proto(&self) -> ProtoUpsertNullKeyError {
+        ProtoUpsertNullKeyError {
+            partition_id: self.partition_id.map(|id| id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoUpsertNullKeyError) -> Result<Self, TryFromProtoError> {
+        let partition_id = RustType::from_proto(proto.partition_id)?;
+        Ok(Self { partition_id })
+    }
+}
+
+impl Display for UpsertNullKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "record with NULL key in UPSERT source")?;
+
+        if let Some(partition_id) = self.partition_id {
+            write!(f, " in partition {}", partition_id)?;
+        }
+
+        write!(
+            f,
+            "; to retract this error, produce a record upstream with a NULL key and NULL value",
+        )?;
+
+        Ok(())
+    }
+}
+
 /// An error that can be retracted by a future message using upsert logic.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UpsertError {
@@ -217,6 +261,7 @@ pub enum UpsertError {
     KeyDecode(DecodeError),
     /// Wrapper around an error related to the value.
     Value(UpsertValueError),
+    NullKey(UpsertNullKeyError),
 }
 
 impl RustType<ProtoUpsertError> for UpsertError {
@@ -226,6 +271,7 @@ impl RustType<ProtoUpsertError> for UpsertError {
             kind: Some(match self {
                 UpsertError::KeyDecode(err) => Kind::KeyDecode(err.into_proto()),
                 UpsertError::Value(err) => Kind::Value(Box::new(err.into_proto())),
+                UpsertError::NullKey(err) => Kind::NullKey(err.into_proto()),
             }),
         }
     }
@@ -241,6 +287,10 @@ impl RustType<ProtoUpsertError> for UpsertError {
                 let rust = RustType::from_proto(*proto)?;
                 Ok(Self::Value(rust))
             }
+            Some(Kind::NullKey(proto)) => {
+                let rust = RustType::from_proto(proto)?;
+                Ok(Self::NullKey(rust))
+            }
             None => Err(TryFromProtoError::missing_field("ProtoUpsertError::kind")),
         }
     }
@@ -251,6 +301,7 @@ impl Display for UpsertError {
         match self {
             UpsertError::KeyDecode(err) => write!(f, "Key decode: {err}"),
             UpsertError::Value(err) => write!(f, "Value error: {err}"),
+            UpsertError::NullKey(err) => write!(f, "Null key: {err}"),
         }
     }
 }
@@ -360,6 +411,26 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+mod columnation {
+    use crate::types::errors::DataflowError;
+    use timely::container::columnation::{CloneRegion, Columnation};
+
+    impl Columnation for DataflowError {
+        // Discussion of `Region` for `DataflowError`: Although `DataflowError` contains pointers,
+        // we treat it as a type that doesn't and can simply be cloned. The reason for this is
+        // threefold:
+        // 1. Cloning the type does not violate correctness. It comes with the disadvantage that its
+        //    `heap_size` will not be accurate.
+        // 2. It is hard to implement a region allocator for `DataflowError`, because it contains
+        //    many pointers across various enum types. Some are boxed, and it contains a box to
+        //    itself, meaning we have to pass the outer region inwards to avoid creating recursive
+        //    regions.
+        // 3. We accept the performance implication of not storing the errors in a region allocator,
+        //    which should be similar to storing errors in vectors on the heap.
+        type InnerRegion = CloneRegion<DataflowError>;
+    }
+}
+
 impl RustType<ProtoDataflowError> for DataflowError {
     fn into_proto(&self) -> ProtoDataflowError {
         use proto_dataflow_error::Kind::*;
@@ -391,7 +462,15 @@ impl Display for DataflowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DataflowError::DecodeError(e) => write!(f, "Decode error: {}", e),
-            DataflowError::EvalError(e) => write!(f, "Evaluation error: {}", e),
+            DataflowError::EvalError(e) => write!(
+                f,
+                "{}{}",
+                match **e {
+                    EvalError::IfNullError(_) => "",
+                    _ => "Evaluation error: ",
+                },
+                e
+            ),
             DataflowError::SourceError(e) => write!(f, "Source error: {}", e),
             DataflowError::EnvelopeError(e) => write!(f, "Envelope error: {}", e),
         }
@@ -428,11 +507,11 @@ mod tests {
 
     use super::DecodeError;
 
-    #[test]
+    #[mz_ore::test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
             kind: DecodeErrorKind::Text("ciao".to_string()),
-            raw: Some(b"oaic".to_vec()),
+            raw: b"oaic".to_vec(),
         };
         let mut encoded = Vec::new();
         original.encode(&mut encoded);

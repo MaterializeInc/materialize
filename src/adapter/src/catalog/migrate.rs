@@ -7,41 +7,63 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use semver::Version;
 use std::collections::BTreeMap;
+
+use futures::future::BoxFuture;
+use mz_ore::collections::CollectionExt;
+use mz_ore::now::EpochMillis;
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::Raw;
+use mz_sql_parser::ast::visit_mut::VisitMut;
+use mz_sql_parser::ast::{Function, Ident};
+use mz_storage_client::types::connections::ConnectionContext;
+use semver::Version;
 use tracing::info;
 
-use mz_ore::collections::CollectionExt;
-use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Raw, Statement, UnresolvedObjectName};
-use mz_sql::plan::{Params, PlanContext};
+use crate::catalog::storage::Transaction;
+use crate::catalog::{storage, Catalog, ConnCatalog, SerializedCatalogItem};
 
-use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
+/// A flag to indicate whether or not we've already run the migration to rename existing uses of
+/// the AVG(...) function. Runs in versions <=0.66.
+const RENAME_AVG_FUNCTION_MIGRATION_FLAG: &str = "rename_avg_function_migration_flag";
 
-use super::storage::Transaction;
-
-fn rewrite_items<F>(tx: &mut Transaction, mut f: F) -> Result<(), anyhow::Error>
+async fn rewrite_items<F>(
+    tx: &mut Transaction<'_>,
+    cat: Option<&ConnCatalog<'_>>,
+    mut f: F,
+) -> Result<(), anyhow::Error>
 where
-    F: FnMut(&mut Transaction, &mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
+    F: for<'a> FnMut(
+        &'a mut Transaction<'_>,
+        &'a Option<&ConnCatalog<'_>>,
+        &'a mut mz_sql::ast::Statement<Raw>,
+    ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
-    for (id, name, SerializedCatalogItem::V1 { create_sql }) in items {
-        let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+    for mut item in items {
+        let create_sql = match &item.definition {
+            SerializedCatalogItem::V1 { create_sql } => create_sql,
+        };
+        let mut stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
 
-        f(tx, &mut stmt)?;
+        f(tx, &cat, &mut stmt).await?;
 
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
         };
+        item.definition = serialized_item;
 
-        updated_items.insert(id, (name.item, serialized_item));
+        updated_items.insert(item.id, item);
     }
     tx.update_items(updated_items)?;
     Ok(())
 }
 
-pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
+pub(crate) async fn migrate(
+    catalog: &mut Catalog,
+    _connection_context: Option<ConnectionContext>,
+) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage().await;
     let catalog_version = storage.get_catalog_content_version().await?;
     let catalog_version = match catalog_version {
@@ -51,13 +73,25 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
 
     info!("migrating from catalog version {:?}", catalog_version);
 
+    let _now = (catalog.config().now)();
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&mut tx, |_tx, stmt| {
-        subsource_type_option_rewrite(stmt);
-        csr_url_path_rewrite(stmt);
-        Ok(())
-    })?;
+    // rewrite_items(&mut tx, None, |_tx, _cat, _stmt| Box::pin(async { Ok(()) })).await?;
+
+    // Only run this migration if we haven't run it already.
+    let avg_function_has_run =
+        tx.check_migration_has_run(RENAME_AVG_FUNCTION_MIGRATION_FLAG.to_string())?;
+    info!("{RENAME_AVG_FUNCTION_MIGRATION_FLAG}, already_run: {avg_function_has_run}");
+
+    if !avg_function_has_run {
+        rewrite_items(&mut tx, None, |_tx, _cat, stmt| {
+            Box::pin(async { ast_rename_avg_function_0_66_0(stmt) })
+        })
+        .await?;
+        // Important: Mark the migration as being completed in the same transaction that we used
+        // to do the migration.
+        tx.mark_migration_has_run(RENAME_AVG_FUNCTION_MIGRATION_FLAG.to_string())?;
+    }
 
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
@@ -66,11 +100,14 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
     let conn_cat = cat.for_system_session();
-    rewrite_items(&mut tx, |tx, item| {
-        normalize_create_secrets(&conn_cat, item)?;
-        progress_collection_rewrite(&conn_cat, tx, item)?;
-        Ok(())
-    })?;
+    rewrite_items(&mut tx, Some(&conn_cat), |_tx, cat, _item| {
+        Box::pin(async move {
+            let _conn_cat = cat.expect("must provide access to conn catalog");
+            Ok(())
+        })
+    })
+    .await?;
+
     tx.commit().await?;
     info!(
         "migration from catalog version {:?} complete",
@@ -100,191 +137,62 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
 
-// Mark all current subsources as "references" subsources in anticipation of
-// adding "progress" subsources.
-// TODO: delete in version v0.45 (released in v0.43 + 1 additional release)
-fn subsource_type_option_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
-    use mz_sql::ast::CreateSubsourceOptionName;
-
-    if let Statement::CreateSubsource(mz_sql::ast::CreateSubsourceStatement {
-        with_options, ..
-    }) = stmt
-    {
-        if !with_options.iter().any(|option| {
-            matches!(
-                option.name,
-                CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::References
-            )
-        }) {
-            with_options.push(mz_sql::ast::CreateSubsourceOption {
-                name: CreateSubsourceOptionName::References,
-                value: Some(mz_sql::ast::WithOptionValue::Value(
-                    mz_sql::ast::Value::Boolean(true),
-                )),
-            });
-        }
-    }
-}
-
-// Remove any present CSR URL paths because we now error on them. We clear them
-// during planning, so this doesn't affect planning.
-// TODO: Released in version 0.43; delete at any later release.
-fn csr_url_path_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
-    use mz_sql::ast::{CreateConnection, CsrConnectionOptionName, Value, WithOptionValue};
-
-    if let Statement::CreateConnection(mz_sql::ast::CreateConnectionStatement {
-        connection: CreateConnection::Csr { with_options },
-        ..
-    }) = stmt
-    {
-        for opt in with_options.iter_mut() {
-            if opt.name != CsrConnectionOptionName::Url {
-                continue;
+fn ast_rename_avg_function_0_66_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    struct AvgFunctionRenamer;
+    impl<'ast> VisitMut<'ast, Raw> for AvgFunctionRenamer {
+        fn visit_function_mut(&mut self, node: &'ast mut Function<Raw>) {
+            let components = &mut node.name.name_mut().0;
+            let len = components.len();
+            if len < 2 {
+                return;
             }
-            let Some(WithOptionValue::Value(Value::String(value))) = opt.value.as_mut() else {
-                continue;
+            let Some(last_two) = components.get_mut(len - 2..) else {
+                return;
             };
-            if let Ok(mut url) = reqwest::Url::parse(value) {
-                url.set_path("");
-                *value = url.to_string();
+
+            // Rewrite the the function to be "avg_internal_v1".
+            if last_two[0].as_str() == "pg_catalog" && last_two[1].as_str() == "avg" {
+                last_two[0] = Ident::new("mz_catalog");
+                last_two[1] = Ident::new("avg_internal_v1");
+            }
+
+            // No one should have an object with this function as a dependency, but we check for it
+            // here just to be safe.
+            if last_two[0].as_str() == "mz_internal" && last_two[1].as_str() == "mz_avg_promotion" {
+                last_two[1] = Ident::new("mz_avg_promotion_internal_v1");
+            }
+
+            // Continue to recurse.
+            self.visit_function_args_mut(&mut node.args);
+            if let Some(v) = &mut node.filter {
+                self.visit_expr_mut(&mut *v);
+            }
+            if let Some(v) = &mut node.over {
+                self.visit_window_spec_mut(&mut *v);
             }
         }
     }
+
+    AvgFunctionRenamer.visit_statement_mut(stmt);
+    Ok(())
 }
 
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
 
-/// Add normalization to all CREATE SECRET statements.
-// TODO: Released in version 0.44; delete at any later release.
-fn normalize_create_secrets(
-    cat: &ConnCatalog,
-    stmt: &mut mz_sql::ast::Statement<Raw>,
+fn _add_to_audit_log(
+    tx: &mut Transaction,
+    event_type: mz_audit_log::EventType,
+    object_type: mz_audit_log::ObjectType,
+    details: mz_audit_log::EventDetails,
+    occurred_at: EpochMillis,
 ) -> Result<(), anyhow::Error> {
-    if matches!(stmt, mz_sql::ast::Statement::CreateSecret(..)) {
-        // Resolve Statement<Raw> to Statement<Aug>.
-        let (resolved_stmt, _depends_on) = mz_sql::names::resolve(cat, stmt.clone())?;
-        // Ok to use `PlanContext::zero()` because wall time is never used.
-        let plan = mz_sql::plan::plan(
-            Some(&PlanContext::zero()),
-            cat,
-            resolved_stmt,
-            &Params::empty(),
-        )?;
-        let create_secret_plan = match plan {
-            mz_sql::plan::Plan::CreateSecret(plan) => plan,
-            _ => unreachable!("create secret statement can only plan into create secret plan"),
-        };
-        *stmt = mz_sql::parse::parse(&create_secret_plan.secret.create_sql)?.into_element();
-    }
-    Ok(())
-}
-
-// Rewrites all subsource references to be qualified by their IDs, which is the
-// mechanism by which `DeferredObjectName` differentiates between user input and
-// created objects.
-// MIGRATION: v0.44 This can be deleted v0.46
-fn progress_collection_rewrite(
-    cat: &ConnCatalog<'_>,
-    tx: &mut Transaction<'_>,
-    stmt: &mut mz_sql::ast::Statement<Raw>,
-) -> Result<(), anyhow::Error> {
-    use mz_sql::ast::{CreateSourceConnection, CreateSubsourceOptionName};
-
-    if let Statement::CreateSource(mz_sql::ast::CreateSourceStatement {
-        name,
-        connection,
-        progress_subsource,
-        ..
-    }) = stmt
-    {
-        if progress_subsource.is_some() {
-            return Ok(());
-        }
-
-        let progress_desc = match connection {
-            CreateSourceConnection::Kafka(_) => {
-                &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC
-            }
-            CreateSourceConnection::Kinesis { .. } => {
-                &mz_storage_client::types::sources::KINESIS_PROGRESS_DESC
-            }
-            CreateSourceConnection::S3 { .. } => {
-                &mz_storage_client::types::sources::S3_PROGRESS_DESC
-            }
-            CreateSourceConnection::Postgres { .. } => {
-                &mz_storage_client::types::sources::PG_PROGRESS_DESC
-            }
-            CreateSourceConnection::LoadGenerator { .. } => {
-                &mz_storage_client::types::sources::LOAD_GEN_PROGRESS_DESC
-            }
-            CreateSourceConnection::TestScript { .. } => {
-                &mz_storage_client::types::sources::TEST_SCRIPT_PROGRESS_DESC
-            }
-        };
-
-        // Generate a new GlobalId for the subsource.
-        let progress_subsource_id =
-            mz_repr::GlobalId::User(tx.get_and_increment_id("user".to_string())?);
-
-        // Generate a StatementContext, which is simplest for handling names.
-        let scx = mz_sql::plan::StatementContext::new(None, cat);
-
-        // Find an available name.
-        let (item, prefix) = name.0.split_last().expect("must have at least one element");
-        let mut suggested_name = prefix.to_vec();
-        suggested_name.push(format!("{}_progress", item.as_str()).into());
-
-        let partial =
-            mz_sql::normalize::unresolved_object_name(UnresolvedObjectName(suggested_name))?;
-        let qualified = scx.allocate_qualified_name(partial)?;
-        let found_name = scx.catalog.find_available_name(qualified);
-        let full_name = scx.catalog.resolve_full_name(&found_name);
-
-        // Grab the item name, which is necessary to add this item to the
-        // current transaction.
-        let item_name = full_name.item.clone();
-
-        info!(
-            "adding progress subsource to {:?}; named {:?}, with id {:?}",
-            name, full_name, progress_subsource_id,
-        );
-
-        // Generate an unresolved version of the name, which will
-        // ultimately go in the parent `CREATE SOURCE` statement.
-        let name = UnresolvedObjectName::from(full_name);
-
-        // Generate the progress subsource schema.
-        let (columns, table_constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
-
-        // Create the subsource statement
-        let subsource = mz_sql::ast::CreateSubsourceStatement {
-            name: name.clone(),
-            columns,
-            constraints: table_constraints,
-            if_not_exists: false,
-            with_options: vec![mz_sql::ast::CreateSubsourceOption {
-                name: CreateSubsourceOptionName::Progress,
-                value: Some(mz_sql::ast::WithOptionValue::Value(
-                    mz_sql::ast::Value::Boolean(true),
-                )),
-            }],
-        };
-
-        tx.insert_item(
-            progress_subsource_id,
-            found_name.qualifiers.schema_spec.into(),
-            &item_name,
-            SerializedCatalogItem::V1 {
-                create_sql: subsource.to_ast_string_stable(),
-            },
-        )?;
-
-        // Place the newly created subsource into the `CREATE SOURCE` statement.
-        *progress_subsource = Some(mz_sql::ast::DeferredObjectName::Named(
-            mz_sql::ast::RawObjectName::Id(progress_subsource_id.to_string(), name),
-        ));
-    }
+    let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+    let event =
+        mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
+    tx.insert_audit_log_event(event);
     Ok(())
 }

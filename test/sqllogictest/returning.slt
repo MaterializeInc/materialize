@@ -62,17 +62,15 @@ INSERT INTO t (a) VALUES (100) RETURNING t.a
 ----
 100
 
-# Work around our table parse alias bug, but verify we can RETURNING results
-# of queries.
 query I
 INSERT INTO t SELECT count(*), 0 FROM t AS t RETURNING a
 ----
 10
 
-# TODO(mjibson): This works in Postgres. We currently parse the RETURNING as a
-# table alias for t.
-statement error Expected end of statement
+query I
 INSERT INTO t SELECT count(*), 0 FROM t RETURNING a
+----
+11
 
 # TODO(mjibson): This works in Postgres.
 statement error Expected right parenthesis
@@ -90,10 +88,10 @@ INSERT INTO t VALUES (7, 8) RETURNING 1/0
 statement error column "z" does not exist
 INSERT INTO t VALUES (7, 8) RETURNING z
 
-statement error aggregate functions are not allowed in RETURNING clause
+statement error db error: ERROR: aggregate functions are not allowed in RETURNING clause \(function pg_catalog\.count\)
 INSERT INTO t VALUES (7, 8) RETURNING count(*)
 
-statement error window functions are not allowed in RETURNING clause
+statement error db error: ERROR: window functions are not allowed in RETURNING clause \(function pg_catalog\.row_number\)
 INSERT INTO t VALUES (7, 8) RETURNING row_number()
 
 statement error RETURNING clause does not allow subqueries
@@ -135,6 +133,7 @@ SELECT * FROM t ORDER BY a, b
 9  10
 10  0
 10  11
+11  0
 100  11
 NULL  10
 NULL  11

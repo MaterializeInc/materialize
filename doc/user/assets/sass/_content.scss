@@ -49,8 +49,7 @@ h5 {
     margin: var(--small) 0 var(--nano);
 }
 
-strong,
-em {
+strong {
     font-weight: 500;
 }
 
@@ -85,15 +84,6 @@ p+p {
         border: none;
     }
 
-    ul,
-    ol {
-        list-style-position: inside;
-
-        li>p {
-            display: inline;
-        }
-    }
-
     &>*:first-child {
         margin-top: var(--small);
     }
@@ -102,35 +92,12 @@ p+p {
         margin: var(--micro) 0;
     }
 
-    ul li {
-        p:not(:first-child) {
-            display: block;
-        }
-
-        &>p:not(:first-child),
-        &>.highlight,
-        &>table {
-            margin-left: var(--milli);
-        }
+    ul,
+    ol {
+        padding-left: var(--small);
     }
 
     li {
-        position: relative;
-
-        p:first-child {
-            margin-top: 0;
-        }
-
-        ul,
-        ol {
-            margin-top: var(--micro);
-            margin-left: var(--milli);
-        }
-
-        &:not(:last-child) {
-            margin-bottom: var(--pico);
-        }
-
         .highlight {
             display: block;
         }
@@ -420,18 +387,29 @@ p+p {
         }
     }
 
-    ol.has-p {
+    ol.has-p:not(ol.has-p ol.has-p) {
         list-style-type: none;
         counter-reset: list-counter;
         margin: 0;
         padding: 0;
 
-        li {
+         >li {
             counter-increment: list-counter;
             min-height: 5rem;
             position: relative;
             padding: 1.6rem 0 1.6rem 6rem;
             border-top: 1px solid var(--divider-light);
+
+            ul,
+            ol {
+                padding-left: var(--milli);
+            }
+
+            ol {
+                li {
+                    list-style-type: lower-alpha;
+                }
+            }
 
             @media(max-width: 850px) {
                 padding-left: 4.5rem;
@@ -479,7 +457,7 @@ p+p {
     }
 
     .warning,
-    .alpha {
+    .private-preview {
         background: rgba(238, 134, 96, 0.05);
         border: 1px solid rgba(238, 134, 96, 0.2);
 
@@ -521,7 +499,7 @@ p+p {
         }
     }
 
-    .beta {
+    .public-preview {
         background: #d8fad9;
         border: 1px solid #c0d8c5;
         color: var(--black);
@@ -538,8 +516,8 @@ p+p {
 
     .warning,
     .note,
-    .alpha,
-    .beta {
+    .private-preview,
+    .public-preview {
         box-sizing: border-box;
         margin: 1.6rem 0;
         padding: 1.6rem 1.6rem 1.6rem 9.6rem;
@@ -751,37 +729,6 @@ p+p {
         }
     }
 
-
-    .table-scrollable {
-        box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
-        margin: 1rem 0 3rem;
-        overflow: auto;
-
-        table {
-            width: 100%;
-        }
-
-        thead th {
-            background: #fff;
-            border: 0;
-            position: sticky;
-            top: 0;
-
-            &:after {
-                border-bottom: 2px $purple-v2 solid;
-                content: "";
-                bottom: -1px;
-                left: 0;
-                right: 0;
-                position: absolute;
-            }
-        }
-
-        &+* {
-            margin-top: 3rem !important;
-        }
-    }
-
     #subscribe_dialog {
         display: none;
         z-index: 10;
@@ -858,6 +805,40 @@ p+p {
     }
 }
 
+.table-scrollable {
+    box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
+    margin: 1rem 0 3rem;
+    overflow: auto;
+
+    .table-container {
+        overflow: visible;
+    }
+
+    table {
+        width: 100%;
+    }
+
+    thead th {
+        background: #fff;
+        position: sticky;
+        top: 0;
+
+        &:after {
+            border-bottom: 1px var(--highlight) solid;
+            content: "";
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            position: absolute;
+        }
+    }
+
+    &+* {
+        margin-top: 3rem !important;
+    }
+}
+
+
 .level-of-support {
     display: inline-block;
     width: 17px;
@@ -891,6 +872,7 @@ p+p {
     font-weight: 300;
     border: none;
     background-color: $grey-light;
+    color: var(--black);
     height: 26px;
     padding: 0 12px;
     cursor: pointer;
@@ -994,17 +976,9 @@ body.dark .content {
     }
 
     .warning,
-    .alpha {
+    .private-preview {
         .gutter {
             color: #ff8504;
-        }
-    }
-
-    .table-scrollable {
-        thead th {
-            &:after {
-                border-bottom: 2px solid var(--link);
-            }
         }
     }
 

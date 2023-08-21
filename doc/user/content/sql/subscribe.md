@@ -1,6 +1,6 @@
 ---
 title: "SUBSCRIBE"
-description: "`SUBSCRIBE` streams updates from a source, table, or view as they occur."
+description: "`SUBSCRIBE` streams updates from a source, table, view, or materialized view as they occur."
 menu:
   main:
     parent: commands
@@ -8,7 +8,8 @@ aliases:
   - /sql/tail
 ---
 
-`SUBSCRIBE` streams updates from a source, table, or view as they occur.
+`SUBSCRIBE` streams updates from a source, table, view, or materialized view as
+they occur.
 
 ## Conceptual framework
 
@@ -30,10 +31,17 @@ You can use `SUBSCRIBE` to:
 
 {{< diagram "subscribe-stmt.svg" >}}
 
-| Field                  | Use                                                                                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| _object_name_          | The name of the source, table, or view that you want to subscribe to.                                                                            |
-| _select_stmt_          | The [`SELECT` statement](../select) whose output you want to subscribe to.                                                                       |
+| Field                           | Use                                                                                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
+| _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
+| **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **ENVELOPE DEBEZIUM**           | Use a [Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope), which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
+
+
+
+The generated schemas have a Debezium-style diff envelope to capture changes in the input view or source.
 
 ### `WITH` options
 
@@ -41,8 +49,8 @@ The following options are valid within the `WITH` clause.
 
 | Option name | Value type | Default | Describes                                                                                                                         |
 | ----------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below. |
-| `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.                                              |
+| `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
+| `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
 
 ## Details
 
@@ -116,6 +124,9 @@ with several additional columns that describe the nature of the update:
 
 The `AS OF` clause allows specifying a timestamp at which the `SUBSCRIBE` should begin returning results, in order to inspect the historical state of a relation. If `AS OF` is specified, no rows whose timestamp is less than the specified timestamp will be returned. If the timestamp specified is earlier than the earliest historical state retained by the source relations, an error will be signaled.
 
+If `AS OF` is unspecified, the system automatically chooses an `AS OF`
+timestamp.
+
 Currently, all user-defined sources and tables have a retention window of one second, so `AS OF` is of limited usefulness except when subscribing to queries over certain internal relations.
 
 ### `UP TO`
@@ -126,7 +137,9 @@ The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will c
 
 The lower timestamp bound specified by `AS OF` is inclusive, whereas the upper bound specified by `UP TO` is exclusive. Thus, a `SUBSCRIBE` query whose `AS OF` is equal to its `UP TO` will terminate after returning zero rows.
 
-A `SUBSCRIBE` whose `UP TO` is less than its "as of" timestamp (whether that timestamp was specified in an `AS OF` clause or chosen by the system) will signal an error.
+A `SUBSCRIBE` whose `UP TO` is less than its `AS OF` timestamp (whether that
+timestamp was specified in an `AS OF` clause or chosen by the system) will
+signal an error.
 
 ### Duration
 
@@ -149,26 +162,31 @@ See the [examples](#examples) for details.
 ### `SNAPSHOT`
 
 By default, `SUBSCRIBE` begins by emitting a snapshot of the subscribed relation, which
-consists of a series of updates describing the contents of the relation at its
-initial timestamp. After the snapshot, `SUBSCRIBE` emits further updates as
+consists of a series of updates at its [`AS OF`](#as-of) timestamp describing the
+contents of the relation. After the snapshot, `SUBSCRIBE` emits further updates as
 they occur.
 
-For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the initial timestamp.
+For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the `AS OF` timestamp.
 For example, an insert that occurred before the `SUBSCRIBE` began would appear in the snapshot.
 
 To see only updates after the initial timestamp, specify `WITH (SNAPSHOT = false)`.
 
 ### `PROGRESS`
 
+If the `PROGRESS` option is specified via `WITH (PROGRESS)`:
+
+  * An additional `mz_progressed` column appears in the output. When the column
+    is `false`, the rest of the row is a valid update. When the column is `true`
+    everything in the row except for `mz_timestamp` is not a valid update and its
+    content should be ignored; the row exists only to communicate that timestamps have advanced.
+
+  * The first update emitted by the `SUBSCRIBE` is guaranteed to be a progress
+    message indicating the subscribe's [`AS OF`](#as-of) timestamp.
+
 Intuitively, progress messages communicate that no updates have occurred in a
 given time window. Without explicit progress messages, it is impossible to
 distinguish between a stall in Materialize and a legitimate period of no
 updates.
-
-If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional `mz_progressed` column appears in the output.
-When the column is `false`, the rest of the row is a valid update.
-When the column is `true` the rest of the row is not a valid update and its content should be ignored;
-the row exists only to communicate that timestamps have advanced.
 
 Not all timestamps that appear will have a corresponding row with `mz_progressed` set to `true`.
 For example, the following is a valid sequence of updates:
@@ -261,6 +279,7 @@ COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
 | [PHP](/integrations/php/#stream)|
 | [Python](/integrations/python/#stream)|
 | [Ruby](/integrations/ruby/#stream)|
+| [Rust](/integrations/rust/#stream)|
 
 ### Mapping rows to their updates
 
@@ -278,6 +297,218 @@ If your row has a unique column key, it is possible to map the update to its cor
 
 In the example above, `Column 1` acts as the column key that uniquely identifies the origin row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
 
+[//]: # "TODO(morsapaes) This page is now complex enough that we should
+restructure it using the same feature-oriented approach as CREATE SOURCE/SINK.
+See #18829 for the design doc."
+
+### Modifying the output format
+
+{{< private-preview />}}
+
+#### `ENVELOPE UPSERT`
+
+To modify the output of `SUBSCRIBE` to support upserts, use `ENVELOPE UPSERT`.
+This clause allows you to specify a `KEY` that Materialize uses to interpret
+the rows as a series of inserts, updates and deletes within each distinct
+timestamp.
+
+The output columns are reordered so that all the key columns come before the
+value columns.
+
+* Using this modifier, the output rows will have the following
+structure:
+
+   ```sql
+   SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
+   ```
+
+   ```sql
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   100          | upsert   | 1    | 2
+   100          | upsert   | 2    | 4
+   ```
+
+* For inserts and updates, the value columns for each key are set to the
+  resulting value of the series of operations, and `mz_state` is set to
+  `upsert`.
+
+  _Insert_
+
+  ```sql
+   -- at time 200, add a new row with key=3, value=6
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   200          | upsert   | 3    | 6
+   ...
+  ```
+
+  _Update_
+
+  ```sql
+   -- at time 300, update key=1's value to 10
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   300          | upsert   | 1    | 10
+   ...
+  ```
+
+* If only deletes occur within a timestamp, the value columns for each key are
+  set to `NULL`, and `mz_state` is set to `delete`.
+
+  _Delete_
+
+  ```sql
+   -- at time 400, delete all rows
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   400          | delete   | 1    | NULL
+   400          | delete   | 2    | NULL
+   400          | delete   | 3    | NULL
+   ...
+  ```
+
+* Only use `ENVELOPE UPSERT` when there is at most one live value per key.
+  If materialize detects that a given key has multiple values, it will generate
+  an update with `mz_state` set to `"key_violation"`, the problematic key, and all
+  the values nulled out. Materialize is not guaranteed to detect this case,
+  please don't rely on it.
+
+  _Key violation_
+
+  ```sql
+   -- at time 500, introduce a key_violation
+   mz_timestamp | mz_state        | key  | value
+   -------------|-----------------|------|--------
+   ...
+   500          | key_violation   | 1    | NULL
+   ...
+  ```
+
+* If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
+column. Each progress row will have a `NULL` key and a `NULL` value.
+
+#### `ENVELOPE DEBEZIUM`
+
+To modify the output of `SUBSCRIBE` to support upserts using a
+[Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope)
+, use`ENVELOPE DEBEZIUM`. This clause allows you to specify a `KEY` that
+Materialize uses to interpret the rows as a series of inserts, updates and
+deletes within each distinct timestamp. Unlike `ENVELOPE UPSERT`, the output
+includes the state of the row before and after the upsert operation.
+
+The output columns are reordered so that all the key columns come before the
+value columns. There are two copies of the value columns: one prefixed with
+`before_`, which represents the value of the columns before the upsert
+operation; and another prefixed with `after_`, which represents the current
+value of the columns.
+
+* Using this modifier, the output rows will have the following
+structure:
+
+   ```sql
+   SUBSCRIBE mview ENVELOPE DEBEZIUM (KEY (key));
+   ```
+
+   ```sql
+   mz_timestamp | mz_state | key  | before_value | after_value
+   -------------|----------|------|--------------|-------
+   100          | upsert   | 1    | NULL         | 2
+   100          | upsert   | 2    | NULL         | 4
+   ```
+
+* For inserts: the before values are `NULL`, the current value is the newly inserted
+  value and `mz_state` is set to `insert`.
+
+  _Insert_
+
+  ```sql
+   -- at time 200, add a new row with key=3, value=6
+   mz_timestamp | mz_state | key  | before_value | after_value
+   -------------|----------|------|--------------|-------
+   ...
+   200          | insert   | 3    | NULL         | 6
+   ...
+  ```
+
+* For updates: the before values are the old values, the value columns are the resulting
+  values of the update, and `mz_state` is set to`upsert`.
+
+  _Update_
+
+  ```sql
+   -- at time 300, update key=1's value to 10
+   mz_timestamp | mz_state | key  | before_value | after_value
+   -------------|----------|------|--------------|-------
+   ...
+   300          | upsert   | 1    | 2            | 10
+   ...
+  ```
+
+* If only deletes occur within a timestamp, the value columns for each key are
+  set to `NULL`, the before values are set to the old value and `mz_state` is set to `delete`.
+
+  _Delete_
+
+  ```sql
+   -- at time 400, delete all rows
+   mz_timestamp | mz_state | key  | before_value | after_value
+   -------------|----------|------|--------------|-------
+   ...
+   400          | delete   | 1    | 10           | NULL
+   400          | delete   | 2    | 4            | NULL
+   400          | delete   | 3    | 6            | NULL
+   ...
+  ```
+
+* Like `ENVELOPE UPSERT`, using `ENVELOPE DEBEZIUM` requires that there is at
+  most one live value per key. If Materialize detects that a given key has
+  multiple values, it will generate an update with `mz_state` set to
+  `"key_violation"`, the problematic key, and all the values nulled out.
+  Materialize identifies key violations on a best-effort basis.
+
+  _Key violation_
+
+  ```sql
+   -- at time 500, introduce a key_violation
+   mz_timestamp | mz_state        | key  | before_value | after_value
+   -------------|-----------------|------|--------------|-------
+   ...
+   500          | key_violation   | 1    | NULL         | NULL
+   ...
+  ```
+
+* If [`PROGRESS`](#progress) is set, Materialize also returns the
+`mz_progressed` column. Each progress row will have a `NULL` key and a `NULL`
+before and after value.
+
+#### `WITHIN TIMESTAMP ORDER BY`
+
+To modify the ordering of the output of `SUBSCRIBE`, use `WITHIN TIMESTAMP ORDER
+BY`. This clause allows you to specify an `ORDER BY` expression which is used
+to sort the rows within each distinct timestamp.
+
+* The `ORDER BY` expression can take any column in the underlying object or
+  query, including `mz_diff`.
+
+   ```sql
+   SUBSCRIBE mview WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff;
+
+   mz_timestamp | mz_diff | c1            | c2   | c3
+   -------------|---------|---------------|------|-----
+   100          | +1      | 1             | 20   | foo
+   100          | -1      | 1             | 2    | bar
+   100          | +1      | 1             | 2    | boo
+   100          | +1      | 1             | 0    | data
+   100          | -1      | 2             | 0    | old
+   100          | +1      | 2             | 0    | new
+   ```
+
+* If [`PROGRESS`](#progress) is set, progress messages are unaffected.
+
 ### Dropping the `counter` load generator source
 
 When you're done, you can drop the `counter` load generator source:
@@ -285,3 +516,14 @@ When you're done, you can drop the `counter` load generator source:
 ```sql
 DROP SOURCE counter;
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+  execute the view definition.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.

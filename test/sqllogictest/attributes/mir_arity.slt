@@ -48,7 +48,7 @@ materialize.public.test1:
       Union // { arity: 4 }
         Negate // { arity: 4 }
           Distinct group_by=[#0..=#3] // { arity: 4 }
-            TopK order_by=[#1 asc nulls_last] limit=10 offset=1 monotonic=false // { arity: 4 }
+            TopK order_by=[#1 asc nulls_last] limit=10 offset=1 // { arity: 4 }
               Project (#0..=#2, #4) // { arity: 4 }
                 Map ((#3 + 1)) // { arity: 5 }
                   Union // { arity: 4 }
@@ -70,19 +70,20 @@ materialize.public.test1:
   With
     cte l1 =
       Project (#0..=#3) // { arity: 4 }
-        Join on=(#0 = #4) type=differential // { arity: 5 }
-          ArrangeBy keys=[[#0]] // { arity: 3 }
-            Filter (#0) IS NOT NULL // { arity: 3 }
-              Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#1]] // { arity: 2 }
-            Get materialize.public.u // { arity: 2 }
+        Filter (#0) IS NOT NULL // { arity: 5 }
+          Join on=(#0 = #4) type=differential // { arity: 5 }
+            ArrangeBy keys=[[#0]] // { arity: 3 }
+              Filter (#0) IS NOT NULL // { arity: 3 }
+                Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Get materialize.public.u // { arity: 2 }
     cte l0 =
       FlatMap generate_series(#0, #1, 1) // { arity: 3 }
         Get materialize.public.t // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.t_a_idx
-  - materialize.public.u_d_idx
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.u_d_idx (differential join)
 
 EOF
 
@@ -121,7 +122,7 @@ Explained Query:
               Get materialize.public.u // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.u_d_idx
+  - materialize.public.u_d_idx (*** full scan ***)
 
 EOF
 
@@ -164,6 +165,6 @@ Source materialize.public.v
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.u_d_idx
+  - materialize.public.u_d_idx (*** full scan ***, differential join)
 
 EOF

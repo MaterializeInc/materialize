@@ -14,17 +14,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use timely::dataflow::{scopes::Child, Scope};
-
 use mz_compute_client::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::probe;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::Scope;
+use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
-use crate::render::{context::Context, RenderTimestamp};
+use crate::render::context::Context;
+use crate::render::RenderTimestamp;
 
 impl<'g, G, T> Context<Child<'g, G, T>, Row>
 where
@@ -36,15 +38,15 @@ where
         &mut self,
         compute_state: &mut crate::compute_state::ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token))
             }
         }
@@ -74,16 +76,21 @@ where
         let ok_collection = ok_collection.leave();
         let err_collection = err_collection.leave();
 
+        let region_name = match sink.connection {
+            ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
+            ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+        };
         self.scope
             .parent
             .clone()
-            .region_named(&format!("PersistSink({:?})", sink_id), |inner| {
+            .region_named(&region_name, |inner| {
                 let sink_render = get_sink_render_for::<_>(&sink.connection);
 
                 let sink_token = sink_render.render_continuous_sink(
                     compute_state,
                     sink,
                     sink_id,
+                    self.as_of_frontier.clone(),
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
                     probes,
@@ -93,16 +100,8 @@ where
                     needed_tokens.push(sink_token);
                 }
 
-                compute_state.sink_tokens.insert(
-                    sink_id,
-                    SinkToken {
-                        token: Box::new(needed_tokens),
-                        is_subscribe: matches!(
-                            sink.connection,
-                            ComputeSinkConnection::Subscribe(_)
-                        ),
-                    },
-                );
+                let collection = compute_state.expect_collection_mut(sink_id);
+                collection.sink_token = Some(SinkToken::new(Box::new(needed_tokens)));
             });
     }
 }
@@ -117,6 +116,7 @@ where
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
+        as_of: Antichain<mz_repr::Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,

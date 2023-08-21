@@ -54,9 +54,11 @@ SERVICES = [
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
             f"MZ_LAUNCHDARKLY_KEY_MAP=max_result_size={LD_FEATURE_FLAG_KEY}",
-            "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug",
             "MZ_CONFIG_SYNC_LOOP_INTERVAL=1s",
-        ]
+        ],
+        additional_system_parameter_defaults={
+            "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
+        },
     ),
     Testdrive(no_reset=True, seed=1),
 ]
@@ -113,8 +115,10 @@ def workflow_default(c: Composition) -> None:
                 environment_extra=[
                     f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
                     f"MZ_LAUNCHDARKLY_KEY_MAP=max_result_size={LD_FEATURE_FLAG_KEY}",
-                    "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug",
-                ]
+                ],
+                additional_system_parameter_defaults={
+                    "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
+                },
             )
         ):
             c.up("materialized")
@@ -161,6 +165,37 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 4 GiB - 1 byte.
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
+        def sys(command: str) -> None:
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        command,
+                    ]
+                )
+            )
+
+        # Assert that we can turn off synchronization
+
+        # (1) The logs should report that the frontend was not stopped until now
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert "stopping system parameter frontend" not in logs.stdout
+        # (2) Turn the kill switch on
+        sys("ALTER SYSTEM SET enable_launchdarkly=off")
+        sleep(10)
+        # (3) The logs should report that the frontend was stopped at least once
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert "stopping system parameter frontend" in logs.stdout
+        # (4) After that, it should be safe to alter a value directly.
+        #     The new value should not be replaced, even after 15 seconds
+        sys("ALTER SYSTEM SET max_result_size=1234")
+        sleep(15)
+        c.testdrive("\n".join(["> SHOW max_result_size", "1234"]))
+        # (5) The value should be reset after we turn the kill switch back off
+        sys("ALTER SYSTEM SET enable_launchdarkly=on")
+        c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
+
         # Remove custom targeting.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
@@ -180,7 +215,6 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 1 GiB (the default when targeting is
         # turned off).
         c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
-
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
         raise UIError(

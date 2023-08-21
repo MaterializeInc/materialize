@@ -23,7 +23,7 @@ use once_cell::sync::Lazy;
 use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
-    if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
+    if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
         use disabled::{handle_get, handle_post};
     } else {
         use enabled::{handle_get, handle_post};
@@ -84,7 +84,7 @@ pub struct FlamegraphTemplate<'a> {
     pub mzfg: &'a str,
 }
 
-#[allow(clippy::drop_copy)]
+#[allow(dropping_copy_types)]
 async fn time_prof<'a>(
     merge_threads: bool,
     build_info: &BuildInfo,
@@ -95,7 +95,7 @@ async fn time_prof<'a>(
 ) -> impl IntoResponse {
     let ctl_lock;
     cfg_if! {
-        if #[cfg(any(target_os = "macos", not(feature = "jemalloc")))] {
+        if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
             ctl_lock = ();
         } else {
             ctl_lock = if let Some(ctl) = crate::jemalloc::PROF_CTL.as_ref() {
@@ -151,18 +151,18 @@ fn flamegraph(
     })
 }
 
-#[cfg(any(target_os = "macos", not(feature = "jemalloc")))]
+#[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))]
 mod disabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
     use http::header::HeaderMap;
     use http::StatusCode;
+    use mz_build_info::BuildInfo;
     use serde::Deserialize;
 
-    use mz_build_info::BuildInfo;
+    use crate::ever_symbolicated;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
-    use crate::ever_symbolicated;
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -226,7 +226,7 @@ mod disabled {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
+#[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
 mod enabled {
     use std::io::{BufReader, Read};
     use std::sync::Arc;
@@ -238,6 +238,8 @@ mod enabled {
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
+    use mz_build_info::BuildInfo;
+    use mz_ore::cast::CastFrom;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
@@ -245,8 +247,6 @@ mod enabled {
     use crate::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
-    use mz_build_info::BuildInfo;
-    use mz_ore::cast::CastFrom;
 
     #[derive(Deserialize)]
     pub struct ProfForm {

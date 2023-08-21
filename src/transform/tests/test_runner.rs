@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -100,10 +98,10 @@ mod tests {
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
-    use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
+    use mz_transform::{Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
 
-    use super::explain::Explainable;
+    use crate::explain::Explainable;
 
     // Global options
     const IN: &str = "in";
@@ -113,19 +111,21 @@ mod tests {
     const TEST: &str = "test";
 
     thread_local! {
-        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> =
-            Optimizer::logical_optimizer()
+        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
+            let ctx = mz_transform::typecheck::empty_context();
+            Optimizer::logical_optimizer(&ctx)
                 .transforms
                 .into_iter()
                 .chain(std::iter::once::<Box<dyn Transform>>(
-                    Box::new(mz_transform::projection_pushdown::ProjectionPushdown)
+                    Box::new(mz_transform::movement::ProjectionPushdown)
                 ))
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
                 ))
-                .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
-                .chain(Optimizer::physical_optimizer().transforms.into_iter())
-                .collect::<Vec<_>>();
+                .chain(Optimizer::logical_cleanup_pass(&ctx, false).transforms.into_iter())
+                .chain(Optimizer::physical_optimizer(&ctx).transforms.into_iter())
+                .collect::<Vec<_>>()
+            };
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -203,6 +203,7 @@ mod tests {
                     subtree_size: false,
                     timing: false,
                     types: format_contains("types"),
+                    ..ExplainConfig::default()
                 };
 
                 let context = ExplainContext {
@@ -220,6 +221,7 @@ mod tests {
         }
     }
 
+    #[tracing::instrument(skip(cat, args, test_type))]
     fn run_single_view_testcase(
         s: &str,
         cat: &TestCatalog,
@@ -228,12 +230,7 @@ mod tests {
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
-            get_transform(t)?.transform(
-                &mut rel,
-                TransformArgs {
-                    indexes: &EmptyIndexOracle,
-                },
-            )?;
+            get_transform(t)?.transform(&mut rel, TransformArgs::default())?;
         }
 
         let format_type = get_format_type(args);
@@ -241,12 +238,7 @@ mod tests {
         let out = match test_type {
             TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                 for transform in transforms.iter() {
-                    transform.transform(
-                        &mut rel,
-                        TransformArgs {
-                            indexes: &EmptyIndexOracle,
-                        },
-                    )?;
+                    transform.transform(&mut rel, TransformArgs::default())?;
                 }
                 Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
@@ -264,12 +256,7 @@ mod tests {
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                     for transform in transforms {
                         let prev = rel.clone();
-                        transform.transform(
-                            &mut rel,
-                            TransformArgs {
-                                indexes: &EmptyIndexOracle,
-                            },
-                        )?;
+                        transform.transform(&mut rel, TransformArgs::default())?;
 
                         if rel != prev {
                             if no_change.len() > 0 {
@@ -336,26 +323,24 @@ mod tests {
             "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
-            "FlatMapToMap" => Ok(Box::new(mz_transform::fusion::flatmap_to_map::FlatMapToMap)),
+            "FlatMapToMap" => Ok(Box::new(mz_transform::canonicalization::FlatMapToMap)),
             "JoinFusion" => Ok(Box::new(mz_transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(
                 mz_transform::literal_lifting::LiteralLifting::default(),
             )),
             "NonNullRequirements" => Ok(Box::new(
-                mz_transform::nonnull_requirements::NonNullRequirements::default(),
+                mz_transform::non_null_requirements::NonNullRequirements::default(),
             )),
             "PredicatePushdown" => Ok(Box::new(
                 mz_transform::predicate_pushdown::PredicatePushdown::default(),
             )),
             "ProjectionExtraction" => Ok(Box::new(
-                mz_transform::projection_extraction::ProjectionExtraction,
+                mz_transform::canonicalization::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(
-                mz_transform::projection_lifting::ProjectionLifting::default(),
+                mz_transform::movement::ProjectionLifting::default(),
             )),
-            "ProjectionPushdown" => Ok(Box::new(
-                mz_transform::projection_pushdown::ProjectionPushdown,
-            )),
+            "ProjectionPushdown" => Ok(Box::new(mz_transform::movement::ProjectionPushdown)),
             "ReductionPushdown" => Ok(Box::new(
                 mz_transform::reduction_pushdown::ReductionPushdown,
             )),
@@ -370,7 +355,8 @@ mod tests {
             "UnionBranchCancellation" => Ok(Box::new(
                 mz_transform::union_cancel::UnionBranchCancellation,
             )),
-            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::UnionNegate)),
+            "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
+            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
@@ -413,7 +399,7 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
-            let optimizer = Optimizer::logical_optimizer();
+            let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
@@ -433,8 +419,9 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let log_optimizer = Optimizer::logical_cleanup_pass();
-            let phys_optimizer = Optimizer::physical_optimizer();
+            let ctx = mz_transform::typecheck::empty_context();
+            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx, true);
+            let phys_optimizer = Optimizer::physical_optimizer(&ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
@@ -519,7 +506,8 @@ mod tests {
         result
     }
 
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn run() {
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();

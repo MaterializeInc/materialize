@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -77,36 +75,29 @@
 
 //! Debug utility for stashes.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io::{self, Write},
-    path::PathBuf,
-    process,
-    str::FromStr,
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
+use anyhow::Context;
 use clap::Parser;
-use once_cell::sync::Lazy;
-
-use mz_adapter::{
-    catalog::{
-        storage::{self as catalog, BootstrapArgs},
-        Catalog, Config,
-    },
-    DUMMY_AVAILABILITY_ZONE,
-};
+use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
-use mz_ore::{
-    cli::{self, CliConfig},
-    metrics::MetricsRegistry,
-    now::SYSTEM_TIME,
-};
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
+use once_cell::sync::Lazy;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -123,20 +114,37 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
+    /// Dumps the stash contents to stdout in a human readable format.
+    /// Includes JSON for each key and value that can be hand edited and
+    /// then passed to the `edit` or `delete` commands.
     Dump {
+        /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
+    /// Edits a single item in a collection in the stash.
     Edit {
+        /// The name of the stash collection to edit.
         collection: String,
+        /// The JSON-encoded key that identifies the item to edit.
         key: serde_json::Value,
+        /// The new JSON-encoded value for the item.
         value: serde_json::Value,
+    },
+    /// Deletes a single item in a collection in the stash
+    Delete {
+        /// The name of the stash collection to edit.
+        collection: String,
+        /// The JSON-encoded key that identifies the item to delete.
+        key: serde_json::Value,
     },
     /// Checks if the specified stash could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
     /// or error message. Exits with 0 if the upgrade would succeed, otherwise
     /// non-zero. Can be used on a running environmentd. Operates without
     /// interfering with it or committing any data to that stash.
-    UpgradeCheck,
+    UpgradeCheck {
+        cluster_replica_sizes: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -146,7 +154,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("stash: {:#}", err);
+        eprintln!("stash: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }
@@ -179,10 +187,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let stash = factory.open(args.postgres_url, None, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
-        Action::UpgradeCheck => {
+        Action::Delete { collection, key } => {
+            // delete needs a mutable stash, so reconnect.
+            let stash = factory.open(args.postgres_url, None, tls).await?;
+            delete(stash, usage, collection, key).await
+        }
+        Action::UpgradeCheck {
+            cluster_replica_sizes,
+        } => {
             // upgrade needs fake writes, so use a savepoint.
             let stash = factory.open_savepoint(args.postgres_url, tls).await?;
-            upgrade_check(stash, usage).await
+            let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
+                None => Default::default(),
+                Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
+            };
+            upgrade_check(stash, usage, cluster_replica_sizes).await
         }
     }
 }
@@ -199,16 +218,92 @@ async fn edit(
     Ok(())
 }
 
-async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<(), anyhow::Error> {
-    let data = usage.dump(&mut stash).await?;
-    serde_json::to_writer_pretty(&mut target, &data)?;
-    write!(&mut target, "\n")?;
+async fn delete(
+    mut stash: Stash,
+    usage: Usage,
+    collection: String,
+    key: serde_json::Value,
+) -> Result<(), anyhow::Error> {
+    usage.delete(&mut stash, collection, key).await?;
     Ok(())
 }
-async fn upgrade_check(stash: Stash, usage: Usage) -> Result<(), anyhow::Error> {
-    let msg = usage.upgrade_check(stash).await?;
+
+async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<(), anyhow::Error> {
+    let data = usage.dump(&mut stash).await?;
+    writeln!(&mut target, "{data:#?}")?;
+    Ok(())
+}
+async fn upgrade_check(
+    stash: Stash,
+    usage: Usage,
+    cluster_replica_sizes: ClusterReplicaSizeMap,
+) -> Result<(), anyhow::Error> {
+    let msg = usage.upgrade_check(stash, cluster_replica_sizes).await?;
     println!("{msg}");
     Ok(())
+}
+
+macro_rules! for_collections {
+    ($usage:expr, $macro:ident) => {
+        match $usage {
+            Usage::Catalog => {
+                $macro!(catalog::AUDIT_LOG_COLLECTION);
+                $macro!(catalog::CLUSTER_COLLECTION);
+                $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
+                $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
+                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::DATABASES_COLLECTION);
+                $macro!(catalog::DEFAULT_PRIVILEGES_COLLECTION);
+                $macro!(catalog::ID_ALLOCATOR_COLLECTION);
+                $macro!(catalog::ITEM_COLLECTION);
+                $macro!(catalog::ROLES_COLLECTION);
+                $macro!(catalog::SCHEMAS_COLLECTION);
+                $macro!(catalog::SETTING_COLLECTION);
+                $macro!(catalog::STORAGE_USAGE_COLLECTION);
+                $macro!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
+                $macro!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
+                $macro!(catalog::SYSTEM_PRIVILEGES_COLLECTION);
+                $macro!(catalog::TIMESTAMP_COLLECTION);
+            }
+            Usage::Storage => {
+                $macro!(storage::METADATA_COLLECTION);
+                $macro!(storage::METADATA_EXPORT);
+            }
+        }
+    };
+}
+
+struct Dumped {
+    key: Box<dyn std::fmt::Debug>,
+    value: Box<dyn std::fmt::Debug>,
+    key_json: UnescapedDebug,
+    value_json: UnescapedDebug,
+    timestamp: mz_stash::Timestamp,
+    diff: mz_stash::Diff,
+}
+
+impl std::fmt::Debug for Dumped {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("")
+            .field("key", &self.key)
+            .field("value", &self.value)
+            .field("key_json", &self.key_json)
+            .field("value_json", &self.value_json)
+            .field("timestamp", &self.timestamp)
+            .field("diff", &self.diff)
+            .finish()
+    }
+}
+
+// We want to auto format things with debug, but also not print \ before the " in JSON values, so
+// implement our own debug that doesn't escape.
+struct UnescapedDebug(String);
+
+impl std::fmt::Debug for UnescapedDebug {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "'{}'", &self.0)
+    }
 }
 
 #[derive(Debug)]
@@ -245,7 +340,7 @@ impl Usage {
         // there is no overlap between expected names.
         Self::verify_all_usages()?;
 
-        let names = stash.collections().await?;
+        let names = BTreeSet::from_iter(stash.collections().await?.into_values());
         for usage in Self::all_usages() {
             // Some TypedCollections exist before any entries have been written
             // to a collection, so `stash.collections()` won't return it, and we
@@ -268,43 +363,36 @@ impl Usage {
         )
     }
 
-    async fn dump(
-        &self,
-        stash: &mut Stash,
-    ) -> Result<BTreeMap<&str, serde_json::Value>, anyhow::Error> {
+    async fn dump(&self, stash: &mut Stash) -> Result<BTreeMap<&str, Vec<Dumped>>, anyhow::Error> {
         let mut collections = Vec::new();
-        let collection_names = stash.collections().await?;
+        let collection_names = BTreeSet::from_iter(stash.collections().await?.into_values());
         macro_rules! dump_col {
             ($col:expr) => {
                 // Collections might not yet exist.
                 if collection_names.contains($col.name()) {
-                    collections.push(($col.name(), serde_json::to_value($col.iter(stash).await?)?));
+                    let values = $col.iter(stash).await?;
+                    let values = values
+                        .into_iter()
+                        .map(|((k, v), timestamp, diff)| {
+                            let key_json = serde_json::to_string(&k).expect("must serialize");
+                            let value_json = serde_json::to_string(&v).expect("must serialize");
+                            Dumped {
+                                key: Box::new(k),
+                                value: Box::new(v),
+                                key_json: UnescapedDebug(key_json),
+                                value_json: UnescapedDebug(value_json),
+                                timestamp,
+                                diff,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    collections.push(($col.name(), values));
                 }
             };
         }
 
-        match self {
-            Usage::Catalog => {
-                dump_col!(catalog::COLLECTION_CONFIG);
-                dump_col!(catalog::COLLECTION_ID_ALLOC);
-                dump_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                dump_col!(catalog::COLLECTION_CLUSTERS);
-                dump_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
-                dump_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
-                dump_col!(catalog::COLLECTION_DATABASE);
-                dump_col!(catalog::COLLECTION_SCHEMA);
-                dump_col!(catalog::COLLECTION_ITEM);
-                dump_col!(catalog::COLLECTION_ROLE);
-                dump_col!(catalog::COLLECTION_TIMESTAMP);
-                dump_col!(catalog::COLLECTION_SYSTEM_CONFIGURATION);
-                dump_col!(catalog::COLLECTION_AUDIT_LOG);
-                dump_col!(catalog::COLLECTION_STORAGE_USAGE);
-            }
-            Usage::Storage => {
-                dump_col!(storage::METADATA_COLLECTION);
-                dump_col!(storage::METADATA_EXPORT);
-            }
-        }
+        for_collections!(self, dump_col);
+
         let data = BTreeMap::from_iter(collections);
         let data_names = BTreeSet::from_iter(data.keys().map(|k| k.to_string()));
         if data_names != self.names() {
@@ -326,7 +414,7 @@ impl Usage {
         collection: String,
         key: serde_json::Value,
         value: serde_json::Value,
-    ) -> Result<Option<serde_json::Value>, anyhow::Error> {
+    ) -> Result<serde_json::Value, anyhow::Error> {
         macro_rules! edit_col {
             ($col:expr) => {
                 if collection == $col.name() {
@@ -337,37 +425,40 @@ impl Usage {
                             Ok::<_, std::convert::Infallible>(value)
                         })
                         .await??;
-                    return Ok(prev.map(|v| serde_json::to_value(v).unwrap()));
+                    let prev = serde_json::to_value(&prev)?;
+                    return Ok(prev);
                 }
             };
         }
-
-        match self {
-            Usage::Catalog => {
-                edit_col!(catalog::COLLECTION_CONFIG);
-                edit_col!(catalog::COLLECTION_ID_ALLOC);
-                edit_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                edit_col!(catalog::COLLECTION_CLUSTERS);
-                edit_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
-                edit_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
-                edit_col!(catalog::COLLECTION_DATABASE);
-                edit_col!(catalog::COLLECTION_SCHEMA);
-                edit_col!(catalog::COLLECTION_ITEM);
-                edit_col!(catalog::COLLECTION_ROLE);
-                edit_col!(catalog::COLLECTION_TIMESTAMP);
-                edit_col!(catalog::COLLECTION_SYSTEM_CONFIGURATION);
-                edit_col!(catalog::COLLECTION_AUDIT_LOG);
-                edit_col!(catalog::COLLECTION_STORAGE_USAGE);
-            }
-            Usage::Storage => {
-                edit_col!(storage::METADATA_COLLECTION);
-                edit_col!(storage::METADATA_EXPORT);
-            }
-        }
+        for_collections!(self, edit_col);
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }
 
-    async fn upgrade_check(&self, stash: Stash) -> Result<String, anyhow::Error> {
+    async fn delete(
+        &self,
+        stash: &mut Stash,
+        collection: String,
+        key: serde_json::Value,
+    ) -> Result<(), anyhow::Error> {
+        macro_rules! delete_col {
+            ($col:expr) => {
+                if collection == $col.name() {
+                    let key = serde_json::from_value(key)?;
+                    let keys = BTreeSet::from([key]);
+                    $col.delete_keys(stash, keys).await?;
+                    return Ok(());
+                }
+            };
+        }
+        for_collections!(self, delete_col);
+        anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
+    }
+
+    async fn upgrade_check(
+        &self,
+        stash: Stash,
+        cluster_replica_sizes: ClusterReplicaSizeMap,
+    ) -> Result<String, anyhow::Error> {
         if !matches!(self, Self::Catalog) {
             anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
         }
@@ -380,30 +471,34 @@ impl Usage {
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
-                default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
+                bootstrap_role: None,
             },
+            None,
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
+
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
-            persisted_introspection: true,
+            all_features: false,
             build_info: &BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,
             skip_migrations: false,
             metrics_registry,
-            cluster_replica_sizes: Default::default(),
+            cluster_replica_sizes,
             default_storage_cluster_size: None,
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
-            system_parameter_frontend: None,
+            system_parameter_sync_config: None,
             storage_usage_retention_period: None,
+            connection_context: None,
+            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         })
         .await?;
 
@@ -419,7 +514,7 @@ impl Usage {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_verify_all_usages() {
         Usage::verify_all_usages().unwrap();
     }

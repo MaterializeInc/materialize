@@ -20,22 +20,21 @@
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::{collections::BTreeMap, fmt, ops::Deref};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::ops::Deref;
 
+use itertools::{izip, Itertools};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
-use crate::plan::{
-    join::{
-        delta_join::{DeltaPathPlan, DeltaStagePlan},
-        linear_join::LinearStagePlan,
-        DeltaJoinPlan, JoinClosure, LinearJoinPlan,
-    },
-    reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan},
-    AvailableCollections, Plan,
-};
+use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
+use crate::plan::join::linear_join::LinearStagePlan;
+use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
+use crate::plan::reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan};
+use crate::plan::{AvailableCollections, Plan};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
@@ -129,16 +128,25 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     Ok(())
                 })?;
             }
-            LetRec { ids, values, body } => {
-                let bindings = ids.iter().zip(values).collect::<Vec<_>>();
+            LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
-                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                    for (id, value, limit) in bindings.iter().rev() {
+                        if let Some(limit) = limit {
+                            writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
+                        } else {
+                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        }
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
@@ -212,9 +220,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
                     }
-                    ReducePlan::DistinctNegated => {
-                        writeln!(f, "{}Reduce::DistinctNegated", ctx.indent)?;
-                    }
                     ReducePlan::Accumulable(plan) => {
                         writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
@@ -265,6 +270,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                             let order_by = separated(", ", &plan.order_key);
                             write!(f, " order_by=[{}]", order_by)?;
                         }
+                        if plan.must_consolidate {
+                            write!(f, " must_consolidate")?;
+                        }
                     }
                     TopKPlan::MonotonicTopK(plan) => {
                         write!(f, "{}TopK::MonotonicTopK", ctx.indent)?;
@@ -278,6 +286,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         }
                         if let Some(limit) = &plan.limit {
                             write!(f, " limit={}", limit)?;
+                        }
+                        if plan.must_consolidate {
+                            write!(f, " must_consolidate")?;
                         }
                     }
                     TopKPlan::Basic(plan) => {
@@ -316,16 +327,22 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         write!(f, "{}Threshold::Basic", ctx.indent)?;
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
-                    ThresholdPlan::Retractions(plan) => {
-                        let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
-                        write!(f, "{}Threshold::Retractions", ctx.indent)?;
-                        writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
-                    }
                 };
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Union { inputs } => {
-                writeln!(f, "{}Union", ctx.indent)?;
+            Union {
+                inputs,
+                consolidate_output,
+            } => {
+                if *consolidate_output {
+                    writeln!(
+                        f,
+                        "{}Union consolidate_output={}",
+                        ctx.indent, consolidate_output
+                    )?;
+                } else {
+                    writeln!(f, "{}Union", ctx.indent)?;
+                }
                 ctx.indented(|ctx| {
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;
@@ -593,13 +610,17 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
                 let skips = separated(", ", &plan.skips);
                 writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+                writeln!(f, "{}monotonic", ctx.indent)?;
+                if plan.must_consolidate {
+                    writeln!(f, "{}must_consolidate", ctx.indent)?;
+                }
             }
             HierarchicalPlan::Bucketed(plan) => {
                 let aggr_funcs = separated(", ", &plan.aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
                 let skips = separated(", ", &plan.skips);
                 writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
-                let buckets = separated(", ", &plan.skips);
+                let buckets = separated(", ", &plan.buckets);
                 writeln!(f, "{}buckets=[{}]", ctx.indent, buckets)?;
             }
         }

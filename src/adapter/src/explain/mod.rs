@@ -14,9 +14,6 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
-use mz_expr::explain::ExplainContext;
-use mz_repr::explain::UsedIndexes;
-
 pub(crate) mod fast_path;
 pub(crate) mod hir;
 pub(crate) mod lir;

@@ -27,7 +27,11 @@ from materialize.mzcompose.services import (
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(
+        setup_materialize=True,
+        # Workaround for #19810
+        restart="on-failure:5",
+    ),
     Postgres(),
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
@@ -40,9 +44,9 @@ SERVICES = [
         no_reset=True,
         seed=1,
         entrypoint_extra=[
-            f"--var=replicas=1",
+            "--var=replicas=1",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         ],
     ),
 ]
