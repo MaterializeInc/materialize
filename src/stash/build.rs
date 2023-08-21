@@ -95,6 +95,8 @@ const PROTO_DIRECTORY: &str = "protos";
 const PROTO_HASHES: &str = "protos/hashes.json";
 
 fn main() -> anyhow::Result<()> {
+    println!("cargo:rerun-if-changed={PROTO_DIRECTORY}");
+
     env::set_var("PROTOC", protobuf_src::protoc());
 
     // Read in the persisted hashes from disk.
