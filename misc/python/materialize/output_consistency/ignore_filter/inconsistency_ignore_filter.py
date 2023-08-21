@@ -165,16 +165,25 @@ class PreExecutionInconsistencyIgnoreFilter:
         expression: ExpressionWithArgs,
         all_involved_characteristics: Set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
-        # Note that function names are always provided in lower case.
         if db_function.function_name_in_lower_case in {
             "sum",
-            # kept for compatibility
+            "avg",
+            # compatibility preserving behavior of original implementation of args
             "avg_internal_v1",
+            "stddev_samp",
+            "stddev_pop",
+            "var_samp",
+            "var_pop",
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return YesIgnore("#19511")
 
+        if db_function.function_name_in_lower_case in {
+            "sum",
+            # compatibility preserving behavior of original implementation of args
+            "avg_internal_v1",
+        }:
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
