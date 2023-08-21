@@ -9,7 +9,7 @@
 
 import unittest
 
-import psycopg  # type: ignore
+import psycopg
 import psycopg2  # type: ignore
 import sqlalchemy  # type: ignore
 
@@ -151,7 +151,9 @@ class SmokeTest(unittest.TestCase):
                     )
 
                     # Validate the first row, but ignore the timestamp column.
-                    (ts, diff, a, b) = copy.read_row()
+                    row = copy.read_row()
+                    assert row is not None
+                    (ts, diff, a, b) = row
                     self.assertEqual(diff, 1)
                     self.assertEqual(a, 1)
                     self.assertEqual(b, "a")
@@ -166,7 +168,9 @@ class SmokeTest(unittest.TestCase):
                             )
 
                     # Validate the new row, again ignoring the timestamp column.
-                    (ts, diff, a, b) = copy.read_row()
+                    row = copy.read_row()
+                    assert row is not None
+                    (ts, diff, a, b) = row
                     self.assertEqual(diff, 1)
                     self.assertEqual(a, 2)
                     self.assertEqual(b, "b")
