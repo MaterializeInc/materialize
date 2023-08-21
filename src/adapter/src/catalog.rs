@@ -5402,7 +5402,7 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-            drop_ids,
+            &drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -5440,7 +5440,7 @@ impl Catalog {
         state: &mut CatalogState,
         // Provide all of the IDs that are being dropped in this transaction so we can provide
         // stronger invariants about when we change items' dependencies.
-        drop_ids: BTreeSet<GlobalId>,
+        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         // NOTE(benesch): to support altering legacy sized sources and sinks
         // (those with linked clusters), we need to generate retractions for
@@ -5508,7 +5508,7 @@ impl Catalog {
                     tx,
                     builtin_table_updates,
                     oracle_write_ts,
-                    &drop_ids,
+                    drop_ids,
                     audit_events,
                     session,
                     id,
@@ -5609,7 +5609,7 @@ impl Catalog {
                         id,
                         to_name,
                         sink.item,
-                        &drop_ids,
+                        drop_ids,
                     )?;
                 }
                 Op::AlterSource { id, cluster_config } => {
@@ -5709,7 +5709,7 @@ impl Catalog {
                         id,
                         to_name,
                         source.item,
-                        &drop_ids,
+                        drop_ids,
                     )?;
                 }
                 Op::CreateDatabase {
@@ -6927,7 +6927,7 @@ impl Catalog {
                             id,
                             to_name,
                             to_item,
-                            &drop_ids,
+                            drop_ids,
                         )?;
                     }
                 }
@@ -7114,7 +7114,7 @@ impl Catalog {
                         id,
                         name.clone(),
                         to_item.clone(),
-                        &drop_ids,
+                        drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry)?;
