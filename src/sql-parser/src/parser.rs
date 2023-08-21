@@ -4656,20 +4656,34 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     let actions = self
-                        .parse_comma_separated(Parser::parse_alter_connection_option)
+                        .parse_comma_separated(Parser::parse_alter_connection_action)
                         .map_parser_err(StatementKind::AlterConnection)?;
+
+                    let with_options = if self.parse_keyword(WITH) {
+                        self.expect_token(&Token::LParen)
+                            .map_parser_err(StatementKind::AlterConnection)?;
+                        let options = self
+                            .parse_comma_separated(Parser::parse_alter_connection_option)
+                            .map_parser_err(StatementKind::AlterConnection)?;
+                        self.expect_token(&Token::RParen)
+                            .map_parser_err(StatementKind::AlterConnection)?;
+                        options
+                    } else {
+                        vec![]
+                    };
 
                     Statement::AlterConnection(AlterConnectionStatement {
                         name,
                         if_exists,
                         actions,
+                        with_options,
                     })
                 }
             },
         )
     }
 
-    fn parse_alter_connection_option(&mut self) -> Result<AlterConnectionAction<Raw>, ParserError> {
+    fn parse_alter_connection_action(&mut self) -> Result<AlterConnectionAction<Raw>, ParserError> {
         let r = match self.expect_one_of_keywords(&[ROTATE, SET, RESET, DROP])? {
             ROTATE => {
                 self.expect_keyword(KEYS)?;
@@ -4691,6 +4705,19 @@ impl<'a> Parser<'a> {
         };
 
         Ok(r)
+    }
+
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_alter_connection_option(&mut self) -> Result<AlterConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[VALIDATE])? {
+            VALIDATE => AlterConnectionOptionName::Validate,
+            _ => unreachable!(),
+        };
+
+        Ok(AlterConnectionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {

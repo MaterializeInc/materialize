@@ -2201,12 +2201,45 @@ impl<T: AstInfo> AstDisplay for AlterConnectionAction<T> {
 }
 impl_display_t!(AlterConnectionAction);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AlterConnectionOptionName {
+    Validate,
+}
+
+impl AstDisplay for AlterConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            AlterConnectionOptionName::Validate => "VALIDATE",
+        })
+    }
+}
+impl_display!(AlterConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in an `ALTER CONNECTION...` statement.
+pub struct AlterConnectionOption<T: AstInfo> {
+    pub name: AlterConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(AlterConnectionOption);
+
 /// `ALTER CONNECTION`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterConnectionStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub if_exists: bool,
     pub actions: Vec<AlterConnectionAction<T>>,
+    pub with_options: Vec<AlterConnectionOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for AlterConnectionStatement<T> {
@@ -2218,6 +2251,12 @@ impl<T: AstInfo> AstDisplay for AlterConnectionStatement<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         f.write_node(&display::comma_separated(&self.actions));
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
     }
 }
 

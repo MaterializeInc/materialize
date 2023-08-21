@@ -122,7 +122,7 @@ use uuid::Uuid;
 
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source,
+    ClusterReplicaSizeMap, Connection, DataSourceDesc, Source,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -189,6 +189,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
+    AlterConnectionValidationReady(AlterConnectionValidationReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -266,6 +267,7 @@ impl Message {
             ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
             PeekStageReady { .. } => "peek_stage_ready",
             DrainStatementLog => "drain_statement_log",
+            AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
         }
     }
 }
@@ -293,6 +295,17 @@ pub struct CreateConnectionValidationReady {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub connection_gid: GlobalId,
+    pub plan_validity: PlanValidity,
+    pub otel_ctx: OpenTelemetryContext,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct AlterConnectionValidationReady {
+    #[derivative(Debug = "ignore")]
+    pub ctx: ExecuteContext,
+    pub result: Result<Connection, AdapterError>,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
