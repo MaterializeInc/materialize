@@ -62,18 +62,31 @@ where
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
         if sink.up_to != Antichain::default() {
             unimplemented!(
-                "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
+                "UP TO is not supported for persist sinks yet, and shouldn't \
+                 have been accepted during parsing/planning"
             )
         }
 
-        persist_sink(
-            sink_id,
-            &self.storage_metadata,
-            desired_collection,
-            as_of,
-            compute_state,
-            probes,
-        )
+        if let Some(storage_metadata) = &self.storage_metadata {
+            persist_sink(
+                sink_id,
+                storage_metadata,
+                desired_collection,
+                as_of,
+                compute_state,
+                probes,
+            )
+        } else {
+            // TODO Consider rendering the persist_sink instead, and only disabling the actual
+            //      persist writes/appends. This would make shadow replicas more useful for
+            //      comparing the effects of code changes on resource usage. It would still not
+            //      be quite fair because a replica that doesn't write probably also participates
+            //      less in persist maintenance work.
+            tracing::warn!("disabling persist_sink because no storage_metadata was provided");
+
+            desired_collection.inner.probe_notify_with(probes);
+            None
+        }
     }
 }
 

@@ -79,6 +79,17 @@ pub type ReplicaId = mz_cluster_client::ReplicaId;
 // TODO(#18377): Replace `ReplicaId` with this type.
 pub type NewReplicaId = mz_cluster_client::NewReplicaId;
 
+fn into_shadow_id(id: u64) -> ReplicaId {
+    // Attempt to avoid collisions with replica IDs assigned by adapter. Hopefully this number is
+    // big enough...
+    // https://github.com/MaterializeInc/materialize/pull/18636 will fix this.
+    id + 1000000
+}
+
+fn is_shadow_replica(id: ReplicaId) -> bool {
+    id >= 1000000
+}
+
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
@@ -139,6 +150,8 @@ pub struct ComputeController<T> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
     metrics: ComputeControllerMetrics,
+    /// Used for allocating IDs of shadow replicas.
+    shadow_counter: u64,
 }
 
 impl<T> ComputeController<T> {
@@ -157,6 +170,7 @@ impl<T> ComputeController<T> {
             replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            shadow_counter: 0,
         }
     }
 
@@ -193,6 +207,13 @@ impl<T> ComputeController<T> {
     ) -> Result<&CollectionState<T>, CollectionLookupError> {
         let collection = self.instance(instance_id)?.collection(collection_id)?;
         Ok(collection)
+    }
+
+    /// Returns an ID that can be used to create a shadow replica.
+    pub fn allocate_shadow_id(&mut self) -> ReplicaId {
+        let id = into_shadow_id(self.shadow_counter);
+        self.shadow_counter += 1;
+        id
     }
 
     /// Acquire an [`ActiveComputeController`] by supplying a storage connection.

@@ -33,10 +33,11 @@ use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
-    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateClusterShadowStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -109,13 +110,14 @@ use crate::plan::{
     AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View, WebhookValidation,
+    CreateClusterReplicaPlan, CreateClusterShadowPlan, CreateClusterUnmanagedPlan,
+    CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion,
+    MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig,
+    RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
+    WebhookValidation,
 };
 use crate::session::vars;
 
@@ -3078,6 +3080,13 @@ pub fn describe_create_cluster_replica(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_cluster_shadow(
+    _: &StatementContext,
+    _: CreateClusterShadowStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_create_cluster_replica(
     scx: &StatementContext,
     CreateClusterReplicaStatement {
@@ -3100,6 +3109,26 @@ pub fn plan_create_cluster_replica(
         name: normalize::ident(name),
         cluster_id: cluster.id(),
         config: plan_replica_config(scx, options)?,
+    }))
+}
+
+pub fn plan_create_cluster_shadow(
+    scx: &StatementContext,
+    CreateClusterShadowStatement {
+        of_cluster,
+        name,
+        image,
+        options,
+    }: CreateClusterShadowStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let cluster = scx
+        .catalog
+        .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
+    Ok(Plan::CreateClusterShadow(CreateClusterShadowPlan {
+        name: normalize::ident(name),
+        cluster_id: cluster.id(),
+        config: plan_replica_config(scx, options)?,
+        image,
     }))
 }
 

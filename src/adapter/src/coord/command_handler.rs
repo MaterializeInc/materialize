@@ -615,6 +615,7 @@ impl Coordinator {
                     | Statement::AlterSystemSet(_)
                     | Statement::CreateCluster(_)
                     | Statement::CreateClusterReplica(_)
+                    | Statement::CreateClusterShadow(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)

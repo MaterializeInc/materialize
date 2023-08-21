@@ -167,6 +167,7 @@ Idle
 If
 Ignore
 Ilike
+Image
 In
 Include
 Index
@@ -325,6 +326,7 @@ Serializable
 Service
 Session
 Set
+Shadow
 Shard
 Show
 Sink

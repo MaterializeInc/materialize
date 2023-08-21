@@ -542,6 +542,8 @@ pub enum ExecuteResponse {
     CreatedCluster,
     /// The requested cluster replica was created.
     CreatedClusterReplica,
+    /// The requested cluster shadow replica was created.
+    CreatedClusterShadow,
     /// The requested index was created.
     CreatedIndex,
     /// The requested secret was created.
@@ -718,6 +720,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedClusterReplica => {
                 Ok(ExecuteResponse::CreatedClusterReplica)
             }
+            ExecuteResponseKind::CreatedClusterShadow => Ok(ExecuteResponse::CreatedClusterShadow),
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
@@ -779,6 +782,7 @@ impl ExecuteResponse {
             CreatedRole => Some("CREATE ROLE".into()),
             CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
             CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
+            CreatedClusterShadow { .. } => Some("CREATE CLUSTER SHADOW".into()),
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
@@ -867,6 +871,7 @@ impl ExecuteResponse {
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
             CreateClusterReplica => vec![CreatedClusterReplica],
+            CreateClusterShadow => vec![CreatedClusterShadow],
             CreateSource | CreateSources => vec![CreatedSource],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],

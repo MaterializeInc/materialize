@@ -139,14 +139,16 @@ pub struct SubscribeSinkConnection {}
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistSinkConnection<S> {
     pub value_desc: RelationDesc,
-    pub storage_metadata: S,
+    // This is an `Option` to support shadow replicas, which should not be allowed to sink to
+    // persist.
+    pub storage_metadata: Option<S>,
 }
 
 impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMetadata> {
     fn into_proto(&self) -> ProtoPersistSinkConnection {
         ProtoPersistSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
-            storage_metadata: Some(self.storage_metadata.into_proto()),
+            storage_metadata: self.storage_metadata.into_proto(),
         }
     }
 
@@ -155,9 +157,7 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
             value_desc: proto
                 .value_desc
                 .into_rust_if_some("ProtoPersistSinkConnection::value_desc")?,
-            storage_metadata: proto
-                .storage_metadata
-                .into_rust_if_some("ProtoPersistSinkConnection::storage_metadata")?,
+            storage_metadata: proto.storage_metadata.into_rust()?,
         })
     }
 }

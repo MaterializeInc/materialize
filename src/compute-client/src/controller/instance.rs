@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::replica::{Replica, ReplicaConfig};
-use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
+use crate::controller::{is_shadow_replica, CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
@@ -304,6 +304,7 @@ where
     ///
     /// Panics if the compute instance still has active replicas.
     pub fn drop(self) {
+        // TODO automatically drop shadow replicas
         assert!(
             self.replicas.is_empty(),
             "cannot drop instances with provisioned replicas"
@@ -413,8 +414,7 @@ where
         config.logging.index_logs = self.compute.log_sources.clone();
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().collect();
 
-        // Initialize frontier tracking for the new replica
-        // and clean up any dropped collections that we can
+        // Initialize frontier tracking for the new replica.
         let mut updates = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
@@ -662,7 +662,7 @@ where
                         .clone();
                     let conn = PersistSinkConnection {
                         value_desc: conn.value_desc,
-                        storage_metadata: metadata,
+                        storage_metadata: Some(metadata),
                     };
                     ComputeSinkConnection::Persist(conn)
                 }
@@ -854,6 +854,13 @@ where
         replica_id: ReplicaId,
         updates: &[(GlobalId, Antichain<T>)],
     ) {
+        // Ignore frontier updates from shadow replicas. Shadows are read-only replicas, so they
+        // don't participate in advancing write frontiers, and they should not hold back read
+        // frontiers.
+        if is_shadow_replica(replica_id) {
+            return;
+        }
+
         let mut advanced_collections = Vec::new();
         let mut compute_read_capability_changes = BTreeMap::default();
         let mut storage_read_capability_changes = BTreeMap::default();
@@ -1060,6 +1067,12 @@ where
         response: ComputeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
+        // Shadow replicas should not have any user-visible effects on the environment, so we
+        // ignore responses from them.
+        if is_shadow_replica(replica_id) {
+            return None;
+        }
+
         match response {
             ComputeResponse::FrontierUpper { id, upper } => {
                 self.handle_frontier_upper(id, upper, replica_id);
@@ -1187,8 +1200,8 @@ where
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
         if !self.compute.collections.contains_key(&subscribe_id) {
-            tracing::warn!(?replica_id, "Response for unknown subscribe {subscribe_id}",);
-            tracing::error!("Replica sent a response for an unknown subscibe");
+            tracing::warn!(?replica_id, "Response for unknown subscribe {subscribe_id}");
+            tracing::error!("Replica sent a response for an unknown subscribe");
             return None;
         }
 
@@ -1284,7 +1297,14 @@ impl<T> PendingPeek<T> {
         // the set of replicas we are waiting for is currently empty. It might be that the cluster
         // has no replicas or all replicas have been temporarily removed for re-hydration. In this
         // case, we wait for new replicas to be added to eventually serve the peek.
-        self.otel_ctx.is_none() && self.unfinished.is_empty()
+        let responded = self.otel_ctx.is_none();
+
+        // A peek is finished even if we haven't yet received a response from shadow replicas.
+        // We are not trying to hold back compaction for shadows, so there is no need to wait for
+        // their responses either.
+        let waiting = self.unfinished.iter().any(|id| !is_shadow_replica(*id));
+
+        responded && !waiting
     }
 }
 

@@ -25,12 +25,13 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
-use crate::controller::ReplicaId;
+use crate::controller::{ReplicaId, is_shadow_replica};
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
+use crate::types::sinks::ComputeSinkConnection;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -174,6 +175,7 @@ where
             logging_config: config.logging,
             timely_config,
             epoch,
+            is_shadow: is_shadow_replica(replica_id),
         };
 
         let result = run_message_loop(
@@ -299,6 +301,7 @@ struct CommandSpecialization {
     logging_config: LoggingConfig,
     timely_config: TimelyConfig,
     epoch: ClusterStartupEpoch,
+    is_shadow: bool,
 }
 
 impl CommandSpecialization {
@@ -314,6 +317,21 @@ impl CommandSpecialization {
         if let ComputeCommand::CreateTimely { config, epoch } = command {
             *config = self.timely_config.clone();
             *epoch = self.epoch;
+        }
+
+        if let ComputeCommand::CreateDataflow(dataflow) = command {
+            if self.is_shadow {
+                // Adjust the dataflow description to prevent shadow replicas from writing to
+                // persist. We do this by removing the storage metadata information from persist
+                // sink connections. Doing so (rather than just setting a flag) ensures that the
+                // shadow cannot write to the sink collection no matter how much it misbehaves.
+                for export in dataflow.sink_exports.values_mut() {
+                    match &mut export.connection {
+                        ComputeSinkConnection::Persist(conn) => conn.storage_metadata = None,
+                        ComputeSinkConnection::Subscribe(_) => (),
+                    };
+                }
+            }
         }
     }
 }

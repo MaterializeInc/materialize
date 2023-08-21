@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
@@ -397,6 +397,42 @@ where
         Ok(())
     }
 
+    /// Creates a shadow replica of the specified cluster with the specified identifier
+    /// and configuration.
+    pub async fn create_shadow(
+        &mut self,
+        cluster_id: ClusterId,
+        _name: String,
+        config: ReplicaConfig,
+        image: Option<String>,
+    ) -> Result<(), anyhow::Error> {
+        let ReplicaLocation::Managed(location) = config.location else {
+            bail!("only managed location supported for shadow replicas");
+        };
+
+        let image = image.unwrap_or_else(|| self.clusterd_image.clone());
+        let shadow_id = self.compute.allocate_shadow_id();
+
+        let workers = location.allocation.workers;
+        let service = self
+            .provision_shadow(image, cluster_id, shadow_id, location)
+            .await?;
+        let compute_location = ClusterReplicaLocation {
+            ctl_addrs: service.addresses("computectl"),
+            dataflow_addrs: service.addresses("compute"),
+            workers,
+        };
+
+        self.active_compute().add_replica_to_instance(
+            cluster_id,
+            shadow_id,
+            compute_location,
+            config.compute,
+        )?;
+
+        Ok(())
+    }
+
     /// Drops the specified replica of the specified cluster.
     pub async fn drop_replica(
         &mut self,
@@ -416,6 +452,7 @@ where
     }
 
     /// Remove orphaned replicas.
+    // TODO remove shadow replicas
     pub async fn remove_orphaned_replicas(
         &mut self,
         next_replica_id: ReplicaId,
@@ -628,6 +665,121 @@ where
         });
 
         Ok((service, metrics_task.abort_on_drop()))
+    }
+
+    /// Provisions a shadow replica with the service orchestrator.
+    async fn provision_shadow(
+        &self,
+        image: String,
+        cluster_id: ClusterId,
+        shadow_id: ReplicaId,
+        location: ManagedReplicaLocation,
+    ) -> Result<Box<dyn Service>, anyhow::Error> {
+        let service_name = generate_replica_service_name(cluster_id, shadow_id);
+        let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let secrets_args = self.secrets_args.to_flags();
+        self.orchestrator
+            .ensure_service(
+                &service_name,
+                ServiceConfig {
+                    image,
+                    init_container_image: self.init_container_image.clone(),
+                    args: &|assigned| {
+                        let mut args = vec![
+                            format!(
+                                "--storage-controller-listen-addr={}",
+                                assigned["storagectl"]
+                            ),
+                            format!(
+                                "--compute-controller-listen-addr={}",
+                                assigned["computectl"]
+                            ),
+                            format!("--internal-http-listen-addr={}", assigned["internal-http"]),
+                            format!("--opentelemetry-resource=cluster_id={}", cluster_id),
+                            format!("--opentelemetry-resource=replica_id={}", shadow_id),
+                            format!("--persist-pubsub-url={}", persist_pubsub_url),
+                        ];
+                        if let Some(memory_limit) = location.allocation.memory_limit {
+                            args.push(format!(
+                                "--announce-memory-limit={}",
+                                memory_limit.0.as_u64()
+                            ));
+                        }
+
+                        args.extend(secrets_args.clone());
+
+                        args
+                    },
+                    ports: vec![
+                        ServicePort {
+                            name: "storagectl".into(),
+                            port_hint: 2100,
+                        },
+                        // To simplify the changes to tests, the port
+                        // chosen here is _after_ the compute ones.
+                        // TODO(petrosagg): fix the numerical ordering here
+                        ServicePort {
+                            name: "storage".into(),
+                            port_hint: 2103,
+                        },
+                        ServicePort {
+                            name: "computectl".into(),
+                            port_hint: 2101,
+                        },
+                        ServicePort {
+                            name: "compute".into(),
+                            port_hint: 2102,
+                        },
+                        ServicePort {
+                            name: "internal-http".into(),
+                            port_hint: 6878,
+                        },
+                    ],
+                    cpu_limit: location.allocation.cpu_limit,
+                    memory_limit: location.allocation.memory_limit,
+                    scale: location.allocation.scale,
+                    labels: BTreeMap::from([
+                        ("replica-id".into(), shadow_id.to_string()),
+                        ("cluster-id".into(), cluster_id.to_string()),
+                        ("type".into(), "cluster".into()),
+                        ("replica-role".into(), "testing".to_string()),
+                        ("workers".into(), location.allocation.workers.to_string()),
+                        ("size".into(), location.size.to_string()),
+                    ]),
+                    availability_zones: match location.availability_zones {
+                        ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
+                        ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
+                    },
+                    // This provides the orchestrator with some label selectors that
+                    // are used to constraint the scheduling of replicas, based on
+                    // its internal configuration.
+                    other_replicas_selector: vec![
+                        LabelSelector {
+                            label_name: "cluster-id".to_string(),
+                            logic: LabelSelectionLogic::Eq {
+                                value: cluster_id.to_string(),
+                            },
+                        },
+                        // Select other replicas (but not oneself)
+                        LabelSelector {
+                            label_name: "replica-id".into(),
+                            logic: LabelSelectionLogic::NotEq {
+                                value: shadow_id.to_string(),
+                            },
+                        },
+                    ],
+                    replicas_selector: vec![LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    }],
+                    disk_limit: location.allocation.disk_limit,
+                    disk: location.disk,
+                },
+            )
+            .await
     }
 
     /// Deprovisions a replica with the service orchestrator.

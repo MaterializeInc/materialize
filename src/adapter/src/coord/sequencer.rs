@@ -157,6 +157,12 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::CreateClusterShadow(plan) => {
+                let result = self
+                    .sequence_create_cluster_shadow(ctx.session(), plan)
+                    .await;
+                ctx.retire(result);
+            }
             Plan::CreateTable(plan) => {
                 let result = self
                     .sequence_create_table(ctx.session_mut(), plan, resolved_ids)
