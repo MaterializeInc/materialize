@@ -28,7 +28,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
-use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
+use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
 use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
@@ -246,6 +246,29 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
         }
     }
     Ok(None)
+}
+
+impl FastPathPlan {
+    pub fn used_indexes(&self, finishing: &Option<RowSetFinishing>) -> UsedIndexes {
+        match self {
+            FastPathPlan::Constant(..) => UsedIndexes::new(Vec::new()),
+            FastPathPlan::PeekExisting(id, literal_constraints, _mfp) => {
+                if literal_constraints.is_some() {
+                    UsedIndexes::new(vec![(*id, vec![IndexUsageType::Lookup])])
+                } else {
+                    if let Some(finishing) = finishing {
+                        if finishing.limit.is_some() && finishing.order_by.is_empty() {
+                            UsedIndexes::new(vec![(*id, vec![IndexUsageType::FastPathLimit])])
+                        } else {
+                            UsedIndexes::new(vec![(*id, vec![IndexUsageType::FullScan])])
+                        }
+                    } else {
+                        UsedIndexes::new(vec![(*id, vec![IndexUsageType::FullScan])])
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl crate::coord::Coordinator {

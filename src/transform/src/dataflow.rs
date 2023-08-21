@@ -736,6 +736,11 @@ impl<'a> CollectIndexRequests<'a> {
                                     IndexUsageType::PlanRoot => {
                                         // This is ok: happens when the entire query is a `Get`.
                                     },
+                                    IndexUsageType::FastPathLimit => {
+                                        // These are created much later, not even inside
+                                        // `prune_and_annotate_dataflow_index_imports`.
+                                        unreachable!()
+                                    }
                                     IndexUsageType::DanglingArrangeBy => {
                                         // Not possible, because we create IndexUsageType::Unknown
                                         // only when we see an `ArrangeBy`.
