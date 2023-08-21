@@ -168,12 +168,8 @@ class PreExecutionInconsistencyIgnoreFilter:
         # Note that function names are always provided in lower case.
         if db_function.function_name_in_lower_case in {
             "sum",
-            "avg",
+            # kept for compatibility
             "avg_internal_v1",
-            "stddev_samp",
-            "stddev_pop",
-            "var_samp",
-            "var_pop",
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
