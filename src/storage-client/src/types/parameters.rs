@@ -48,6 +48,8 @@ pub struct StorageParameters {
     pub grpc_client: GrpcClientParameters,
     /// Configuration for basic hydration backpressure.
     pub delay_sources_past_rehydration: bool,
+    /// Configuration ratio to shrink upsert buffers by.
+    pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -130,6 +132,7 @@ impl StorageParameters {
             storage_dataflow_max_inflight_bytes_config,
             grpc_client,
             delay_sources_past_rehydration,
+            shrink_upsert_unused_buffers_by_ratio,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -145,6 +148,7 @@ impl StorageParameters {
             storage_dataflow_max_inflight_bytes_config;
         self.grpc_client.update(grpc_client);
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
+        self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
     }
 }
 
@@ -168,6 +172,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ),
             grpc_client: Some(self.grpc_client.into_proto()),
             storage_dataflow_delay_sources_past_rehydration: self.delay_sources_past_rehydration,
+            shrink_upsert_unused_buffers_by_ratio: u64::cast_from(
+                self.shrink_upsert_unused_buffers_by_ratio,
+            ),
         }
     }
 
@@ -204,6 +211,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .grpc_client
                 .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
             delay_sources_past_rehydration: proto.storage_dataflow_delay_sources_past_rehydration,
+            shrink_upsert_unused_buffers_by_ratio: usize::cast_from(
+                proto.shrink_upsert_unused_buffers_by_ratio,
+            ),
         })
     }
 }

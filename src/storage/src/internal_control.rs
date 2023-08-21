@@ -37,6 +37,9 @@ pub struct DataflowParameters {
         mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
     /// Configuration for basic hydration backpressure.
     pub delay_sources_past_rehydration: bool,
+    /// Configuration ratio to shrink upsert buffers.
+    /// Defaults to 0, which means no shrinking will happen.
+    pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 impl DataflowParameters {
@@ -48,6 +51,7 @@ impl DataflowParameters {
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
         storage_dataflow_max_inflight_bytes_config: mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
         delay_sources_past_rehydration: bool,
+        shrink_upsert_unused_buffers_by_ratio: usize,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
@@ -55,6 +59,7 @@ impl DataflowParameters {
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
+        self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
     }
 }
 
@@ -107,6 +112,8 @@ pub enum InternalStorageCommand {
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
         /// Configuration for basic hydration backpressure.
         delay_sources_past_rehydration: bool,
+        /// Configuration ratio to shrink upsert buffers by
+        shrink_upsert_unused_buffers_by_ratio: usize,
     },
 }
 

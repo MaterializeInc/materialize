@@ -924,6 +924,16 @@ const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerV
     internal: true,
 };
 
+/// Configuration ratio to shrink unusef buffers in upsert by.
+/// For eg: is 2 is set, then the buffers will be reduced by 2 i.e. halved.
+/// Default is 0, which means shrinking is disabled.
+const STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_shrink_upsert_unused_buffers_by_ratio"),
+    value: &0,
+    description: "Configuration ratio to shrink unusef buffers in upsert by",
+    internal: true,
+};
+
 /// The fraction of the cluster replica size to be used as the maximum number of
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
@@ -2130,6 +2140,7 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
+            .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2643,6 +2654,11 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
     pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
         *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
+    }
+
+    /// Returns the `storage_shrink_upsert_unused_buffers_by_ratio` configuration parameter.
+    pub fn storage_shrink_upsert_unused_buffers_by_ratio(&self) -> usize {
+        *self.expect_value(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -4232,6 +4248,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
+        || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)

@@ -101,6 +101,8 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         grpc_client: grpc_client_config(config),
         delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
+        shrink_upsert_unused_buffers_by_ratio: config
+            .storage_shrink_upsert_unused_buffers_by_ratio(),
     }
 }
 

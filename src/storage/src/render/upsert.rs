@@ -218,6 +218,11 @@ where
     // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
     // this, to prevent unnecessary work.
     let wait_for_input_resumption = dataflow_paramters.delay_sources_past_rehydration;
+    let upsert_config = UpsertConfig {
+        wait_for_input_resumption,
+        shrink_upsert_unused_buffers_by_ratio: dataflow_paramters
+            .shrink_upsert_unused_buffers_by_ratio,
+    };
 
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
@@ -266,7 +271,7 @@ where
                         rocksdb_in_use_metric,
                     )
                 },
-                wait_for_input_resumption,
+                upsert_config,
             )
         } else {
             upsert_inner(
@@ -293,7 +298,7 @@ where
                         .unwrap(),
                     )
                 },
-                wait_for_input_resumption,
+                upsert_config,
             )
         }
     } else {
@@ -311,7 +316,7 @@ where
             upsert_metrics,
             source_config,
             || async { InMemoryHashMap::default() },
-            wait_for_input_resumption,
+            upsert_config,
         )
     }
 }
@@ -323,6 +328,7 @@ fn stage_input<T, O>(
     data: &mut Vec<((UpsertKey, Option<UpsertValue>, O), T, Diff)>,
     input_upper: &Antichain<T>,
     resume_upper: &Antichain<T>,
+    storage_shrink_upsert_unused_buffers_by_ratio: usize,
 ) where
     T: PartialOrder,
     O: Ord,
@@ -336,9 +342,21 @@ fn stage_input<T, O>(
         (time, key, Reverse(order), value)
     }));
 
-    if stash.capacity() / 2 > stash.len() {
-        stash.shrink_to(stash.capacity() / 2);
+    if storage_shrink_upsert_unused_buffers_by_ratio > 0 {
+        let reduced_capacity = stash.capacity() / storage_shrink_upsert_unused_buffers_by_ratio;
+        if reduced_capacity > stash.len() {
+            stash.shrink_to(reduced_capacity);
+        }
     }
+}
+
+// Created a struct to hold the configs for upserts.
+// So that new configs don't require a new method parameter.
+struct UpsertConfig {
+    // Whether or not to wait for the `input` to reach the `resumption_frontier`
+    // before we finalize `rehydration`.
+    wait_for_input_resumption: bool,
+    shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
@@ -350,9 +368,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
-    // Whether or not to wait for the `input` to reach the `resumption_frontier`
-    // before we finalize `rehydration`.
-    wait_for_input_resumption: bool,
+    upsert_config: UpsertConfig,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
@@ -402,6 +418,7 @@ where
             upsert_shared_metrics,
             upsert_metrics,
             source_config.source_statistics,
+            upsert_config.shrink_upsert_unused_buffers_by_ratio
         );
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
@@ -410,7 +427,7 @@ where
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
-            || (wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
+            || (upsert_config.wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
         {
             let previous_event = tokio::select! {
                 // Note that these are both cancel-safe. The reason we drain the `input` is to
@@ -422,7 +439,7 @@ where
                 input_event = input.next_mut() => {
                     match input_event {
                         Some(AsyncEvent::Data(_cap, data)) => {
-                            stage_input(&mut stash, data, &input_upper, &resume_upper);
+                            stage_input(&mut stash, data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
                         }
                         Some(AsyncEvent::Progress(upper)) => {
                             input_upper = upper;
@@ -540,7 +557,7 @@ where
         } {
             match event {
                 AsyncEvent::Data(_cap, data) => {
-                    stage_input(&mut stash, data, &input_upper, &resume_upper);
+                    stage_input(&mut stash, data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
                 }
                 AsyncEvent::Progress(upper) => {
                     // Ignore progress updates before the `resume_upper`, which is our initial
