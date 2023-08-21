@@ -128,7 +128,7 @@ use uuid::Uuid;
 
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source,
+    ClusterReplicaSizeMap, Connection, DataSourceDesc, Source,
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -182,6 +182,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
+    AlterConnectionValidationReady(AlterConnectionValidationReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -272,6 +273,7 @@ impl Message {
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
+            Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
         }
     }
 }
@@ -295,14 +297,17 @@ pub type PurifiedStatementReady = BackgroundWorkResult<(
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CreateConnectionValidationReady {
+pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
-    pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub result: Result<T, AdapterError>,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
 }
+
+pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>;
+pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
 pub enum RealTimeRecencyContext {

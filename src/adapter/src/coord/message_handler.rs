@@ -40,6 +40,8 @@ use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
+use super::AlterConnectionValidationReady;
+
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
@@ -63,6 +65,9 @@ impl Coordinator {
                 }
                 Message::CreateConnectionValidationReady(ready) => {
                     self.message_create_connection_validation_ready(ready).await
+                }
+                Message::AlterConnectionValidationReady(ready) => {
+                    self.message_alter_connection_validation_ready(ready).await
                 }
                 Message::WriteLockGrant(write_lock_guard) => {
                     self.message_write_lock_grant(write_lock_guard).await;
@@ -492,6 +497,41 @@ impl Coordinator {
                 plan,
                 ResolvedIds(plan_validity.dependency_ids),
             )
+            .await;
+        ctx.retire(result);
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_alter_connection_validation_ready(
+        &mut self,
+        AlterConnectionValidationReady {
+            mut ctx,
+            result,
+            connection_gid,
+            mut plan_validity,
+            otel_ctx,
+        }: AlterConnectionValidationReady,
+    ) {
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            return ctx.retire(Err(e));
+        }
+
+        let conn = match result {
+            Ok(ok) => ok,
+            Err(e) => {
+                return ctx.retire(Err(e));
+            }
+        };
+
+        let result = self
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
             .await;
         ctx.retire(result);
     }
