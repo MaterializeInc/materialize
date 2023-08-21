@@ -2039,14 +2039,6 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_initial_output_duration(self, collection_id: str) -> float | None:
-        metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
-        values = [
-            v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
-        ]
-        assert len(values) <= 1
-        return next(iter(values), None)
-
     def get_command_count(self, command_type: str) -> float:
         metrics = self.with_name("mz_compute_replica_history_command_count")
         values = [
@@ -2098,9 +2090,6 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
-    index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
-    mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
-
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
@@ -2124,29 +2113,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     count = metrics.get_value("mz_compute_replica_history_dataflow_count")
     assert count >= 2, f"unexpected dataflow count: {count}"
 
-    index_iod = metrics.get_initial_output_duration(index_id)
-    assert index_iod, f"unexpected index iod: {index_iod}"
-    mv_iod = metrics.get_initial_output_duration(mv_id)
-    assert mv_iod, f"unexpected mv iod: {mv_iod}"
-
     maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
     assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
-
-    # Drop the dataflows.
-    c.sql(
-        """
-        DROP INDEX idx;
-        DROP MATERIALIZED VIEW mv;
-        """
-    )
-
-    # Wait for the drop commands to reach the replica.
-    time.sleep(1)
-
-    # Check that the dataflow metrics have been cleaned up.
-    metrics = fetch_metrics()
-    assert metrics.get_initial_output_duration(index_id) is None
-    assert metrics.get_initial_output_duration(mv_id) is None
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
