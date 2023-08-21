@@ -2813,12 +2813,7 @@ where
             *reconciled_updates.entry(row).or_default() += diff;
         }
 
-        match self.state.collections[&id]
-            .write_frontier
-            .elements()
-            .iter()
-            .min()
-        {
+        match self.state.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
@@ -2901,12 +2896,7 @@ where
 
         let id = self.state.introspection_ids[&collection];
 
-        let rows = match self.state.collections[&id]
-            .write_frontier
-            .elements()
-            .iter()
-            .min()
-        {
+        let rows = match self.state.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
