@@ -1358,7 +1358,11 @@ impl Coordinator {
                         let mut dataflow = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
-                        let as_of = self.bootstrap_index_as_of(&dataflow, idx.cluster_id);
+                        let as_of = self.bootstrap_index_as_of(
+                            &dataflow,
+                            idx.cluster_id,
+                            idx.is_retained_metrics_object,
+                        );
                         dataflow.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
@@ -1659,11 +1663,12 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ComputeInstanceId,
+        is_retained_metrics_index: bool,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let mut as_of = self.least_valid_read(&id_bundle);
+        let min_as_of = self.least_valid_read(&id_bundle);
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
@@ -1674,11 +1679,32 @@ impl Coordinator {
         // this time either.
         let write_frontier = self.least_valid_write(&id_bundle);
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        if !write_frontier.is_empty() {
-            as_of.join_assign(&write_frontier);
+        if write_frontier.is_empty() {
+            return min_as_of;
         }
 
-        as_of
+        // Advancing the `as_of` to the write frontier means that we lose some historical data.
+        // That might be acceptable for the default 1-second index compaction window, but not for
+        // retained-metrics indexes. So we need to regress the write frontier by the retention
+        // duration of the index.
+        //
+        // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
+        // as well.
+        let lag = if is_retained_metrics_index {
+            let retention = self.catalog().state().system_config().metrics_retention();
+            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+                tracing::error!("absurd metrics retention duration: {retention:?}");
+                u64::MAX
+            }))
+        } else {
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+        };
+
+        let time = write_frontier.into_option().expect("checked above");
+        let time = time.saturating_sub(lag);
+        let max_as_of = Antichain::from_elem(time);
+
+        min_as_of.join(&max_as_of)
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
