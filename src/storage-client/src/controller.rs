@@ -29,13 +29,15 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
+use futures::Stream;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -70,7 +72,10 @@ use crate::client::{
 };
 use crate::controller::command_wals::ProtoShardId;
 use crate::controller::rehydration::RehydratingStorageClient;
-use crate::healthcheck;
+use crate::healthcheck::{
+    self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
+    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+};
 use crate::metrics::StorageControllerMetrics;
 
 mod collection_mgmt;
@@ -124,6 +129,11 @@ pub enum IntrospectionType {
     // once we allow multiplexing multiple sources/sinks on a single cluster.
     StorageSourceStatistics,
     StorageSinkStatistics,
+
+    // The below are for statement logging.
+    StatementExecutionHistory,
+    SessionHistory,
+    PreparedStatementHistory,
 }
 
 /// Describes how data is written to the collection.
@@ -531,6 +541,13 @@ pub trait StorageController: Debug + Send {
     async fn record_frontiers(
         &mut self,
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    );
+
+    async fn send_statement_log_updates(
+        &mut self,
+        statement_execution_history_updates: Vec<(Row, Diff)>,
+        prepared_statement_history_updates: Vec<Row>,
+        session_history_updates: Vec<Row>,
     );
 }
 
@@ -1290,6 +1307,7 @@ where
         this.append_shard_mappings(to_create.iter().map(|(id, _)| *id), 1)
             .await;
 
+        let mut statement_logging_sources_seen = 0;
         // TODO(guswynn): perform the io in this final section concurrently.
         for (id, description) in to_create {
             match description.data_source {
@@ -1371,6 +1389,15 @@ where
                                 IntrospectionType::SinkStatusHistory,
                             )
                             .await;
+                        }
+
+                        IntrospectionType::StatementExecutionHistory
+                        | IntrospectionType::SessionHistory
+                        | IntrospectionType::PreparedStatementHistory => {
+                            statement_logging_sources_seen += 1;
+                            if statement_logging_sources_seen == 3 {
+                                self.partially_truncate_statement_log().await;
+                            }
                         }
                     }
                 }
@@ -1732,31 +1759,7 @@ where
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
         let as_of = Antichain::from_elem(as_of);
-        let metadata = &self.collection(id)?.collection_metadata;
-
-        let persist_client = self
-            .persist
-            .open(metadata.persist_location.clone())
-            .await
-            .unwrap();
-
-        // We create a new read handle every time someone requests a snapshot and then immediately
-        // expire it instead of keeping a read handle permanently in our state to avoid having it
-        // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
-        // worth it to always create a new handle.
-        let mut read_handle = persist_client
-            .open_leased_reader::<SourceData, (), _, _>(
-                metadata.data_shard,
-                Arc::new(metadata.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: id.to_string(),
-                    handle_purpose: format!("snapshot {}", id),
-                },
-            )
-            .await
-            .expect("invalid persist usage");
-
+        let mut read_handle = self.read_handle_for_snapshot(id).await?;
         match read_handle.snapshot_and_fetch(as_of).await {
             Ok(contents) => {
                 let mut snapshot = Vec::with_capacity(contents.len());
@@ -2307,6 +2310,35 @@ where
         )
         .await;
     }
+    async fn send_statement_log_updates(
+        &mut self,
+        statement_execution_history_updates: Vec<(Row, Diff)>,
+        prepared_statement_history_updates: Vec<Row>,
+        session_history_updates: Vec<Row>,
+    ) {
+        let mseh_id = self.state.introspection_ids[&IntrospectionType::StatementExecutionHistory];
+        let mpsh_id = self.state.introspection_ids[&IntrospectionType::PreparedStatementHistory];
+        let msh_id = self.state.introspection_ids[&IntrospectionType::SessionHistory];
+
+        self.append_to_managed_collection(mseh_id, statement_execution_history_updates)
+            .await;
+        self.append_to_managed_collection(
+            mpsh_id,
+            prepared_statement_history_updates
+                .into_iter()
+                .map(|update| (update, 1))
+                .collect(),
+        )
+        .await;
+        self.append_to_managed_collection(
+            msh_id,
+            session_history_updates
+                .into_iter()
+                .map(|update| (update, 1))
+                .collect(),
+        )
+        .await;
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2638,6 +2670,206 @@ where
         }
 
         self.reconcile_managed_collection(id, updates).await;
+    }
+
+    /// Partially truncate the statement log tables.
+    /// The logic is as follows:
+    /// For any statement execution whose begin date is younger than
+    /// `statement_logging_retention_time_seconds`, retain both it, and any
+    /// prepared statement and session it references.
+    ///
+    /// Note - this can use unbounded memory. We don't need to ingest
+    /// the whole collection on startup, but we _do_ need to buffer
+    /// all the updates/retractions before sending them. This will be
+    /// fine with our current volume, but in the near future we should switch to a more incremental approach.
+    /// Persist will soon give us the ability to do that easily; see
+    /// [here](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1693592123322009) for details.
+    ///
+    /// The other reason this might technically use unbounded memory
+    /// is because we have to store the UUID of every prepared
+    /// statement we plan to keep -- this will cost about 40 MB * the
+    /// average QPS, assuming 30-day retention. This shouldn't cause problems for any of the
+    /// existing usage patterns, but we will need to think harder
+    /// about how to avoid it if we start supporting customers with a
+    /// huge QPS (probably we will need to just make their statement
+    /// logs non-persistent or have a low sampling rate).
+    ///
+    /// If for any reason this function starts causing problems in the
+    /// real world, we can disable it by turning off the
+    /// `TRUNCATE_STATEMENT_LOG` variable.
+    async fn partially_truncate_statement_log(&mut self) {
+        if !self.state.config.truncate_statement_log {
+            tracing::info!("Not garbage-collecting statement log, due to config parameter.");
+            return;
+        }
+        let now = (self.state.now)();
+        let cutoff = to_datetime(now)
+            - chrono::Duration::seconds(
+                self.state
+                    .config
+                    .statement_logging_retention_time_seconds
+                    .try_into()
+                    .expect("sane config value"),
+            );
+        let mseh_id = self.state.introspection_ids[&IntrospectionType::StatementExecutionHistory];
+        let mpsh_id = self.state.introspection_ids[&IntrospectionType::PreparedStatementHistory];
+        let msh_id = self.state.introspection_ids[&IntrospectionType::SessionHistory];
+        let mseh_ts = match self.state.collections[&mseh_id]
+            .write_frontier
+            .elements()
+            .iter()
+            .next()
+        {
+            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
+        };
+        let mpsh_ts = match self.state.collections[&mpsh_id]
+            .write_frontier
+            .elements()
+            .iter()
+            .next()
+        {
+            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
+        };
+        let msh_ts = match self.state.collections[&msh_id]
+            .write_frontier
+            .elements()
+            .iter()
+            .next()
+        {
+            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
+        };
+
+        let (mseh_began_at, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
+            .get_by_name(&ColumnName::from("began_at"))
+            .expect("schema has not changed");
+        let (mseh_prepared_statement_id, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
+            .get_by_name(&ColumnName::from("prepared_statement_id"))
+            .expect("schema has not changed");
+        let (mseh_finished_at, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
+            .get_by_name(&ColumnName::from("finished_at"))
+            .expect("schema has not changed");
+        let (mseh_finished_status, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
+            .get_by_name(&ColumnName::from("finished_status"))
+            .expect("schema has not changed");
+
+        let mut mseh_rows = Box::pin(
+            self.snapshot_and_stream(mseh_id, mseh_ts)
+                .await
+                .expect("snapshot_succeeds"),
+        );
+
+        let mut mseh_updates = vec![];
+        let mut ps_to_keep = HashSet::new();
+        use futures::stream::StreamExt;
+        while let Some((source_data, _ts, diff)) = mseh_rows.next().await {
+            assert!(diff != 0);
+            let row = source_data.0.expect("valid data");
+
+            let unpacked = row.unpack();
+            let began_at = unpacked[mseh_began_at].unwrap_timestamptz();
+
+            if *began_at < cutoff {
+                mseh_updates.push((row, diff * -1));
+            } else {
+                let ps_id = unpacked[mseh_prepared_statement_id].unwrap_uuid();
+                // The following `ps_to_keep.insert` invocation is imprecise -- technically, we only
+                // need to keep the corresponding prepared statement if the diffs of all the
+                // statement execution rows that reference it sum to a positive value.
+                // However, it's exceedingly likely that this is true if there are _any_ diffs in the
+                // window, so we don't really need to bother keeping track of a multiplicity here.
+                //
+                // In the event where due to some uncompacted data in mseh we keep around a row in mpsh
+                // that we shouldn't, no problems will be caused other than a tiny increase in storage until the
+                // next time we run this truncation process.
+                ps_to_keep.insert(ps_id);
+                let ended_at = unpacked[mseh_finished_at];
+                if matches!(ended_at, Datum::Null) {
+                    // We refer to a statement that began, but didn't finish (or whose finish was never recorded)
+                    // as "aborted".
+                    // We need to fill in "finished_at" and "finished_status" for such statements here.
+                    let aborted_row = Row::pack(unpacked.iter().enumerate().map(|(i, datum)| {
+                        if i == mseh_finished_at {
+                            Datum::TimestampTz(
+                                to_datetime(now).try_into().expect("sane system time"),
+                            )
+                        } else if i == mseh_finished_status {
+                            Datum::String("aborted")
+                        } else {
+                            *datum
+                        }
+                    }));
+                    mseh_updates.push((row, diff * -1));
+                    mseh_updates.push((aborted_row, diff));
+                }
+            }
+        }
+
+        let mut mpsh_updates = vec![];
+        let mut sessions_to_keep = HashSet::new();
+
+        let mut mpsh_rows = Box::pin(
+            self.snapshot_and_stream(mpsh_id, mpsh_ts)
+                .await
+                .expect("snapshot_succeeds"),
+        );
+
+        let (mpsh_id_col, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
+            .get_by_name(&ColumnName::from("id"))
+            .expect("schema has not changed");
+        let (mpsh_session_id, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
+            .get_by_name(&ColumnName::from("session_id"))
+            .expect("schema has not changed");
+        while let Some((source_data, _ts, diff)) = mpsh_rows.next().await {
+            let row = source_data.0.expect("valid data");
+            let unpacked = row.unpack();
+            let id = unpacked[mpsh_id_col].unwrap_uuid();
+            if ps_to_keep.get(&id).is_some() {
+                let session_id = unpacked[mpsh_session_id].unwrap_uuid();
+                sessions_to_keep.insert(session_id);
+            } else {
+                mpsh_updates.push((row, diff * -1));
+            }
+        }
+        let ps_kept = ps_to_keep.len();
+        std::mem::drop(ps_to_keep);
+
+        let mut msh_rows = Box::pin(
+            self.snapshot_and_stream(msh_id, msh_ts)
+                .await
+                .expect("snapshot_succeeds"),
+        );
+
+        let (msh_id_col, _) = MZ_SESSION_HISTORY_DESC
+            .get_by_name(&ColumnName::from("id"))
+            .expect("schema has not changed");
+
+        let mut msh_updates = vec![];
+        while let Some((source_data, _ts, diff)) = msh_rows.next().await {
+            let row = source_data.0.expect("valid data");
+            let id = row.iter().nth(msh_id_col).unwrap().unwrap_uuid();
+            if !sessions_to_keep.contains(&id) {
+                msh_updates.push((row, diff * -1));
+            }
+        }
+
+        self.append_to_managed_collection(mseh_id, mseh_updates)
+            .await;
+        self.append_to_managed_collection(mpsh_id, mpsh_updates)
+            .await;
+        self.append_to_managed_collection(msh_id, msh_updates).await;
+        // self.metrics
+        //     .set_startup_prepared_statement_bytes(u64::cast_from(mpsh_bytes));
+        self.metrics
+            .set_startup_prepared_statements_kept(u64::cast_from(ps_kept));
     }
 
     /// Effectively truncates the source status history shard except for the most recent updates
@@ -3216,6 +3448,55 @@ where
             instance_id: ingestion.instance_id,
             remap_collection_id: ingestion.remap_collection_id,
         })
+    }
+
+    async fn read_handle_for_snapshot(
+        &self,
+        id: GlobalId,
+    ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError> {
+        let metadata = &self.collection(id)?.collection_metadata;
+
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
+            .await
+            .unwrap();
+
+        // We create a new read handle every time someone requests a snapshot and then immediately
+        // expire it instead of keeping a read handle permanently in our state to avoid having it
+        // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
+        // worth it to always create a new handle.
+        let read_handle = persist_client
+            .open_leased_reader::<SourceData, (), _, _>(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: format!("snapshot {}", id),
+                },
+            )
+            .await
+            .expect("invalid persist usage");
+        Ok(read_handle)
+    }
+
+    async fn snapshot_and_stream(
+        &self,
+        id: GlobalId,
+        as_of: T,
+    ) -> Result<impl Stream<Item = (SourceData, T, Diff)>, StorageError> {
+        let as_of = Antichain::from_elem(as_of);
+        let mut read_handle = self.read_handle_for_snapshot(id).await?;
+        use futures::stream::StreamExt;
+        match read_handle.snapshot_and_stream(as_of).await {
+            Ok(contents) => Ok(contents.map(|((result_k, result_v), t, diff)| {
+                let () = result_v.expect("invalid empty value");
+                let data = result_k.expect("invalid key data");
+                (data, t, diff)
+            })),
+            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+        }
     }
 }
 

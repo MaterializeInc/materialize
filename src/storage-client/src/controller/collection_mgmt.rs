@@ -127,7 +127,7 @@ where
         existed
     }
 
-    /// Appends `updates` to the collection correlated with `id`, does not work for the append to
+    /// Appends `updates` to the collection correlated with `id`, does not wait for the append to
     /// complete.
     ///
     /// # Panics
@@ -224,7 +224,7 @@ where
                                 .into_iter()
                                 .flatten()
                                 .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                                .collect();
+                            .collect();
                             let request = vec![(id, rows, T::from(now()))];
 
                             // We'll try really hard to succeed, but eventually stop.
