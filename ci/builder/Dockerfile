@@ -62,7 +62,7 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
     # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
-    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.2.13"/g' .config \
+    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3"/g' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
