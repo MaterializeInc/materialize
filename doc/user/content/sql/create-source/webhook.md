@@ -115,16 +115,7 @@ sources.
 
 {{< /note >}}
 
-## Request Limits
-
-Webhook sources apply the following limits to received requests:
-
-* Maximum size of the request body is `2MB`. Requests larger than this will fail with 413 Payload Too Large.
-* Maximum number of concurrent connections is 250, across all webhook sources. Trying to connect
-when the server is at the maximum will return 429 Too Many Requests.
-* Requests that contain a header name specified more than once will be rejected with 401 Unauthorized.
-
-## Debugging `CHECK` Statements
+### Debugging Validation
 
 It can be difficult to get your `CHECK` statement correct, especially if your application does not
 have a way to send test events. If you're having trouble with your `CHECK` statement, we recommend
@@ -154,6 +145,15 @@ It's not possible to use `SECRET`s in a `SELECT` statement, so you'll need to pr
 as raw text for debugging.
 
 {{< /note >}}
+
+## Request Limits
+
+Webhook sources apply the following limits to received requests:
+
+* Maximum size of the request body is `2MB`. Requests larger than this will fail with 413 Payload Too Large.
+* Maximum number of concurrent connections is 250, across all webhook sources. Trying to connect
+when the server is at the maximum will return 429 Too Many Requests.
+* Requests that contain a header name specified more than once will be rejected with 401 Unauthorized.
 
 ## Duplicated and Partial Events
 
