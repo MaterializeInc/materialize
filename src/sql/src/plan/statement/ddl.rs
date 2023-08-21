@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions};
@@ -31,15 +31,15 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, SetRoleVar, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName,
-    Value,
+    AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterRoleOption,
+    AlterRoleStatement, AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement,
+    AlterSourceAction, AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName,
+    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
+    AlterSystemSetStatement, CommentObjectType, CommentStatement, ConnectionOption,
+    ConnectionOptionName, CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    DeferredItemName, DropOwnedStatement, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::Connection;
@@ -110,8 +110,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
+    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
@@ -4440,13 +4440,14 @@ pub fn describe_alter_connection(
 
 pub fn plan_alter_connection(
     scx: &StatementContext,
-    conn_name: UnresolvedItemName,
-    if_exists: bool,
-    set_options: Vec<ConnectionOption<Aug>>,
-    reset_options: Vec<ConnectionOptionName>,
-    drop_options: Vec<ConnectionOptionName>,
+    stmt: AlterConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let conn_name = normalize::unresolved_item_name(conn_name)?;
+    let AlterConnectionStatement {
+        name,
+        if_exists,
+        actions,
+    } = stmt;
+    let conn_name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&conn_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
@@ -4456,27 +4457,54 @@ pub fn plan_alter_connection(
             });
 
             return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Sink,
+                object_type: ObjectType::Connection,
             }));
         }
         Err(e) => return Err(e.into()),
     };
 
-    let mut total_options = set_options.clone();
-    total_options.extend(reset_options.iter().chain(drop_options.iter()).map(|name| {
-        ConnectionOption {
-            name: *name,
-            value: None,
+    let connection = entry.connection()?;
+
+    if actions
+        .iter()
+        .any(|action| matches!(action, AlterConnectionAction::RotateKeys))
+    {
+        if actions.len() > 1 {
+            sql_bail!("cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS");
         }
-    }));
+
+        if !matches!(connection, Connection::Ssh(_)) {
+            sql_bail!(
+                "{} is not an SSH connection",
+                scx.catalog.resolve_full_name(entry.name())
+            )
+        }
+
+        return Ok(Plan::AlterConnection(AlterConnectionPlan {
+            id: entry.id(),
+            action: crate::plan::AlterConnectionAction::RotateKeys,
+        }));
+    }
+
+    let total_options: Vec<_> = actions
+        .iter()
+        .map(|action| match action {
+            AlterConnectionAction::SetOption(option) => option.clone(),
+            AlterConnectionAction::ResetOption(name) | AlterConnectionAction::DropOption(name) => {
+                ConnectionOption {
+                    name: *name,
+                    value: None,
+                }
+            }
+            AlterConnectionAction::RotateKeys => unreachable!(),
+        })
+        .collect();
 
     // Type check values + avoid duplicates; we don't want to e.g. let users
     // drop and set the same option in the same statement, so treating drops as
     // sets here is fine.
     let connection_options_extracted =
         connection::ConnectionOptionExtracted::try_from(total_options)?;
-
-    let connection = entry.connection()?;
 
     let connection_type = match connection {
         Connection::Aws(_) => CreateConnectionType::Aws,
@@ -4490,15 +4518,15 @@ pub fn plan_alter_connection(
     // Ensure only this connection type's options were provided.
     connection_options_extracted.ensure_only_valid_options(connection_type)?;
 
-    // Turn any reset options into a `None` which when re-planned will convert
-    // them back to default values if they're available.
-    let set_options: BTreeMap<_, _> = set_options
-        .into_iter()
-        .map(|o| (o.name, o.value))
-        .chain(reset_options.into_iter().map(|name| (name, None)))
-        .collect();
-
-    let drop_options: BTreeSet<_> = drop_options.into_iter().collect();
+    let (mut drop_options, set_options): (BTreeSet<_>, BTreeMap<_, _>) =
+        actions.into_iter().partition_map(|action| match action {
+            AlterConnectionAction::DropOption(name) => Either::Left(name),
+            AlterConnectionAction::SetOption(ConnectionOption { name, value }) => {
+                Either::Right((name, value))
+            }
+            AlterConnectionAction::ResetOption(name) => Either::Right((name, None)),
+            AlterConnectionAction::RotateKeys => unreachable!(),
+        });
 
     // Handle any mutually exclusive options.
     //
@@ -4513,8 +4541,10 @@ pub fn plan_alter_connection(
 
     Ok(Plan::AlterConnection(AlterConnectionPlan {
         id: entry.id(),
-        set_options,
-        drop_options,
+        action: crate::plan::AlterConnectionAction::AlterOptions {
+            set_options,
+            drop_options,
+        },
     }))
 }
 
@@ -4780,37 +4810,6 @@ pub fn plan_alter_system_reset_all(
     _: AlterSystemResetAllStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
-}
-
-pub fn plan_alter_connection(
-    scx: &mut StatementContext,
-    stmt: AlterConnectionStatement,
-) -> Result<Plan, PlanError> {
-    let AlterConnectionStatement { name, if_exists } = stmt;
-    let name = normalize::unresolved_item_name(name)?;
-    let entry = match scx.catalog.resolve_item(&name) {
-        Ok(connection) => connection,
-        Err(_) if if_exists => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_string(),
-                object_type: ObjectType::Connection,
-            });
-
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Connection,
-            }));
-        }
-        Err(e) => return Err(e.into()),
-    };
-    if !matches!(entry.connection()?, Connection::Ssh(_)) {
-        sql_bail!(
-            "{} is not an SSH connection",
-            scx.catalog.resolve_full_name(entry.name())
-        )
-    }
-
-    let id = entry.id();
-    Ok(Plan::RotateKeys(RotateKeysPlan { id }))
 }
 
 pub fn describe_alter_role(

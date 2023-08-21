@@ -825,11 +825,7 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
-        Plan::AlterConnection(plan::AlterConnectionPlan {
-            id,
-            set_options: _,
-            drop_options: _,
-        }) => RbacRequirements {
+        Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
@@ -1033,10 +1029,6 @@ fn generate_rbac_requirements(
                 ..Default::default()
             }
         }
-        Plan::RotateKeys(plan::RotateKeysPlan { id }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id)],
-            ..Default::default()
-        },
         Plan::GrantRole(plan::GrantRolePlan {
             role_ids: _,
             member_ids: _,

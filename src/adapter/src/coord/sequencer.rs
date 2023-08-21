@@ -22,7 +22,7 @@ use mz_sql::catalog::{CatalogCluster, CatalogError};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
+    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -513,10 +513,6 @@ impl Coordinator {
                 ctx.session()
                     .add_notice(AdapterNotice::UserRequested { severity });
                 ctx.retire(Ok(ExecuteResponse::Raised));
-            }
-            Plan::RotateKeys(RotateKeysPlan { id }) => {
-                let result = self.sequence_rotate_keys(ctx.session(), id).await;
-                ctx.retire(result);
             }
             Plan::GrantPrivileges(plan) => {
                 let result = self

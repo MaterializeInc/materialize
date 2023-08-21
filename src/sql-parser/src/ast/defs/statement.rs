@@ -2201,7 +2201,7 @@ impl<T: AstInfo> AstDisplay for AlterConnectionAction<T> {
 }
 impl_display_t!(AlterConnectionAction);
 
-/// `ALTER CONNECTION ... ROTATE KEYS`
+/// `ALTER CONNECTION`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterConnectionStatement<T: AstInfo> {
     pub name: UnresolvedItemName,

@@ -172,7 +172,6 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
-    RotateKeys(RotateKeysPlan),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
     GrantPrivileges(GrantPrivilegesPlan),
@@ -191,7 +190,7 @@ impl Plan {
             StatementKind::AlterCluster => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
             }
-            StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::AlterConnection],
             StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
@@ -408,7 +407,6 @@ impl Plan {
             Plan::Execute(_) => "execute",
             Plan::Deallocate(_) => "deallocate",
             Plan::Raise(_) => "raise",
-            Plan::RotateKeys(_) => "rotate keys",
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivileges(_) => "grant privilege",
@@ -967,10 +965,18 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterConnectionAction {
+    RotateKeys,
+    AlterOptions {
+        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
+        drop_options: BTreeSet<ConnectionOptionName>,
+    },
+}
+
+#[derive(Debug)]
 pub struct AlterConnectionPlan {
     pub id: GlobalId,
-    pub set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
-    pub drop_options: BTreeSet<ConnectionOptionName>,
+    pub action: AlterConnectionAction,
 }
 
 #[derive(Debug)]
@@ -1071,11 +1077,6 @@ pub struct AlterOwnerPlan {
     pub id: ObjectId,
     pub object_type: ObjectType,
     pub new_owner: RoleId,
-}
-
-#[derive(Debug)]
-pub struct RotateKeysPlan {
-    pub id: GlobalId,
 }
 
 #[derive(Debug)]

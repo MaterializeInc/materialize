@@ -9,7 +9,7 @@
 
 //! Data definition language (DDL) utilities for CONNECTION objects.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_ore::str::StrExt;
@@ -155,7 +155,7 @@ impl ConnectionOptionExtracted {
         self,
         scx: &StatementContext,
         connection_type: CreateConnectionType,
-    ) -> Result<Connection, PlanError> {
+    ) -> Result<Connection<ReferencedConnection>, PlanError> {
         self.ensure_only_valid_options(connection_type)?;
 
         let connection: Connection<ReferencedConnection> = match connection_type {
