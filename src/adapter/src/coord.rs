@@ -89,7 +89,7 @@ use mz_controller::clusters::{
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
@@ -231,6 +231,34 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+}
+
+impl Message {
+    /// Returns a string to identify the kind of [`Message`], useful for logging.
+    pub const fn kind(&self) -> &'static str {
+        use Message::*;
+
+        match self {
+            Command(_) => "command",
+            ControllerReady => "controller_ready",
+            PurifiedStatementReady(_) => "purified_statement_ready",
+            CreateConnectionValidationReady(_) => "create_connection_validation_ready",
+            SinkConnectionReady(_) => "sink_connection_ready",
+            WriteLockGrant(_) => "write_lock_grant",
+            GroupCommitInitiate(..) => "group_commit_initiate",
+            GroupCommitApply(..) => "group_commit_apply",
+            AdvanceTimelines => "advance_timelines",
+            ClusterEvent(_) => "cluster_event",
+            RemovePendingPeeks { .. } => "remove_pending_peeks",
+            LinearizeReads(_) => "linearize_reads",
+            StorageUsageFetch => "storage_usage_fetch",
+            StorageUsageUpdate(_) => "storage_usage_update",
+            RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
+            RetireExecute { .. } => "retire_execute",
+            ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
+            PeekStageReady { .. } => "peek_stage_ready",
+        }
+    }
 }
 
 #[derive(Derivative)]
@@ -1746,7 +1774,7 @@ impl Coordinator {
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        // // Watcher that listens for and reports cluster service status changes.
+        // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
 
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
@@ -1798,6 +1826,12 @@ impl Coordinator {
 
         self.schedule_storage_usage_collection();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
+
+        // Report if the handling of a single message takes longer than this threshold.
+        let reporting_threshold = self
+            .catalog
+            .system_config()
+            .coord_slow_message_reporting_threshold_ms();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1851,10 +1885,19 @@ impl Coordinator {
                 }
             };
 
+            // Track the wall time for each message for reporting.
+            let histogram_metric = self
+                .metrics
+                .slow_message_handling
+                .with_label_values(&[msg.kind()]);
+
             self.handle_message(msg)
                 // All message processing functions trace. Start a parent span for them to make
                 // it easy to find slow messages.
                 .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .wall_time()
+                .observe(histogram_metric)
+                .with_filter(move |wall_time| wall_time >= reporting_threshold)
                 .await;
         }
     }
