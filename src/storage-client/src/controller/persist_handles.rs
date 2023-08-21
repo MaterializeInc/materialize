@@ -642,12 +642,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                                             let lower = if current_upper.less_than(&at_least) {
                                                 at_least
                                             } else {
-                                                current_upper
-                                                    .elements()
-                                                    .iter()
-                                                    .min()
-                                                    .expect("cannot append data to closed collection")
-                                                    .clone()
+                                                current_upper.into_option().expect("cannot append data to closed collection")
                                             };
 
                                             let upper = lower.step_forward();
