@@ -1305,12 +1305,6 @@ pub const MZ_COMPUTE_EXPORTS_PER_WORKER: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
-pub const MZ_COMPUTE_DEPENDENCIES_PER_WORKER: BuiltinLog = BuiltinLog {
-    name: "mz_compute_dependencies_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::DataflowDependency),
-};
-
 pub const MZ_COMPUTE_FRONTIERS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1468,6 +1462,14 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_compute_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("dependency_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2337,15 +2339,6 @@ pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_internal.mz_compute_exports AS
 SELECT export_id, dataflow_id
 FROM mz_internal.mz_compute_exports_per_worker
-WHERE worker_id = 0",
-};
-
-pub const MZ_COMPUTE_DEPENDENCIES: BuiltinView = BuiltinView {
-    name: "mz_compute_dependencies",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_compute_dependencies AS
-SELECT export_id, import_id
-FROM mz_internal.mz_compute_dependencies_per_worker
 WHERE worker_id = 0",
 };
 
@@ -4848,7 +4841,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_DEPENDENCIES_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -4871,6 +4863,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        Builtin::Table(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
@@ -4936,7 +4929,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_EXPORTS),
-        Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),

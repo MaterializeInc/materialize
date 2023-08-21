@@ -89,6 +89,12 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+    /// A notification about dependency updates.
+    DependencyUpdate {
+        id: GlobalId,
+        dependencies: Vec<GlobalId>,
+        diff: i64,
+    },
 }
 
 /// Replica configuration
