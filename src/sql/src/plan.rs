@@ -1027,6 +1027,7 @@ pub enum AlterConnectionAction {
     AlterOptions {
         set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
         drop_options: BTreeSet<ConnectionOptionName>,
+        validate: bool,
     },
 }
 

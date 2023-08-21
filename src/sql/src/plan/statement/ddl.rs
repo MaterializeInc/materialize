@@ -31,11 +31,11 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterRoleOption,
-    AlterRoleStatement, AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement,
-    AlterSourceAction, AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName,
-    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
-    AlterSystemSetStatement, CommentObjectType, CommentStatement, ConnectionOptionName,
+    AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
+    AlterConnectionOptionName, AlterRoleOption, AlterRoleStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
@@ -4775,6 +4775,8 @@ pub fn describe_alter_connection(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(AlterConnectionOption, (Validate, bool));
+
 pub fn plan_alter_connection(
     scx: &StatementContext,
     stmt: AlterConnectionStatement<Aug>,
@@ -4783,6 +4785,7 @@ pub fn plan_alter_connection(
         name,
         if_exists,
         actions,
+        with_options,
     } = stmt;
     let conn_name = normalize::unresolved_item_name(name)?;
     let entry = match scx.catalog.resolve_item(&conn_name) {
@@ -4801,6 +4804,21 @@ pub fn plan_alter_connection(
     };
 
     let connection = entry.connection()?;
+
+    let options = AlterConnectionOptionExtracted::try_from(with_options)?;
+    if options.validate.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
+    }
+
+    let validate = match options.validate {
+        Some(val) => val,
+        None => {
+            scx.catalog
+                .system_vars()
+                .enable_default_connection_validation()
+                && connection.validate_by_default()
+        }
+    };
 
     if actions
         .iter()
@@ -4924,6 +4942,7 @@ pub fn plan_alter_connection(
         action: crate::plan::AlterConnectionAction::AlterOptions {
             set_options,
             drop_options,
+            validate,
         },
     }))
 }
