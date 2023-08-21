@@ -68,6 +68,17 @@ In both of those cases, Materialize, CRDB and Python will run within the same ma
 ./mzcompose run default --target=remote \--materialize-url="postgres://user:password@host:6875/materialize?sslmode=require" --cluster-name= ...
 ```
 
+## Running against multiple targets:
+
+If you issue separate `./mzcompose run default --target=...` commands, their results will be accumulated in the `results` directory
+and all targets will be displayed together on a single chart.
+
+```
+./mzcompose run default --target=devel-cdb1f682e28d54e85afdcac3c32d43039df093a8
+...
+./mzcompose run default --target=devel-c891e3b4b174bd536b7a15ec212c5202ddc85b95
+```
+
 # Accuracy
 
 The following considerations can potentially impact the accuracy/realism of the reported results:

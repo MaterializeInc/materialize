@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import pathlib
 import sys
 import time
 from concurrent import futures
@@ -28,7 +29,7 @@ from materialize.scalability.endpoints import (
 )
 from materialize.scalability.operation import Operation
 from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
@@ -149,8 +150,13 @@ def run_workload(
         df_totals = pd.concat([df_totals, df_total])
         df_details = pd.concat([df_details, df_detail])
 
-        df_totals.to_csv(f"results/{type(workload).__name__}.csv")
-        df_details.to_csv(f"results/{type(workload).__name__}_details.csv")
+        endpoint_name = endpoint.name()
+        pathlib.Path(f"results/{endpoint_name}").mkdir(parents=True, exist_ok=True)
+
+        df_totals.to_csv(f"results/{endpoint_name}/{type(workload).__name__}.csv")
+        df_details.to_csv(
+            f"results/{endpoint_name}/{type(workload).__name__}_details.csv"
+        )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -234,7 +240,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else Workload.__subclasses__()
+        else [w for w in Workload.__subclasses__() if not w == WorkloadSelfTest]
     )
 
     schema = Schema(

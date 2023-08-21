@@ -13,3 +13,9 @@ from materialize.scalability.operation import Operation
 class Workload:
     def operations(self) -> list[Operation]:
         raise NotImplementedError
+
+
+class WorkloadSelfTest(Workload):
+    """Used to self-test the framework, so need to be excluded from regular benchmark runs."""
+
+    pass
