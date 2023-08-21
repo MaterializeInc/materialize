@@ -1174,3 +1174,62 @@ Used Indexes:
   - materialize.public.t_b_idx (lookup)
 
 EOF
+
+# Fast path with a LIMIT and no ORDER BY. This is not a full scan.
+query T multiline
+EXPLAIN
+SELECT a+b as x
+FROM t
+WHERE a < 7
+LIMIT 3;
+----
+Explained Query (fast path):
+  Finish limit=3 output=[#0]
+    Project (#2)
+      Filter (#0 < 7)
+        Map ((#0 + #1))
+          ReadExistingIndex materialize.public.t_a_idx_1
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (fast path limit)
+
+EOF
+
+# Same query without a LIMIT, so full scan
+query T multiline
+EXPLAIN
+SELECT a+b as x
+FROM t
+WHERE a < 7;
+----
+Explained Query (fast path):
+  Project (#2)
+    Filter (#0 < 7)
+      Map ((#0 + #1))
+        ReadExistingIndex materialize.public.t_a_idx_1
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+EOF
+
+# Same query with a LIMIT + ORDER BY, so full scan
+query T multiline
+EXPLAIN
+SELECT a+b as x
+FROM t
+WHERE a < 7
+ORDER BY x
+LIMIT 3;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last] limit=3 output=[#0]
+    Project (#2)
+      Filter (#0 < 7)
+        Map ((#0 + #1))
+          ReadExistingIndex materialize.public.t_a_idx_1
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+EOF

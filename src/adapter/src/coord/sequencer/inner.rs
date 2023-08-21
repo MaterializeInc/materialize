@@ -2772,6 +2772,7 @@ impl Coordinator {
                 no_errors,
                 cluster_id,
                 ctx.session_mut(),
+                &row_set_finishing,
             )
             .with_subscriber(&optimizer_trace)
             .await
@@ -2849,6 +2850,7 @@ impl Coordinator {
         no_errors: bool,
         cluster_id: mz_storage_client::types::instances::StorageInstanceId,
         session: &mut Session,
+        finishing: &Option<RowSetFinishing>,
     ) -> Result<(UsedIndexes, Option<FastPathPlan>), AdapterError> {
         use mz_repr::explain::trace_plan;
 
@@ -2964,7 +2966,7 @@ impl Coordinator {
         })?;
 
         // Save the list of indexes used by the dataflow at this point
-        let used_indexes = UsedIndexes::new(
+        let mut used_indexes = UsedIndexes::new(
             dataflow
                 .index_imports
                 .iter()
@@ -2975,12 +2977,6 @@ impl Coordinator {
         );
 
         // Determine if fast path plan will be used for this explainee.
-        //
-        // TODO: If we switch to a fast path plan here, that will currently use the same index
-        // in the same way as the slow path plan, so it's ok that we continue using the
-        // `used_indexes` that we saved above. But this still sounds a bit dangerous, so we should
-        // maybe recreate `used_indexes` here based on the `FastPathPlan` to avoid getting out of
-        // sync.
         let fast_path_plan = match explainee {
             Explainee::Query => {
                 dataflow.set_as_of(query_as_of);
@@ -2997,6 +2993,10 @@ impl Coordinator {
             }
             _ => None,
         };
+
+        if let Some(fast_path_plan) = &fast_path_plan {
+            used_indexes = fast_path_plan.used_indexes(finishing);
+        }
 
         if matches!(explainee, Explainee::Query) {
             // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
