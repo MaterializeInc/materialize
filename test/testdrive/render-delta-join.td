@@ -31,8 +31,8 @@ count
 ----
 1
 
-> EXPLAIN WITH(join_impls) VIEW delta_join;
-"delta_join:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=differential        implementation          %0:t1[#0]KA » %1:t2[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2Used Indexes:  - i1 (differential join)  - i2 (differential join)"
+> EXPLAIN WITH(join_impls) SELECT * FROM delta_join;
+"Explained Query:  Project (#0, #1, #0, #3)    Filter (#0) IS NOT NULL      Join on=(#0 = #2) type=differential        implementation          %0:t1[#0]KA » %1:t2[#0]KA        ArrangeBy keys=[[#0]]          Get t1        ArrangeBy keys=[[#0]]          Get t2Used Indexes:  - i1 (differential join)  - i2 (differential join)"
 
 > SELECT count(*) AS count FROM delta_join;
 count

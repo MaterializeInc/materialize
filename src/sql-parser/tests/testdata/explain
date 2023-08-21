@@ -115,7 +115,7 @@ EXPLAIN TIMESTAMP FOR SELECT 1
 ----
 EXPLAIN TIMESTAMP AS TEXT FOR SELECT 1
 =>
-Explain(ExplainTimestampStatement { format: Text, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }})
+ExplainTimestamp(ExplainTimestampStatement { format: Text, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 EXPLAIN AS JSON SELECT * FROM foo

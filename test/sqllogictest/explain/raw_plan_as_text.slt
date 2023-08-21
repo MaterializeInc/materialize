@@ -98,17 +98,6 @@ ExceptAll
 
 EOF
 
-# Test TopK.
-query T multiline
-EXPLAIN RAW PLAN AS TEXT FOR
-VIEW ov
-----
-Project (#0, #1)
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
-    Get materialize.public.t
-
-EOF
-
 # Test Finish.
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR

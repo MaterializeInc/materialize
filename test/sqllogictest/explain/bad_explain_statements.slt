@@ -7,5 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+statement ok
+CREATE VIEW v as SELECT (1, 2)
+
+statement error db error: ERROR: EXPLAIN \.\.\. VIEW <view_name> is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/explain\-plan
+EXPLAIN VIEW v
+
 statement error unsupported 'EXPLAIN ... WITH' flags: \{"foo"\}
 EXPLAIN RAW PLAN WITH (foo, types) AS TEXT FOR SELECT 1

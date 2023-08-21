@@ -51,11 +51,19 @@ FROM t
 GROUP BY a
 
 statement ok
+CREATE MATERIALIZED VIEW hierarchical_group_by_mv AS
+SELECT * FROM hierarchical_group_by
+
+statement ok
 CREATE VIEW hierarchical_global AS
 SELECT
   MIN(b),
   MAX(DISTINCT b)
 FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW hierarchical_global_mv AS
+SELECT * FROM hierarchical_global
 
 statement ok
 CREATE VIEW collated_group_by AS
@@ -71,15 +79,23 @@ FROM t
 GROUP BY a
 
 statement ok
+CREATE MATERIALIZED VIEW collated_group_by_mv AS
+SELECT * FROM collated_group_by
+
+statement ok
 CREATE VIEW collated_global AS
 SELECT
   COUNT(DISTINCT b),
-  STRING_AGG(b::text || '1',  ',') as b1,
+  STRING_AGG(b::text || '1',  ',') AS b1,
   MIN(b),
   MAX(DISTINCT b),
   SUM(b),
-  STRING_AGG(b::text || '2',  ',') as b2
+  STRING_AGG(b::text || '2',  ',') AS b2
 FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW collated_global_mv AS
+SELECT * FROM collated_global
 
 mode cockroach
 
@@ -416,105 +432,6 @@ SELECT c + d, 1 FROM u
 }
 EOF
 
-# TopKBasic plan.
-query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
-VIEW ov
-----
-{
-  "plans": [
-    {
-      "id": "materialize.public.ov",
-      "plan": {
-        "TopK": {
-          "input": {
-            "ArrangeBy": {
-              "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 1
-                    }
-                  },
-                  "keys": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
-                        [
-                          1
-                        ]
-                      ]
-                    ]
-                  },
-                  "plan": "PassArrangements"
-                }
-              },
-              "forms": {
-                "raw": true,
-                "arranged": []
-              },
-              "input_key": [
-                {
-                  "Column": 0
-                }
-              ],
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0,
-                  1
-                ],
-                "input_arity": 2
-              }
-            }
-          },
-          "top_k_plan": {
-            "Basic": {
-              "group_key": [],
-              "order_key": [
-                {
-                  "column": 1,
-                  "desc": false,
-                  "nulls_last": true
-                },
-                {
-                  "column": 0,
-                  "desc": true,
-                  "nulls_last": false
-                }
-              ],
-              "limit": 5,
-              "offset": 0,
-              "arity": 2,
-              "buckets": [
-                268435456,
-                16777216,
-                1048576,
-                65536,
-                4096,
-                256,
-                16
-              ]
-            }
-          }
-        }
-      }
-    }
-  ],
-  "sources": []
-}
-EOF
-
 # MonotonicTopK plan (one-shot).
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
@@ -762,12 +679,12 @@ EOF
 
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH (TYPES) AS JSON FOR
-VIEW ov
+SELECT * FROM ov
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.ov",
+      "id": "Explained Query",
       "plan": {
         "TopK": {
           "input": {
@@ -822,7 +739,7 @@ VIEW ov
             }
           },
           "top_k_plan": {
-            "Basic": {
+            "MonotonicTopK": {
               "group_key": [],
               "order_key": [
                 {
@@ -837,17 +754,8 @@ VIEW ov
                 }
               ],
               "limit": 5,
-              "offset": 0,
               "arity": 2,
-              "buckets": [
-                268435456,
-                16777216,
-                1048576,
-                65536,
-                4096,
-                256,
-                16
-              ]
+              "must_consolidate": true
             }
           }
         }
@@ -2066,105 +1974,6 @@ FROM t
 }
 EOF
 
-# Test Reduce::Hierarchical (with GROUP BY).
-query T multiline
-EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW hierarchical_group_by
-----
-{
-  "plans": [
-    {
-      "id": "materialize.public.hierarchical_group_by",
-      "plan": {
-        "Reduce": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0,
-                      "1": 1
-                    },
-                    [
-                      1
-                    ]
-                  ]
-                ]
-              },
-              "plan": "PassArrangements"
-            }
-          },
-          "key_val_plan": {
-            "key_plan": {
-              "mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0
-                ],
-                "input_arity": 2
-              }
-            },
-            "val_plan": {
-              "mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  1,
-                  1
-                ],
-                "input_arity": 2
-              }
-            }
-          },
-          "plan": {
-            "Hierarchical": {
-              "Bucketed": {
-                "aggr_funcs": [
-                  "MinInt32",
-                  "MaxInt32"
-                ],
-                "skips": [
-                  0,
-                  0
-                ],
-                "buckets": [
-                  268435456,
-                  16777216,
-                  1048576,
-                  65536,
-                  4096,
-                  256,
-                  16
-                ]
-              }
-            }
-          },
-          "input_key": [
-            {
-              "Column": 0
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "sources": []
-}
-EOF
-
 # Test Reduce::Hierarchical (with GROUP BY, one-shot).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
@@ -2259,12 +2068,12 @@ EOF
 # Test Reduce::Hierarchical (global aggregate).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW hierarchical_global
+MATERIALIZED VIEW hierarchical_global_mv
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.hierarchical_global",
+      "id": "materialize.public.hierarchical_global_mv",
       "plan": {
         "Let": {
           "id": 0,
@@ -3780,12 +3589,12 @@ EOF
 # Test Reduce::Collated (with GROUP BY).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW collated_group_by
+MATERIALIZED VIEW collated_group_by_mv
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.collated_group_by",
+      "id": "materialize.public.collated_group_by_mv",
       "plan": {
         "Reduce": {
           "input": {
@@ -4740,12 +4549,12 @@ EOF
 # Test Reduce::Collated (global aggregate).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW collated_global
+MATERIALIZED VIEW collated_global_mv
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.collated_global",
+      "id": "materialize.public.collated_global_mv",
       "plan": {
         "Let": {
           "id": 0,

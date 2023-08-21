@@ -169,9 +169,9 @@ EOF
 # Test TopK.
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
-VIEW ov
+SELECT * FROM ov
 ----
-materialize.public.ov:
+Explained Query:
   TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     Get materialize.public.t
 
