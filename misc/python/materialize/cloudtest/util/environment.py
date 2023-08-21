@@ -168,7 +168,7 @@ def await_environment_pod(context: str, namespace: str, pod_name: str) -> None:
         namespace=namespace,
         resource_type="pod",
         resource_name=pod_name,
-        wait_for="condition=Ready=True",
+        wait_for="condition=Ready",
         # If we're unlucky with certificates, we can take up to 10 minutes :-(
         # -- pad a bit just in case
         timeout_secs=630,
