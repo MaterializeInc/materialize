@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::btreeset;
+use maplit::{btreemap, btreeset};
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -4840,9 +4840,11 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
+                let collection = btreemap! {id => ingestion};
+
                 self.controller
                     .storage
-                    .check_alter_collection(id, ingestion.clone())
+                    .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Do not drop this source, even though it's a dependency.
@@ -4886,7 +4888,7 @@ impl Coordinator {
                 // Commit the new ingestion to storage.
                 self.controller
                     .storage
-                    .alter_collection(id, ingestion)
+                    .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
             }
@@ -5051,9 +5053,11 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
+                let collection = btreemap! {id => ingestion};
+
                 self.controller
                     .storage
-                    .check_alter_collection(id, ingestion.clone())
+                    .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 let CreateSourceInner {
@@ -5124,7 +5128,7 @@ impl Coordinator {
                 // Commit the new ingestion to storage.
                 self.controller
                     .storage
-                    .alter_collection(id, ingestion)
+                    .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
 
