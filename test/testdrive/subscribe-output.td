@@ -393,3 +393,24 @@ DELETE FROM t2 WHERE key = 1
 
 ! SUBSCRIBE (SELECT * FROM t2) WITH (PROGRESS, SNAPSHOT) ENVELOPE DEBEZIUM (KEY (invalid_key))
 contains: column "invalid_key" does not exist
+
+# SUBSCRIBE with a query that has a `RowSetFinishing`, which needs to be turned into a TopK
+
+> CREATE TABLE t3 (a int, b int);
+
+> INSERT INTO t3 VALUES (1,2), (3,4), (5,6), (7,8);
+
+> CREATE VIEW limited AS
+  SELECT * FROM t3
+  ORDER BY a DESC, b
+  LIMIT 3;
+
+> BEGIN;
+
+> DECLARE c CURSOR FOR SUBSCRIBE limited;
+
+> FETCH 2 c;
+<TIMESTAMP> 1 5 6
+<TIMESTAMP> 1 3 4
+
+> COMMIT;

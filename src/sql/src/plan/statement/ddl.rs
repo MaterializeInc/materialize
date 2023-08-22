@@ -1833,13 +1833,16 @@ pub fn plan_view(
     let query::PlannedQuery {
         mut expr,
         mut desc,
-        finishing,
+        // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
+        // Note: Earlier, we were thinking to maybe persist the finishing information with the view
+        // here to help with materialize#724. However, in the meantime, there might be a better
+        // approach to solve materialize#724:
+        // https://github.com/MaterializeInc/materialize/issues/724#issuecomment-1688293709
+        finishing: _,
         scope: _,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
 
     expr.bind_parameters(params)?;
-    //TODO: materialize#724 - persist finishing information with the view?
-    expr.finish(finishing);
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
@@ -1974,12 +1977,11 @@ pub fn plan_create_materialized_view(
     let query::PlannedQuery {
         mut expr,
         mut desc,
-        finishing,
+        finishing: _, // We get back a trivial finishing, see comment in `plan_view`.
         scope: _,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
 
     expr.bind_parameters(params)?;
-    expr.finish(finishing);
     let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(

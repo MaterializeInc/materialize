@@ -261,8 +261,7 @@ pub fn plan_explain(
     }: ExplainStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let is_view = matches!(explainee, Explainee::View(_));
-    let (explainee, query) = match explainee {
+    let (explainee, query, lifetime) = match explainee {
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             let item_type = view.item_type();
@@ -291,6 +290,7 @@ pub fn plan_explain(
             (
                 mz_repr::explain::Explainee::Dataflow(view.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
+                QueryLifetime::View,
             )
         }
         Explainee::MaterializedView(name) => {
@@ -318,9 +318,14 @@ pub fn plan_explain(
             (
                 mz_repr::explain::Explainee::MaterializedView(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
+                QueryLifetime::MaterializedView,
             )
         }
-        Explainee::Query(query) => (mz_repr::explain::Explainee::Query, query),
+        Explainee::Query(query) => (
+            mz_repr::explain::Explainee::Query,
+            query,
+            QueryLifetime::OneShot,
+        ),
     };
     // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -329,12 +334,8 @@ pub fn plan_explain(
         desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?; // TODO: Set correct QueryLifetime
-    let finishing = if is_view {
-        // views don't use a separate finishing
-        expr.finish(finishing);
-        None
-    } else if finishing.is_trivial(desc.arity()) {
+    } = query::plan_root_query(scx, query, lifetime)?;
+    let finishing = if finishing.is_trivial(desc.arity()) {
         None
     } else {
         Some(finishing)
@@ -499,12 +500,10 @@ pub fn plan_subscribe(
             (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
-            // There's no way to apply finishing operations to a `SUBSCRIBE`
-            // directly. So we wrap the query in another query so that the
-            // user-supplied query is planned as a subquery whose `ORDER
-            // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
-            let query = Query::query(query);
             let query = plan_query(scx, query, &Params::empty(), QueryLifetime::Subscribe)?;
+            // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
+            // finishing should have already been turned into a `TopK` by
+            // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
             assert!(query.finishing.is_trivial(query.desc.arity()));
             let desc = query.desc.clone();
             (

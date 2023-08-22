@@ -122,6 +122,10 @@ pub fn plan_root_query(
     // `finishing.project`).
     try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
 
+    if lifetime.is_maintained() {
+        expr.finish_maintained(&mut finishing);
+    }
+
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
         finishing
