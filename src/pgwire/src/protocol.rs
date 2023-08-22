@@ -49,7 +49,7 @@ use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, warn, Instrument};
+use tracing::{debug, debug_span, instrument, warn, Instrument};
 
 use crate::codec::FramedConn;
 use crate::message::{self, BackendMessage};
@@ -464,6 +464,7 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
         // Handle timeouts first so we don't execute any statements when there's a pending timeout.
         let message = select! {
@@ -597,6 +598,7 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn one_query(&mut self, stmt: Statement<Raw>, sql: String) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
@@ -688,6 +690,7 @@ where
     // See "Multiple Statements in a Simple Query" which documents how implicit
     // transactions are handled.
     // From https://www.postgresql.org/docs/current/protocol-flow.html
+    #[instrument(level = "debug", skip_all)]
     async fn query(&mut self, sql: String) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
         let stmts = match self.parse_sql(&sql) {
@@ -738,6 +741,7 @@ where
         self.ready().await
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn parse(
         &mut self,
         name: String,
@@ -808,16 +812,19 @@ where
     }
 
     /// Commits and clears the current transaction.
+    #[instrument(level = "debug", skip_all)]
     async fn commit_transaction(&mut self) -> Result<(), io::Error> {
         self.end_transaction(EndTransactionAction::Commit).await
     }
 
     /// Rollback and clears the current transaction.
+    #[instrument(level = "debug", skip_all)]
     async fn rollback_transaction(&mut self) -> Result<(), io::Error> {
         self.end_transaction(EndTransactionAction::Rollback).await
     }
 
     /// End a transaction and report to the user if an error occurred.
+    #[instrument(level = "debug", skip_all)]
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
         let resp = self.adapter_client.end_transaction(action).await;
         if let Err(err) = resp {
@@ -829,6 +836,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn bind(
         &mut self,
         portal_name: String,
@@ -1137,9 +1145,11 @@ where
                 }
             }
         }
+        .instrument(debug_span!("execute"))
         .boxed()
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1));
@@ -1165,6 +1175,7 @@ where
         Ok(State::Ready)
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1));
@@ -1188,6 +1199,7 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn close_statement(&mut self, name: String) -> Result<State, io::Error> {
         self.adapter_client
             .session()
@@ -1196,6 +1208,7 @@ where
         Ok(State::Ready)
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn close_portal(&mut self, name: String) -> Result<State, io::Error> {
         self.adapter_client.session().remove_portal(&name);
         self.send(BackendMessage::CloseComplete).await?;
@@ -1291,6 +1304,7 @@ where
     ///
     /// The message is only sent if its severity is above the severity set
     /// in the session, with the default value being NOTICE.
+    #[instrument(level = "debug", skip_all)]
     async fn send<M>(&mut self, message: M) -> Result<(), io::Error>
     where
         M: Into<BackendMessage>,
@@ -1299,6 +1313,7 @@ where
         self.conn.send(message).await
     }
 
+    #[instrument(level = "debug", skip_all)]
     pub async fn send_all(
         &mut self,
         messages: impl IntoIterator<Item = BackendMessage>,
@@ -1309,6 +1324,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are in an implicit transaction.
         if self.adapter_client.session().transaction().is_implicit() {
@@ -1317,6 +1333,7 @@ where
         self.ready().await
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn ready(&mut self) -> Result<State, io::Error> {
         let txn_state = self.adapter_client.session().transaction().into();
         self.send(BackendMessage::ReadyForQuery(txn_state)).await?;
@@ -1324,6 +1341,7 @@ where
     }
 
     // Converts a RowsFuture to a stream while also checking for connection close.
+    #[instrument(level = "debug", skip_all)]
     async fn row_future_to_stream<'s, 'p>(
         &'s mut self,
         parent: &'p tracing::Span,
@@ -1358,6 +1376,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(level = "debug", skip_all)]
     async fn send_execute_response(
         &mut self,
         response: ExecuteResponse,
@@ -2027,6 +2046,7 @@ where
 
     /// Handles the copy-in mode of the postgres protocol from transferring
     /// data to the server.
+    #[instrument(level = "debug", skip_all)]
     async fn copy_from(
         &mut self,
         id: GlobalId,
@@ -2183,6 +2203,7 @@ where
         Ok(State::Ready)
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn send_pending_notices(&mut self) -> Result<(), io::Error> {
         let notices = self
             .adapter_client
@@ -2194,6 +2215,7 @@ where
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         assert!(err.severity.is_error());
         debug!(
@@ -2229,6 +2251,7 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn aborted_txn_error(&mut self) -> Result<State, io::Error> {
         self.send(BackendMessage::ErrorResponse(ErrorResponse::error(
             SqlState::IN_FAILED_SQL_TRANSACTION,

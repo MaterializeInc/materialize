@@ -39,7 +39,7 @@ use mz_transform::Optimizer;
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::error;
+use tracing::{error, instrument};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -340,6 +340,7 @@ Issue a SQL query to get started. Need help?
         response
     }
 
+    #[instrument(level = "debug", skip_all)]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send(cmd)
@@ -489,6 +490,7 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn declare(
         &mut self,
         name: String,
@@ -567,6 +569,7 @@ impl SessionClient {
     }
 
     /// Ends a transaction.
+    #[instrument(level = "debug", skip_all)]
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -588,6 +591,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog.
+    #[instrument(level = "debug", skip_all)]
     pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
@@ -729,6 +733,7 @@ impl SessionClient {
         rx.await.expect("sender dropped")
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
@@ -736,6 +741,7 @@ impl SessionClient {
         self.send_with_cancel(f, futures::future::pending()).await
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn send_with_cancel<T, F>(
         &mut self,
         f: F,

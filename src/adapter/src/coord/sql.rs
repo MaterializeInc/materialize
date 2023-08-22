@@ -89,6 +89,7 @@ impl Coordinator {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn describe(
         catalog: &Catalog,
         session: &Session,

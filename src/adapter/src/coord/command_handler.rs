@@ -39,7 +39,7 @@ use mz_sql::session::vars::{
 };
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::Instrument;
+use tracing::{debug_span, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
@@ -227,6 +227,7 @@ impl Coordinator {
                 }
             }
         }
+        .instrument(debug_span!("handle_command"))
         .boxed_local()
     }
 

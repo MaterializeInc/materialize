@@ -1998,6 +1998,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2078,6 +2079,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
@@ -2227,6 +2229,7 @@ impl Coordinator {
     }
 
     /// Do some simple validation. We must defer most of it until after any off-thread work.
+    #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2325,6 +2328,7 @@ impl Coordinator {
 
     /// Determine a linearized read timestamp (from a `TimestampOracle`), if
     /// needed.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_timestamp(
         &mut self,
         ctx: ExecuteContext,
@@ -2397,6 +2401,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -2450,6 +2455,7 @@ impl Coordinator {
         );
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn optimize_peek(
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
@@ -2640,6 +2646,7 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
@@ -2762,6 +2769,7 @@ impl Coordinator {
         Ok(determination)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn plan_peek(
         &mut self,
         session: &mut Session,
