@@ -654,6 +654,8 @@ steps:
     label: "Canary Deploy in Staging Cloud"
     artifact_paths: junit_*.xml
     timeout_in_minutes: 1200
+    concurrency: 1
+    concurrency_group: 'cloud-canary'
     agents:
       queue: linux-x86_64
     plugins:
