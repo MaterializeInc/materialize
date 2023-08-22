@@ -141,9 +141,17 @@ def run_workload(
 ) -> None:
     df_totals = pd.DataFrame()
     df_details = pd.DataFrame()
-    for concurrency in range(
-        args.min_concurrency, args.max_concurrency + 1, args.concurrency_step
-    ):
+
+    concurrencies: list[int] = [round(args.exponent_base**c) for c in range(0, 1024)]
+    concurrencies = sorted(set(concurrencies))
+    concurrencies = [
+        c
+        for c in concurrencies
+        if c >= args.min_concurrency and c <= args.max_concurrency
+    ]
+    print(f"Concurrencies to benchmark: {concurrencies}")
+
+    for concurrency in concurrencies:
         df_total, df_detail = run_with_concurrency(
             c, endpoint, schema, workload, concurrency, args.count
         )
@@ -166,6 +174,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--exponent-base",
+        type=float,
+        help="Exponent base to use when deciding what concurrencies to test",
+        default=2,
+    )
+
+    parser.add_argument(
         "--min-concurrency", type=int, help="Minimum concurrency to test", default=1
     )
 
@@ -174,10 +189,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         help="Maximum concurrency to test",
         default=256,
-    )
-
-    parser.add_argument(
-        "--concurrency-step", type=int, help="Maximum concurrency to test", default=10
     )
 
     parser.add_argument(
