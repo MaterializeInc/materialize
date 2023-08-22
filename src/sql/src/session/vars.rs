@@ -984,6 +984,14 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_budget_bytes`].
+const PERSIST_STATS_BUDGET_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_stats_budget_bytes"),
+    value: &PersistConfig::DEFAULT_STATS_BUDGET_BYTES,
+    description: "The budget (in bytes) of how many stats to maintain per batch part.",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
 const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_pubsub_client_enabled"),
@@ -2127,6 +2135,7 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_STATS_BUDGET_BYTES)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
@@ -2658,6 +2667,11 @@ impl SystemVars {
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
+    }
+
+    /// Returns the `persist_stats_budget_bytes` configuration parameter.
+    pub fn persist_stats_budget_bytes(&self) -> usize {
+        *self.expect_value(&PERSIST_STATS_BUDGET_BYTES)
     }
 
     /// Returns the `persist_pubsub_client_enabled` configuration parameter.
@@ -4258,6 +4272,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_STATS_BUDGET_BYTES.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
 }
