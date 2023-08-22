@@ -19,7 +19,7 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{func, CollectionPlan, Id, LetRecLimit};
+use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
@@ -1670,8 +1670,15 @@ impl HirRelationExpr {
         HirRelationExpr::Constant { rows, typ }
     }
 
-    pub fn finish(&mut self, finishing: mz_expr::RowSetFinishing) {
+    /// A `RowSetFinishing` can only be directly applied to the result of a one-shot select.
+    /// This function is concerned with maintained queries, e.g., an index or materialized view.
+    /// Instead of directly applying the given `RowSetFinishing`, it converts the `RowSetFinishing`
+    /// to a `TopK`, which it then places at the top of `self`. Additionally, it turns the given
+    /// finishing into a trivial finishing.
+    pub fn finish_maintained(&mut self, finishing: &mut RowSetFinishing) {
         if !finishing.is_trivial(self.arity()) {
+            let old_finishing =
+                mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
             *self = HirRelationExpr::Project {
                 input: Box::new(HirRelationExpr::TopK {
                     input: Box::new(std::mem::replace(
@@ -1682,13 +1689,13 @@ impl HirRelationExpr {
                         },
                     )),
                     group_key: vec![],
-                    order_key: finishing.order_by,
-                    limit: finishing.limit,
-                    offset: finishing.offset,
+                    order_key: old_finishing.order_by,
+                    limit: old_finishing.limit,
+                    offset: old_finishing.offset,
                     expected_group_size: None,
                 }),
-                outputs: finishing.project,
-            }
+                outputs: old_finishing.project,
+            };
         }
     }
 

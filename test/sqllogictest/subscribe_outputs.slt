@@ -195,3 +195,15 @@ mz_timestamp mz_progressed mz_diff a b
 
 statement ok
 COMMIT
+
+# SHOW commands are not allowed in maintained (i.e., non-one-shot) dataflows, but SUBSCRIBE _does_ allow it, even though
+# it's a maintained dataflow.
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c2 CURSOR FOR SUBSCRIBE TO (SHOW CLUSTER REPLICAS);
+
+statement ok
+COMMIT
