@@ -754,7 +754,7 @@ pub fn plan_create_source(
                 // of the types are text
                 let mut cast_scx = scx.clone();
                 cast_scx.param_types = Default::default();
-                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Static);
+                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
                 let mut column_types = vec![];
                 for column in table.columns.iter() {
                     column_types.push(ColumnType {
@@ -1835,7 +1835,7 @@ pub fn plan_view(
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
 
     expr.bind_parameters(params)?;
     //TODO: materialize#724 - persist finishing information with the view?
@@ -1976,7 +1976,7 @@ pub fn plan_create_materialized_view(
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
 
     expr.bind_parameters(params)?;
     expr.finish(finishing);

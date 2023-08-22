@@ -287,7 +287,7 @@ pub fn plan_explain(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+            let qcx = QueryContext::root(scx, QueryLifetime::View);
             (
                 mz_repr::explain::Explainee::Dataflow(view.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
@@ -314,7 +314,7 @@ pub fn plan_explain(
                     panic!("Sql for existing materialized view should parse as a materialized view")
                 }
             };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+            let qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
             (
                 mz_repr::explain::Explainee::MaterializedView(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
@@ -329,7 +329,7 @@ pub fn plan_explain(
         desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+    } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?; // TODO: Set correct QueryLifetime
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -407,7 +407,7 @@ pub fn describe_subscribe(
         }
         SubscribeRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
-                query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+                query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             desc
         }
     };
@@ -504,7 +504,7 @@ pub fn plan_subscribe(
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
             let query = Query::query(query);
-            let query = plan_query(scx, query, &Params::empty(), QueryLifetime::OneShot)?;
+            let query = plan_query(scx, query, &Params::empty(), QueryLifetime::Subscribe)?;
             assert!(query.finishing.is_trivial(query.desc.arity()));
             let desc = query.desc.clone();
             (
@@ -521,7 +521,7 @@ pub fn plan_subscribe(
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let qcx = QueryContext::root(scx, QueryLifetime::Subscribe);
     let ecx = ExprContext {
         qcx: &qcx,
         name: "",
