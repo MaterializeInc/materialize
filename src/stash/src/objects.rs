@@ -190,6 +190,8 @@ pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
     }
 }
 
+unsafe impl WireCompatible<()> for () {}
+
 /// Defines one protobuf type as wire compatible with another.
 ///
 /// ```text

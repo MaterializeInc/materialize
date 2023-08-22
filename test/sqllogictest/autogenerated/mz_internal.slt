@@ -82,7 +82,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
 ----
-1  internal_replica_id  text
+1  replica_id  text
 2  size  text
 3  cluster_name  text
 4  replica_name  text

@@ -25,9 +25,9 @@ different processes, e.g.:
 
 ```text
 environmentd: [...]  INFO mz_ore::tracing: starting tokio console on http://127.0.0.1:6669
-compute-cluster-u1-replica-1: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]3ee9
-compute-cluster-s1-replica-2: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]f5b6
-compute-cluster-s2-replica-3: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]7af2
+compute-cluster-u1-replica-u1: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]3ee9
+compute-cluster-s1-replica-s1: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]f5b6
+compute-cluster-s2-replica-s2: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]7af2
 ```
 
 Then, in a different tmux pane/terminal, run the `tokio-console` command with the listen address of

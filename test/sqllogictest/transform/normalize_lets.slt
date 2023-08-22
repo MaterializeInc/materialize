@@ -558,13 +558,13 @@ from
   (select
         ref_0."credits_per_hour" as c0,
         ref_0."credits_per_hour" as c1,
-        ref_0."internal_replica_id" as c2,
+        ref_0."replica_id" as c2,
         ref_0."cluster_name" as c3,
         (select "id" from mz_internal.mz_scheduling_elapsed_raw limit 1 offset 57)
            as c4
       from
         mz_internal.mz_cluster_replica_history as ref_0
-      where ref_0."internal_replica_id" is NULL
+      where ref_0."replica_id" is NULL
       limit 102) as subq_0
 where (~ (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset 5)
       ) <= (~ case when (case when (((((select "details" from mz_internal.mz_sink_statuses limit 1 offset 4)

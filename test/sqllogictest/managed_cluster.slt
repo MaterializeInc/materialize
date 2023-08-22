@@ -198,11 +198,11 @@ query TTT
 SELECT mz_clusters.name, mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id ORDER BY 1, 2
 ----
 default  r1  u1
-foo  r1  u5
-foo  r2  u6
-foo  r3  u7
-mz_introspection  r1  u3
-mz_system  r1  u2
+foo  r1  u3
+foo  r2  u4
+foo  r3  u5
+mz_introspection  r1  s2
+mz_system  r1  s1
 
 statement error db error: ERROR: cannot modify managed cluster foo
 DROP CLUSTER REPLICA foo.r1

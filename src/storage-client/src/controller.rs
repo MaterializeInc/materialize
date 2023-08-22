@@ -33,7 +33,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::{NewReplicaId, ReplicaId};
+use mz_cluster_client::ReplicaId;
 use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -2517,10 +2517,7 @@ where
             };
             let object_id = object_id.to_string();
             let object_datum = Datum::String(&object_id);
-            let replica_id = replica_id.map(|id| {
-                // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-                NewReplicaId::User(id).to_string()
-            });
+            let replica_id = replica_id.map(|id| id.to_string());
             let replica_datum = replica_id.as_deref().map_or(Datum::Null, Datum::String);
 
             let row = Row::pack_slice(&[object_datum, replica_datum, time_datum]);

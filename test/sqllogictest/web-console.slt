@@ -110,9 +110,9 @@ FROM mz_clusters c
 LEFT OUTER JOIN mz_cluster_replicas r ON c.id = r.cluster_id
 ORDER BY r.id
 ----
+s1 mz_system s1 r1 1
+s2 mz_introspection s2 r1 1
 u1 default u1 r1 1
-s1 mz_system u2 r1 1
-s2 mz_introspection u3 r1 1
 
 
 # ---- useClusterUtilization.ts
