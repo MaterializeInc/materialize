@@ -141,6 +141,7 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         stats_audit_percent: Some(config.persist_stats_audit_percent()),
         stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
         stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
+        stats_budget_bytes: Some(config.persist_stats_budget_bytes()),
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),

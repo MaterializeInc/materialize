@@ -216,10 +216,7 @@ impl BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            // TODO: Make a dynamic config for this? This initial constant is
-            // the rough upper bound on what we see for the total serialized
-            // batch size in prod, so it will at worst double it.
-            stats_budget: 1024,
+            stats_budget: value.dynamic.stats_budget_bytes(),
         }
     }
 }

@@ -30,6 +30,7 @@ message ProtoPersistParameters {
     optional uint64 blob_cache_mem_limit_bytes = 14;
     mz_proto.ProtoDuration consensus_connection_pool_ttl = 15;
     mz_proto.ProtoDuration consensus_connection_pool_ttl_stagger = 16;
+    optional uint64 stats_budget_bytes = 17;
 }
 
 message ProtoRetryParameters {
