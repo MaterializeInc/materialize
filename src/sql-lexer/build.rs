@@ -89,6 +89,8 @@ use uncased::UncasedStr;
 const KEYWORDS_LIST: &str = "src/keywords.txt";
 
 fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed={KEYWORDS_LIST}");
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
 
     // Generate keywords list and lookup table.
