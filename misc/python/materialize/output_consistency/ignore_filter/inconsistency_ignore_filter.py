@@ -37,7 +37,7 @@ from materialize.output_consistency.validation.validation_message import (
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class IgnoreVerdict:
     ignore: bool
 
@@ -50,7 +50,7 @@ class YesIgnore(IgnoreVerdict):
         self.reason = reason
 
 
-@dataclass(frozen=True)
+@dataclass
 class NoIgnore(IgnoreVerdict):
     ignore: bool = False
 

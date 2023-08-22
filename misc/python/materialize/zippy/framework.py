@@ -9,7 +9,7 @@
 
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Type, TypeVar, Union, Sequence
+from typing import Dict, List, Optional, Sequence, Set, Type, TypeVar, Union
 
 from materialize.mzcompose import Composition
 
@@ -42,7 +42,8 @@ class Capabilities:
 
     def _extend(self, capabilities: Sequence[Capability]) -> None:
         """Add new capabilities."""
-        self._capabilities = list(*self._capabilities, *capabilities)
+        new_capabilities = list(capabilities)
+        self._capabilities = list(self._capabilities) + new_capabilities
 
     def remove_capability_instance(self, capability: Capability) -> None:
         """Remove a specific capability."""
@@ -66,7 +67,9 @@ class Capabilities:
         """Get all capabilities of the specified type."""
         matches: List[T] = [
             # NOTE: unfortunately pyright can't handle this
-            cap for cap in self._capabilities if type(cap) == capability  # type: ignore
+            cap
+            for cap in self._capabilities
+            if type(cap) == capability  # type: ignore
         ]
         return matches
 
@@ -178,8 +181,11 @@ class Test:
 
         for action in actions:
             self._actions.append(action)
+            print("test:", action)
             self._capabilities._extend(action.provides())
+            print(" - ", self._capabilities, action.provides())
             self._capabilities._remove(action.withholds())
+            print(" - ", self._capabilities, action.withholds())
 
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
