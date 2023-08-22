@@ -16,6 +16,7 @@ use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
 use timely::communication::initialize::WorkerGuards;
@@ -42,6 +43,8 @@ pub struct Config {
     pub sink_metrics: SinkBaseMetrics,
     /// Metrics for decoding.
     pub decode_metrics: DecodeMetrics,
+    /// Shared rocksdb write buffer manager
+    pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
 /// A handle to a running dataflow server.
@@ -68,6 +71,7 @@ pub fn serve(
     let source_metrics = SourceBaseMetrics::register_with(&generic_config.metrics_registry);
     let sink_metrics = SinkBaseMetrics::register_with(&generic_config.metrics_registry);
     let decode_metrics = DecodeMetrics::register_with(&generic_config.metrics_registry);
+    let shared_rocksdb_write_buffer_manager = Default::default();
 
     let config = Config {
         now,
@@ -76,6 +80,7 @@ pub fn serve(
         source_metrics,
         sink_metrics,
         decode_metrics,
+        shared_rocksdb_write_buffer_manager,
     };
 
     let (timely_container, client_builder) = mz_cluster::server::serve::<
@@ -117,6 +122,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.instance_context,
             persist_clients,
             tracing_handle,
+            config.shared_rocksdb_write_buffer_manager,
         )
         .run();
     }

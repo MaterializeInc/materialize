@@ -794,6 +794,37 @@ mod upsert_rocksdb {
             "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
         internal: true,
     };
+    /// Only used if `upsert_rocksdb_write_buffer_manager_memory_bytes` is also set
+    /// and write buffer manager is enabled
+    pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION: Lazy<
+        ServerVar<Option<Numeric>>,
+    > = Lazy::new(|| ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_cluster_memory_fraction"),
+        value: &None,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    });
+    /// `upsert_rocksdb_write_buffer_manager_memory_bytes` needs to be set for write buffer manager to be
+    /// used.
+    pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES: ServerVar<Option<usize>> =
+        ServerVar {
+            name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_memory_bytes"),
+            value: &None,
+            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+            internal: true,
+        };
+    pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_allow_stall"),
+        value: &false,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -2174,6 +2205,9 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2609,6 +2643,20 @@ impl SystemVars {
 
     pub fn upsert_rocksdb_shrink_allocated_buffers_by_ratio(&self) -> usize {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
+    }
+
+    pub fn upsert_rocksdb_write_buffer_manager_cluster_memory_fraction(&self) -> Option<Numeric> {
+        *self.expect_value(
+            &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION,
+        )
+    }
+
+    pub fn upsert_rocksdb_write_buffer_manager_memory_bytes(&self) -> Option<usize> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES)
+    }
+
+    pub fn upsert_rocksdb_write_buffer_manager_allow_stall(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.

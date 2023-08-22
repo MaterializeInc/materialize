@@ -85,4 +85,4 @@
 #![warn(missing_docs)]
 
 pub mod config;
-pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
+pub use config::{defaults, RocksDBTuningParameters};

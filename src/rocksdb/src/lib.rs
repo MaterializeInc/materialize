@@ -103,6 +103,8 @@ use tokio::sync::{mpsc, oneshot};
 pub mod config;
 pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
 
+use crate::config::WriteBufferManagerHandle;
+
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -273,6 +275,9 @@ pub struct RocksDBInstance<K, V> {
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
+
+    // Handle to the optional write buffer manager
+    _write_buffer_manager_handle: Option<WriteBufferManagerHandle>,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -322,6 +327,22 @@ where
 
         let instance_path = instance_path.to_owned();
 
+        let handle = config::get_write_buffer_manager(&tuning_config.write_buffer_manager_config)
+            .map(|write_buffer_manager| {
+                let buffer_manager = tuning_config
+                    .shared_write_buffer_manager
+                    .get_or_init(write_buffer_manager);
+                WriteBufferManagerHandle {
+                    inner: buffer_manager,
+                }
+            });
+
+        tracing::info!(
+            "Starting rocksdb at {:?} with write_buffer_manager: {:?}",
+            instance_path,
+            handle
+        );
+
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
             rocksdb_core_loop(
@@ -346,6 +367,7 @@ where
             multi_get_results_scratch: Vec::new(),
             multi_put_scratch: Vec::new(),
             dynamic_config,
+            _write_buffer_manager_handle: handle,
         })
     }
 

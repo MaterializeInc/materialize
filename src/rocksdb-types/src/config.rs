@@ -37,13 +37,13 @@
 //! - <https://www.eecg.toronto.edu/~stumm/Papers/Dong-CIDR-16.pdf>
 //! - <http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-pick-2_23.html>
 
+use std::fmt::Debug;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
@@ -53,7 +53,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_rocksdb_types.config.rs"));
 /// A set of parameters to tune RocksDB. This struct is plain-old-data, and is
 /// used to update `RocksDBConfig`, which contains some dynamic value for some
 /// parameters.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug, Arbitrary)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Arbitrary)]
 pub struct RocksDBTuningParameters {
     /// RocksDB has 2 primary styles of compaction:
     /// - The default, usually referred to as "level" compaction
@@ -144,6 +144,14 @@ pub struct RocksDBTuningParameters {
     /// i.e. halved.
     /// Shrinking will be disabled if value is 0;
     pub shrink_buffers_by_ratio: usize,
+
+    /// Optional write buffer manager bytes. This needs to be set to enable write buffer manager
+    /// across all rocksdb instances
+    pub write_buffer_manager_memory_bytes: Option<usize>,
+    /// Optional write buffer manager memory limit as a percentage of cluster limit
+    pub write_buffer_manager_memory_fraction: Option<f64>,
+    /// Config to enable stalls with write buffer manager
+    pub write_buffer_manager_allow_stall: bool,
 }
 
 impl Default for RocksDBTuningParameters {
@@ -164,6 +172,9 @@ impl Default for RocksDBTuningParameters {
             stats_persist_interval_seconds: defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
             point_lookup_block_cache_size_mb: None,
             shrink_buffers_by_ratio: defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
+            write_buffer_manager_memory_bytes: None,
+            write_buffer_manager_memory_fraction: None,
+            write_buffer_manager_allow_stall: false,
         }
     }
 }
@@ -184,6 +195,9 @@ impl RocksDBTuningParameters {
         stats_persist_interval_seconds: u32,
         point_lookup_block_cache_size_mb: Option<u32>,
         shrink_buffers_by_ratio: usize,
+        write_buffer_manager_memory_bytes: Option<usize>,
+        write_buffer_manager_memory_fraction: Option<f64>,
+        write_buffer_manager_allow_stall: bool,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -217,6 +231,9 @@ impl RocksDBTuningParameters {
             stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb,
             shrink_buffers_by_ratio,
+            write_buffer_manager_memory_bytes,
+            write_buffer_manager_memory_fraction,
+            write_buffer_manager_allow_stall,
         })
     }
 }
@@ -333,6 +350,11 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             stats_persist_interval_seconds: self.stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb: self.point_lookup_block_cache_size_mb,
             shrink_buffers_by_ratio: u64::cast_from(self.shrink_buffers_by_ratio),
+            write_buffer_manager_memory_bytes: self
+                .write_buffer_manager_memory_bytes
+                .map(u64::cast_from),
+            write_buffer_manager_memory_fraction: self.write_buffer_manager_memory_fraction,
+            write_buffer_manager_allow_stall: self.write_buffer_manager_allow_stall,
         }
     }
 
@@ -401,119 +423,27 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             stats_persist_interval_seconds: proto.stats_persist_interval_seconds,
             point_lookup_block_cache_size_mb: proto.point_lookup_block_cache_size_mb,
             shrink_buffers_by_ratio: usize::cast_from(proto.shrink_buffers_by_ratio),
+            write_buffer_manager_memory_bytes: proto
+                .write_buffer_manager_memory_bytes
+                .map(usize::cast_from),
+            write_buffer_manager_memory_fraction: proto.write_buffer_manager_memory_fraction,
+            write_buffer_manager_allow_stall: proto.write_buffer_manager_allow_stall,
         })
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RocksDBDynamicConfig {
-    batch_size: Arc<AtomicUsize>,
-}
-
-impl RocksDBDynamicConfig {
-    pub fn batch_size(&self) -> usize {
-        // SeqCst is probably not required here, but its the easiest to reason about
-        self.batch_size.load(Ordering::SeqCst)
-    }
-}
-
-/// Configurable options for a `RocksDBInstance`. Some can be updated
-/// dynamically, as cloned instances of this object will shared dynamic values.
-#[derive(Debug, Clone)]
-pub struct RocksDBConfig {
-    pub compaction_style: CompactionStyle,
-    pub optimize_compaction_memtable_budget: usize,
-    pub level_compaction_dynamic_level_bytes: bool,
-    pub universal_compaction_target_ratio: i32,
-    pub parallelism: Option<i32>,
-    pub compression_type: CompressionType,
-    pub bottommost_compression_type: CompressionType,
-    pub retry_max_duration: Duration,
-    pub stats_log_interval_seconds: u32,
-    pub stats_persist_interval_seconds: u32,
-    pub point_lookup_block_cache_size_mb: Option<u32>,
-    pub shrink_buffers_by_ratio: usize,
-    pub dynamic: RocksDBDynamicConfig,
-}
-
-impl Default for RocksDBConfig {
-    fn default() -> Self {
-        RocksDBConfig::new(RocksDBTuningParameters::default())
-    }
-}
-
-impl RocksDBConfig {
-    fn new(params: RocksDBTuningParameters) -> Self {
-        let RocksDBTuningParameters {
-            compaction_style,
-            optimize_compaction_memtable_budget,
-            level_compaction_dynamic_level_bytes,
-            universal_compaction_target_ratio,
-            parallelism,
-            compression_type,
-            bottommost_compression_type,
-            batch_size,
-            retry_max_duration,
-            stats_log_interval_seconds,
-            stats_persist_interval_seconds,
-            point_lookup_block_cache_size_mb,
-            shrink_buffers_by_ratio,
-        } = params;
-
-        Self {
-            compaction_style,
-            optimize_compaction_memtable_budget,
-            level_compaction_dynamic_level_bytes,
-            universal_compaction_target_ratio,
-            parallelism,
-            compression_type,
-            bottommost_compression_type,
-            retry_max_duration,
-            stats_log_interval_seconds,
-            stats_persist_interval_seconds,
-            point_lookup_block_cache_size_mb,
-            shrink_buffers_by_ratio,
-            dynamic: RocksDBDynamicConfig {
-                batch_size: Arc::new(AtomicUsize::new(batch_size)),
-            },
-        }
-    }
-
-    /// Apply the new parameters to the config. Dynamic parameters
-    /// are updated in place.
-    pub fn apply(&mut self, params: RocksDBTuningParameters) {
-        let RocksDBTuningParameters {
-            compaction_style,
-            optimize_compaction_memtable_budget,
-            level_compaction_dynamic_level_bytes,
-            universal_compaction_target_ratio,
-            parallelism,
-            compression_type,
-            bottommost_compression_type,
-            batch_size,
-            retry_max_duration,
-            stats_log_interval_seconds,
-            stats_persist_interval_seconds,
-            point_lookup_block_cache_size_mb,
-            shrink_buffers_by_ratio,
-        } = params;
-
-        self.compaction_style = compaction_style;
-        self.optimize_compaction_memtable_budget = optimize_compaction_memtable_budget;
-        self.level_compaction_dynamic_level_bytes = level_compaction_dynamic_level_bytes;
-        self.universal_compaction_target_ratio = universal_compaction_target_ratio;
-        self.parallelism = parallelism;
-        self.compression_type = compression_type;
-        self.bottommost_compression_type = bottommost_compression_type;
-        self.retry_max_duration = retry_max_duration;
-        self.stats_log_interval_seconds = stats_log_interval_seconds;
-        self.stats_persist_interval_seconds = stats_persist_interval_seconds;
-        self.point_lookup_block_cache_size_mb = point_lookup_block_cache_size_mb;
-        self.shrink_buffers_by_ratio = shrink_buffers_by_ratio;
-
-        // SeqCst is probably not required here, but its the easiest to reason about
-        self.dynamic.batch_size.store(batch_size, Ordering::SeqCst);
-    }
+#[derive(Clone, Debug)]
+pub struct RocksDbWriteBufferManagerConfig {
+    /// Optional write buffer manager bytes. This needs to be set to enable write buffer manager
+    /// across all rocksdb instances
+    pub write_buffer_manager_memory_bytes: Option<usize>,
+    /// Optional write buffer manager memory limit as a percentage of cluster limit
+    pub write_buffer_manager_memory_fraction: Option<f64>,
+    /// Config to enable stalls with write buffer manager
+    pub write_buffer_manager_allow_stall: bool,
+    /// Cluster memory limit used to calculate write buffer manager limit
+    /// if `write_buffer_manager_memory_fraction` is provided
+    pub cluster_memory_limit: Option<usize>,
 }
 
 /// The following are defaults (and default strings for LD parameters)
@@ -565,6 +495,9 @@ pub mod defaults {
 
     /// Default is 0, i.e. shrinking will be disabled
     pub const DEFAULT_SHRINK_BUFFERS_BY_RATIO: usize = 0;
+
+    /// Not allowing stalls for write buffer manager. Only applicable if write buffer manager is enabled by other flags.
+    pub const DEFAULT_WRITE_BUFFER_MANAGER_ALLOW_STALL: bool = false;
 }
 
 #[cfg(test)]
@@ -590,21 +523,13 @@ mod tests {
             defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
             None,
             defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
+            None,
+            None,
+            defaults::DEFAULT_WRITE_BUFFER_MANAGER_ALLOW_STALL,
         )
         .unwrap();
 
         assert_eq!(r, RocksDBTuningParameters::default());
-    }
-
-    #[mz_ore::test]
-    fn dynamic_defaults() {
-        assert_eq!(
-            RocksDBConfig::default()
-                .dynamic
-                .batch_size
-                .load(Ordering::SeqCst),
-            defaults::DEFAULT_BATCH_SIZE
-        )
     }
 
     #[mz_ore::test]
