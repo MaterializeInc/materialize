@@ -40,7 +40,7 @@ use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{warn, Event, Level, Subscriber};
+use tracing::{warn, Event, Level, Span, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -599,6 +599,17 @@ impl OpenTelemetryContext {
     pub fn attach_as_parent(&self) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
         tracing::Span::current().set_parent(parent_cx);
+    }
+
+    /// Attaches this `Context` to the given [`tracing`] Span, as its parent.
+    /// as its parent.
+    ///
+    /// If there is not enough information in this `OpenTelemetryContext`
+    /// to create a context, then the current thread's `Context` is used
+    /// defaulting to the default `Context`.
+    pub fn attach_as_parent_to(&self, span: &mut Span) {
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
+        span.set_parent(parent_cx);
     }
 
     /// Obtains a `Context` from the current [`tracing`] span.

@@ -13,6 +13,7 @@ use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
 use mz_controller::clusters::ClusterId;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
@@ -82,13 +83,20 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
             .tx
             .take()
             .expect("tx will always be `Some` unless `self` has been consumed")
-            .send(Response { result, session })
+            .send(Response {
+                result,
+                session,
+                otel_ctx: OpenTelemetryContext::obtain(),
+            })
         {
             self.internal_cmd_tx
-                .send(Message::Command(Command::Terminate {
-                    session: res.session,
-                    tx: None,
-                }))
+                .send(Message::Command(
+                    OpenTelemetryContext::obtain(),
+                    Command::Terminate {
+                        session: res.session,
+                        tx: None,
+                    },
+                ))
                 .expect("coordinator unexpectedly gone");
         }
     }

@@ -455,13 +455,16 @@ impl Coordinator {
                     Ok(portal_name) => {
                         let (tx, _, session, extra) = ctx.into_parts();
                         self.internal_cmd_tx
-                            .send(Message::Command(Command::Execute {
-                                portal_name,
-                                session,
-                                tx: tx.take(),
-                                outer_ctx_extra: Some(extra),
-                                span: tracing::Span::none(),
-                            }))
+                            .send(Message::Command(
+                                OpenTelemetryContext::obtain(),
+                                Command::Execute {
+                                    portal_name,
+                                    session,
+                                    tx: tx.take(),
+                                    outer_ctx_extra: Some(extra),
+                                    span: tracing::Span::none(),
+                                },
+                            ))
                             .expect("sending to self.internal_cmd_tx cannot fail");
                     }
                     Err(err) => ctx.retire(Err(err)),
@@ -561,17 +564,20 @@ impl Coordinator {
         mz_ore::task::spawn(
             || format!("execute_single_statement:{conn_id}"),
             async move {
-                let Ok(Response { result, session }) = sub_rx.await else {
+                let Ok(Response { result, session, otel_ctx }) = sub_rx.await else {
                     // Coordinator went away.
                     return;
                 };
+                otel_ctx.attach_as_parent();
                 let (sub_tx, sub_rx) = oneshot::channel();
-                let _ = internal_cmd_tx.send(Message::Command(Command::Commit {
-                    action: EndTransactionAction::Commit,
-                    session,
-                    tx: sub_tx,
-                    otel_ctx: OpenTelemetryContext::obtain(),
-                }));
+                let _ = internal_cmd_tx.send(Message::Command(
+                    otel_ctx,
+                    Command::Commit {
+                        action: EndTransactionAction::Commit,
+                        session,
+                        tx: sub_tx,
+                    },
+                ));
                 let Ok(commit_response) = sub_rx.await else {
                     // Coordinator went away.
                     return;

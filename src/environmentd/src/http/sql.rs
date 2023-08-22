@@ -1046,7 +1046,7 @@ async fn execute_stmt<S: ResultSender>(
         }
         ExecuteResponse::SendingRows {
             future: rows,
-            span: _,
+            otel_ctx: _,
         } => {
             let rows = match sender.await_rows(client.canceled(), rows).await? {
                 PeekResponseUnary::Rows(rows) => {
@@ -1071,7 +1071,7 @@ async fn execute_stmt<S: ResultSender>(
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
         }
-        ExecuteResponse::SendingRowsImmediate { rows, span: _} => {
+        ExecuteResponse::SendingRowsImmediate { rows, otel_ctx: _} => {
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let mut datum_vec = mz_repr::DatumVec::new();
             let desc = desc.relation_desc.expect("RelationDesc must exist");

@@ -1820,13 +1820,19 @@ impl Coordinator {
                         },
                         created: Instant::now(),
                         num_requeues: 0,
+                        otel_ctx: OpenTelemetryContext::obtain(),
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
             Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
                 self.internal_cmd_tx
-                    .send(Message::ExecuteSingleStatementTransaction { ctx, stmt, params })
+                    .send(Message::ExecuteSingleStatementTransaction {
+                        ctx,
+                        otel_ctx: OpenTelemetryContext::obtain(),
+                        stmt,
+                        params,
+                    })
                     .expect("must send");
                 return;
             }
@@ -2086,22 +2092,33 @@ impl Coordinator {
             }
         };
 
+        let otel_ctx = OpenTelemetryContext::obtain();
+
         mz_ore::task::spawn_blocking(
             || "optimize peek",
-            move || match Self::optimize_peek(
-                catalog.state(),
-                compute,
-                ctx.session(),
-                stats,
-                id_bundle,
-                stage,
-            ) {
-                Ok(stage) => {
-                    let stage = PeekStage::Timestamp(stage);
-                    // Ignore errors if the coordinator has shut down.
-                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+            move || {
+                let mut span = tracing::debug_span!("optimize peek task");
+                otel_ctx.attach_as_parent_to(&mut span);
+                let _guard = span.enter();
+                match Self::optimize_peek(
+                    catalog.state(),
+                    compute,
+                    ctx.session(),
+                    stats,
+                    id_bundle,
+                    stage,
+                ) {
+                    Ok(stage) => {
+                        let stage = PeekStage::Timestamp(stage);
+                        // Ignore errors if the coordinator has shut down.
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                            ctx,
+                            otel_ctx,
+                            stage,
+                        });
+                    }
+                    Err(err) => ctx.retire(Err(err)),
                 }
-                Err(err) => ctx.retire(Err(err)),
             },
         );
     }
@@ -3561,13 +3578,19 @@ impl Coordinator {
                 Ok(Response {
                     result: Ok(resp),
                     session,
-                }) => (resp, session),
+                    otel_ctx,
+                }) => {
+                    otel_ctx.attach_as_parent();
+                    (resp, session)
+                }
                 Ok(Response {
                     result: Err(e),
                     session,
+                    otel_ctx,
                 }) => {
                     let ctx =
                         ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+                    otel_ctx.attach_as_parent();
                     ctx.retire(Err(e));
                     return;
                 }
@@ -3622,7 +3645,7 @@ impl Coordinator {
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
                     future: batch,
-                    span: _,
+                    otel_ctx: _,
                 } => {
                     // TODO: This timeout should be removed once #11782 lands;
                     // we should instead periodically ensure clusters are
@@ -3651,7 +3674,7 @@ impl Coordinator {
                         }
                     }
                 }
-                ExecuteResponse::SendingRowsImmediate { rows, span: _ } => make_diffs(rows),
+                ExecuteResponse::SendingRowsImmediate { rows, otel_ctx: _ } => make_diffs(rows),
                 resp @ ExecuteResponse::Canceled => {
                     ctx.retire(Ok(resp));
                     return;
@@ -3726,6 +3749,7 @@ impl Coordinator {
                     },
                     created: Instant::now(),
                     num_requeues: 0,
+                    otel_ctx: OpenTelemetryContext::obtain(),
                 });
                 // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
                 if let Err(e) = result {

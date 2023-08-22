@@ -32,7 +32,6 @@ use mz_sql::session::vars::{
 };
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{oneshot, watch};
-use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
@@ -58,6 +57,7 @@ impl Coordinator {
             let _ = tx.send(Response::<T> {
                 result: Err(e),
                 session,
+                otel_ctx: OpenTelemetryContext::obtain(),
             });
         }
         match cmd {
@@ -115,11 +115,7 @@ impl Coordinator {
                 outer_ctx_extra,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let span = span
-                    .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
-
                 self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                    .instrument(span)
                     .await;
             }
 
@@ -242,6 +238,7 @@ impl Coordinator {
                     let _ = tx.send(Response {
                         result: Ok(()),
                         session,
+                        otel_ctx: OpenTelemetryContext::obtain(),
                     });
                 }
             }
@@ -250,7 +247,6 @@ impl Coordinator {
                 action,
                 session,
                 tx,
-                otel_ctx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 // We reach here not through a statement execution, but from the
@@ -275,14 +271,7 @@ impl Coordinator {
                         })
                     }
                 };
-                // TODO: We need a Span that is not none for the otel_ctx to
-                // attach the parent relationship to. If we do the TODO to swap
-                // otel_ctx in `Command::Commit` for a Span, we can downgrade
-                // this to a debug_span.
-                let span = tracing::info_span!("message_command (commit)");
-                span.in_scope(|| otel_ctx.attach_as_parent());
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                    .instrument(span)
                     .await;
             }
 
@@ -326,6 +315,7 @@ impl Coordinator {
                 let _ = tx.send(Response {
                     result: Err(err),
                     session,
+                    otel_ctx: OpenTelemetryContext::obtain(),
                 });
                 return;
             }
@@ -345,6 +335,7 @@ impl Coordinator {
             let _ = tx.send(Response {
                 result: Err(e.into()),
                 session,
+                otel_ctx: OpenTelemetryContext::obtain(),
             });
             return;
         }

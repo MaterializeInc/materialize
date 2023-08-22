@@ -24,7 +24,7 @@ use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Instrument, Level};
+use tracing::{event, info, warn, Instrument, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
@@ -41,7 +41,10 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn handle_message(&mut self, msg: Message) {
         match msg {
-            Message::Command(cmd) => self.message_command(cmd).await,
+            Message::Command(otel_ctx, cmd) => {
+                otel_ctx.attach_as_parent();
+                self.message_command(cmd).await
+            }
             Message::ControllerReady => {
                 if let Some(m) = self
                     .controller
@@ -94,14 +97,30 @@ impl Coordinator {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
-            Message::RetireExecute { data, reason } => {
+            Message::RetireExecute {
+                otel_ctx,
+                data,
+                reason,
+            } => {
+                otel_ctx.attach_as_parent();
                 self.retire_execution(reason, data);
             }
-            Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+            Message::ExecuteSingleStatementTransaction {
+                ctx,
+                otel_ctx,
+                stmt,
+                params,
+            } => {
+                otel_ctx.attach_as_parent();
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
                     .await;
             }
-            Message::PeekStageReady { ctx, stage } => {
+            Message::PeekStageReady {
+                ctx,
+                otel_ctx,
+                stage,
+            } => {
+                otel_ctx.attach_as_parent();
                 self.sequence_peek_stage(ctx, stage).await;
             }
         }
@@ -661,6 +680,7 @@ impl Coordinator {
                 let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
                 if timestamp <= read_ts {
+                    info!("ready txn!");
                     ready_txns.push(read_txn);
                 } else {
                     let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
@@ -668,6 +688,7 @@ impl Coordinator {
                         shortest_wait = wait;
                     }
                     read_txn.num_requeues += 1;
+                    info!("deferred txn!");
                     deferred_txns.push(read_txn);
                 }
             } else {
@@ -676,12 +697,17 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
+            let otel_ctx = ready_txns.first().map(|txn| txn.otel_ctx.clone()).unwrap();
+            otel_ctx.attach_as_parent();
             self.catalog_mut()
                 .confirm_leadership()
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
             let now = Instant::now();
             for ready_txn in ready_txns {
+                let mut span = tracing::debug_span!("retire_read_results");
+                ready_txn.otel_ctx.attach_as_parent_to(&mut span);
+                let _entered = span.enter();
                 self.metrics
                     .linearize_message_seconds
                     .with_label_values(&[

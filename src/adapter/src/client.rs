@@ -94,7 +94,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     build_info: &'static BuildInfo,
-    inner_cmd_tx: mpsc::UnboundedSender<Command>,
+    inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
     id_alloc: IdAllocator<ConnectionIdType>,
     now: NowFn,
     metrics: Metrics,
@@ -105,7 +105,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         build_info: &'static BuildInfo,
-        cmd_tx: mpsc::UnboundedSender<Command>,
+        cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
@@ -222,7 +222,13 @@ impl Client {
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
-            (ExecuteResponse::SendingRows { future, span: _ }, _) => match future.await {
+            (
+                ExecuteResponse::SendingRows {
+                    future,
+                    otel_ctx: _,
+                },
+                _,
+            ) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
@@ -265,7 +271,7 @@ impl Client {
     #[instrument(level = "debug", skip_all)]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
-            .send(cmd)
+            .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
     }
 }
@@ -478,7 +484,6 @@ impl SessionClient {
             action,
             session,
             tx,
-            otel_ctx: OpenTelemetryContext::obtain(),
         })
         .await
     }
