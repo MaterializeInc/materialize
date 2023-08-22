@@ -124,8 +124,9 @@ def test_upgrade_from_version(
                 )
             )
 
-    priors = sorted(priors + prior_patch_versions)
-    prior_strings = [repr(prior) for prior in priors]
+    # We need this to be a new variable binding otherwise `pyright` complains of
+    # a type mismatch
+    prior_strings = sorted(str(p) for p in priors + prior_patch_versions)
 
     if len(priors) == 0:
         prior_strings = ["*"]
