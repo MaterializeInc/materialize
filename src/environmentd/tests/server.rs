@@ -2374,7 +2374,6 @@ fn test_github_20262() {
         r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
         r#"{"type":"Row","payload":[1]}"#,
         r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
-        r#"{"type":"Notice","payload":{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
     ]);
     while !expect.is_empty() {

@@ -109,6 +109,7 @@ mod error;
 mod explain;
 mod notice;
 mod rbac;
+mod severity;
 mod subscribe;
 mod util;
 
@@ -136,3 +137,4 @@ pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::{serve, Config};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;
+pub use crate::severity::Severity;

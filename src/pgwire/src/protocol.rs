@@ -22,7 +22,7 @@ use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
 };
 use mz_adapter::{
-    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
+    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture, Severity,
 };
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
@@ -48,9 +48,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
-use crate::message::{
-    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
-};
+use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -1315,21 +1313,7 @@ where
         M: Into<BackendMessage>,
     {
         let message: BackendMessage = message.into();
-        match message {
-            BackendMessage::ErrorResponse(ref err) => {
-                let minimum_client_severity =
-                    self.adapter_client.session().vars().client_min_messages();
-                if err
-                    .severity
-                    .should_output_to_client(minimum_client_severity)
-                {
-                    self.conn.send(message).await
-                } else {
-                    Ok(())
-                }
-            }
-            _ => self.conn.send(message).await,
-        }
+        self.conn.send(message).await
     }
 
     pub async fn send_all(
