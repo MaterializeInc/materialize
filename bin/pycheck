@@ -23,11 +23,9 @@ typecheck_cmd="npx pyright@$pyright_version"
 python_folders=(ci misc/python)
 flake8_folders=(ci misc/python test)
 
-compose_files=$(git_files "**/mzcompose.py")
-test_files=$(git_files "test/**.py")
-unique_files=$(echo $compose_files $test_files | sort -u)
+compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
 
-try $typecheck_cmd "${python_folders[@]}" $unique_files
+try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
 
 try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
 
