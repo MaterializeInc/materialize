@@ -19,7 +19,7 @@ SUBCOMMANDS:
     help            Print this message or the help of the given subcommand(s)
     profile         Manage authentication profiles for the CLI
     region          Manage regions in your organization
-    secret          Manage secrets in a region
+    secret          Manage secrets in your region
     sql             Execute SQL statements in a region
     user            Manage users in your organization
 ```
