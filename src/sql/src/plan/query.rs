@@ -122,6 +122,10 @@ pub fn plan_root_query(
     // `finishing.project`).
     try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
 
+    if lifetime.is_maintained() {
+        expr.finish_maintained(&mut finishing);
+    }
+
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
         finishing
@@ -5591,12 +5595,6 @@ impl Visit<'_, Aug> for WindowFuncCollector {
 }
 
 /// Specifies how long a query will live.
-///
-/// Currently, it affects whether SHOW commands are allowed.
-///
-/// (This used to also impact whether the query is
-/// allowed to reason about the time at which it is running, e.g., by calling
-/// the `now()` function. Nowadays, this is decided by a different mechanism.)
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum QueryLifetime {
     /// The query's (or the expression's) result will be computed at one point in time.
@@ -5614,25 +5612,45 @@ pub enum QueryLifetime {
 }
 
 impl QueryLifetime {
+    /// (This used to impact whether the query is allowed to reason about the time at which it is
+    /// running, e.g., by calling the `now()` function. Nowadays, this is decided by a different
+    /// mechanism.)
     pub fn is_one_shot(&self) -> bool {
-        let res = matches!(self, QueryLifetime::OneShot);
-        assert_eq!(!res, self.is_maintained());
-        res
+        let result = match self {
+            QueryLifetime::OneShot => true,
+            QueryLifetime::Index => false,
+            QueryLifetime::MaterializedView => false,
+            QueryLifetime::Subscribe => false,
+            QueryLifetime::View => false,
+            QueryLifetime::Source => false,
+        };
+        assert_eq!(!result, self.is_maintained());
+        result
     }
 
+    /// Maintained dataflows can't have a finishing applied directly. Therefore, the finishing is
+    /// turned into a `TopK`.
     pub fn is_maintained(&self) -> bool {
-        matches!(
-            self,
-            QueryLifetime::Index
-                | QueryLifetime::MaterializedView
-                | QueryLifetime::Subscribe
-                | QueryLifetime::View
-                | QueryLifetime::Source
-        )
+        match self {
+            QueryLifetime::OneShot => false,
+            QueryLifetime::Index => true,
+            QueryLifetime::MaterializedView => true,
+            QueryLifetime::Subscribe => true,
+            QueryLifetime::View => true,
+            QueryLifetime::Source => true,
+        }
     }
 
+    /// Most maintained dataflows don't allow SHOW commands currently. However, SUBSCRIBE does.
     pub fn allow_show(&self) -> bool {
-        self.is_one_shot() || matches!(self, QueryLifetime::Subscribe)
+        match self {
+            QueryLifetime::OneShot => true,
+            QueryLifetime::Index => false,
+            QueryLifetime::MaterializedView => false,
+            QueryLifetime::Subscribe => true, // SUBSCRIBE allows SHOW commands!
+            QueryLifetime::View => false,
+            QueryLifetime::Source => false,
+        }
     }
 }
 

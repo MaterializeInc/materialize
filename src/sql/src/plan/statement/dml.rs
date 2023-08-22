@@ -501,12 +501,10 @@ pub fn plan_subscribe(
             (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
-            // There's no way to apply finishing operations to a `SUBSCRIBE`
-            // directly. So we wrap the query in another query so that the
-            // user-supplied query is planned as a subquery whose `ORDER
-            // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
-            let query = Query::query(query);
             let query = plan_query(scx, query, &Params::empty(), QueryLifetime::Subscribe)?;
+            // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
+            // finishing should have already been turned into a `TopK` by
+            // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
             assert!(query.finishing.is_trivial(query.desc.arity()));
             let desc = query.desc.clone();
             (

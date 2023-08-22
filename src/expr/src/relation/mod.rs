@@ -2860,6 +2860,15 @@ impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
 }
 
 impl RowSetFinishing {
+    /// Returns a trivial finishing, i.e., that does nothing to the result set.
+    pub fn trivial(arity: usize) -> RowSetFinishing {
+        RowSetFinishing {
+            order_by: Vec::new(),
+            limit: None,
+            offset: 0,
+            project: (0..arity).collect(),
+        }
+    }
     /// True if the finishing does nothing to any result set.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.limit.is_none()
