@@ -50,7 +50,10 @@ impl Coordinator {
     pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
         async move {
             match msg {
-                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Command(otel_ctx, cmd) => {
+                    otel_ctx.attach_as_parent();
+                    self.message_command(cmd).await
+                }
                 Message::ControllerReady => {
                     if let Some(m) = self
                         .controller
@@ -113,14 +116,30 @@ impl Coordinator {
                     )
                     .await;
                 }
-                Message::RetireExecute { data, reason } => {
+                Message::RetireExecute {
+                    otel_ctx,
+                    data,
+                    reason,
+                } => {
+                    otel_ctx.attach_as_parent();
                     self.retire_execution(reason, data);
                 }
-                Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+                Message::ExecuteSingleStatementTransaction {
+                    ctx,
+                    otel_ctx,
+                    stmt,
+                    params,
+                } => {
+                    otel_ctx.attach_as_parent();
                     self.sequence_execute_single_statement_transaction(ctx, stmt, params)
                         .await;
                 }
-                Message::PeekStageReady { ctx, stage } => {
+                Message::PeekStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
                     self.sequence_peek_stage(ctx, stage).await;
                 }
                 Message::DrainStatementLog => {
@@ -667,12 +686,23 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
+            // Sniff out one ctx, this is where tracing breaks down because we
+            // do one confirm_leadership for multiple peeks.
+            let otel_ctx = ready_txns.first().expect("known to exist").otel_ctx.clone();
+            let mut span = tracing::debug_span!("message_linearize_reads");
+            otel_ctx.attach_as_parent_to(&mut span);
+
             self.catalog_mut()
                 .confirm_leadership()
+                .instrument(span)
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
+
             let now = Instant::now();
             for ready_txn in ready_txns {
+                let mut span = tracing::debug_span!("retire_read_results");
+                ready_txn.otel_ctx.attach_as_parent_to(&mut span);
+                let _entered = span.enter();
                 self.metrics
                     .linearize_message_seconds
                     .with_label_values(&[

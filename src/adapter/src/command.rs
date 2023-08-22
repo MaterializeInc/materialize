@@ -71,17 +71,12 @@ pub enum Command {
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
         outer_ctx_extra: Option<ExecuteContextExtra>,
-        span: tracing::Span,
     },
 
     Commit {
         action: EndTransactionAction,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
-        // TODO: Ideally this would just be a tracing::Span, but that seems like
-        // it might be tickling a bug in tracing_opentelemetry:
-        // https://github.com/tokio-rs/tracing-opentelemetry/issues/14
-        otel_ctx: OpenTelemetryContext,
     },
 
     CancelRequest {
@@ -172,6 +167,7 @@ impl Command {
 pub struct Response<T> {
     pub result: Result<T, AdapterError>,
     pub session: Session,
+    pub otel_ctx: OpenTelemetryContext,
 }
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
@@ -363,14 +359,14 @@ pub enum ExecuteResponse {
         #[derivative(Debug = "ignore")]
         future: RowsFuture,
         #[derivative(Debug = "ignore")]
-        span: tracing::Span,
+        otel_ctx: OpenTelemetryContext,
     },
     /// Like `SendingRows`, but the rows are known to be available
     /// immediately, and thus the execution is considered ended in the coordinator.
     SendingRowsImmediate {
         rows: Vec<Row>,
         #[derivative(Debug = "ignore")]
-        span: tracing::Span,
+        otel_ctx: OpenTelemetryContext,
     },
     /// The specified variable was set to a new value.
     SetVariable {

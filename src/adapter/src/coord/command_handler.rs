@@ -96,15 +96,11 @@ impl Coordinator {
                     portal_name,
                     session,
                     tx,
-                    span,
                     outer_ctx_extra,
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                    let span = span.or_current();
-                    tracing::Span::current().add_link(span.context().span().span_context().clone());
 
                     self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                        .instrument(span)
                         .await;
                 }
 
@@ -178,7 +174,6 @@ impl Coordinator {
                     action,
                     session,
                     tx,
-                    otel_ctx,
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                     // We reach here not through a statement execution, but from the
@@ -203,16 +198,8 @@ impl Coordinator {
                             })
                         }
                     };
-                    // TODO: We need a Span that is not none for the otel_ctx to
-                    // attach the parent relationship to. If we do the TODO to swap
-                    // otel_ctx in `Command::Commit` for a Span, we can downgrade
-                    // this to a debug_span.
-                    let span = tracing::info_span!("message_command (commit)").or_current();
-                    span.in_scope(|| otel_ctx.attach_as_parent());
-                    tracing::Span::current().add_link(span.context().span().span_context().clone());
 
                     self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                        .instrument(span)
                         .await;
                 }
 

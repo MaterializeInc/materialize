@@ -179,7 +179,7 @@ mod sql;
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
-    Command(Command),
+    Command(OpenTelemetryContext, Command),
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
@@ -216,15 +216,18 @@ pub enum Message<T = mz_repr::Timestamp> {
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+        otel_ctx: OpenTelemetryContext,
         reason: StatementEndedExecutionReason,
     },
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
         stmt: Statement<Raw>,
         params: mz_sql::plan::Params,
     },
     PeekStageReady {
         ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
         stage: PeekStage,
     },
     DrainStatementLog,
@@ -235,7 +238,7 @@ impl Message {
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
         match self {
-            Message::Command(msg) => match msg {
+            Message::Command(_, msg) => match msg {
                 Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
                 Command::Startup { .. } => "command-startup",
                 Command::Execute { .. } => "command-execute",
@@ -667,6 +670,8 @@ pub struct PendingReadTxn {
     /// Requeueing is necessary if the time we executed the query is after the current oracle time;
     /// see [`Coordinator::message_linearize_reads`] for more details.
     num_requeues: u64,
+    /// Telemetry context.
+    otel_ctx: OpenTelemetryContext,
 }
 
 #[derive(Debug)]
@@ -889,6 +894,7 @@ impl ExecuteContext {
         tx.send(result, session);
         if let Some(reason) = reason {
             if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                otel_ctx: OpenTelemetryContext::obtain(),
                 data: extra,
                 reason,
             }) {
@@ -1968,7 +1974,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
-        mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
         async move {
@@ -2089,7 +2095,10 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     m = cmd_rx.recv() => match m {
                         None => break,
-                        Some(m) => Message::Command(m),
+                        Some((otel_ctx, m)) => {
+                            Message::Command(otel_ctx, m)
+
+                        }
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety

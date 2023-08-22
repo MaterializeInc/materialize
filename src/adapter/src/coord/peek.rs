@@ -602,7 +602,7 @@ impl crate::coord::Coordinator {
 
         Ok(crate::ExecuteResponse::SendingRows {
             future: Box::pin(rows_rx),
-            span: tracing::Span::current(),
+            otel_ctx: OpenTelemetryContext::obtain(),
         })
     }
 
@@ -712,7 +712,7 @@ impl crate::coord::Coordinator {
     pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
         ExecuteResponse::SendingRowsImmediate {
             rows,
-            span: tracing::Span::none(),
+            otel_ctx: OpenTelemetryContext::obtain(),
         }
     }
 }
