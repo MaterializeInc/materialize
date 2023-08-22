@@ -13,15 +13,6 @@
 
 > CREATE SECRET pgpass AS 'postgres'
 
-! CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
-    DATABASE postgres,
-    USER postgres,
-    PASSWORD SECRET pgpass,
-    BROKER '${testdrive.kafka-addr}'
-  )
-contains:POSTGRES connections do not support BROKER values
-
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
