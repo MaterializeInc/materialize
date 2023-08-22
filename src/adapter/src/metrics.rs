@@ -32,6 +32,7 @@ pub struct Metrics {
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub introspection_logins: IntCounter,
     pub statement_logging_actual_bytes: IntCounterVec,
+    pub slow_message_handling: HistogramVec,
 }
 
 impl Metrics {
@@ -110,7 +111,14 @@ impl Metrics {
             statement_logging_actual_bytes: registry.register(metric!(
                 name: "mz_statement_logging_actual_bytes",
                 help: "The total amount of SQL text that was logged by statement logging.",
-            ))
+            )),
+            slow_message_handling: registry.register(metric!(
+                name: "mz_slow_message_handling",
+                help: "Latency for coordinator messages that are 'slow' to process. 'Slow' is \
+                    defined by the LaunchDarkly variable 'coord_slow_message_reporting_threshold'",
+                var_labels: ["message_kind"],
+                buckets: histogram_seconds_buckets(0.128, 32.0),
+            )),
         }
     }
 }

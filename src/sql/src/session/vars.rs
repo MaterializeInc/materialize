@@ -822,6 +822,17 @@ static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| 
     internal: true,
 });
 
+// Note(parkmycar): This value was chosen arbitrarily.
+const DEFAULT_COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: Duration = Duration::from_millis(100);
+const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("coord_slow_message_reporting_threshold"),
+    value: &DEFAULT_COORD_SLOW_MESSAGE_REPORTING_THRESHOLD,
+    description:
+        "Sets the threshold at which we will report the handling of a coordinator message \
+    for being slow.",
+    internal: true,
+};
+
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
 /// when connecting to PG via replication.
 const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
@@ -2150,6 +2161,7 @@ impl SystemVars {
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+            .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2737,6 +2749,10 @@ impl SystemVars {
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+    }
+
+    pub fn coord_slow_message_reporting_threshold_ms(&self) -> Duration {
+        *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
