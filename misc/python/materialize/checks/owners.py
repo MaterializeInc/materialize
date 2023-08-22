@@ -44,7 +44,8 @@ class Owners(Check):
                 f"""
                 CREATE SOURCE owner_source{i} FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
                 CREATE SINK owner_sink{i} FROM owner_mv{i} INTO KAFKA CONNECTION owner_kafka_conn{i} (TOPIC 'sink-sink-owner{i}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION owner_csr_conn{i} ENVELOPE DEBEZIUM
-                CREATE CLUSTER owner_cluster{i} REPLICAS (owner_cluster_r{i} (SIZE '4'))
+                -- Disable cluster-related operations due to https://github.com/MaterializeInc/materialize/issues/21317
+                -- CREATE CLUSTER owner_cluster{i} REPLICAS (owner_cluster_r{i} (SIZE '4'))
                 """
             )
 
@@ -71,7 +72,7 @@ class Owners(Check):
                 f"""
                 ALTER SOURCE owner_source{i} OWNER TO other_owner
                 ALTER SINK owner_sink{i} OWNER TO other_owner
-                ALTER CLUSTER owner_cluster{i} OWNER TO other_owner
+                -- ALTER CLUSTER owner_cluster{i} OWNER TO other_owner -- https://github.com/MaterializeInc/materialize/issues/21317
                 """
             )
 
@@ -86,7 +87,7 @@ class Owners(Check):
             cmds += [
                 f"DROP SOURCE owner_source{i}",
                 f"DROP SINK owner_sink{i}",
-                f"DROP CLUSTER owner_cluster{i}",
+                # f"DROP CLUSTER owner_cluster{i}",
             ]
         cmds += [
             f"DROP SECRET owner_secret{i}",
@@ -345,13 +346,13 @@ class Owners(Check):
                 owner_sink1 owner_role_01
                 owner_sink2 other_owner
 
-                > SELECT mz_clusters.name, mz_roles.name FROM mz_clusters JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id WHERE mz_clusters.name LIKE 'owner_cluster%'
-                owner_cluster1 owner_role_01
-                owner_cluster2 other_owner
+                # > SELECT mz_clusters.name, mz_roles.name FROM mz_clusters JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id WHERE mz_clusters.name LIKE 'owner_cluster%'
+                # owner_cluster1 owner_role_01
+                # owner_cluster2 other_owner
 
-                > SELECT mz_cluster_replicas.name, mz_roles.name FROM mz_cluster_replicas JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id WHERE mz_cluster_replicas.name LIKE 'owner_cluster_r%'
-                owner_cluster_r1 owner_role_01
-                owner_cluster_r2 other_owner
+                # > SELECT mz_cluster_replicas.name, mz_roles.name FROM mz_cluster_replicas JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id WHERE mz_cluster_replicas.name LIKE 'owner_cluster_r%'
+                # owner_cluster_r1 owner_role_01
+                # owner_cluster_r2 other_owner
 
                 > SELECT mz_connections.name, mz_roles.name FROM mz_connections JOIN mz_roles ON mz_connections.owner_id = mz_roles.id WHERE mz_connections.name LIKE 'owner_%'
                 owner_csr_conn1  owner_role_01
@@ -508,11 +509,11 @@ class Owners(Check):
                 ! SELECT name, unnest(privileges)::text FROM mz_sinks WHERE name LIKE 'owner_sink%'
                 contains: column "privileges" does not exist
 
-                > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
-                owner_cluster1 mz_support=U/owner_role_01
-                owner_cluster1 owner_role_01=UC/owner_role_01
-                owner_cluster2 mz_support=U/other_owner
-                owner_cluster2 other_owner=UC/other_owner
+                # > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
+                # owner_cluster1 mz_support=U/owner_role_01
+                # owner_cluster1 owner_role_01=UC/owner_role_01
+                # owner_cluster2 mz_support=U/other_owner
+                # owner_cluster2 other_owner=UC/other_owner
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'
                 owner_csr_conn1  owner_role_01=U/owner_role_01
