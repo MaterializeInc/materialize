@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
@@ -19,7 +19,7 @@ use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::btreeset;
+use maplit::{btreemap, btreeset};
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -4495,13 +4495,45 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops).await?;
 
         let entry = self.catalog().get_entry(&id);
-        let sources: BTreeSet<GlobalId> = entry
-            .used_by()
-            .iter()
-            .filter_map(|dep| self.catalog().get_entry(&dep).source().map(|_source| *dep))
-            .collect();
 
-        self.controller.storage.restart_collections(sources).await?;
+        let mut connections = VecDeque::new();
+        connections.push_front(entry.id());
+
+        let mut sources = BTreeMap::new();
+        // let mut sinks = BTreeMap::new();
+
+        while let Some(id) = connections.pop_front() {
+            for id in self.catalog.get_entry(&id).used_by() {
+                let entry = self.catalog.get_entry(&id);
+                match entry.item_type() {
+                    CatalogItemType::Connection => connections.push_back(*id),
+                    CatalogItemType::Source => {
+                        let ingestion =
+                            match &entry.source().expect("known to be source").data_source {
+                                DataSourceDesc::Ingestion(ingestion) => ingestion
+                                    .clone()
+                                    .into_inline_connection(&self.catalog().state()),
+                                _ => unreachable!("only ingestions reference connections"),
+                            };
+
+                        sources.insert(*id, ingestion);
+                    }
+                    CatalogItemType::Sink => {
+                        let _export = entry.sink().expect("known to be sink");
+                        todo!()
+                    }
+                    _ => todo!(),
+                }
+            }
+        }
+
+        if !sources.is_empty() {
+            self.controller
+                .storage
+                .alter_collection(sources)
+                .await
+                .expect("altering collection after txn must succeed");
+        }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
@@ -4733,9 +4765,11 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
+                let collection = btreemap! {id => ingestion};
+
                 self.controller
                     .storage
-                    .check_alter_collection(id, ingestion.clone())
+                    .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Do not drop this source, even though it's a dependency.
@@ -4779,7 +4813,7 @@ impl Coordinator {
                 // Commit the new ingestion to storage.
                 self.controller
                     .storage
-                    .alter_collection(id, ingestion)
+                    .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
             }
@@ -4944,9 +4978,11 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
+                let collection = btreemap! {id => ingestion};
+
                 self.controller
                     .storage
-                    .check_alter_collection(id, ingestion.clone())
+                    .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 let CreateSourceInner {
@@ -5017,7 +5053,7 @@ impl Coordinator {
                 // Commit the new ingestion to storage.
                 self.controller
                     .storage
-                    .alter_collection(id, ingestion)
+                    .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
 

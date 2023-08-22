@@ -849,94 +849,70 @@ where
 
     fn check_alter_collection(
         &mut self,
-        id: GlobalId,
-        ingestion: IngestionDescription,
+        collections: &BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError> {
-        self.check_alter_collection_inner(id, ingestion)
+        for (id, ingestion) in collections {
+            self.check_alter_collection_inner(*id, ingestion.clone())?;
+        }
+        Ok(())
     }
 
     async fn alter_collection(
         &mut self,
-        id: GlobalId,
-        ingestion: IngestionDescription,
+        collections: BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError> {
-        self.check_alter_collection_inner(id, ingestion.clone())
+        self.check_alter_collection(&collections)
             .expect("error avoided by calling check_alter_collection first");
 
-        // Describe the ingestion in terms of collection metadata.
-        let description = self
-            .enrich_ingestion(id, ingestion.clone())
-            .expect("verified valid in check_alter_collection_inner");
-
-        let collection = self.collection_mut(id).expect("validated exists");
-        let new_source_exports = match &mut collection.description.data_source {
-            DataSource::Ingestion(active_ingestion) => {
-                // Determine which IDs we're adding.
-                let new_source_exports: Vec<_> = description
-                    .source_exports
-                    .keys()
-                    .filter(|id| !active_ingestion.source_exports.contains_key(id))
-                    .cloned()
-                    .collect();
-                *active_ingestion = ingestion;
-
-                new_source_exports
-            }
-            _ => unreachable!("verified collection refers to ingestion"),
-        };
-
-        // Assess dependency since, which we have to fast-forward this
-        // collection's since to.
-        let storage_dependencies = collection.description.get_storage_dependencies();
-
-        // Ensure this new collection's since is aligned with the dependencies.
-        // This will likely place its since beyond its upper which is OK because
-        // its snapshot will catch it up with the rest of the source, i.e. we
-        // will never see its upper at a state beyond 0 and less than its since.
-        self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
-
-        // Fetch the client for this ingestion's instance.
-        let client = self
-            .clients
-            .get_mut(&description.instance_id)
-            .expect("verified exists");
-
-        client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
-            id,
-            description,
-            update: true,
-        }]));
-
-        Ok(())
-    }
-
-    /// Restart any ingestions described by `collections`.
-    async fn restart_collections(
-        &mut self,
-        collections: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError> {
         let mut restart_ingestions_by_instance: BTreeMap<
             StorageInstanceId,
             Vec<RunIngestionCommand>,
         > = BTreeMap::new();
 
-        for id in collections.into_iter() {
-            let collection_description = &self.collection(id)?.description;
+        for (id, ingestion) in collections.into_iter() {
+            // Describe the ingestion in terms of collection metadata.
+            let description = self
+                .enrich_ingestion(id, ingestion.clone())
+                .expect("verified valid in check_alter_collection_inner");
 
-            if let DataSource::Ingestion(ingestion) = &collection_description.data_source {
-                let description = self
-                    .enrich_ingestion(id, ingestion.clone())
-                    .expect("current ingestion must be valid");
+            let collection = self.collection_mut(id).expect("validated exists");
+            let new_source_exports = match &mut collection.description.data_source {
+                DataSource::Ingestion(active_ingestion) => {
+                    // Determine which IDs we're adding.
+                    let new_source_exports: Vec<_> = description
+                        .source_exports
+                        .keys()
+                        .filter(|id| !active_ingestion.source_exports.contains_key(id))
+                        .cloned()
+                        .collect();
+                    *active_ingestion = ingestion;
 
-                let collections = restart_ingestions_by_instance
-                    .entry(description.instance_id)
-                    .or_default();
-                collections.push(RunIngestionCommand {
-                    id,
-                    description,
-                    update: true,
-                });
-            }
+                    new_source_exports
+                }
+                _ => unreachable!("verified collection refers to ingestion"),
+            };
+
+            // Assess dependency since, which we have to fast-forward this
+            // collection's since to.
+            let storage_dependencies = collection.description.get_storage_dependencies();
+
+            // Ensure this new collection's since is aligned with the dependencies.
+            // This will likely place its since beyond its upper which is OK because
+            // its snapshot will catch it up with the rest of the source, i.e. we
+            // will never see its upper at a state beyond 0 and less than its since.
+            self.install_dependency_read_holds(
+                new_source_exports.into_iter(),
+                &storage_dependencies,
+            )?;
+
+            let collections = restart_ingestions_by_instance
+                .entry(description.instance_id)
+                .or_default();
+            collections.push(RunIngestionCommand {
+                id,
+                description,
+                update: true,
+            });
         }
 
         for (instance_id, ingestions) in restart_ingestions_by_instance {
