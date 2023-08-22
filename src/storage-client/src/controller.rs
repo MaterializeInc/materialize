@@ -296,15 +296,13 @@ pub trait StorageController: Debug + Send {
     /// subsequent calls to `alter_collection` are guaranteed to succeed.
     fn check_alter_collection(
         &mut self,
-        id: GlobalId,
-        desc: IngestionDescription,
+        collections: &BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError>;
 
     /// Alter the identified collection to use the described ingestion.
     async fn alter_collection(
         &mut self,
-        id: GlobalId,
-        desc: IngestionDescription,
+        collections: BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
