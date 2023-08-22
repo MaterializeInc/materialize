@@ -454,8 +454,8 @@ pub trait MetricsFutureExt<F> {
     ///
     /// # Wall Time vs Execution Time
     ///
-    /// There is also [`MetricsFutureExt::exec_time`], which measures how long a [`Future`] spent
-    /// executing, instead of how long it took to complete. For example, a network request may have
+    /// There is also [`MetricsFutureExt::wall_time`], which measures how long a [`Future`] took to
+    /// complete, instead of how long it spent executing. For example, a network request may have
     /// a wall time of 1 second, meanwhile it's execution time may have only been 50ms. The 950ms
     /// delta would be how long the [`Future`] waited for a response from the network.
     ///
@@ -571,8 +571,8 @@ impl<F> WallTimeFuture<F, UnspecifiedMetric> {
 impl<F, M> WallTimeFuture<F, M> {
     /// Specifies a filter which much return `true` for the wall time to be recorded.
     ///
-    /// This can be particularly useful if you have a high volume `Future`, e.g. Coordinator
-    /// messages, and you only want to record ones that take a long time to complete.
+    /// This can be particularly useful if you have a high volume `Future` and you only want to
+    /// record ones that take a long time to complete.
     pub fn with_filter(mut self, filter: impl FnMut(Duration) -> bool + 'static) -> Self {
         self.filter = Some(Box::new(filter));
         self
@@ -585,19 +585,16 @@ impl<F: Future, M: DurationMetric> Future for WallTimeFuture<F, M> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        // Record when we started this Future.
         if this.start.is_none() {
             *this.start = Some(Instant::now());
         }
 
-        // Poll, returning early if we get Pending.
         let result = match this.fut.poll(cx) {
             Poll::Ready(r) => r,
             Poll::Pending => return Poll::Pending,
         };
         let duration = Instant::now().duration_since(this.start.expect("timer to be started"));
 
-        // Only record the Duration if it passes our filter.
         let pass = this
             .filter
             .as_mut()
@@ -688,21 +685,17 @@ impl<F: Future, M: DurationMetric> Future for ExecTimeFuture<F, M> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        // Record the total amount of time this call to poll took.
         let start = Instant::now();
         let result = this.fut.poll(cx);
         let duration = Instant::now().duration_since(start);
 
-        // Update our running sum.
         *this.running_duration = this.running_duration.saturating_add(duration);
 
-        // Return if our inner Future has not yet completed.
         let result = match result {
             Poll::Ready(result) => result,
             Poll::Pending => return Poll::Pending,
         };
 
-        // Only record the Duration if it passes our filter.
         let duration = *this.running_duration;
         let pass = this
             .filter
