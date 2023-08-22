@@ -191,6 +191,12 @@ RUN mkdir rust \
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
+# Install the locked version of our typechecker -- it'll be invoked via `npx`,
+# so using the same command here should ensure it's installed and cached in the
+# right place
+COPY pyright-version.sh /workdir/
+RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
+
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 

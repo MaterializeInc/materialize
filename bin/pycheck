@@ -17,8 +17,8 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-PYRIGHT_VERSION="1.1.323"
-typecheck_cmd="npx pyright@$PYRIGHT_VERSION"
+pyright_version=$(sh ci/builder/pyright-version.sh)
+typecheck_cmd="npx pyright@$pyright_version"
 
 python_folders=(ci misc/python)
 flake8_folders=(ci misc/python test)
