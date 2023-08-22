@@ -37,6 +37,15 @@ def sql_execute(
     cur.execute(query, vars)
 
 
+def sql_execute_ddl(
+    conn: Connection[Any],
+    query: str,
+    vars: Optional[Sequence[Any]] = None,
+) -> None:
+    cur = psycopg.ClientCursor(conn)
+    cur.execute(query, vars)
+
+
 def pgwire_sql_conn(config: EnvironmentConfig) -> Connection[Any]:
     environment = wait_for_environmentd(config)
     pgwire_url: str = environment["regionInfo"]["sqlAddress"]
@@ -60,7 +69,7 @@ def sql_query_pgwire(
 ) -> List[List[Any]]:
     with pgwire_sql_conn(config) as conn:
         eprint(f"QUERY: {query}")
-    return sql_query(conn, query, vars)
+        return sql_query(conn, query, vars)
 
 
 def sql_execute_pgwire(
