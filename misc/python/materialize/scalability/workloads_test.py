@@ -15,29 +15,29 @@ from materialize.scalability.operations_test import (
     SleepInEnvironmentd,
     SleepInPython,
 )
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import WorkloadSelfTest
 
 
-class EmptyOperatorWorkload(Workload):
+class EmptyOperatorWorkload(WorkloadSelfTest):
     def operations(self) -> list["Operation"]:
         return [EmptyOperation()]
 
 
-class EmptySqlStatementWorkload(Workload):
+class EmptySqlStatementWorkload(WorkloadSelfTest):
     def operations(self) -> list["Operation"]:
         return [EmptySqlStatement()]
 
 
-class Sleep10MsInEnvironmentdWorkload(Workload):
+class Sleep10MsInEnvironmentdWorkload(WorkloadSelfTest):
     def operations(self) -> list["Operation"]:
         return [SleepInEnvironmentd(duration_in_sec=0.01)]
 
 
-class Sleep10MsInClusterdWorkload(Workload):
+class Sleep10MsInClusterdWorkload(WorkloadSelfTest):
     def operations(self) -> list["Operation"]:
         return [SleepInClusterd(duration_in_sec=0.01)]
 
 
-class Sleep10MsInPythonWorkload(Workload):
+class Sleep10MsInPythonWorkload(WorkloadSelfTest):
     def operations(self) -> list["Operation"]:
         return [SleepInPython(duration_in_sec=0.01)]
