@@ -527,6 +527,10 @@ impl fmt::Display for Attributes {
 }
 
 /// A set of indexes that are used in the explained plan.
+///
+/// Each vector element consists of the following components:
+/// 1. The id of the index.
+/// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
 #[derive(Debug)]
 pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
 
