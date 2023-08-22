@@ -200,17 +200,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
 use timely::communication::Allocate;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback};
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::source::types::SourcePersistSinkMetrics;
+use crate::source::types::{HealthStatus, HealthStatusUpdate, SourcePersistSinkMetrics};
 use crate::storage_state::StorageState;
 
 mod debezium;
@@ -248,7 +249,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
 
-            let (mut outputs, health_stream, token) = crate::render::sources::render_source(
+            let (mut outputs, source_health, token) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
                 primary_source_id,
@@ -264,6 +265,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let mut health_configs = BTreeMap::new();
 
             let mut upper_streams = vec![];
+            let mut health_streams = vec![source_health];
             for (export_id, export) in description.source_exports {
                 let (ok, err) = outputs
                     .get_mut(export.output_index)
@@ -282,7 +284,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 tracing::info!(
                     "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                 );
-                let (upper_stream, token) = crate::render::persist_sink::render(
+                let (upper_stream, errors, token) = crate::render::persist_sink::render(
                     into_time_scope,
                     export_id,
                     export.storage_metadata.clone(),
@@ -294,6 +296,17 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 upper_streams.push(upper_stream);
                 tokens.push(token);
 
+                let sink_health = errors.map(|err: Rc<anyhow::Error>| {
+                    let halt_status = HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError {
+                            error: err.display_with_causes().to_string(),
+                            hint: None,
+                        },
+                        should_halt: true,
+                    };
+                    (0, halt_status)
+                });
+                health_streams.push(sink_health.leave());
                 health_configs.insert(export.output_index, (export_id, export.storage_metadata));
             }
 
@@ -301,6 +314,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
+            let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::source::health_operator(
                 into_time_scope,
                 storage_state,

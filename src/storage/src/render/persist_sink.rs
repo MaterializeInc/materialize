@@ -314,7 +314,7 @@ pub(crate) fn render<G>(
     storage_state: &mut StorageState,
     metrics: SourcePersistSinkMetrics,
     output_index: usize,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -342,7 +342,7 @@ where
         storage_state,
     );
 
-    let (upper_stream, append_token) = append_batches(
+    let (upper_stream, append_errors, append_token) = append_batches(
         scope,
         collection_id.clone(),
         operator_name,
@@ -357,6 +357,7 @@ where
 
     (
         upper_stream,
+        append_errors,
         Rc::new((mint_token, write_token, append_token)),
     )
 }
@@ -907,7 +908,7 @@ fn append_batches<G>(
     storage_state: &mut StorageState,
     output_index: usize,
     metrics: SourcePersistSinkMetrics,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -954,9 +955,8 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |caps| async move {
-        let [upper_cap]: [_; 1] = caps.try_into().unwrap();
-        let mut upper_capset = CapabilitySet::from_elem(upper_cap);
+    let (shutdown_button, errors) = append_op.build_fallible(move |caps| Box::pin(async move {
+        let [upper_cap]: &mut [_; 1] = caps.try_into().unwrap();
 
         // This may SEEM unnecessary, but metrics contains extra
         // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
@@ -988,14 +988,12 @@ where
             // The non-active workers report that they are done snapshotting.
             source_statistics
                 .initialize_snapshot_committed(&Antichain::<mz_repr::Timestamp>::new());
-            return;
+            return Ok(());
         }
 
-        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
             .open(persist_location)
-            .await
-            .expect("could not open persist client");
+            .await?;
 
         let mut write = persist_client
             .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
@@ -1007,8 +1005,7 @@ where
                     handle_purpose: format!("persist_sink::append_batches {}", collection_id)
                 },
             )
-            .await
-            .expect("could not open persist shard");
+            .await?;
 
         // Initialize this sink's `upper` to the `upper` of the persist shard we are writing
         // to. Data from the source not beyond this time will be dropped, as it has already
@@ -1018,7 +1015,10 @@ where
         // shared upper. All other workers have already cleared this
         // upper above.
         current_upper.borrow_mut().clone_from(write.upper());
-        upper_capset.downgrade(current_upper.borrow().elements());
+        match current_upper.borrow().as_option() {
+            Some(ts) => upper_cap.as_mut().unwrap().downgrade(ts),
+            None => *upper_cap = None,
+        };
         source_statistics.initialize_snapshot_committed(write.upper());
 
         // The current input frontiers.
@@ -1117,7 +1117,7 @@ where
                 }
                 else => {
                     // All inputs are exhausted, so we can shut down.
-                    return;
+                    return Ok(());
                 }
             };
 
@@ -1236,7 +1236,10 @@ where
                 match result {
                     Ok(()) => {
                         current_upper.borrow_mut().clone_from(&batch_upper);
-                        upper_capset.downgrade(current_upper.borrow().elements());
+                        match current_upper.borrow().as_option() {
+                            Some(ts) => upper_cap.as_mut().unwrap().downgrade(ts),
+                            None => *upper_cap = None,
+                        };
                     }
                     Err(mismatch) => {
                         // _Best effort_ Clean up in case we didn't manage to append the
@@ -1244,7 +1247,8 @@ where
                         for batch in batches {
                             batch.delete().await;
                         }
-                        panic!(
+
+                        tracing::warn!(
                             "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
                                 is {:?}. This is not a problem, it just means \
@@ -1252,11 +1256,16 @@ where
                                 again with a new batch description.",
                             collection_id, batch_lower, batch_upper, mismatch.current,
                         );
+                        anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
                     }
                 }
             }
         }
-    });
+    }));
 
-    (upper_stream, Rc::new(shutdown_button.press_on_drop()))
+    (
+        upper_stream,
+        errors,
+        Rc::new(shutdown_button.press_on_drop()),
+    )
 }
