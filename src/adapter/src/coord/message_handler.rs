@@ -38,6 +38,7 @@ use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::Command(cmd) => self.message_command(cmd).await,

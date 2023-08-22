@@ -1794,6 +1794,7 @@ impl SessionVars {
     /// [`SessionVars::set`] since the last call to `end_transaction`.
     ///
     /// Returns any session parameters that changed because the transaction ended.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn end_transaction(
         &mut self,
         action: EndTransactionAction,

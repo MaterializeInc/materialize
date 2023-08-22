@@ -630,6 +630,7 @@ impl crate::coord::Coordinator {
     /// Constructs an [`ExecuteResponse`] that that will send some rows to the
     /// client immediately, as opposed to asking the dataflow layer to send along
     /// the rows after some computation.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
         ExecuteResponse::SendingRowsImmediate {
             rows,

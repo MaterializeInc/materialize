@@ -64,6 +64,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// # Panics
     /// - If in `soft_assert`, `result.is_ok()`, `self.allowed.is_some()`, and
     ///   the result value is not in the set of allowed values.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn send(mut self, result: Result<T, AdapterError>, session: Session) {
         // Guarantee that the value sent is of an allowed type.
         soft_assert!(

@@ -605,6 +605,7 @@ impl PendingRead {
     ///
     /// If it is necessary to finalize an execute, return the state necessary to do so
     /// (execution context and result)
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
             PendingRead::Read {
@@ -762,6 +763,7 @@ impl ExecuteContext {
     }
 
     /// Retire the execution, by sending a message to the coordinator.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         let Self {
             tx,

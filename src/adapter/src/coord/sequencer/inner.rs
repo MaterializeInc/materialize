@@ -1765,6 +1765,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(super) fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1842,6 +1843,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
@@ -1921,6 +1923,7 @@ impl Coordinator {
     }
 
     /// Processes as many peek stages as possible.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1963,6 +1966,7 @@ impl Coordinator {
     }
 
     // Do some simple validation. We must defer most of it until after any off-thread work.
+    #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_validate(
         &mut self,
         session: &mut Session,
@@ -2042,6 +2046,7 @@ impl Coordinator {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -2101,6 +2106,7 @@ impl Coordinator {
         );
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn optimize_peek(
         catalog: &CatalogState,
         compute: ComputeInstanceSnapshot,
@@ -2340,6 +2346,7 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
+    #[tracing::instrument(level = "debug", skip_all)]
     fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
@@ -2452,6 +2459,7 @@ impl Coordinator {
         Ok(determination)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn plan_peek(
         &mut self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,

@@ -85,6 +85,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
