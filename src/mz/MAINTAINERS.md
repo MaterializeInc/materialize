@@ -2,7 +2,7 @@
 
 ## Testing the CLI
 
-All the tests for the CLI reside in a single function inside `./tests/e2e.rs`. To test locally run:
+All the tests for the CLI reside in a single function inside `./tests/e2e.rs`. To test locally, run:
 
 ```
 cargo test -p mz
