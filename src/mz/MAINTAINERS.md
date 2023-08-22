@@ -28,7 +28,7 @@ cargo test -p mz
    gh pr create
    ```
 
-4. Once the PR is merged to main, check out the merged SHA, tag it, and push
+5. Once the PR is merged to main, check out the merged SHA, tag it, and push
    the tag to GitHub.
 
    ```

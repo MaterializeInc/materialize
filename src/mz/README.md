@@ -162,31 +162,3 @@ region = "aws/us-east-1"
 app-password = "mzp_a48df1039ecb2d94c..."
 region = "aws/eu-west-1"
 ```
-
-## Dependencies
-
-Install [`rust` and `cargo`](https://doc.rust-lang.org/cargo/getting-started/installation.html):
-
-```bash
-# Linux & macOS
-curl https://sh.rustup.rs -sSf | sh
-
-# Windows
-https://win.rustup.rs/
-```
-
-Install `psql` dependency for the shell command:
-
-```bash
-# Linux
-apt-get install postgresql-client
-
-# macOS
-brew install libpq
-
-echo 'export PATH="/usr/local/opt/libpq/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-
-echo 'export PATH="/usr/local/opt/libpq/bin:$PATH"' >> ~/.bash_profile
-source ~/.bash_profile
-```
