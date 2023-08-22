@@ -631,6 +631,10 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Numeric(d)) => {
             let mut d = d.0 .0.clone();
             let mut cx = numeric::cx_datum();
+            // Truncate the decimal to match sqlite.
+            if mode == Mode::Standard {
+                cx.set_rounding(dec::Rounding::Down);
+            }
             cx.round(&mut d);
             numeric::munge_numeric(&mut d).unwrap();
             d.to_standard_notation_string()
