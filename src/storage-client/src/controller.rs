@@ -18,7 +18,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -277,6 +277,12 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
         desc: IngestionDescription,
+    ) -> Result<(), StorageError>;
+
+    /// Restart any ingestions described by `collections`.
+    async fn restart_collections(
+        &mut self,
+        collections: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.

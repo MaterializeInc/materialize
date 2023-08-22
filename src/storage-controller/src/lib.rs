@@ -910,6 +910,45 @@ where
         Ok(())
     }
 
+    /// Restart any ingestions described by `collections`.
+    async fn restart_collections(
+        &mut self,
+        collections: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError> {
+        let mut restart_ingestions_by_instance: BTreeMap<
+            StorageInstanceId,
+            Vec<RunIngestionCommand>,
+        > = BTreeMap::new();
+
+        for id in collections.into_iter() {
+            let collection_description = &self.collection(id)?.description;
+
+            if let DataSource::Ingestion(ingestion) = &collection_description.data_source {
+                let description = self
+                    .enrich_ingestion(id, ingestion.clone())
+                    .expect("current ingestion must be valid");
+
+                let collections = restart_ingestions_by_instance
+                    .entry(description.instance_id)
+                    .or_default();
+                collections.push(RunIngestionCommand {
+                    id,
+                    description,
+                    update: true,
+                });
+            }
+        }
+
+        for (instance_id, ingestions) in restart_ingestions_by_instance {
+            // Fetch the client for this ingestion's instance.
+            let client = self.clients.get_mut(&instance_id).expect("verified exists");
+
+            client.send(StorageCommand::RunIngestions(ingestions));
+        }
+
+        Ok(())
+    }
+
     fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError> {
         self.exports
             .get(&id)

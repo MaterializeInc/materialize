@@ -4494,7 +4494,15 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        // todo: restart ingestions
+        let entry = self.catalog().get_entry(&id);
+        let sources: BTreeSet<GlobalId> = entry
+            .used_by()
+            .iter()
+            .filter_map(|dep| self.catalog().get_entry(&dep).source().map(|_source| *dep))
+            .collect();
+
+        self.controller.storage.restart_collections(sources).await?;
+
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
