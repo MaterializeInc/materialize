@@ -10,7 +10,7 @@
 //! A handle to a batch of updates
 
 use std::collections::VecDeque;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,8 +27,9 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::RustType;
+use mz_proto::{RustType, TryFromProtoError};
 use mz_timely_util::order::Reverse;
+use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -36,6 +37,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::cfg::ProtoUntrimmableColumns;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -203,6 +205,7 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
+    pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
 }
 
 impl BatchBuilderConfig {
@@ -217,7 +220,69 @@ impl BatchBuilderConfig {
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
             stats_budget: value.dynamic.stats_budget_bytes(),
+            stats_untrimmable_columns: Arc::new(value.dynamic.stats_untrimmable_columns()),
         }
+    }
+}
+
+/// A list of column names that persist will always retain stats for,
+/// even if it means going over the stats budget.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
+pub struct UntrimmableColumns {
+    /// Always retain columns that exactly equal any of these strings.
+    pub equals: Vec<String>,
+    /// Always retain columns that start with any of these strings.
+    pub prefixes: Vec<String>,
+    /// Always retain columns that end with any of these strings.
+    pub suffixes: Vec<String>,
+}
+
+impl UntrimmableColumns {
+    pub(crate) fn should_retain(&self, name: &str) -> bool {
+        for s in &self.equals {
+            if s == name {
+                return true;
+            }
+        }
+        for s in &self.prefixes {
+            if name.starts_with(s) {
+                return true;
+            }
+        }
+        for s in &self.suffixes {
+            if name.ends_with(s) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl std::fmt::Display for UntrimmableColumns {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UntrimmableColumns")
+            .field("equals", &self.equals)
+            .field("prefixes", &self.prefixes)
+            .field("suffixes", &self.suffixes)
+            .finish()
+    }
+}
+
+impl RustType<ProtoUntrimmableColumns> for UntrimmableColumns {
+    fn into_proto(&self) -> ProtoUntrimmableColumns {
+        ProtoUntrimmableColumns {
+            equals: self.equals.into_proto(),
+            prefixes: self.prefixes.into_proto(),
+            suffixes: self.suffixes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoUntrimmableColumns) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            equals: proto.equals.into_proto(),
+            prefixes: proto.prefixes.into_proto(),
+            suffixes: proto.suffixes.into_proto(),
+        })
     }
 }
 
@@ -678,22 +743,6 @@ pub(crate) struct BatchParts<T> {
     consolidated: bool,
 }
 
-// NB: In practice, the inputs to this end up getting downcased before they make
-// it here.
-fn force_keep_stats_col(name: &str) -> bool {
-    // If we trim the "err" column, then we can't ever use pushdown on this part
-    // (because it could have >0 errors).
-    name == "err"
-        // Various flavors of timestamp column names found in the wild.
-        || name == "ts"
-        || name.ends_with("timestamp")
-        || name.ends_with("time")
-        || name.ends_with("_at")
-        || name.starts_with("last_")
-        || name == "receivedat"
-        || name == "createdat"
-}
-
 impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
@@ -741,6 +790,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
         let consolidated = self.consolidated;
+        let untrimmable_columns = Arc::clone(&self.cfg.stats_untrimmable_columns);
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
         let handle = mz_ore::task::spawn(
@@ -768,8 +818,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                 Ok(x) => {
                                     let mut trimmed_bytes = 0;
                                     let x = LazyPartStats::encode(&x, |s| {
-                                        trimmed_bytes =
-                                            trim_to_budget(s, stats_budget, force_keep_stats_col);
+                                        trimmed_bytes = trim_to_budget(s, stats_budget, |s| {
+                                            untrimmable_columns.should_retain(s)
+                                        });
                                     });
                                     Some((x, stats_start.elapsed(), trimmed_bytes))
                                 }
