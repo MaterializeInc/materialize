@@ -69,7 +69,7 @@ def sql_query_pgwire(
 ) -> List[List[Any]]:
     with pgwire_sql_conn(config) as conn:
         eprint(f"QUERY: {query}")
-    return sql_query(conn, query, vars)
+        return sql_query(conn, query, vars)
 
 
 def sql_execute_pgwire(
