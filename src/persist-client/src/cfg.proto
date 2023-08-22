@@ -31,10 +31,17 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration consensus_connection_pool_ttl = 15;
     mz_proto.ProtoDuration consensus_connection_pool_ttl_stagger = 16;
     optional uint64 stats_budget_bytes = 17;
+    optional ProtoUntrimmableColumns stats_untrimmable_columns = 18;
 }
 
 message ProtoRetryParameters {
     mz_proto.ProtoDuration initial_backoff = 1;
     uint32 multiplier = 2;
     mz_proto.ProtoDuration clamp = 3;
+}
+
+message ProtoUntrimmableColumns {
+    repeated string equals = 1;
+    repeated string prefixes = 2;
+    repeated string suffixes = 3;
 }
