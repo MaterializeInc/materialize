@@ -570,6 +570,11 @@ pub enum IndexUsageType {
     /// The index is used for creating a new index. Currently, a `PlanRoot` usage will always
     /// additionally be present together with an `IndexExport` usage.
     IndexExport,
+    /// When a fast path peek has a LIMIT, but no ORDER BY, then we read from the index only as many
+    /// records (approximately), as the OFFSET + LIMIT needs.
+    /// Note: When a fast path peek does a lookup and also has a limit, the usage type will be
+    /// `Lookup`. However, the smart limiting logic will still apply.
+    FastPathLimit,
     /// We saw a dangling `ArrangeBy`, i.e., where we have no idea what the arrangement will be used
     /// for. This is an internal error. Can be a bug either in `CollectIndexRequests`, or some
     /// other transform that messed up the plan. It's also possible that somebody is trying to add
@@ -600,6 +605,7 @@ impl std::fmt::Display for IndexUsageType {
                 IndexUsageType::PlanRoot => "plan root",
                 IndexUsageType::SinkExport => "sink export",
                 IndexUsageType::IndexExport => "index export",
+                IndexUsageType::FastPathLimit => "fast path limit",
                 IndexUsageType::DanglingArrangeBy => "*** INTERNAL ERROR (dangling ArrangeBy) ***",
                 IndexUsageType::Unknown => "*** INTERNAL ERROR (unknown usage) ***",
             }
@@ -621,6 +627,7 @@ impl RustType<ProtoIndexUsageType> for IndexUsageType {
                 IndexUsageType::IndexExport => IndexExport(()),
                 IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
                 IndexUsageType::Unknown => Unknown(()),
+                IndexUsageType::FastPathLimit => FastPathLimit(()),
             }),
         }
     }
@@ -641,6 +648,7 @@ impl RustType<ProtoIndexUsageType> for IndexUsageType {
             IndexExport(()) => Ok(IndexUsageType::IndexExport),
             DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),
             Unknown(()) => Ok(IndexUsageType::Unknown),
+            FastPathLimit(()) => Ok(IndexUsageType::FastPathLimit),
         }
     }
 }

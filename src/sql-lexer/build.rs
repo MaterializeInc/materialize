@@ -142,7 +142,16 @@ fn main() -> Result<()> {
             phf.build()
         ));
 
-        fs::write(out_dir.join("keywords.rs"), buf.into_string())?;
+        let contents = buf.into_string();
+        let path = out_dir.join("keywords.rs");
+        let needs_write = if let Ok(on_disk) = fs::read(&path) {
+            on_disk != contents.as_bytes()
+        } else {
+            true
+        };
+        if needs_write {
+            fs::write(path, contents)?;
+        }
     }
     Ok(())
 }

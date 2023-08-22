@@ -48,7 +48,6 @@ message ProtoDifferentialLog {
 message ProtoComputeLog {
     oneof kind {
         google.protobuf.Empty dataflow_current = 1;
-        google.protobuf.Empty dataflow_dependency = 2;
         google.protobuf.Empty frontier_current = 3;
         google.protobuf.Empty peek_current = 4;
         google.protobuf.Empty peek_duration = 5;

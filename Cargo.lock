@@ -3673,6 +3673,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-proto",
+ "mz-stash",
  "once_cell",
  "prometheus",
  "proptest",

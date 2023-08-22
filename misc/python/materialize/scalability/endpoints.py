@@ -57,6 +57,7 @@ class PostgresContainer(Endpoint):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
         self._port: Optional[int] = None
+        super().__init__()
 
     def host(self) -> str:
         return "localhost"
@@ -77,12 +78,16 @@ class PostgresContainer(Endpoint):
             self.composition.up("postgres")
             self._port = self.composition.default_port("postgres")
 
+    def name(self) -> str:
+        return "postgres"
+
 
 class MaterializeContainer(Endpoint):
     def __init__(self, composition: Composition, image: Optional[str] = None) -> None:
         self.composition = composition
         self.image = image
         self._port: Optional[int] = None
+        super().__init__()
 
     def host(self) -> str:
         return "localhost"

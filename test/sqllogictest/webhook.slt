@@ -213,6 +213,15 @@ CREATE SOURCE webhook_buildkite2 IN CLUSTER webhook_cluster FROM WEBHOOK
   )
 
 statement ok
+ALTER SOURCE webhook_buildkite2 RENAME TO webhook_buildkite2_renamed;
+
+statement ok
+SELECT * FROM webhook_buildkite2_renamed;
+
+statement error unknown catalog item 'webhook_buildkite2'
+SELECT * FROM webhook_buildkite2;
+
+statement ok
 CREATE SECRET other_secret AS 'another_one';
 
 statement ok

@@ -1688,7 +1688,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             // The ID is arbitrary here; we just need some dummy
                             // value to return.
                             cluster_id: ClusterId::System(0),
-                            replica_id: 0,
+                            replica_id: ReplicaId::System(0),
                         })
                     }
                 }

@@ -327,6 +327,18 @@ impl Coordinator {
                     self.buffer_builtin_table_updates(updates);
                 }
             }
+            ControllerResponse::ComputeDependencyUpdate {
+                id,
+                dependencies,
+                diff,
+            } => {
+                let state = self.catalog().state();
+                let updates = dependencies
+                    .into_iter()
+                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
+                    .collect();
+                self.buffer_builtin_table_updates(updates);
+            }
         }
     }
 

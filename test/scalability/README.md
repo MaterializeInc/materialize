@@ -41,13 +41,13 @@ This is going to display a URL that you can open in your browser
 
 The framework can be directed to execute its queries against various targets:
 
-# Against your current HEAD in a container
+### Against your current HEAD in a container
 
 ```
 ./mzcompose run default --target HEAD ...
 ```
 
-# Against a specific DockerHub tag:
+### Against a specific DockerHub tag:
 
 ```
 ./mzcompose run default --target v1.2.4 ...
@@ -55,17 +55,37 @@ The framework can be directed to execute its queries against various targets:
 
 In both of those cases, Materialize, CRDB and Python will run within the same machine, possibly interfering with each other
 
-# Against a local containerized Postgres instance
+### Against a local containerized Postgres instance
 
 
 ```
 ./mzcompose run default --target postgres ...
 ```
 
-# Against a remote Materialize instance
+### Against a remote Materialize instance
 
 ```
 ./mzcompose run default --target=remote \--materialize-url="postgres://user:password@host:6875/materialize?sslmode=require" --cluster-name= ...
+```
+
+## Running against multiple targets:
+
+If you issue separate `./mzcompose run default --target=...` commands, their results will be accumulated in the `results` directory
+and all targets will be displayed together on a single chart.
+
+```
+./mzcompose run default --target=devel-cdb1f682e28d54e85afdcac3c32d43039df093a8
+...
+./mzcompose run default --target=devel-c891e3b4b174bd536b7a15ec212c5202ddc85b95
+```
+
+## Specifying the number of datapoints
+
+The framework uses an exponential function to determine what concurrencies to test. By default, exponent base of 2 is used, with a default
+minimum value of 1 and maximum of 256. To get more data points, you can modify the exponent base to be less than 2:
+
+```
+./mzcompose run default --exponent-base=1.5 --min-concurrency=N --max-concurrency=M
 ```
 
 # Accuracy

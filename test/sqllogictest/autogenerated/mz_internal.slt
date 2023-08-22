@@ -82,13 +82,19 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
 ----
-1  internal_replica_id  text
+1  replica_id  text
 2  size  text
 3  cluster_name  text
 4  replica_name  text
 5  created_at  timestamp␠with␠time␠zone
 6  dropped_at  timestamp␠with␠time␠zone
 7  credits_per_hour  numeric
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
+----
+1  object_id  text
+2  dependency_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
@@ -397,12 +403,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  count  numeric
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
-----
-1  export_id  text
-2  import_id  text
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_exports' ORDER BY position
 ----
 1  export_id  text
@@ -584,7 +584,6 @@ mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
 mz_compute_delays_histogram_raw
 mz_compute_dependencies
-mz_compute_dependencies_per_worker
 mz_compute_exports
 mz_compute_exports_per_worker
 mz_compute_frontiers

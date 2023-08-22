@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import pathlib
 import sys
 import time
 from concurrent import futures
@@ -28,7 +29,7 @@ from materialize.scalability.endpoints import (
 )
 from materialize.scalability.operation import Operation
 from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
@@ -140,23 +141,43 @@ def run_workload(
 ) -> None:
     df_totals = pd.DataFrame()
     df_details = pd.DataFrame()
-    for concurrency in range(
-        args.min_concurrency, args.max_concurrency + 1, args.concurrency_step
-    ):
+
+    concurrencies: list[int] = [round(args.exponent_base**c) for c in range(0, 1024)]
+    concurrencies = sorted(set(concurrencies))
+    concurrencies = [
+        c
+        for c in concurrencies
+        if c >= args.min_concurrency and c <= args.max_concurrency
+    ]
+    print(f"Concurrencies to benchmark: {concurrencies}")
+
+    for concurrency in concurrencies:
         df_total, df_detail = run_with_concurrency(
             c, endpoint, schema, workload, concurrency, args.count
         )
         df_totals = pd.concat([df_totals, df_total])
         df_details = pd.concat([df_details, df_detail])
 
-        df_totals.to_csv(f"results/{type(workload).__name__}.csv")
-        df_details.to_csv(f"results/{type(workload).__name__}_details.csv")
+        endpoint_name = endpoint.name()
+        pathlib.Path(f"results/{endpoint_name}").mkdir(parents=True, exist_ok=True)
+
+        df_totals.to_csv(f"results/{endpoint_name}/{type(workload).__name__}.csv")
+        df_details.to_csv(
+            f"results/{endpoint_name}/{type(workload).__name__}_details.csv"
+        )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--target",
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
+    )
+
+    parser.add_argument(
+        "--exponent-base",
+        type=float,
+        help="Exponent base to use when deciding what concurrencies to test",
+        default=2,
     )
 
     parser.add_argument(
@@ -168,10 +189,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         help="Maximum concurrency to test",
         default=256,
-    )
-
-    parser.add_argument(
-        "--concurrency-step", type=int, help="Maximum concurrency to test", default=10
     )
 
     parser.add_argument(
@@ -234,7 +251,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else Workload.__subclasses__()
+        else [w for w in Workload.__subclasses__() if not w == WorkloadSelfTest]
     )
 
     schema = Schema(

@@ -12,7 +12,6 @@ use std::net::Ipv4Addr;
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
     ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaId, ReplicaLocation,
@@ -46,12 +45,13 @@ use crate::catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
     MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
-    MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_COMPUTE_DEPENDENCIES, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
+    MZ_VIEWS,
 };
 use crate::catalog::builtin::{
     MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
@@ -255,9 +255,6 @@ impl CatalogState {
             _ => (None, None, None),
         };
 
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let id = NewReplicaId::User(id);
-
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
@@ -305,9 +302,6 @@ impl CatalogState {
             ClusterStatus::NotReady(None) => None,
             ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
         };
-
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let replica_id = NewReplicaId::User(replica_id);
 
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
@@ -1134,9 +1128,6 @@ impl CatalogState {
         last_heartbeat: DateTime<Utc>,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let id = NewReplicaId::User(id);
-
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
             row: Row::pack_slice(&[
@@ -1178,10 +1169,6 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_METRICS);
-
-        // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
-        let replica_id = NewReplicaId::User(replica_id);
-
         let rows = updates.iter().enumerate().map(
             |(
                 process_id,
@@ -1513,5 +1500,21 @@ impl CatalogState {
         let retraction = self.pack_statement_began_execution_update(began_record, -1);
         let new = self.pack_full_statement_execution_update(began_record, ended_record);
         vec![retraction, new]
+    }
+
+    pub fn pack_compute_dependency_update(
+        &self,
+        object_id: GlobalId,
+        dependency_id: GlobalId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_COMPUTE_DEPENDENCIES),
+            row: Row::pack_slice(&[
+                Datum::String(&object_id.to_string()),
+                Datum::String(&dependency_id.to_string()),
+            ]),
+            diff,
+        }
     }
 }

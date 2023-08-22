@@ -66,9 +66,6 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_delays_histogram);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_dependencies);
-1
-
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
 1
 

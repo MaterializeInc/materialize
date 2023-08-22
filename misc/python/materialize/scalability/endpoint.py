@@ -42,3 +42,10 @@ class Endpoint:
         conn = self.sql_connection()
         cursor = conn.cursor()
         cursor.execute(sql)
+
+    def name(self) -> str:
+        cursor = self.sql_connection().cursor()
+        cursor.execute("SELECT mz_version()")
+        row = cursor.fetchone()
+        assert row is not None
+        return str(row[0])

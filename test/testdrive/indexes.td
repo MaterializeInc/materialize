@@ -299,7 +299,6 @@ mz_cluster_replica_statuses_ind                             mz_cluster_replica_s
 mz_cluster_replicas_ind                                     mz_cluster_replicas                          mz_introspection    {id}
 mz_clusters_ind                                             mz_clusters                                  mz_introspection    {id}
 mz_compute_delays_histogram_raw_s2_primary_idx              mz_compute_delays_histogram_raw              mz_introspection    {export_id,import_id,worker_id,delay_ns}
-mz_compute_dependencies_per_worker_s2_primary_idx           mz_compute_dependencies_per_worker           mz_introspection    {export_id,import_id,worker_id}
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_introspection    {export_id,worker_id}
 mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_introspection    {export_id,worker_id,time}
 mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_introspection    {export_id,import_id,worker_id,time}

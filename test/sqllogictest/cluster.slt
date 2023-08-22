@@ -203,9 +203,6 @@ bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary
 bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  2  import_id  NULL  false
 bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  3  worker_id  NULL  false
 bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  4  delay_ns  NULL  false
-bar  mz_compute_dependencies_per_worker  mz_compute_dependencies_per_worker_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_dependencies_per_worker  mz_compute_dependencies_per_worker_u7_primary_idx  2  import_id  NULL  false
-bar  mz_compute_dependencies_per_worker  mz_compute_dependencies_per_worker_u7_primary_idx  3  worker_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
@@ -399,7 +396,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-25
+24
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -412,7 +409,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-127
+123
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -420,7 +417,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-102
+99
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER default OWNER TO materialize
