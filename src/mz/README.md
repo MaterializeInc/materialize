@@ -74,7 +74,7 @@ SUBCOMMANDS:
    you@corp.com=#
    ```
 
-   Substitute `aws/us-east-1` with the name of an enabled region in your
+   Replace `aws/us-east-1` with the name of an enabled region in your
    organization. If you don't yet have an enabled region, use
    [`mz region enable`](reference/region) to enable one.
 
@@ -83,13 +83,13 @@ SUBCOMMANDS:
 `mz` is configured via a single TOML file stored at
 `$HOME/.config/materialize/mz.toml`.
 
-You typically manage configuration via the following two commands:
+You typically manage configuration using the following commands:
 
   * [`mz config`](../reference/config), which manages global configuration
     parameters.
   * [`mz profile`](../reference/profile), which manages authentication profiles.
 
-You can also edit the file directly if you prefer. The format of the file is
+You can also edit the file directly, if you prefer. The format of the file is
 shown in the [Example](#example) section.
 
 ### Global parameters
