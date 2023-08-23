@@ -177,9 +177,10 @@ class Environment:
 
     def cleanup_crds(
         self,
-        system_context: str,
-        environment_context: str,
     ) -> None:
+        environment_context = self.env_kubectl.context
+        system_context = self.sys_kubectl.context
+
         if system_context != "kind-mzcloud":
             return
 
