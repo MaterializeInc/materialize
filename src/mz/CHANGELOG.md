@@ -4,7 +4,7 @@ All notable changes to the `mz` CLI will be documented in this file.
 
 ## [0.1.3] - 2023-09-08
 
-This new version contains a big revamp of the `mz` CLI. It includes updated code with an entirely different pattern for `profiles`.
+This version introduces a large code refactor of the client, as well as new functionality:
 
 ### Added
  - The `mz user` command for managing users in the organization.
