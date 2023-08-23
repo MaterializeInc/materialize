@@ -26,7 +26,17 @@ To begin you will need to add your Materialize database as a source in Hightouch
 1. In **Step 1** and **Step 2** set the connection parameters using the credentials provided in the [Materialize console](https://console.materialize.com/).
    Then click the **Continue**. After the tests pass, click **Continue**. Name your source and click **Finish**.
 
-## Step 2. Set up a Destination
+## Step 2. Add Model
+
+1. In Hightouch, navigate to **Models** and then click **Add Model**.
+
+1. Under **Select a data source** select the Materialize source configured in step 1.
+
+1. Under **Select a modeling method** in "Table sector" select the Materialize object you would to export then click **Continue**.
+
+1. Under **Finalize settings for this model** name your model and click **Finish**.
+
+## Step 3. Set up a Destination
 
 Next you will add a destination where data will be sent.
 
@@ -44,7 +54,7 @@ Next you will add a destination where data will be sent.
 {{< /tab >}}
 {{< /tabs >}}
 
-## Step 3. Create a Sync
+## Step 4. Create a Sync
 
 After successfully adding the Materialize source, you can create a sync to send data from Materialize to your downstream destination.
 
@@ -53,9 +63,9 @@ After successfully adding the Materialize source, you can create a sync to send 
 
 1. In Hightouch, navigate to **Syncs** and then click **Add Sync**.
 
-1. Under **Select a model** select the Materialize object you would like to export.
+1. Under **Select a model** select the Materialize model configured in step 2.
 
-1. Under **Select a destination** select the Braze destination configured in step 2.
+1. Under **Select a destination** select the Braze destination configured in step 3.
 
 1. Under **Configure sync to Braze** in **What would you like Hightouch to send to Braze?** select "User Identity". You will
    map your columns in your object to the Braze user object.
