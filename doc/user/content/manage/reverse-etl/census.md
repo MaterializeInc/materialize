@@ -24,7 +24,7 @@ To begin you will need to add your Materialize database as a source in Census.
 1. From the list of connection types, choose **Materialize**.
 
 1. Set the connection parameters using the credentials provided in the [Materialize console](https://console.materialize.com/).
-   Then click the **Connect**.
+   Then click the **Connect** button.
 
 ## Step 2. Set up a Destination
 
