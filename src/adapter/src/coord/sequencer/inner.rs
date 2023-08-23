@@ -100,9 +100,9 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady,
-    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, TargetCluster,
+    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageRealTimeRecency, PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -2160,10 +2160,12 @@ impl Coordinator {
                     self.peek_stage_optimize(ctx, stage).await;
                     return;
                 }
-                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
-                    Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
-                    None => return,
-                },
+                PeekStage::RealTimeRecency(stage) => {
+                    match self.peek_stage_real_time_recency(ctx, stage) {
+                        Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                        None => return,
+                    }
+                }
                 PeekStage::Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
@@ -2313,7 +2315,7 @@ impl Coordinator {
             || "optimize peek",
             move || match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
                 Ok(stage) => {
-                    let stage = PeekStage::Timestamp(stage);
+                    let stage = PeekStage::RealTimeRecency(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
                 }
@@ -2337,12 +2339,12 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             mut optimizer,
         }: PeekStageOptimize,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageRealTimeRecency, AdapterError> {
         let local_mir_plan = optimizer.optimize(source)?;
         let local_mir_plan = local_mir_plan.resolve(session, stats);
         let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2357,10 +2359,10 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_timestamp(
+    fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
-        PeekStageTimestamp {
+        PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2371,7 +2373,7 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
-        }: PeekStageTimestamp,
+        }: PeekStageRealTimeRecency,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {

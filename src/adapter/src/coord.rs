@@ -344,7 +344,7 @@ impl RealTimeRecencyContext {
 pub enum PeekStage {
     Validate(PeekStageValidate),
     Optimize(PeekStageOptimize),
-    Timestamp(PeekStageTimestamp),
+    RealTimeRecency(PeekStageRealTimeRecency),
     Finish(PeekStageFinish),
 }
 
@@ -353,7 +353,7 @@ impl PeekStage {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Optimize(PeekStageOptimize { validity, .. })
-            | PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -379,7 +379,7 @@ pub struct PeekStageOptimize {
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     copy_to: Option<CopyFormat>,
     source_ids: BTreeSet<GlobalId>,
