@@ -38,7 +38,7 @@ Next you will add a destination where data will be sent.
 1. From the list of destinations types, choose **Braze**.
 
 1. You will need to supply your Braze URL (which will most likely be `https://rest.iad-03.braze.com`) and a Braze API key.
-   The [Census guide for Braze](https://docs.getcensus.com/destinations/braze) will explain how create an API key with the
+   The [Census guide for Braze](https://docs.getcensus.com/destinations/braze) will explain how to create an API key with the
    correct permissions. Then click the **Connect**.
 
 {{< /tab >}}
