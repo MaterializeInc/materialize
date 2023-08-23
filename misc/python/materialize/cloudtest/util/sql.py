@@ -11,6 +11,7 @@ from typing import Any, List, Optional, Sequence
 
 import psycopg
 from psycopg.connection import Connection
+from typing_extensions import LiteralString
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import eprint
@@ -39,7 +40,7 @@ def sql_execute(
 
 def sql_execute_ddl(
     conn: Connection[Any],
-    query: str,
+    query: LiteralString,
     vars: Optional[Sequence[Any]] = None,
 ) -> None:
     cur = psycopg.ClientCursor(conn)
