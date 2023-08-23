@@ -6,10 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 from requests.exceptions import ConnectionError
@@ -24,18 +25,30 @@ class AuthConfig:
     token: str
     app_password: Optional[str]
 
+    refresh_fn: Callable[[AuthConfig], None]
+
+    def refresh(self) -> None:
+        self.refresh_fn(self)
+
 
 DEFAULT_ORG_ID = "80b1a04a-2277-11ed-a1ce-5405dbb9e0f7"
+
 
 # TODO: this retry loop should not be necessary, but we are seeing
 # connections getting frequently (but sporadically) interrupted here - we
 # should track this down and remove these retries
-def get_auth(args: argparse.Namespace) -> AuthConfig:
-    config: AuthConfig = retry(lambda: _get_auth(args), 5, [ConnectionError])
+def create_auth(
+    args: argparse.Namespace, refresh_fn: Callable[[AuthConfig], None]
+) -> AuthConfig:
+    config: AuthConfig = retry(
+        lambda: _create_auth(args, refresh_fn), 5, [ConnectionError]
+    )
     return config
 
 
-def _get_auth(args: argparse.Namespace) -> AuthConfig:
+def _create_auth(
+    args: argparse.Namespace, refresh_fn: Callable[[AuthConfig], None]
+) -> AuthConfig:
     if args.e2e_test_user_email is not None:
         assert args.e2e_test_user_password is not None
         assert args.frontegg_host is not None
@@ -65,7 +78,15 @@ def _get_auth(args: argparse.Namespace) -> AuthConfig:
         organization_id=organization_id,
         token=token,
         app_password=app_password,
+        refresh_fn=refresh_fn,
     )
+
+
+def update_auth(args: argparse.Namespace, auth: AuthConfig) -> None:
+    new_auth = create_auth(args, auth.refresh_fn)
+    auth.organization_id = new_auth.organization_id
+    auth.token = new_auth.token
+    auth.app_password = new_auth.app_password
 
 
 def make_app_password(frontegg_host: str, token: str) -> str:

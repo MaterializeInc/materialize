@@ -59,7 +59,7 @@ def get(
         response = try_get()
     except requests.exceptions.HTTPError as e:
         if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+            config.auth.refresh()
             response = try_get()
         else:
             raise
@@ -97,7 +97,7 @@ def post(
         response = try_post()
     except requests.exceptions.HTTPError as e:
         if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+            config.auth.refresh()
             response = try_post()
         else:
             raise
@@ -135,7 +135,7 @@ def patch(
         response = try_patch()
     except requests.exceptions.HTTPError as e:
         if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+            config.auth.refresh()
             response = try_patch()
         else:
             raise
@@ -179,7 +179,7 @@ def delete(
         response = try_delete()
     except requests.exceptions.HTTPError as e:
         if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+            config.auth.refresh()
             response = try_delete()
         else:
             raise

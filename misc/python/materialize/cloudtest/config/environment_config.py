@@ -12,7 +12,11 @@ from typing import Callable, Optional
 
 import pytest
 
-from materialize.cloudtest.util.authentication import AuthConfig, get_auth
+from materialize.cloudtest.util.authentication import (
+    AuthConfig,
+    create_auth,
+    update_auth,
+)
 from materialize.cloudtest.util.controller import ControllerDefinition
 
 
@@ -54,14 +58,7 @@ class EnvironmentConfig:
 
     e2e_test_user_email: Optional[str]
 
-    refresh_auth_fn: Callable[[], AuthConfig]
-    auth: AuthConfig = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.refresh_auth()
-
-    def refresh_auth(self) -> None:
-        self.auth = self.refresh_auth_fn()
+    auth: AuthConfig
 
 
 @dataclass
@@ -85,12 +82,17 @@ def load_environment_config(pytestconfig: pytest.Config) -> EnvironmentConfig:
                 f"{controller.name.replace('-', '_')}_address"
             ]
 
+    def refresh_auth_fn(auth: AuthConfig) -> None:
+        update_auth(args, auth)
+
+    auth = create_auth(args, refresh_auth_fn)
+
     config = EnvironmentConfig(
         system_context=args.system_context,
         environment_context=args.environment_context,
         controllers=controllers,
         e2e_test_user_email=args.e2e_test_user_email,
-        refresh_auth_fn=lambda: get_auth(args),
+        auth=auth,
         region=args.region,
         stack=args.stack,
     )
