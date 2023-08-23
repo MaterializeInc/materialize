@@ -29,7 +29,6 @@ use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
-use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -39,6 +38,7 @@ use uuid::Uuid;
 use crate::client::ConnectionId;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 

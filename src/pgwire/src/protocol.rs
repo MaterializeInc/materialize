@@ -21,6 +21,7 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
 };
+use mz_adapter::statement_logging::StatementEndedExecutionReason;
 use mz_adapter::{
     AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture, Severity,
 };
@@ -29,7 +30,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};

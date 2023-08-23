@@ -25,7 +25,6 @@ use mz_ore::soft_assert;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -45,6 +44,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::Transmittable;
 use crate::AdapterNotice;
 
