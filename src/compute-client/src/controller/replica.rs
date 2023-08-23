@@ -17,7 +17,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
-use mz_service::client::GenericClient;
+use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use timely::progress::Timestamp;
 use tokio::select;
@@ -31,6 +31,8 @@ use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
+
+type ReplicaClient<T> = Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -151,173 +153,145 @@ where
 {
     /// Asynchronously forwards commands to and responses from a single replica.
     async fn run(self) {
-        let ReplicaTask {
-            replica_id,
-            config,
-            build_info,
-            command_rx,
-            response_tx,
-            epoch,
-            metrics,
-        } = self;
-
+        let replica_id = self.replica_id;
         info!(replica = ?replica_id, "starting replica task");
 
-        let addrs = config.location.ctl_addrs;
-        let timely_config = TimelyConfig {
-            workers: config.location.workers,
-            process: 0,
-            addresses: config.location.dataflow_addrs,
-            idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
-        };
-        let cmd_spec = CommandSpecialization {
-            logging_config: config.logging,
-            timely_config,
-            epoch,
-        };
-
-        let result = run_message_loop(
-            replica_id,
-            command_rx,
-            response_tx,
-            build_info,
-            addrs,
-            cmd_spec,
-            metrics,
-            config.grpc_client,
-        )
-        .await;
-
-        match result {
+        let client = self.connect().await;
+        match self.run_message_loop(client).await {
             Ok(()) => info!(replica = ?replica_id, "stopped replica task"),
             Err(error) => warn!(replica = ?replica_id, "replica task failed: {error}"),
         }
     }
-}
 
-/// Connects to the replica and runs the message loop.
-///
-/// The initial replica connection is retried forever (with backoff). Once connected, the task
-/// returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
-///
-/// If no error condition is encountered, the task runs until the controller disconnects from the
-/// command channel, or the task is dropped.
-async fn run_message_loop<T>(
-    replica_id: ReplicaId,
-    mut command_rx: UnboundedReceiver<ComputeCommand<T>>,
-    response_tx: UnboundedSender<ComputeResponse<T>>,
-    build_info: &BuildInfo,
-    addrs: Vec<String>,
-    cmd_spec: CommandSpecialization,
-    metrics: ReplicaMetrics,
-    grpc_client_params: GrpcClientParameters,
-) -> Result<(), anyhow::Error>
-where
-    T: Timestamp + Lattice,
-    ComputeGrpcClient: ComputeClient<T>,
-{
-    let mut client = Retry::default()
-        .clamp_backoff(Duration::from_secs(1))
-        .retry_async(|state| {
-            let dests = addrs
-                .clone()
-                .into_iter()
-                .map(|addr| (addr, metrics.clone()))
-                .collect();
-            let version = build_info.semver_version();
-            let client_params = grpc_client_params.clone();
+    /// Connects to the replica.
+    ///
+    /// The connection is retried forever (with backoff) and this method returns only after
+    /// a connection was successfully established.
+    async fn connect(&self) -> ReplicaClient<T> {
+        Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .retry_async(|state| {
+                let addrs = &self.config.location.ctl_addrs;
+                let dests = addrs
+                    .iter()
+                    .map(|addr| (addr.clone(), self.metrics.clone()))
+                    .collect();
+                let version = self.build_info.semver_version();
+                let client_params = &self.config.grpc_client;
 
-            async move {
-                match ComputeGrpcClient::connect_partitioned(dests, version, &client_params).await {
-                    Ok(client) => Ok(client),
-                    Err(e) => {
-                        if state.i >= mz_service::retry::INFO_MIN_RETRIES {
-                            info!(
-                                replica = ?replica_id,
-                                "error connecting to replica, retrying in {:?}: {e}",
-                                state.next_backoff.unwrap()
-                            );
-                        } else {
-                            debug!(
-                                replica = ?replica_id,
-                                "error connecting to replica, retrying in {:?}: {e}",
-                                state.next_backoff.unwrap()
-                            );
+                async move {
+                    match ComputeGrpcClient::connect_partitioned(dests, version, client_params)
+                        .await
+                    {
+                        Ok(client) => Ok(client),
+                        Err(e) => {
+                            if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                                info!(
+                                    replica = ?self.replica_id,
+                                    "error connecting to replica, retrying in {:?}: {e}",
+                                    state.next_backoff.unwrap()
+                                );
+                            } else {
+                                debug!(
+                                    replica = ?self.replica_id,
+                                    "error connecting to replica, retrying in {:?}: {e}",
+                                    state.next_backoff.unwrap()
+                                );
+                            }
+                            Err(e)
                         }
-                        Err(e)
+                    }
+                }
+            })
+            .await
+            .expect("retry retries forever")
+    }
+
+    /// Runs the message loop.
+    ///
+    /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
+    /// If no error condition is encountered, the task runs until the controller disconnects from
+    /// the command channel, or the task is dropped.
+    async fn run_message_loop(mut self, mut client: ReplicaClient<T>) -> Result<(), anyhow::Error>
+    where
+        T: Timestamp + Lattice,
+        ComputeGrpcClient: ComputeClient<T>,
+    {
+        loop {
+            select! {
+                // Command from controller to forward to replica.
+                command = self.command_rx.recv() => {
+                    let Some(mut command) = command else {
+                        // Controller is no longer interested in this replica. Shut down.
+                        break;
+                    };
+
+                    self.specialize_command(&mut command);
+                    self.observe_command(&command);
+                    client.send(command).await?;
+                },
+                // Response from replica to forward to controller.
+                response = client.recv() => {
+                    let Some(response) = response? else {
+                        bail!("replica unexpectedly gracefully terminated connection");
+                    };
+
+                    self.observe_response(&response);
+
+                    if self.response_tx.send(response).is_err() {
+                        // Controller is no longer interested in this replica. Shut down.
+                        break;
                     }
                 }
             }
-        })
-        .await
-        .expect("retry retries forever");
-
-    loop {
-        select! {
-            // Command from controller to forward to replica.
-            command = command_rx.recv() => {
-                let Some(mut command) = command else {
-                    // Controller is no longer interested in this replica. Shut down.
-                    break;
-                };
-
-                metrics.inner.command_queue_size.dec();
-                cmd_spec.specialize_command(&mut command);
-
-                trace!(
-                    replica = ?replica_id,
-                    command = ?command,
-                    "sending command to replica",
-                );
-                client.send(command).await?;
-            },
-            // Response from replica to forward to controller.
-            response = client.recv() => {
-                let Some(response) = response? else {
-                    bail!("replica unexpectedly gracefully terminated connection");
-                };
-                trace!(
-                    replica = ?replica_id,
-                    response = ?response,
-                    "received response from replica",
-                );
-
-                if response_tx.send(response).is_ok() {
-                    metrics.inner.response_queue_size.inc();
-                } else {
-                    // Controller is no longer interested in this replica. Shut down.
-                    break;
-                }
-            }
         }
+
+        Ok(())
     }
 
-    Ok(())
-}
-
-struct CommandSpecialization {
-    logging_config: LoggingConfig,
-    timely_config: TimelyConfig,
-    epoch: ClusterStartupEpoch,
-}
-
-impl CommandSpecialization {
     /// Specialize a command for the given replica configuration.
     ///
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
-    fn specialize_command<T>(&self, command: &mut ComputeCommand<T>) {
+    fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         if let ComputeCommand::CreateInstance(InstanceConfig {
             logging_config,
             variable_length_row_encoding: _,
         }) = command
         {
-            *logging_config = self.logging_config.clone();
+            *logging_config = self.config.logging.clone();
         }
 
         if let ComputeCommand::CreateTimely { config, epoch } = command {
-            *config = self.timely_config.clone();
+            *config = TimelyConfig {
+                workers: self.config.location.workers,
+                process: 0,
+                addresses: self.config.location.dataflow_addrs.clone(),
+                idle_arrangement_merge_effort: self.config.idle_arrangement_merge_effort,
+            };
             *epoch = self.epoch;
         }
+    }
+
+    /// Update task state according to an observed command.
+    fn observe_command(&self, command: &ComputeCommand<T>) {
+        trace!(
+            replica = ?self.replica_id,
+            command = ?command,
+            "sending command to replica",
+        );
+
+        self.metrics.inner.command_queue_size.dec();
+    }
+
+    /// Update task state according to an observed response.
+    fn observe_response(&self, response: &ComputeResponse<T>) {
+        trace!(
+            replica = ?self.replica_id,
+            response = ?response,
+            "received response from replica",
+        );
+
+        self.metrics.inner.response_queue_size.inc();
     }
 }
