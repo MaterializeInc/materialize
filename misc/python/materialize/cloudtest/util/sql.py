@@ -50,7 +50,7 @@ def sql_execute_ddl(
 def pgwire_sql_conn(
     config: EnvironmentConfig, environment: Environment
 ) -> Connection[Any]:
-    environment_params = environment.wait_for_environmentd(config)
+    environment_params = environment.wait_for_environmentd()
     pgwire_url: str = environment_params["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
     conn = psycopg.connect(
@@ -90,7 +90,7 @@ def sql_execute_pgwire(
 def sql_query_http(
     config: EnvironmentConfig, environment: Environment, query: str
 ) -> list[list[Any]]:
-    environment_params = environment.wait_for_environmentd(config)
+    environment_params = environment.wait_for_environmentd()
     environmentd_url: str = environment_params["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
     response = post(

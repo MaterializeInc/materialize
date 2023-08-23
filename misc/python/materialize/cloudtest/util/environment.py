@@ -12,7 +12,7 @@ from typing import Any, Optional
 import requests
 from requests import Response
 
-from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.controller import wait_for_connectable
 from materialize.cloudtest.util.kubectl import Kubectl
@@ -20,45 +20,52 @@ from materialize.cloudtest.util.web_request import delete, get, patch
 
 
 class Environment:
+    def __init__(
+        self,
+        auth: AuthConfig,
+        region_api_server_base_url: str,
+        env_kubectl: Kubectl,
+        sys_kubectl: Kubectl,
+    ):
+        self.auth = auth
+        self.region_api_server_base_url = region_api_server_base_url
+        self.env_kubectl = env_kubectl
+        self.sys_kubectl = sys_kubectl
+
     def create_environment_assignment(
         self,
-        config: EnvironmentConfig,
         image: Optional[str] = None,
     ) -> dict[str, Any]:
-        environment_assignment = f"{config.auth.organization_id}-0"
+        environment_assignment = f"{self.auth.organization_id}-0"
         environment = f"environment-{environment_assignment}"
 
         json: dict[str, Any] = {}
         if image is not None:
             json["environmentdImageRef"] = image
         patch(
-            config.auth,
-            config.controllers.region_api_server.configured_base_url(),
+            self.auth,
+            self.region_api_server_base_url,
             "/api/region",
             json,
         )
-        env_kubectl = Kubectl(config.environment_context)
-        sys_kubectl = Kubectl(config.system_context)
 
-        env_kubectl.get_retry(
+        self.env_kubectl.get_retry(
             None,
             "environment",
             environment,
             10,
         )
-        return sys_kubectl.get(
+        return self.sys_kubectl.get(
             None,
             "environmentassignment",
             environment_assignment,
         )
 
-    def wait_for_environmentd(
-        self, config: EnvironmentConfig, max_attempts: int = 300
-    ) -> dict[str, Any]:
+    def wait_for_environmentd(self, max_attempts: int = 300) -> dict[str, Any]:
         def get_environment() -> Response:
             response = get(
-                config.auth,
-                config.controllers.region_api_server.configured_base_url(),
+                self.auth,
+                self.region_api_server_base_url,
                 "/api/region",
             )
             region_info = response.json().get("regionInfo")
@@ -75,14 +82,14 @@ class Environment:
         wait_for_connectable((pgwire_host, int(pgwire_port)), max_attempts)
         return environment_json
 
-    def delete_environment_assignment(self, config: EnvironmentConfig) -> None:
-        environment_assignment = f"{config.auth.organization_id}-0"
+    def delete_environment_assignment(self) -> None:
+        environment_assignment = f"{self.auth.organization_id}-0"
         environment = f"environment-{environment_assignment}"
 
         def delete_environment() -> None:
             delete(
-                config.auth,
-                config.controllers.region_api_server.configured_base_url(),
+                self.auth,
+                self.region_api_server_base_url,
                 "/api/region",
                 # we have a 60 second timeout in the region api's load balancer
                 # for this call and a 5 minute timeout in the region api (which
@@ -92,11 +99,8 @@ class Environment:
 
         retry(delete_environment, 20, [requests.exceptions.HTTPError])
 
-        env_kubectl = Kubectl(config.environment_context)
-        sys_kubectl = Kubectl(config.system_context)
-
         assert (
-            env_kubectl.get_or_none(
+            self.env_kubectl.get_or_none(
                 namespace=None,
                 resource_type="namespace",
                 resource_name=environment,
@@ -104,7 +108,7 @@ class Environment:
             is None
         )
         assert (
-            env_kubectl.get_or_none(
+            self.env_kubectl.get_or_none(
                 namespace=None,
                 resource_type="environment",
                 resource_name=environment,
@@ -112,7 +116,7 @@ class Environment:
             is None
         )
         assert (
-            sys_kubectl.get_or_none(
+            self.sys_kubectl.get_or_none(
                 namespace=None,
                 resource_type="environmentassignment",
                 resource_name=environment_assignment,
@@ -120,12 +124,12 @@ class Environment:
             is None
         )
 
-    def wait_for_no_environmentd(self, config: EnvironmentConfig) -> None:
+    def wait_for_no_environmentd(self) -> None:
         # Confirm the Region API is not returning the environment
         def get_environment() -> None:
             res = get(
-                config.auth,
-                config.controllers.region_api_server.configured_base_url(),
+                self.auth,
+                self.region_api_server_base_url,
                 "/api/region",
             )
             # a 204 indicates no region is found
@@ -135,13 +139,12 @@ class Environment:
         retry(get_environment, 600, [AssertionError])
 
         # Confirm the environment resource is gone
-        environment_assignment = f"{config.auth.organization_id}-0"
+        environment_assignment = f"{self.auth.organization_id}-0"
         environment = f"environment-{environment_assignment}"
-        env_kubectl = Kubectl(config.environment_context)
 
         def get_k8s_environment() -> None:
             assert (
-                env_kubectl.get_or_none(
+                self.env_kubectl.get_or_none(
                     namespace=None,
                     resource_type="environment",
                     resource_name=environment,
@@ -152,10 +155,8 @@ class Environment:
         retry(get_k8s_environment, 600, [AssertionError])
 
     def await_environment_pod(
-        self, context: str, namespace: str, pod_name: str
+        self, kubectl: Kubectl, namespace: str, pod_name: str
     ) -> None:
-        kubectl = Kubectl(context)
-
         # we can't just wait, since it errors if it doesn't exist yet
         kubectl.get_retry(
             namespace=namespace,
@@ -187,22 +188,19 @@ class Environment:
         assert "staging" not in system_context
         assert "staging" not in environment_context
 
-        sys_kubectl = Kubectl(system_context)
-        env_kubectl = Kubectl(environment_context)
-
-        sys_kubectl.delete(
+        self.sys_kubectl.delete(
             namespace=None,
             resource_type="crd",
             resource_name="environmentassignments.materialize.cloud",
         )
 
-        env_kubectl.delete(
+        self.env_kubectl.delete(
             namespace=None,
             resource_type="crd",
             resource_name="environments.materialize.cloud",
         )
 
-        env_kubectl.delete(
+        self.env_kubectl.delete(
             namespace=None,
             resource_type="crd",
             resource_name="vpcendpoints.materialize.cloud",
