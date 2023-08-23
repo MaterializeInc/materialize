@@ -22,6 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -32,6 +33,7 @@ use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
 use mz_sql::session::vars::VarInput;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
+use mz_transform::Optimizer;
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -599,15 +601,26 @@ impl SessionClient {
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.send(|tx, session| Command::CopyRows {
-            id,
-            columns,
-            rows,
-            session,
-            tx,
-            ctx_extra,
-        })
-        .await
+        let catalog = self.catalog_snapshot().await;
+        // TODO: Remove this clone once we always have the session. It's currently needed because
+        // self.session returns a mut ref, so we can't call it twice.
+        let pcx = self.session().pcx().clone();
+        let conn_catalog = catalog.for_session(self.session());
+        let result: Result<_, AdapterError> =
+            mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
+                .err_into()
+                .and_then(|values| values.lower().err_into())
+                .and_then(|values| {
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
+                        .optimize(values)
+                        .err_into()
+                })
+                .and_then(|values| {
+                    // Copied rows must always be constants.
+                    Coordinator::insert_constant(&catalog, self.session(), id, values.into_inner())
+                });
+        self.retire_execute(ctx_extra, (&result).into());
+        result
     }
 
     /// Gets the current value of all system variables.
@@ -697,7 +710,6 @@ impl SessionClient {
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }
-                | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }

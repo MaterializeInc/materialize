@@ -100,15 +100,6 @@ pub enum Command {
         conn_id: ConnectionId,
     },
 
-    CopyRows {
-        id: GlobalId,
-        columns: Vec<usize>,
-        rows: Vec<Row>,
-        session: Session,
-        tx: oneshot::Sender<Response<ExecuteResponse>>,
-        ctx_extra: ExecuteContextExtra,
-    },
-
     AppendWebhook {
         database: String,
         schema: String,
@@ -148,9 +139,7 @@ pub enum Command {
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Execute { session, .. }
-            | Command::Commit { session, .. }
-            | Command::CopyRows { session, .. } => Some(session),
+            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
@@ -165,9 +154,7 @@ impl Command {
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Execute { session, .. }
-            | Command::Commit { session, .. }
-            | Command::CopyRows { session, .. } => Some(session),
+            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
@@ -846,7 +833,6 @@ impl ExecuteResponse {
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
-            CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRowsImmediate],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],

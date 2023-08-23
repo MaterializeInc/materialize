@@ -284,7 +284,6 @@ pub fn generate_required_role_membership(
         | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::CopyFrom(_)
-        | Plan::CopyRows(_)
         | Plan::Explain(_)
         | Plan::Insert(_)
         | Plan::AlterClusterRename(_)
@@ -351,7 +350,6 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowCreate(_)
         | Plan::ShowColumns(_)
         | Plan::CopyFrom(_)
-        | Plan::CopyRows(_)
         | Plan::Explain(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
@@ -1087,11 +1085,6 @@ fn generate_required_privileges(
         })
         | Plan::AbortTransaction(plan::AbortTransactionPlan {
             transaction_type: _,
-        })
-        | Plan::CopyRows(plan::CopyRowsPlan {
-            id: _,
-            columns: _,
-            rows: _,
         })
         | Plan::AlterNoop(plan::AlterNoopPlan { object_type: _ })
         | Plan::AlterIndexSetOptions(plan::AlterIndexSetOptionsPlan { id: _, options: _ })

@@ -92,7 +92,6 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
-        | Plan::CopyRows(_)
         | Plan::Explain(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
@@ -323,7 +322,6 @@ pub fn user_privilege_hack(
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzSupport {

@@ -23,8 +23,7 @@ use mz_sql::ast::{
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
-    TransactionType,
+    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
@@ -112,28 +111,6 @@ impl Coordinator {
 
             Command::PrivilegedCancelRequest { conn_id } => {
                 self.handle_privileged_cancel(conn_id);
-            }
-
-            Command::CopyRows {
-                id,
-                columns,
-                rows,
-                session,
-                tx,
-                ctx_extra,
-            } => {
-                let ctx = ExecuteContext::from_parts(
-                    ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    ctx_extra,
-                );
-                self.sequence_plan(
-                    ctx,
-                    Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
             }
 
             Command::AppendWebhook {

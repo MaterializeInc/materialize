@@ -27,11 +27,10 @@ use mz_compute_client::types::sinks::{
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::explain::ExplainContext;
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
+    RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
@@ -3309,75 +3308,6 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn sequence_send_diffs(
-        session: &mut Session,
-        mut plan: plan::SendDiffsPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let affected_rows = {
-            let mut affected_rows = Diff::from(0);
-            let mut all_positive_diffs = true;
-            // If all diffs are positive, the number of affected rows is just the
-            // sum of all unconsolidated diffs.
-            for (_, diff) in plan.updates.iter() {
-                if *diff < 0 {
-                    all_positive_diffs = false;
-                    break;
-                }
-
-                affected_rows += diff;
-            }
-
-            if !all_positive_diffs {
-                // Consolidate rows. This is useful e.g. for an UPDATE where the row
-                // doesn't change, and we need to reflect that in the number of
-                // affected rows.
-                differential_dataflow::consolidation::consolidate(&mut plan.updates);
-
-                affected_rows = 0;
-                // With retractions, the number of affected rows is not the number
-                // of rows we see, but the sum of the absolute value of their diffs,
-                // e.g. if one row is retracted and another is added, the total
-                // number of rows affected is 2.
-                for (_, diff) in plan.updates.iter() {
-                    affected_rows += diff.abs();
-                }
-            }
-
-            usize::try_from(affected_rows).expect("positive isize must fit")
-        };
-        event!(
-            Level::TRACE,
-            affected_rows,
-            id = format!("{:?}", plan.id),
-            kind = format!("{:?}", plan.kind),
-            updates = plan.updates.len(),
-            returning = plan.returning.len(),
-        );
-
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
-            id: plan.id,
-            rows: plan.updates,
-        }]))?;
-        if !plan.returning.is_empty() {
-            let finishing = RowSetFinishing {
-                order_by: Vec::new(),
-                limit: None,
-                offset: 0,
-                project: (0..plan.returning[0].0.iter().count()).collect(),
-            };
-            return match finishing.finish(plan.returning, plan.max_result_size) {
-                Ok(rows) => Ok(Self::send_immediate_rows(rows)),
-                Err(e) => Err(AdapterError::ResultSize(e)),
-            };
-        }
-        Ok(match plan.kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-            MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
-        })
-    }
-
     pub(super) async fn sequence_insert(
         &mut self,
         mut ctx: ExecuteContext,
@@ -3395,12 +3325,8 @@ impl Coordinator {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
-                    let result = Self::sequence_insert_constant(
-                        &catalog,
-                        ctx.session_mut(),
-                        plan.id,
-                        selection,
-                    );
+                    let result =
+                        Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
                     ctx.retire(result);
                 });
             }
@@ -3450,80 +3376,6 @@ impl Coordinator {
                     .await;
             }
         }
-    }
-
-    fn sequence_insert_constant(
-        catalog: &Catalog,
-        session: &mut Session,
-        id: GlobalId,
-        constants: MirRelationExpr,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // Insert can be queued, so we need to re-verify the id exists.
-        let desc = match catalog.try_get_entry(&id) {
-            Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
-            }
-            None => {
-                return Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                )))
-            }
-        };
-
-        match constants.as_const() {
-            Some((rows, ..)) => {
-                let rows = rows.clone()?;
-                for (row, _) in &rows {
-                    for (i, datum) in row.iter().enumerate() {
-                        desc.constraints_met(i, &datum)?;
-                    }
-                }
-                let diffs_plan = plan::SendDiffsPlan {
-                    id,
-                    updates: rows,
-                    kind: MutationKind::Insert,
-                    returning: Vec::new(),
-                    max_result_size: catalog.system_config().max_result_size(),
-                };
-                Self::sequence_send_diffs(session, diffs_plan)
-            }
-            None => panic!(
-                "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
-                constants
-            ),
-        }
-    }
-
-    pub(super) fn sequence_copy_rows(
-        &mut self,
-        mut ctx: ExecuteContext,
-        id: GlobalId,
-        columns: Vec<usize>,
-        rows: Vec<Row>,
-    ) {
-        let catalog = self.owned_catalog();
-        mz_ore::task::spawn(|| "coord::sequence_copy_rows", async move {
-            let conn_catalog = catalog.for_session(ctx.session());
-            let result: Result<_, AdapterError> =
-                mz_sql::plan::plan_copy_from(ctx.session().pcx(), &conn_catalog, id, columns, rows)
-                    .err_into()
-                    .and_then(|values| values.lower().err_into())
-                    .and_then(|values| {
-                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
-                            .optimize(values)
-                            .err_into()
-                    })
-                    .and_then(|values| {
-                        // Copied rows must always be constants.
-                        Self::sequence_insert_constant(
-                            &catalog,
-                            ctx.session_mut(),
-                            id,
-                            values.into_inner(),
-                        )
-                    });
-            ctx.retire(result);
-        });
     }
 
     /// ReadThenWrite is a plan whose writes depend on the results of a
@@ -3836,7 +3688,7 @@ impl Coordinator {
 
             match diffs {
                 Ok(diffs) => {
-                    let result = Self::sequence_send_diffs(
+                    let result = Self::send_diffs(
                         ctx.session_mut(),
                         plan::SendDiffsPlan {
                             id,
