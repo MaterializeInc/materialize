@@ -30,9 +30,7 @@ use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
 
 use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
-use crate::catalog::Catalog;
 use crate::client::ConnectionId;
-use crate::command::Command;
 use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
 use crate::AdapterError;
@@ -109,43 +107,6 @@ impl UnauthorizedError {
             | UnauthorizedError::RoleMembership { .. }
             | UnauthorizedError::Privilege { .. } => None,
         }
-    }
-}
-
-/// Checks if a session is authorized to execute a command. If not, an error is returned.
-///
-/// Note: The session and role ID are stored in the command itself.
-pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), UnauthorizedError> {
-    if let Some(session) = cmd.session() {
-        if !is_rbac_enabled_for_session(catalog.system_config(), session) {
-            return Ok(());
-        }
-    } else if !is_rbac_enabled_for_system(catalog.system_config()) {
-        return Ok(());
-    }
-
-    match cmd {
-        Command::DumpCatalog { session, .. } => {
-            if session.is_superuser() {
-                Ok(())
-            } else {
-                Err(UnauthorizedError::Superuser {
-                    action: "dump catalog".into(),
-                })
-            }
-        }
-        Command::Startup { .. }
-        | Command::Execute { .. }
-        | Command::Commit { .. }
-        | Command::CancelRequest { .. }
-        | Command::PrivilegedCancelRequest { .. }
-        | Command::CopyRows { .. }
-        | Command::GetSystemVars { .. }
-        | Command::SetSystemVars { .. }
-        | Command::AppendWebhook { .. }
-        | Command::Terminate { .. }
-        | Command::CatalogSnapshot { .. }
-        | Command::RetireExecute { .. } => Ok(()),
     }
 }
 
@@ -257,17 +218,6 @@ pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session: &Session) 
     // The session flag allows users to turn RBAC on for just their session while the server flag
     // allows users to turn RBAC on for everyone.
     ld_enabled && (server_enabled || session_enabled)
-}
-
-/// Returns true if RBAC is turned on for the system, false otherwise.
-pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
-    let ld_enabled = system_vars.enable_ld_rbac_checks();
-    let server_enabled = system_vars.enable_rbac_checks();
-
-    // The LD flag acts as a global off switch in case we need to turn the feature off for
-    // everyone. Users will still need to turn one of the non-LD flags on to enable RBAC.
-    // The server flag allows users to turn RBAC on for everyone.
-    ld_enabled && server_enabled
 }
 
 /// Generates the role membership required to execute a give plan.

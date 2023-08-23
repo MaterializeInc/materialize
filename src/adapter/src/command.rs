@@ -100,11 +100,6 @@ pub enum Command {
         conn_id: ConnectionId,
     },
 
-    DumpCatalog {
-        session: Session,
-        tx: oneshot::Sender<Response<CatalogDump>>,
-    },
-
     CopyRows {
         id: GlobalId,
         columns: Vec<usize>,
@@ -155,7 +150,6 @@ impl Command {
         match self {
             Command::Execute { session, .. }
             | Command::Commit { session, .. }
-            | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. } => Some(session),
@@ -173,7 +167,6 @@ impl Command {
         match self {
             Command::Execute { session, .. }
             | Command::Commit { session, .. }
-            | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
             | Command::SetSystemVars { session, .. } => Some(session),

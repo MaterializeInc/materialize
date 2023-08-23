@@ -566,9 +566,12 @@ impl SessionClient {
     }
 
     /// Dumps the catalog to a JSON string.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
-        self.send(|tx, session| Command::DumpCatalog { session, tx })
-            .await
+        let catalog = self.catalog_snapshot().await;
+        catalog.dump().map_err(AdapterError::from)
     }
 
     /// Tells the coordinator a statement has finished execution, in the cases
@@ -692,7 +695,6 @@ impl SessionClient {
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }
-                | Command::DumpCatalog { .. }
                 | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }

@@ -39,7 +39,7 @@ use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
     AppendWebhookResponse, AppendWebhookValidator, Canceled, CatalogSnapshot, Command,
-    ExecuteResponse, GetVariablesResponse, Response, StartupResponse,
+    ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -53,45 +53,9 @@ use crate::{catalog, metrics, rbac, ExecuteContext};
 use super::ExecuteContextExtra;
 
 impl Coordinator {
-    fn send_error(&mut self, cmd: Command, e: AdapterError) {
-        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
-            let _ = tx.send(Response::<T> {
-                result: Err(e),
-                session,
-            });
-        }
-        match cmd {
-            Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
-            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
-            Command::CopyRows { tx, session, .. } => send(tx, session, e),
-            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::AppendWebhook { tx, .. } => {
-                // We don't care if our listener went away.
-                let _ = tx.send(Err(e));
-            }
-            Command::Startup { tx, .. } => {
-                let _ = tx.send(Err(e));
-            }
-            Command::Terminate { tx, .. } => {
-                if let Some(tx) = tx {
-                    let _ = tx.send(Err(e));
-                }
-            }
-            Command::CatalogSnapshot { .. } => panic!("Command::CatalogSnapshot is infallible"),
-            Command::RetireExecute { .. } => panic!("Command::RetireExecute is infallible"),
-        }
-    }
-
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
-        }
-        if let Err(e) = rbac::check_command(self.catalog(), &cmd) {
-            self.send_error(cmd, e.into());
-            return;
         }
         match cmd {
             Command::Startup {
@@ -148,11 +112,6 @@ impl Coordinator {
 
             Command::PrivilegedCancelRequest { conn_id } => {
                 self.handle_privileged_cancel(conn_id);
-            }
-
-            Command::DumpCatalog { session, tx } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(self.catalog().dump().map_err(AdapterError::from), session);
             }
 
             Command::CopyRows {
