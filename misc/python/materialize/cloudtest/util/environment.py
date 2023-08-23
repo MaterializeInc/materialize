@@ -30,7 +30,7 @@ def create_environment_assignment(
     if image is not None:
         json["environmentdImageRef"] = image
     patch(
-        config,
+        config.auth,
         config.controllers.region_api_server.configured_base_url(),
         "/api/region",
         json,
@@ -56,7 +56,7 @@ def wait_for_environmentd(
 ) -> dict[str, Any]:
     def get_environment() -> Response:
         response = get(
-            config,
+            config.auth,
             config.controllers.region_api_server.configured_base_url(),
             "/api/region",
         )
@@ -81,7 +81,7 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
 
     def delete_environment() -> None:
         delete(
-            config,
+            config.auth,
             config.controllers.region_api_server.configured_base_url(),
             "/api/region",
             # we have a 60 second timeout in the region api's load balancer
@@ -125,7 +125,7 @@ def wait_for_no_environmentd(config: EnvironmentConfig) -> None:
     # Confirm the Region API is not returning the environment
     def get_environment() -> None:
         res = get(
-            config,
+            config.auth,
             config.controllers.region_api_server.configured_base_url(),
             "/api/region",
         )

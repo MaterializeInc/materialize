@@ -88,7 +88,7 @@ def sql_query_http(config: EnvironmentConfig, query: str) -> list[list[Any]]:
     environmentd_url: str = environment["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
     response = post(
-        config,
+        config.auth,
         f"{schema}://{environmentd_url}",
         "/api/sql",
         {"query": query},
