@@ -113,7 +113,7 @@ class KafkaExecutor(Executor):
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
             [
-                confluent_kafka.admin.NewTopic(
+                confluent_kafka.admin.NewTopic(  # type: ignore
                     self.topic, num_partitions=1, replication_factor=1
                 )
             ]

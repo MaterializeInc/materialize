@@ -8,12 +8,14 @@
 # by the Apache License, Version 2.0.
 
 from importlib import resources
-from importlib.abc import Traversable
-from typing import List
+from pathlib import Path
+from typing import List, cast
 
 
-def resource_path(name: str) -> Traversable:
-    return resources.files(__package__) / name
+def resource_path(name: str) -> Path:
+    # NOTE: we have to do this cast because pyright is not comfortable with the
+    # Traversable protocol.
+    return cast(Path, resources.files(__package__)) / name
 
 
 def scenarios() -> List[str]:
@@ -39,10 +41,10 @@ class Scenario:
     def __init__(self, value: str) -> None:
         self.value = value
 
-    def schema_path(self) -> Traversable:
+    def schema_path(self) -> Path:
         return resource_path(f"schema/{self}.sql")
 
-    def workload_path(self) -> Traversable:
+    def workload_path(self) -> Path:
         return resource_path(f"workload/{self}.sql")
 
     def __str__(self) -> str:

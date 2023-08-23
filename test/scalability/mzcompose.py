@@ -70,7 +70,7 @@ def run_with_concurrency(
     init_cursor = init_conn.cursor()
     for init_sql in init_sqls:
         print(init_sql)
-        init_cursor.execute(init_sql)
+        init_cursor.execute(init_sql.encode("utf8"))
 
     connect_sqls = schema.connect_sqls()
 
@@ -83,7 +83,7 @@ def run_with_concurrency(
         conn.autocommit = True
         cursor = conn.cursor()
         for connect_sql in connect_sqls:
-            cursor.execute(connect_sql)
+            cursor.execute(connect_sql.encode("utf8"))
         cursor_pool.append(cursor)
 
     print(f"Benchmarking workload {type(workload)} at concurrency {concurrency} ...")

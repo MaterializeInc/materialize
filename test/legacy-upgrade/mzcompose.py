@@ -124,14 +124,14 @@ def test_upgrade_from_version(
                 )
             )
 
-    priors = priors + prior_patch_versions
-    priors.sort()
-    priors = [f"{prior}" for prior in priors]
+    # We need this to be a new variable binding otherwise `pyright` complains of
+    # a type mismatch
+    prior_strings = sorted(str(p) for p in priors + prior_patch_versions)
 
     if len(priors) == 0:
-        priors = ["*"]
+        prior_strings = ["*"]
 
-    version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
+    version_glob = "{" + ",".join(["any_version", *prior_strings, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)

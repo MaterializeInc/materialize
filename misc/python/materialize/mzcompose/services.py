@@ -105,7 +105,7 @@ class Materialized(Service):
         additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
         soft_assertions: bool = True,
     ) -> None:
-        depends_on: Dict[str, ServiceDependency] = {
+        depends_graph: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
@@ -157,7 +157,7 @@ class Materialized(Service):
         command += [f"--environment-id={environment_id}"]
 
         if external_minio:
-            depends_on["minio"] = {"condition": "service_healthy"}
+            depends_graph["minio"] = {"condition": "service_healthy"}
             persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
 
         if persist_blob_url:
@@ -190,7 +190,7 @@ class Materialized(Service):
         ]
 
         if external_cockroach:
-            depends_on["cockroach"] = {"condition": "service_healthy"}
+            depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
                 "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
                 "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
@@ -227,7 +227,7 @@ class Materialized(Service):
 
         config.update(
             {
-                "depends_on": depends_on,
+                "depends_on": depends_graph,
                 "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
@@ -870,7 +870,7 @@ class Testdrive(Service):
         if no_reset:
             entrypoint.append("--no-reset")
 
-        for (k, v) in materialize_params.items():
+        for k, v in materialize_params.items():
             entrypoint.append(f"--materialize-param={k}={v}")
 
         entrypoint.append(f"--default-timeout={default_timeout}")

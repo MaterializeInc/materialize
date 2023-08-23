@@ -21,7 +21,7 @@ class DropDefaultReplica(Action):
     """Drops the default replica."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -41,7 +41,7 @@ class CreateReplica(Action):
     """Creates a replica on the default cluster."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -106,7 +106,7 @@ class DropReplica(Action):
     replica: Optional[ReplicaExists]
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, ReplicaExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
