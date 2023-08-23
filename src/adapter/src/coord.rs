@@ -372,7 +372,7 @@ impl RealTimeRecencyContext {
 pub enum PeekStage {
     Validate(PeekStageValidate),
     Optimize(PeekStageOptimize),
-    Timestamp(PeekStageTimestamp),
+    ReadHolds(PeekStageReadHolds),
     Finish(PeekStageFinish),
 }
 
@@ -381,7 +381,7 @@ impl PeekStage {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Optimize(PeekStageOptimize { validity, .. })
-            | PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::ReadHolds(PeekStageReadHolds { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -410,7 +410,7 @@ pub struct PeekStageOptimize {
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageReadHolds {
     validity: PlanValidity,
     dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     finishing: RowSetFinishing,

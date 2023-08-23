@@ -104,7 +104,7 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
-    PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
+    PeekStageFinish, PeekStageOptimize, PeekStageReadHolds, PeekStageValidate, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
     SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
@@ -2118,7 +2118,7 @@ impl Coordinator {
                     self.peek_stage_optimize(ctx, stage).await;
                     return;
                 }
-                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
+                PeekStage::ReadHolds(stage) => match self.peek_stage_read_holds(ctx, stage) {
                     Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
                     None => return,
                 },
@@ -2272,7 +2272,7 @@ impl Coordinator {
                 stage,
             ) {
                 Ok(stage) => {
-                    let stage = PeekStage::Timestamp(stage);
+                    let stage = PeekStage::ReadHolds(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
                 }
@@ -2301,7 +2301,7 @@ impl Coordinator {
             timeline_context,
             in_immediate_multi_stmt_txn,
         }: PeekStageOptimize,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageReadHolds, AdapterError> {
         let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
         let source = optimizer.optimize(source)?;
         let mut builder = DataflowBuilder::new(catalog, compute);
@@ -2342,7 +2342,7 @@ impl Coordinator {
         // Optimize the dataflow across views, and any other ways that appeal.
         let dataflow_metainfo = mz_transform::optimize_dataflow(&mut dataflow, &builder, &*stats)?;
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageReadHolds {
             validity,
             dataflow,
             finishing,
@@ -2363,10 +2363,10 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_timestamp(
+    fn peek_stage_read_holds(
         &mut self,
         ctx: ExecuteContext,
-        PeekStageTimestamp {
+        PeekStageReadHolds {
             validity,
             dataflow,
             finishing,
@@ -2383,7 +2383,7 @@ impl Coordinator {
             key,
             typ,
             dataflow_metainfo,
-        }: PeekStageTimestamp,
+        }: PeekStageReadHolds,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
