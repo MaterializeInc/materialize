@@ -432,6 +432,7 @@ table_ref ::=
     | 'LATERAL'? table_func_call
     | '(' join_expr ')'
   ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
+table_expr ::= 'TABLE' table_name
 time_unit ::=
   'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=
@@ -478,6 +479,7 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
+values_expr ::= 'VALUES' '(' expr (',' expr)* ')' (',' '(' expr (',' expr)* ')')*
 with_ctes ::=
   'WITH'
     cte_binding ( ',' cte_binding )*
