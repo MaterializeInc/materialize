@@ -23,6 +23,7 @@ from materialize.cloudtest.util.jwt_key import fetch_jwt, make_jwt
 class AuthConfig:
     organization_id: str
     token: str
+    app_user: Optional[str]
     app_password: Optional[str]
 
     refresh_fn: Callable[[AuthConfig], None]
@@ -70,15 +71,18 @@ def _create_auth(
         response.raise_for_status()
 
         organization_id = response.json()["tenantId"]
+        app_user = args.e2e_test_user_email
         app_password = make_app_password(args.frontegg_host, token)
     else:
         organization_id = DEFAULT_ORG_ID
         token = make_jwt(tenant_id=organization_id)
+        app_user = None
         app_password = None
 
     return AuthConfig(
         organization_id=organization_id,
         token=token,
+        app_user=app_user,
         app_password=app_password,
         refresh_fn=refresh_fn,
     )
@@ -88,6 +92,7 @@ def update_auth(args: argparse.Namespace, auth: AuthConfig) -> None:
     new_auth = create_auth(args, auth.refresh_fn)
     auth.organization_id = new_auth.organization_id
     auth.token = new_auth.token
+    auth.app_user = new_auth.app_user
     auth.app_password = new_auth.app_password
 
 
