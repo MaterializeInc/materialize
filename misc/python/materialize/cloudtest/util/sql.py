@@ -15,7 +15,7 @@ from psycopg.connection import Connection
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import eprint
-from materialize.cloudtest.util.environment import wait_for_environmentd
+from materialize.cloudtest.util.environment import Environment
 from materialize.cloudtest.util.web_request import post
 
 
@@ -47,9 +47,11 @@ def sql_execute_ddl(
     cur.execute(query, vars)
 
 
-def pgwire_sql_conn(config: EnvironmentConfig) -> Connection[Any]:
-    environment = wait_for_environmentd(config)
-    pgwire_url: str = environment["regionInfo"]["sqlAddress"]
+def pgwire_sql_conn(
+    config: EnvironmentConfig, environment: Environment
+) -> Connection[Any]:
+    environment_params = environment.wait_for_environmentd(config)
+    pgwire_url: str = environment_params["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
     conn = psycopg.connect(
         dbname="materialize",
@@ -65,27 +67,31 @@ def pgwire_sql_conn(config: EnvironmentConfig) -> Connection[Any]:
 
 def sql_query_pgwire(
     config: EnvironmentConfig,
+    environment: Environment,
     query: Query,
     vars: Optional[Params] = None,
 ) -> list[list[Any]]:
-    with pgwire_sql_conn(config) as conn:
+    with pgwire_sql_conn(config, environment) as conn:
         eprint(f"QUERY: {query}")
         return sql_query(conn, query, vars)
 
 
 def sql_execute_pgwire(
     config: EnvironmentConfig,
+    environment: Environment,
     query: Query,
     vars: Optional[Params] = None,
 ) -> None:
-    with pgwire_sql_conn(config) as conn:
+    with pgwire_sql_conn(config, environment) as conn:
         eprint(f"QUERY: {query}")
         return sql_execute(conn, query, vars)
 
 
-def sql_query_http(config: EnvironmentConfig, query: str) -> list[list[Any]]:
-    environment = wait_for_environmentd(config)
-    environmentd_url: str = environment["regionInfo"]["httpAddress"]
+def sql_query_http(
+    config: EnvironmentConfig, environment: Environment, query: str
+) -> list[list[Any]]:
+    environment_params = environment.wait_for_environmentd(config)
+    environmentd_url: str = environment_params["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
     response = post(
         config.auth,
