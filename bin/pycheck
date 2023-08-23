@@ -25,6 +25,9 @@ flake8_folders=(ci misc/python test)
 
 compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
 
+# NOTE: we actually _want_ the word-splitting behavior on `typecheck_cmd` below,
+# so turn off the warning
+# shellcheck disable=SC2086
 try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
 
 try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
