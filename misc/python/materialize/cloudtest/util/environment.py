@@ -16,7 +16,7 @@ from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.controller import wait_for_connectable
 from materialize.cloudtest.util.kubectl import Kubectl
-from materialize.cloudtest.util.web_request import delete, get, patch
+from materialize.cloudtest.util.web_request import WebRequests
 
 
 class Environment:
@@ -28,9 +28,9 @@ class Environment:
         sys_kubectl: Kubectl,
     ):
         self.auth = auth
-        self.region_api_server_base_url = region_api_server_base_url
         self.env_kubectl = env_kubectl
         self.sys_kubectl = sys_kubectl
+        self.region_api_requests = WebRequests(self.auth, region_api_server_base_url)
 
     def create_environment_assignment(
         self,
@@ -42,9 +42,7 @@ class Environment:
         json: dict[str, Any] = {}
         if image is not None:
             json["environmentdImageRef"] = image
-        patch(
-            self.auth,
-            self.region_api_server_base_url,
+        self.region_api_requests.patch(
             "/api/region",
             json,
         )
@@ -63,9 +61,7 @@ class Environment:
 
     def wait_for_environmentd(self, max_attempts: int = 300) -> dict[str, Any]:
         def get_environment() -> Response:
-            response = get(
-                self.auth,
-                self.region_api_server_base_url,
+            response = self.region_api_requests.get(
                 "/api/region",
             )
             region_info = response.json().get("regionInfo")
@@ -87,9 +83,7 @@ class Environment:
         environment = f"environment-{environment_assignment}"
 
         def delete_environment() -> None:
-            delete(
-                self.auth,
-                self.region_api_server_base_url,
+            self.region_api_requests.delete(
                 "/api/region",
                 # we have a 60 second timeout in the region api's load balancer
                 # for this call and a 5 minute timeout in the region api (which
@@ -127,9 +121,7 @@ class Environment:
     def wait_for_no_environmentd(self) -> None:
         # Confirm the Region API is not returning the environment
         def get_environment() -> None:
-            res = get(
-                self.auth,
-                self.region_api_server_base_url,
+            res = self.region_api_requests.get(
                 "/api/region",
             )
             # a 204 indicates no region is found

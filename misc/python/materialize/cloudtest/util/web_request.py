@@ -31,24 +31,26 @@ def verbose_http_errors() -> Generator[None, None, None]:
         raise
 
 
-class WebRequest:
+class WebRequests:
+    def __init__(self, auth: Optional[AuthConfig], base_url: str):
+        self.auth = auth
+        self.base_url = base_url
+
     def get(
         self,
-        auth: Optional[AuthConfig],
-        base_url: str,
         path: str,
         timeout: int = 15,
     ) -> requests.Response:
-        eprint(f"GET {base_url}{path}")
+        eprint(f"GET {self.base_url}{path}")
 
         def try_get() -> requests.Response:
             with verbose_http_errors():
-                headers = self._create_headers(auth)
+                headers = self._create_headers(self.auth)
                 response = requests.get(
-                    f"{base_url}{path}",
+                    f"{self.base_url}{path}",
                     headers=headers,
                     timeout=timeout,
-                    cert=self._get_cert(auth),
+                    cert=self._get_cert(self.auth),
                 )
                 response.raise_for_status()
                 return response
@@ -56,8 +58,8 @@ class WebRequest:
         try:
             response = try_get()
         except requests.exceptions.HTTPError as e:
-            if auth and e.response.status_code == 401:
-                auth.refresh()
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
                 response = try_get()
             else:
                 raise
@@ -66,23 +68,21 @@ class WebRequest:
 
     def post(
         self,
-        auth: Optional[AuthConfig],
-        base_url: str,
         path: str,
         json: Any,
         timeout: int = 15,
     ) -> requests.Response:
-        eprint(f"POST {base_url}{path}")
+        eprint(f"POST {self.base_url}{path}")
 
         def try_post() -> requests.Response:
             with verbose_http_errors():
-                headers = self._create_headers(auth)
+                headers = self._create_headers(self.auth)
                 response = requests.post(
-                    f"{base_url}{path}",
+                    f"{self.base_url}{path}",
                     headers=headers,
                     json=json,
                     timeout=timeout,
-                    cert=self._get_cert(auth),
+                    cert=self._get_cert(self.auth),
                 )
                 response.raise_for_status()
                 return response
@@ -90,8 +90,8 @@ class WebRequest:
         try:
             response = try_post()
         except requests.exceptions.HTTPError as e:
-            if auth and e.response.status_code == 401:
-                auth.refresh()
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
                 response = try_post()
             else:
                 raise
@@ -100,23 +100,21 @@ class WebRequest:
 
     def patch(
         self,
-        auth: Optional[AuthConfig],
-        base_url: str,
         path: str,
         json: Any,
         timeout: int = 15,
     ) -> requests.Response:
-        eprint(f"PATCH {base_url}{path}")
+        eprint(f"PATCH {self.base_url}{path}")
 
         def try_patch() -> requests.Response:
             with verbose_http_errors():
-                headers = self._create_headers(auth)
+                headers = self._create_headers(self.auth)
                 response = requests.patch(
-                    f"{base_url}{path}",
+                    f"{self.base_url}{path}",
                     headers=headers,
                     json=json,
                     timeout=timeout,
-                    cert=self._get_cert(auth),
+                    cert=self._get_cert(self.auth),
                 )
                 response.raise_for_status()
                 return response
@@ -124,8 +122,8 @@ class WebRequest:
         try:
             response = try_patch()
         except requests.exceptions.HTTPError as e:
-            if auth and e.response.status_code == 401:
-                auth.refresh()
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
                 response = try_patch()
             else:
                 raise
@@ -134,22 +132,20 @@ class WebRequest:
 
     def delete(
         self,
-        auth: Optional[AuthConfig],
-        base_url: str,
         path: str,
         params: Any = None,
         timeout: int = 15,
     ) -> requests.Response:
-        eprint(f"DELETE {base_url}{path}")
+        eprint(f"DELETE {self.base_url}{path}")
 
         def try_delete() -> requests.Response:
             with verbose_http_errors():
-                headers = self._create_headers(auth)
+                headers = self._create_headers(self.auth)
                 response = requests.delete(
-                    f"{base_url}{path}",
+                    f"{self.base_url}{path}",
                     headers=headers,
                     timeout=timeout,
-                    cert=self._get_cert(auth),
+                    cert=self._get_cert(self.auth),
                     **(
                         {
                             "params": params,
@@ -164,8 +160,8 @@ class WebRequest:
         try:
             response = try_delete()
         except requests.exceptions.HTTPError as e:
-            if auth and e.response.status_code == 401:
-                auth.refresh()
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
                 response = try_delete()
             else:
                 raise

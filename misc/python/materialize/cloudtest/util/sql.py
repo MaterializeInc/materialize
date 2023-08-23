@@ -16,7 +16,7 @@ from psycopg.connection import Connection
 from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint
 from materialize.cloudtest.util.environment import Environment
-from materialize.cloudtest.util.web_request import post
+from materialize.cloudtest.util.web_request import WebRequests
 
 
 def sql_query(
@@ -91,9 +91,8 @@ def sql_query_http(
     environment_params = environment.wait_for_environmentd()
     environmentd_url: str = environment_params["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
-    response = post(
-        auth,
-        f"{schema}://{environmentd_url}",
+    envd_web_requests = WebRequests(auth, f"{schema}://{environmentd_url}")
+    response = envd_web_requests.post(
         "/api/sql",
         {"query": query},
     )
