@@ -283,7 +283,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 ]
             )
 
-        for k, v in self.env.items():
+        for (k, v) in self.env.items():
             env.append(V1EnvVar(name=k, value=v))
 
         return env
@@ -298,8 +298,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         except ValueError:
             return default
 
-        cmp_version = Version.parse(version)
-        return bool(operator(tag_version, cmp_version))
+        version = Version.parse(version)
+        return bool(operator(tag_version, version))
 
     def _meets_minimum_version(self, version: str) -> bool:
         return self._meets_version(version=version, operator=operator.ge, default=True)

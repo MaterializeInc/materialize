@@ -25,7 +25,7 @@ def sql_query(
     vars: Optional[Sequence[Any]] = None,
 ) -> List[List[Any]]:
     cur = conn.cursor()
-    cur.execute(query.encode("utf8"), vars)
+    cur.execute(query, vars)
     return [list(row) for row in cur]
 
 
@@ -35,7 +35,7 @@ def sql_execute(
     vars: Optional[Sequence[Any]] = None,
 ) -> None:
     cur = conn.cursor()
-    cur.execute(query.encode("utf8"), vars)
+    cur.execute(query, vars)
 
 
 def sql_execute_ddl(

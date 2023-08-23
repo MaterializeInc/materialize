@@ -41,11 +41,11 @@ class Endpoint:
     def sql(self, sql: str) -> None:
         conn = self.sql_connection()
         cursor = conn.cursor()
-        cursor.execute(sql.encode("utf8"))
+        cursor.execute(sql)
 
     def name(self) -> str:
         cursor = self.sql_connection().cursor()
-        cursor.execute(b"SELECT mz_version()")
+        cursor.execute("SELECT mz_version()")
         row = cursor.fetchone()
         assert row is not None
         return str(row[0])

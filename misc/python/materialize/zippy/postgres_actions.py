@@ -31,7 +31,7 @@ class PostgresStop(Action):
     """Stop the Postgres instance."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(self) -> Set[Type[Capability]]:
         return {PostgresRunning}
 
     def withholds(self) -> Set[Type[Capability]]:
@@ -53,7 +53,7 @@ class CreatePostgresTable(Action):
     """Creates a table on the Postgres instance. 50% of the tables have a PK."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, PostgresRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -106,7 +106,7 @@ class PostgresDML(Action):
     MAX_BATCH_SIZE = 10000
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

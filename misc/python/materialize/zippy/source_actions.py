@@ -23,7 +23,7 @@ class CreateSourceParameterized(ActionFactory):
     """Creates a source in Materialized."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
 
     def __init__(self, max_sources: int = 10) -> None:

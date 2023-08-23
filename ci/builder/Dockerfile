@@ -97,6 +97,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     lld \
     llvm \
     make \
+    npm \
     openssh-client \
     pkg-config \
     postgresql-client-14 \
@@ -109,11 +110,6 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js LTS, for our Python typechecker. This is up here because we don't
-# expect it to change often.
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
@@ -190,12 +186,6 @@ RUN mkdir rust \
 
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
-
-# Install the locked version of our typechecker -- it'll be invoked via `npx`,
-# so using the same command here should ensure it's installed and cached in the
-# right place
-COPY pyright-version.sh /workdir/
-RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
 
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.

@@ -247,7 +247,7 @@ class QueryGenerator:
         expressions: List[Expression],
         row_selection: DataRowSelection,
     ) -> List[Expression]:
-        indices_to_remove: list[int] = []
+        indices_to_remove = []
 
         for index, expression in enumerate(expressions):
             ignore_verdict = self.ignore_filter.shall_ignore_expression(

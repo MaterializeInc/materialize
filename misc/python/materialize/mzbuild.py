@@ -557,7 +557,7 @@ class Image:
                 f"mzbuild image name {self.name} contains invalid character; only alphanumerics and hyphens allowed"
             )
 
-        self.depends_on: list[str] = []
+        self.depends_on = []
         with open(self.path / "Dockerfile", "rb") as f:
             for line in f:
                 match = self._DOCKERFILE_MZFROM_RE.match(line)
@@ -917,7 +917,7 @@ class Repository:
         self.rd = RepositoryDetails(root, arch, release_mode, coverage, stable)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
-        for path, dirs, files in os.walk(self.root, topdown=True):
+        for (path, dirs, files) in os.walk(self.root, topdown=True):
             if path == str(root / "misc"):
                 dirs.remove("python")
             # Filter out some particularly massive ignored directories to keep

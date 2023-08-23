@@ -28,9 +28,8 @@ def pytest_configure(config: "Config") -> None:
 def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
     return MaterializeApplication(
         release_mode=(not pytestconfig.getoption("dev")),
-        # NOTE(necaris): pyright doesn't like that the `getoption` default type is `Notset`
-        aws_region=pytestconfig.getoption("aws_region", None),  # type: ignore
-        log_filter=pytestconfig.getoption("log_filter", None),  # type: ignore
+        aws_region=pytestconfig.getoption("aws_region"),
+        log_filter=pytestconfig.getoption("log_filter"),
     )
 
 

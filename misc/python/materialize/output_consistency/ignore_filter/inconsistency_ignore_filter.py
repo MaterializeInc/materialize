@@ -42,15 +42,13 @@ class IgnoreVerdict:
     ignore: bool
 
 
+@dataclass(frozen=True)
 class YesIgnore(IgnoreVerdict):
     reason: str
-
-    def __init__(self, reason: str, ignore: bool = True):
-        super().__init__(ignore)
-        self.reason = reason
+    ignore: bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class NoIgnore(IgnoreVerdict):
     ignore: bool = False
 
@@ -109,6 +107,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
     ) -> IgnoreVerdict:
+
         expression_characteristics = (
             expression.recursively_collect_involved_characteristics(row_selection)
         )

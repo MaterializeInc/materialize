@@ -17,19 +17,25 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-pyright_version=$(sh ci/builder/pyright-version.sh)
-typecheck_cmd="npx pyright@$pyright_version"
-
-python_folders=(ci misc/python)
+mypy_folders=(ci misc/python)
 flake8_folders=(ci misc/python test)
 
-compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
+try bin/pyactivate -m mypy "${mypy_folders[@]}"
+if ! try_last_failed; then
+    # mzcompose.py files need to be passed to mypy individually to avoid
+    # duplicate module warnings. We don't check these if the previous `mypy`
+    # invocation failed, though, or we'll get a ton of duplicate warnings.
+    for file in $(git_files "**/mzcompose.py"); do
+        try bin/pyactivate -m mypy "$file"
+    done
 
-# NOTE: we actually _want_ the word-splitting behavior on `typecheck_cmd` below,
-# so turn off the warning
-# shellcheck disable=SC2086
-try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
-
+    for file in $(git_files "test/**.py"); do
+        if [[ $file == *"mzcompose"* ]]; then
+            continue
+        fi
+        try bin/pyactivate -m mypy "$file"
+    done
+fi
 try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
 
 if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then

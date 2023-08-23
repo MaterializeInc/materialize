@@ -54,7 +54,7 @@ class KafkaStop(Action):
     """Stop the Kafka instance."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(self) -> Set[Type[Capability]]:
         return {KafkaRunning}
 
     def withholds(self) -> Set[Type[Capability]]:
@@ -175,7 +175,7 @@ class KafkaInsertParallel(KafkaInsert):
     """Inserts data into a Kafka topic using background threads."""
 
     @classmethod
-    def require_explicit_mention(cls) -> bool:
+    def require_explicit_mention(self) -> bool:
         return True
 
     def parallel(self) -> bool:

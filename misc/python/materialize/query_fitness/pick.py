@@ -19,7 +19,7 @@ threshold = 0.5
 
 
 def main() -> None:
-    conn = pg8000.connect(database="pstoev", password="pstoev", user=None)
+    conn = pg8000.connect(database="pstoev", password="pstoev")
     fitness_func = AllPartsEssential(conn=conn)
 
     for query in sys.stdin:
@@ -35,7 +35,6 @@ def dump_slt(conn: pg8000.Connection, query: str) -> None:
     cursor.execute("ROLLBACK")
     cursor.execute(query)
     row = cursor.fetchone()
-    assert row is not None
     cols = len(row)
     colspec = "I" * cols
     print(

@@ -720,7 +720,7 @@ class Composition:
             force: Whether to force the removal (i.e., don't error if the
                 volume does not exist).
         """
-        volumes = tuple(f"{self.name}_{v}" for v in volumes)
+        volumes = (f"{self.name}_{v}" for v in volumes)
         spawn.runv(
             ["docker", "volume", "rm", *(["--force"] if force else []), *volumes]
         )
