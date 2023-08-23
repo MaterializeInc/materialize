@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Callable, Optional
 
 import requests
@@ -90,10 +90,9 @@ def _create_auth(
 
 def update_auth(args: argparse.Namespace, auth: AuthConfig) -> None:
     new_auth = create_auth(args, auth.refresh_fn)
-    auth.organization_id = new_auth.organization_id
-    auth.token = new_auth.token
-    auth.app_user = new_auth.app_user
-    auth.app_password = new_auth.app_password
+
+    for field in fields(new_auth):
+        setattr(auth, field.name, getattr(new_auth, field.name))
 
 
 def make_app_password(frontegg_host: str, token: str) -> str:
