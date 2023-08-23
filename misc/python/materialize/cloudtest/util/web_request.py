@@ -14,6 +14,7 @@ from typing import Any, Generator, Optional
 import requests
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint
 
 
@@ -43,9 +44,7 @@ def get(
 
     def try_get() -> requests.Response:
         with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
+            headers = _create_headers(use_token=use_token, auth=config.auth)
             response = requests.get(
                 f"{base_url}{path}",
                 headers=headers,
@@ -80,9 +79,7 @@ def post(
 
     def try_post() -> requests.Response:
         with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
+            headers = _create_headers(use_token=use_token, auth=config.auth)
             response = requests.post(
                 f"{base_url}{path}",
                 headers=headers,
@@ -118,9 +115,7 @@ def patch(
 
     def try_patch() -> requests.Response:
         with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
+            headers = _create_headers(use_token=use_token, auth=config.auth)
             response = requests.patch(
                 f"{base_url}{path}",
                 headers=headers,
@@ -156,9 +151,7 @@ def delete(
 
     def try_delete() -> requests.Response:
         with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
+            headers = _create_headers(use_token=use_token, auth=config.auth)
             response = requests.delete(
                 f"{base_url}{path}",
                 headers=headers,
@@ -185,3 +178,11 @@ def delete(
             raise
 
     return response
+
+
+def _create_headers(use_token: bool, auth: AuthConfig) -> dict[str, Any]:
+    headers = {}
+    if use_token:
+        headers["Authorization"] = f"Bearer {auth.token}"
+
+    return headers
