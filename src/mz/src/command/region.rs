@@ -47,7 +47,7 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
     // Loop retrieving the region and checking the SQL connection for 6 minutes.
     // After 6 minutes it will timeout.
     let _ = Retry::default()
-        .max_duration(Duration::from_secs(360))
+        .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
             let region_info = cx.get_region().await?.region_info;
@@ -91,7 +91,7 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
     // For any other type of error response, we handle it here
     // with a retry loop.
     Retry::default()
-        .max_duration(Duration::from_secs(360))
+        .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
             let cloud_provider = cx.get_cloud_provider().await?;
