@@ -612,7 +612,8 @@ impl SessionClient {
 
     /// Gets the current value of all system variables.
     pub async fn get_system_vars(&mut self) -> Result<GetVariablesResponse, AdapterError> {
-        self.send(|tx, session| Command::GetSystemVars { session, tx })
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::GetSystemVars { conn_id, tx })
             .await
     }
 
@@ -621,7 +622,8 @@ impl SessionClient {
         &mut self,
         vars: BTreeMap<String, String>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::SetSystemVars { vars, session, tx })
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::SetSystemVars { vars, conn_id, tx })
             .await
     }
 

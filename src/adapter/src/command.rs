@@ -118,14 +118,14 @@ pub enum Command {
     },
 
     GetSystemVars {
-        session: Session,
-        tx: oneshot::Sender<Response<GetVariablesResponse>>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<GetVariablesResponse, AdapterError>>,
     },
 
     SetSystemVars {
         vars: BTreeMap<String, String>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
     Terminate {
@@ -150,15 +150,15 @@ impl Command {
         match self {
             Command::Execute { session, .. }
             | Command::Commit { session, .. }
-            | Command::CopyRows { session, .. }
-            | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. } => Some(session),
+            | Command::CopyRows { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
             | Command::Terminate { .. }
+            | Command::GetSystemVars { .. }
+            | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. } => None,
         }
     }
@@ -167,15 +167,15 @@ impl Command {
         match self {
             Command::Execute { session, .. }
             | Command::Commit { session, .. }
-            | Command::CopyRows { session, .. }
-            | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. } => Some(session),
+            | Command::CopyRows { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
             | Command::Terminate { .. }
+            | Command::GetSystemVars { .. }
+            | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. } => None,
         }
     }

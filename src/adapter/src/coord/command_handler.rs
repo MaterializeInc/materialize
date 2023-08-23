@@ -146,25 +146,26 @@ impl Coordinator {
                 self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
-            Command::GetSystemVars { session, tx } => {
+            Command::GetSystemVars { conn_id, tx } => {
+                let conn = &self.active_conns[&conn_id];
                 let vars =
                     GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
-                        var.visible(session.user(), Some(self.catalog.system_config()))
+                        var.visible(conn.user(), Some(self.catalog.system_config()))
                             .is_ok()
                     }));
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(Ok(vars), session);
+                let _ = tx.send(Ok(vars));
             }
 
-            Command::SetSystemVars { vars, session, tx } => {
+            Command::SetSystemVars { vars, conn_id, tx } => {
                 let mut ops = Vec::with_capacity(vars.len());
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let conn = &self.active_conns[&conn_id];
 
                 for (name, value) in vars {
                     if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                        var.visible(session.user(), Some(self.catalog.system_config()))
+                        var.visible(conn.user(), Some(self.catalog.system_config()))
                     }) {
-                        return tx.send(Err(e.into()), session);
+                        let _ = tx.send(Err(e.into()));
+                        return;
                     }
 
                     ops.push(catalog::Op::UpdateSystemConfiguration {
@@ -173,8 +174,8 @@ impl Coordinator {
                     });
                 }
 
-                let result = self.catalog_transact(Some(&session), ops).await;
-                tx.send(result, session);
+                let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                let _ = tx.send(result);
             }
 
             Command::Terminate { conn_id, tx } => {
