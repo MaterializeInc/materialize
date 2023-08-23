@@ -360,7 +360,10 @@ impl<'a> Parser<'a> {
     fn parse_statement_inner(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.next_token() {
             Some(t) => match t {
-                Token::Keyword(SELECT) | Token::Keyword(WITH) | Token::Keyword(VALUES) => {
+                Token::Keyword(SELECT)
+                | Token::Keyword(WITH)
+                | Token::Keyword(VALUES)
+                | Token::Keyword(TABLE) => {
                     self.prev_token();
                     Ok(Statement::Select(SelectStatement {
                         query: self.parse_query().map_parser_err(StatementKind::Select)?,
@@ -5703,6 +5706,8 @@ impl<'a> Parser<'a> {
             SetExpr::Values(self.parse_values()?)
         } else if self.parse_keyword(SHOW) {
             SetExpr::Show(self.parse_show()?)
+        } else if self.parse_keyword(TABLE) {
+            SetExpr::Table(self.parse_raw_name()?)
         } else {
             return self.expected(
                 self.peek_pos(),
