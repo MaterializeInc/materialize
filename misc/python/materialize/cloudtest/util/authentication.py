@@ -27,6 +27,8 @@ class AuthConfig:
 
     refresh_fn: Callable[[AuthConfig], None]
 
+    client_cert: Optional[tuple[str, str]] = None
+
     def refresh(self) -> None:
         self.refresh_fn(self)
 
