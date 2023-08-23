@@ -13,7 +13,7 @@ import psycopg
 from psycopg.abc import Params, Query
 from psycopg.connection import Connection
 
-from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint
 from materialize.cloudtest.util.environment import Environment
 from materialize.cloudtest.util.web_request import post
@@ -47,16 +47,14 @@ def sql_execute_ddl(
     cur.execute(query, vars)
 
 
-def pgwire_sql_conn(
-    config: EnvironmentConfig, environment: Environment
-) -> Connection[Any]:
+def pgwire_sql_conn(auth: AuthConfig, environment: Environment) -> Connection[Any]:
     environment_params = environment.wait_for_environmentd()
     pgwire_url: str = environment_params["regionInfo"]["sqlAddress"]
     (pgwire_host, pgwire_port) = pgwire_url.split(":")
     conn = psycopg.connect(
         dbname="materialize",
-        user=config.e2e_test_user_email,
-        password=config.auth.app_password,
+        user=auth.app_user,
+        password=auth.app_password,
         host=pgwire_host,
         port=pgwire_port,
         sslmode="require",
@@ -66,35 +64,35 @@ def pgwire_sql_conn(
 
 
 def sql_query_pgwire(
-    config: EnvironmentConfig,
+    auth: AuthConfig,
     environment: Environment,
     query: Query,
     vars: Optional[Params] = None,
 ) -> list[list[Any]]:
-    with pgwire_sql_conn(config, environment) as conn:
+    with pgwire_sql_conn(auth, environment) as conn:
         eprint(f"QUERY: {query}")
         return sql_query(conn, query, vars)
 
 
 def sql_execute_pgwire(
-    config: EnvironmentConfig,
+    auth: AuthConfig,
     environment: Environment,
     query: Query,
     vars: Optional[Params] = None,
 ) -> None:
-    with pgwire_sql_conn(config, environment) as conn:
+    with pgwire_sql_conn(auth, environment) as conn:
         eprint(f"QUERY: {query}")
         return sql_execute(conn, query, vars)
 
 
 def sql_query_http(
-    config: EnvironmentConfig, environment: Environment, query: str
+    auth: AuthConfig, environment: Environment, query: str
 ) -> list[list[Any]]:
     environment_params = environment.wait_for_environmentd()
     environmentd_url: str = environment_params["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
     response = post(
-        config.auth,
+        auth,
         f"{schema}://{environmentd_url}",
         "/api/sql",
         {"query": query},
