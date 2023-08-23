@@ -23,15 +23,15 @@ This guide walks you through the steps required to use the collaborative data no
 1. Click in the **+ Add Integration** button.
 2. Search and click the **Materialize** option.
 3. Enter the connection fields as follows:
-   - Integration name: Choose any name you prefer.
-   - Host name: Use the host available in the [console](https://console.materialize.com/).
-   - Port: Use the port available in the [console](https://console.materialize.com/).
-   - Authentication:
-      - Username: Enter the email associated with your console login.
-      - Password: Use your app password or generate a new one in the [console](https://console.materialize.com/access).
-      - Database: Use the database available in the [console](https://console.materialize.com/).
-      - Cluster: Use your preferred cluster.
-
+    Field             | Value
+    ----------------- | ----------------------
+    Integration name  | Materialize.
+    Host name         | Materialize host name.
+    Port              | **6875**
+    Username          | Materialize user.
+    Password          | App-specific password.
+    Database          | **materialize**
+    Cluster           | Your preferred cluster.
 4. Click the **Create Integration** button.
 5. After a successful test, in the popup dialog, you can either select an existing project or create a new one to continue.
 
@@ -39,9 +39,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 1. Create a new SQL block.
 
-2. Inside the block, select the new **Materialize** integration.
-
-3. Inside the block, paste the following query:
+2. Inside the block, select the new **Materialize** integration and paste the following query:
     ```sql
     SELECT number, row_num
     FROM (
@@ -52,10 +50,16 @@ This guide walks you through the steps required to use the collaborative data no
         ) AS subquery
     );
     ```
-4. Click the **Run Notebook** button.
 
-5. Click the {{% icons/chart %}} **Visualize** button and create the following chart:
-<img width="1002" alt="Deepnote guide" src="https://github.com/joacoc/materialize/assets/11491779/fdd21c0c-db2f-4096-8d7a-dd38bdfb646d">
+    This query generates a series of 1000 numbers squared and assigns row numbers to each.
+3. Click the **Run Notebook** button.
+
+4. Inside the block, click the {{% icons/chart %}} **Visualize** button and configure as follows:
+   1. In the **Y Axis** options, select the **number** column and set the aggregation to **None**.
+   2. In the **X Axis** options, select the **row_num** column and set the aggregation to **None**.
+
+   <img width="1002" alt="Deepnote guide" src="https://github.com/joacoc/materialize/assets/11491779/fdd21c0c-db2f-4096-8d7a-dd38bdfb646d">
+
 
 ### Related pages
 
