@@ -81,6 +81,7 @@ int4
 int4range
 int8
 int8range
+internal
 uint2
 uint4
 uint8
