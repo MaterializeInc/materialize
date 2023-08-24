@@ -119,6 +119,7 @@ pub mod config;
 pub mod flags;
 pub mod metrics;
 pub mod session;
+pub mod statement_logging;
 pub mod telemetry;
 
 pub use crate::client::{Client, Handle, SessionClient};

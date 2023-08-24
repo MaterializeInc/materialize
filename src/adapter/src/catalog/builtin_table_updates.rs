@@ -25,10 +25,6 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::statement_logging::{
-    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementPreparedRecord,
-};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
@@ -62,6 +58,10 @@ use crate::catalog::{
     StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;
+use crate::statement_logging::{
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementPreparedRecord,
+};
 use crate::subscribe::ActiveSubscribe;
 
 /// An update to a built-in table.

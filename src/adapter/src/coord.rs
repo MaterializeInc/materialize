@@ -99,7 +99,6 @@ use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
@@ -141,6 +140,7 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, RoleMetadata, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
@@ -838,100 +838,7 @@ impl ExecuteContext {
         let reason = if extra.is_trivial() {
             None
         } else {
-            Some(match &result {
-                Ok(ok) => match ok {
-                    ExecuteResponse::CopyTo { resp, .. } => match resp.as_ref() {
-                        // NB [btv]: It's not clear that this combination
-                        // can ever actually happen.
-                        ExecuteResponse::SendingRowsImmediate { rows, .. } => {
-                            StatementEndedExecutionReason::Success {
-                                rows_returned: Some(u64::cast_from(rows.len())),
-                                execution_strategy: Some(StatementExecutionStrategy::Constant),
-                            }
-                        }
-                        ExecuteResponse::SendingRows { .. } => {
-                            panic!("SELECTs terminate on peek finalization, not here.")
-                        }
-                        ExecuteResponse::Subscribing { .. } => {
-                            panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
-                        }
-                        _ => panic!("Invalid COPY response type"),
-                    },
-                    ExecuteResponse::CopyFrom { .. } => {
-                        panic!("COPY FROMs terminate in the protocol layer, not here.")
-                    }
-                    ExecuteResponse::Fetch { .. } => {
-                        panic!("FETCHes terminate after a follow-up message is sent.")
-                    }
-                    ExecuteResponse::SendingRows { .. } => {
-                        panic!("SELECTs terminate on peek finalization, not here.")
-                    }
-                    ExecuteResponse::Subscribing { .. } => {
-                        panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
-                    }
-
-                    ExecuteResponse::SendingRowsImmediate { rows, .. } => {
-                        StatementEndedExecutionReason::Success {
-                            rows_returned: Some(u64::cast_from(rows.len())),
-                            execution_strategy: Some(StatementExecutionStrategy::Constant),
-                        }
-                    }
-                    ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
-
-                    ExecuteResponse::AlteredDefaultPrivileges
-                    | ExecuteResponse::AlteredObject(_)
-                    | ExecuteResponse::AlteredIndexLogicalCompaction
-                    | ExecuteResponse::AlteredRole
-                    | ExecuteResponse::AlteredSystemConfiguration
-                    | ExecuteResponse::ClosedCursor
-                    | ExecuteResponse::CreatedConnection
-                    | ExecuteResponse::CreatedDatabase
-                    | ExecuteResponse::CreatedSchema
-                    | ExecuteResponse::CreatedRole
-                    | ExecuteResponse::CreatedCluster
-                    | ExecuteResponse::CreatedClusterReplica
-                    | ExecuteResponse::CreatedIndex
-                    | ExecuteResponse::CreatedSecret
-                    | ExecuteResponse::CreatedSink
-                    | ExecuteResponse::CreatedSource
-                    | ExecuteResponse::CreatedTable
-                    | ExecuteResponse::CreatedView
-                    | ExecuteResponse::CreatedViews
-                    | ExecuteResponse::CreatedWebhookSource { .. }
-                    | ExecuteResponse::CreatedMaterializedView
-                    | ExecuteResponse::CreatedType
-                    | ExecuteResponse::Deallocate { .. }
-                    | ExecuteResponse::DeclaredCursor
-                    | ExecuteResponse::Deleted(_)
-                    | ExecuteResponse::DiscardedTemp
-                    | ExecuteResponse::DiscardedAll
-                    | ExecuteResponse::DroppedObject(_)
-                    | ExecuteResponse::DroppedOwned
-                    | ExecuteResponse::EmptyQuery
-                    | ExecuteResponse::GrantedPrivilege
-                    | ExecuteResponse::GrantedRole
-                    | ExecuteResponse::Inserted(_)
-                    | ExecuteResponse::Prepare
-                    | ExecuteResponse::Raised
-                    | ExecuteResponse::ReassignOwned
-                    | ExecuteResponse::RevokedPrivilege
-                    | ExecuteResponse::RevokedRole
-                    | ExecuteResponse::SetVariable { .. }
-                    | ExecuteResponse::StartedTransaction
-                    | ExecuteResponse::TransactionCommitted { .. }
-                    | ExecuteResponse::TransactionRolledBack { .. }
-                    | ExecuteResponse::Updated(_)
-                    | ExecuteResponse::ValidatedConnection { .. } => {
-                        StatementEndedExecutionReason::Success {
-                            rows_returned: None,
-                            execution_strategy: None,
-                        }
-                    }
-                },
-                Err(e) => StatementEndedExecutionReason::Errored {
-                    error: e.to_string(),
-                },
-            })
+            Some((&result).into())
         };
         tx.send(result, session);
         if let Some(reason) = reason {

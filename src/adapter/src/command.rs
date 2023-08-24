@@ -25,7 +25,6 @@ use mz_ore::soft_assert;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -45,6 +44,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::Transmittable;
 use crate::AdapterNotice;
 
@@ -100,20 +100,6 @@ pub enum Command {
         conn_id: ConnectionId,
     },
 
-    DumpCatalog {
-        session: Session,
-        tx: oneshot::Sender<Response<CatalogDump>>,
-    },
-
-    CopyRows {
-        id: GlobalId,
-        columns: Vec<usize>,
-        rows: Vec<Row>,
-        session: Session,
-        tx: oneshot::Sender<Response<ExecuteResponse>>,
-        ctx_extra: ExecuteContextExtra,
-    },
-
     AppendWebhook {
         database: String,
         schema: String,
@@ -123,14 +109,14 @@ pub enum Command {
     },
 
     GetSystemVars {
-        session: Session,
-        tx: oneshot::Sender<Response<GetVariablesResponse>>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<GetVariablesResponse, AdapterError>>,
     },
 
     SetSystemVars {
         vars: BTreeMap<String, String>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
     Terminate {
@@ -153,36 +139,30 @@ pub enum Command {
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Execute { session, .. }
-            | Command::Commit { session, .. }
-            | Command::DumpCatalog { session, .. }
-            | Command::CopyRows { session, .. }
-            | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. } => Some(session),
+            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
             | Command::Terminate { .. }
+            | Command::GetSystemVars { .. }
+            | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. } => None,
         }
     }
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Execute { session, .. }
-            | Command::Commit { session, .. }
-            | Command::DumpCatalog { session, .. }
-            | Command::CopyRows { session, .. }
-            | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. } => Some(session),
+            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
             | Command::Terminate { .. }
+            | Command::GetSystemVars { .. }
+            | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. } => None,
         }
     }
@@ -853,7 +833,6 @@ impl ExecuteResponse {
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
-            CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRowsImmediate],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],

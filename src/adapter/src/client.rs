@@ -22,10 +22,10 @@ use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
@@ -33,6 +33,7 @@ use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
 use mz_sql::session::vars::VarInput;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
+use mz_transform::Optimizer;
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -48,6 +49,7 @@ use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
 
@@ -566,9 +568,12 @@ impl SessionClient {
     }
 
     /// Dumps the catalog to a JSON string.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
-        self.send(|tx, session| Command::DumpCatalog { session, tx })
-            .await
+        let catalog = self.catalog_snapshot().await;
+        catalog.dump().map_err(AdapterError::from)
     }
 
     /// Tells the coordinator a statement has finished execution, in the cases
@@ -596,20 +601,32 @@ impl SessionClient {
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.send(|tx, session| Command::CopyRows {
-            id,
-            columns,
-            rows,
-            session,
-            tx,
-            ctx_extra,
-        })
-        .await
+        let catalog = self.catalog_snapshot().await;
+        // TODO: Remove this clone once we always have the session. It's currently needed because
+        // self.session returns a mut ref, so we can't call it twice.
+        let pcx = self.session().pcx().clone();
+        let conn_catalog = catalog.for_session(self.session());
+        let result: Result<_, AdapterError> =
+            mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
+                .err_into()
+                .and_then(|values| values.lower().err_into())
+                .and_then(|values| {
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
+                        .optimize(values)
+                        .err_into()
+                })
+                .and_then(|values| {
+                    // Copied rows must always be constants.
+                    Coordinator::insert_constant(&catalog, self.session(), id, values.into_inner())
+                });
+        self.retire_execute(ctx_extra, (&result).into());
+        result
     }
 
     /// Gets the current value of all system variables.
     pub async fn get_system_vars(&mut self) -> Result<GetVariablesResponse, AdapterError> {
-        self.send(|tx, session| Command::GetSystemVars { session, tx })
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::GetSystemVars { conn_id, tx })
             .await
     }
 
@@ -618,7 +635,8 @@ impl SessionClient {
         &mut self,
         vars: BTreeMap<String, String>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::SetSystemVars { vars, session, tx })
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::SetSystemVars { vars, conn_id, tx })
             .await
     }
 
@@ -692,8 +710,6 @@ impl SessionClient {
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }
-                | Command::DumpCatalog { .. }
-                | Command::CopyRows { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }

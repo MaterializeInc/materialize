@@ -12,10 +12,6 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
-use mz_repr::statement_logging::{
-    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementPreparedRecord,
-};
 use mz_sql::plan::Params;
 use qcell::QCell;
 use rand::SeedableRng;
@@ -24,6 +20,10 @@ use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
+use crate::statement_logging::{
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementPreparedRecord,
+};
 
 /// Metadata required for logging a prepared statement.
 #[derive(Debug)]

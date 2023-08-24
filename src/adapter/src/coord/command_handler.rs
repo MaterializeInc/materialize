@@ -23,8 +23,7 @@ use mz_sql::ast::{
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
-    TransactionType,
+    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
@@ -39,7 +38,7 @@ use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
     AppendWebhookResponse, AppendWebhookValidator, Canceled, CatalogSnapshot, Command,
-    ExecuteResponse, GetVariablesResponse, Response, StartupResponse,
+    ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -53,45 +52,9 @@ use crate::{catalog, metrics, rbac, ExecuteContext};
 use super::ExecuteContextExtra;
 
 impl Coordinator {
-    fn send_error(&mut self, cmd: Command, e: AdapterError) {
-        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
-            let _ = tx.send(Response::<T> {
-                result: Err(e),
-                session,
-            });
-        }
-        match cmd {
-            Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
-            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
-            Command::CopyRows { tx, session, .. } => send(tx, session, e),
-            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::AppendWebhook { tx, .. } => {
-                // We don't care if our listener went away.
-                let _ = tx.send(Err(e));
-            }
-            Command::Startup { tx, .. } => {
-                let _ = tx.send(Err(e));
-            }
-            Command::Terminate { tx, .. } => {
-                if let Some(tx) = tx {
-                    let _ = tx.send(Err(e));
-                }
-            }
-            Command::CatalogSnapshot { .. } => panic!("Command::CatalogSnapshot is infallible"),
-            Command::RetireExecute { .. } => panic!("Command::RetireExecute is infallible"),
-        }
-    }
-
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
-        }
-        if let Err(e) = rbac::check_command(self.catalog(), &cmd) {
-            self.send_error(cmd, e.into());
-            return;
         }
         match cmd {
             Command::Startup {
@@ -150,33 +113,6 @@ impl Coordinator {
                 self.handle_privileged_cancel(conn_id);
             }
 
-            Command::DumpCatalog { session, tx } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(self.catalog().dump().map_err(AdapterError::from), session);
-            }
-
-            Command::CopyRows {
-                id,
-                columns,
-                rows,
-                session,
-                tx,
-                ctx_extra,
-            } => {
-                let ctx = ExecuteContext::from_parts(
-                    ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    ctx_extra,
-                );
-                self.sequence_plan(
-                    ctx,
-                    Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
-            }
-
             Command::AppendWebhook {
                 database,
                 schema,
@@ -187,25 +123,26 @@ impl Coordinator {
                 self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
-            Command::GetSystemVars { session, tx } => {
+            Command::GetSystemVars { conn_id, tx } => {
+                let conn = &self.active_conns[&conn_id];
                 let vars =
                     GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
-                        var.visible(session.user(), Some(self.catalog.system_config()))
+                        var.visible(conn.user(), Some(self.catalog.system_config()))
                             .is_ok()
                     }));
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(Ok(vars), session);
+                let _ = tx.send(Ok(vars));
             }
 
-            Command::SetSystemVars { vars, session, tx } => {
+            Command::SetSystemVars { vars, conn_id, tx } => {
                 let mut ops = Vec::with_capacity(vars.len());
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let conn = &self.active_conns[&conn_id];
 
                 for (name, value) in vars {
                     if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                        var.visible(session.user(), Some(self.catalog.system_config()))
+                        var.visible(conn.user(), Some(self.catalog.system_config()))
                     }) {
-                        return tx.send(Err(e.into()), session);
+                        let _ = tx.send(Err(e.into()));
+                        return;
                     }
 
                     ops.push(catalog::Op::UpdateSystemConfiguration {
@@ -214,8 +151,8 @@ impl Coordinator {
                     });
                 }
 
-                let result = self.catalog_transact(Some(&session), ops).await;
-                tx.send(result, session);
+                let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                let _ = tx.send(result);
             }
 
             Command::Terminate { conn_id, tx } => {
