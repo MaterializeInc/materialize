@@ -34,3 +34,8 @@ class SelectCount(Operation):
 class SelectUnionAll(Operation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1 UNION ALL SELECT * FROM t1;"
+
+
+class Update(Operation):
+    def sql_statement(self) -> str:
+        return "UPDATE t1 SET f1 = f1 + 1;"
