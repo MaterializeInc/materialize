@@ -172,7 +172,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--target",
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
         action="append",
-        default=["HEAD"],
     )
 
     parser.add_argument(
@@ -236,6 +235,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.materialize_url is not None and "remote" not in args.target:
         assert False, "--materialize_url requires --target=remote"
+
+    if len(args.target) == 0:
+        args.target = ["HEAD"]
+
+    print(f"Targets: {args.target}")
 
     endpoints: list[Endpoint] = []
     for i, target in enumerate(args.target):
