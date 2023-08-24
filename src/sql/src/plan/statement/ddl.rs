@@ -1437,6 +1437,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
+        mz_sql_parser::ast::LoadGenerator::Clock => LoadGenerator::Clock,
     };
 
     let mut available_subsources = BTreeMap::new();
@@ -1449,6 +1450,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
+                LoadGenerator::Clock => "clock".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
