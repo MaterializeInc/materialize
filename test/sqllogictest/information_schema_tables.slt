@@ -313,6 +313,10 @@ mz_cluster_replica_utilization
 VIEW
 materialize
 mz_internal
+mz_comments
+BASE TABLE
+materialize
+mz_internal
 mz_compute_delays_histogram
 VIEW
 materialize
