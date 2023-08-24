@@ -65,7 +65,8 @@ def run(
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
         cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
-        cur.execute("ALTER SYSTEM SET max_tables = 105")
+        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
+        cur.execute("ALTER SYSTEM SET max_tables = 200")
         cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
         cur.execute("ALTER SYSTEM SET max_sources = 105")
         cur.execute("ALTER SYSTEM SET max_roles = 105")
