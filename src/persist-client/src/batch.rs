@@ -225,32 +225,35 @@ impl BatchBuilderConfig {
     }
 }
 
-/// A list of column names that persist will always retain stats for,
-/// even if it means going over the stats budget.
+/// A list of (lowercase) column names that persist will always retain
+/// stats for, even if it means going over the stats budget.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
 pub struct UntrimmableColumns {
-    /// Always retain columns that exactly equal any of these strings.
+    /// Always retain columns whose lowercased names exactly equal any of these strings.
     pub equals: Vec<String>,
-    /// Always retain columns that start with any of these strings.
+    /// Always retain columns whose lowercased names start with any of these strings.
     pub prefixes: Vec<String>,
-    /// Always retain columns that end with any of these strings.
+    /// Always retain columns whose lowercased names end with any of these strings.
     pub suffixes: Vec<String>,
 }
 
 impl UntrimmableColumns {
     pub(crate) fn should_retain(&self, name: &str) -> bool {
+        // TODO: see if there's a better way to match different formats than lowercasing
+        // https://github.com/MaterializeInc/materialize/issues/21353#issue-1863623805
+        let name_lower = name.to_lowercase();
         for s in &self.equals {
-            if s == name {
+            if *s == name_lower {
                 return true;
             }
         }
         for s in &self.prefixes {
-            if name.starts_with(s) {
+            if name_lower.starts_with(s) {
                 return true;
             }
         }
         for s in &self.suffixes {
-            if name.ends_with(s) {
+            if name_lower.ends_with(s) {
                 return true;
             }
         }
@@ -260,11 +263,7 @@ impl UntrimmableColumns {
 
 impl std::fmt::Display for UntrimmableColumns {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UntrimmableColumns")
-            .field("equals", &self.equals)
-            .field("prefixes", &self.prefixes)
-            .field("suffixes", &self.suffixes)
-            .finish()
+        f.write_str(&serde_json::to_string(self).expect("serializable"))
     }
 }
 
@@ -1121,5 +1120,34 @@ mod tests {
                 _ => panic!("unparseable blob key"),
             }
         }
+    }
+
+    #[test]
+    fn untrimmable_columns() {
+        let untrimmable = UntrimmableColumns {
+            equals: vec!["abc".to_string(), "def".to_string()],
+            prefixes: vec!["123".to_string(), "234".to_string()],
+            suffixes: vec!["xyz".to_string()],
+        };
+
+        // equals
+        assert!(untrimmable.should_retain("abc"));
+        assert!(untrimmable.should_retain("ABC"));
+        assert!(untrimmable.should_retain("aBc"));
+        assert!(!untrimmable.should_retain("abcd"));
+        assert!(untrimmable.should_retain("deF"));
+        assert!(!untrimmable.should_retain("defg"));
+
+        // prefix
+        assert!(untrimmable.should_retain("123"));
+        assert!(untrimmable.should_retain("123-4"));
+        assert!(untrimmable.should_retain("1234"));
+        assert!(untrimmable.should_retain("234"));
+        assert!(!untrimmable.should_retain("345"));
+
+        // suffix
+        assert!(untrimmable.should_retain("ijk_xyZ"));
+        assert!(untrimmable.should_retain("ww-XYZ"));
+        assert!(!untrimmable.should_retain("xya"));
     }
 }

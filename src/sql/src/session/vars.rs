@@ -1012,7 +1012,9 @@ static PERSIST_STATS_UNTRIMMABLE_COLUMNS: Lazy<ServerVar<UntrimmableColumns>> =
     Lazy::new(|| ServerVar {
         name: UncasedStr::new("persist_stats_untrimmable_columns"),
         value: &PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS,
-        description: "Which columns to always retain during persist stats trimming.",
+        description: "Which columns to always retain during persist stats trimming. The expected \
+        format is JSON (ex. `{\"equals\": [\"foo\"], \"prefixes\": [], \"suffixes\": [\"_bar\"]}`) \
+        and all strings must be lowercase.",
         internal: true,
     });
 
@@ -2160,10 +2162,10 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&PERSIST_STATS_BUDGET_BYTES)
+            .with_var(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
-            .with_var(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
