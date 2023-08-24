@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
@@ -145,10 +146,10 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
-    ) {
+    ) -> DataflowDescription<Plan> {
         self.ship_dataflow(dataflow, instance)
             .await
-            .expect("failed to ship dataflow");
+            .expect("failed to ship dataflow")
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
@@ -159,7 +160,7 @@ impl Coordinator {
         &mut self,
         mut dataflow: DataflowDesc,
         instance: ComputeInstanceId,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<DataflowDescription<Plan>, AdapterError> {
         // If the only outputs of the dataflow are sinks, we might
         // be able to turn off the computation early, if they all
         // have non-trivial `up_to`s.
@@ -170,21 +171,21 @@ impl Coordinator {
             }
         }
 
-        let output_ids = dataflow.export_ids().collect();
         let plan = self.finalize_dataflow(dataflow, instance)?;
 
         self.controller
             .active_compute()
-            .create_dataflow(instance, plan)
+            .create_dataflow(instance, plan.clone())
             .unwrap_or_terminate("dataflow creation cannot fail");
+
         self.initialize_compute_read_policies(
-            output_ids,
+            plan.export_ids().collect(),
             instance,
             Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
         )
         .await;
 
-        Ok(())
+        Ok(plan)
     }
 
     /// Finalizes a dataflow.
@@ -915,9 +916,10 @@ impl Coordinator {
         // this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
 
-        let df = DataflowDesc::new("".into());
-        let _: () = self.must_ship_dataflow(df.clone(), compute_instance).await;
+        let dataflow = || DataflowDesc::new("".into());
         let _: DataflowDescription<mz_compute_client::plan::Plan> =
-            self.must_finalize_dataflow(df, compute_instance);
+            self.must_ship_dataflow(dataflow(), compute_instance).await;
+        let _: DataflowDescription<mz_compute_client::plan::Plan> =
+            self.must_finalize_dataflow(dataflow(), compute_instance);
     }
 }

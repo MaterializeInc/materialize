@@ -1719,6 +1719,7 @@ impl CatalogState {
 #[derive(Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
+    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
 }
 
 impl Catalog {
@@ -1732,6 +1733,16 @@ impl Catalog {
         self.plans.optimized_plan_by_id.insert(id, plan);
     }
 
+    /// Set the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn set_physical_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<mz_compute_client::plan::Plan>,
+    ) {
+        self.plans.physical_plan_by_id.insert(id, plan);
+    }
+
     /// Try to get the optimized plan for the item identified by `id`.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn try_get_optimized_plan(
@@ -1741,12 +1752,22 @@ impl Catalog {
         self.plans.optimized_plan_by_id.get(id)
     }
 
+    /// Try to get the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn try_get_physical_plan(
+        &self,
+        id: &GlobalId,
+    ) -> Option<&DataflowDescription<mz_compute_client::plan::Plan>> {
+        self.plans.physical_plan_by_id.get(id)
+    }
+
     /// Drop all optimized and physical plans for the item identified by `id`.
     ///
     /// Ignore requests for non-existing plans.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn drop_plans(&mut self, id: GlobalId) {
         self.plans.optimized_plan_by_id.remove(&id);
+        self.plans.physical_plan_by_id.remove(&id);
     }
 }
 
@@ -3293,6 +3314,7 @@ impl Catalog {
             },
             plans: CatalogPlans {
                 optimized_plan_by_id: Default::default(),
+                physical_plan_by_id: Default::default(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),

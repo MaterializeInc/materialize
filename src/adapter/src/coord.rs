@@ -1494,7 +1494,8 @@ impl Coordinator {
                     let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
                     df.set_as_of(as_of);
 
-                    self.must_ship_dataflow(df, mview.cluster_id).await;
+                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                    self.catalog_mut().set_physical_plan(entry.id(), df);
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
