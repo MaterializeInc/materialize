@@ -4224,7 +4224,7 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 
 impl Value for UntrimmableColumns {
     fn type_name() -> String {
-        "UntrimmableStatsColumns".to_string()
+        "UntrimmableColumns".to_string()
     }
 
     fn parse<'a>(
