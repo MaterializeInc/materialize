@@ -9,7 +9,8 @@
 
 //! A client for replicas of a compute instance.
 
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
@@ -17,9 +18,11 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -27,9 +30,9 @@ use tracing::{debug, info, trace, warn};
 
 use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
-use crate::metrics::ReplicaMetrics;
+use crate::metrics::{ReplicaCollectionMetrics, ReplicaMetrics};
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
-use crate::protocol::response::ComputeResponse;
+use crate::protocol::response::{ComputeResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 type ReplicaClient<T> = Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>;
@@ -92,6 +95,7 @@ where
                 response_tx,
                 epoch,
                 metrics: metrics.clone(),
+                collections: Default::default(),
             }
             .run(),
         );
@@ -142,8 +146,10 @@ struct ReplicaTask<T> {
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ClusterStartupEpoch,
-    /// Replica metrics
+    /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// Tracked collection state.
+    collections: BTreeMap<GlobalId, CollectionState<T>>,
 }
 
 impl<T> ReplicaTask<T>
@@ -274,7 +280,7 @@ where
     }
 
     /// Update task state according to an observed command.
-    fn observe_command(&self, command: &ComputeCommand<T>) {
+    fn observe_command(&mut self, command: &ComputeCommand<T>) {
         trace!(
             replica = ?self.replica_id,
             command = ?command,
@@ -282,10 +288,29 @@ where
         );
 
         self.metrics.inner.command_queue_size.dec();
+
+        // Initialize or drop per-collection state.
+        match command {
+            ComputeCommand::CreateDataflow(dataflow) => {
+                for id in dataflow.export_ids() {
+                    let metrics = self.metrics.for_collection(id);
+                    let state = CollectionState {
+                        metrics,
+                        created_at: Instant::now(),
+                        as_of: dataflow.as_of.clone().unwrap(),
+                    };
+                    self.collections.insert(id, state);
+                }
+            }
+            ComputeCommand::AllowCompaction { id, frontier } if frontier.is_empty() => {
+                self.collections.remove(id);
+            }
+            _ => (),
+        }
     }
 
     /// Update task state according to an observed response.
-    fn observe_response(&self, response: &ComputeResponse<T>) {
+    fn observe_response(&mut self, response: &ComputeResponse<T>) {
         trace!(
             replica = ?self.replica_id,
             response = ?response,
@@ -293,5 +318,51 @@ where
         );
 
         self.metrics.inner.response_queue_size.inc();
+
+        // Apply changes to the `initial_output_duration_seconds` metric.
+        let collection_frontier = match response {
+            ComputeResponse::FrontierUpper { id, upper } => Some((id, upper.clone())),
+            ComputeResponse::SubscribeResponse(id, resp) => match resp {
+                SubscribeResponse::Batch(batch) => Some((id, batch.upper.clone())),
+                SubscribeResponse::DroppedAt(_) => Some((id, Antichain::new())),
+            },
+            _ => None,
+        };
+        if let Some((id, frontier)) = collection_frontier {
+            if let Some(state) = self.collections.get(id) {
+                state.observe_frontier_update(&frontier);
+            }
+        }
+    }
+}
+
+/// State tracked for a compute collection.
+struct CollectionState<T> {
+    /// Metrics tracked for this collection.
+    ///
+    /// If this is `None`, no metrics are collected.
+    metrics: Option<ReplicaCollectionMetrics>,
+    /// Time at which this collection was installed.
+    created_at: Instant,
+    /// Original as_of of this collection.
+    as_of: Antichain<T>,
+}
+
+impl<T: Timestamp> CollectionState<T> {
+    /// Apply the given frontier update to the collection metrics.
+    fn observe_frontier_update(&self, frontier: &Antichain<T>) {
+        let Some(metrics) = &self.metrics else { return };
+
+        // If the value of `initial_output_duration_seconds` is greater than 0, that means we have
+        // already observed the output before and have nothing else to do.
+        let initial_output_duration = metrics.initial_output_duration_seconds.get();
+        if initial_output_duration > 0. {
+            return;
+        }
+
+        if PartialOrder::less_than(&self.as_of, frontier) {
+            let duration = self.created_at.elapsed().as_secs_f64();
+            metrics.initial_output_duration_seconds.set(duration);
+        }
     }
 }
