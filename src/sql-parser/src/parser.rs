@@ -6700,7 +6700,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
         let stage = match self.parse_one_of_keywords(&[
@@ -6710,7 +6710,6 @@ impl<'a> Parser<'a> {
             OPTIMIZED,
             PHYSICAL,
             OPTIMIZER,
-            QUERY,
         ]) {
             Some(PLAN) => {
                 // EXPLAIN PLAN = EXPLAIN OPTIMIZED PLAN

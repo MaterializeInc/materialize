@@ -810,6 +810,8 @@ pub enum Explainee {
     MaterializedView(GlobalId),
     /// An existing index.
     Index(GlobalId),
+    /// The object to be explained is a one-off query and may or may not be
+    /// served using a dataflow.
     /// The object to be explained is a one-off query.
     ///
     /// THe query may be served using a dataflow or using a FastPathPlan.

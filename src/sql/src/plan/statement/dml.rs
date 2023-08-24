@@ -350,8 +350,6 @@ pub fn plan_explain_timestamp(
     };
 
     let raw_plan = {
-        // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-        // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         let query::PlannedQuery {
             expr: mut raw_plan,
             desc: _,

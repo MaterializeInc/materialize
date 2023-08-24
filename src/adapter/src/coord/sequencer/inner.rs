@@ -1131,8 +1131,13 @@ impl Coordinator {
         {
             Ok((df, df_metainfo)) => {
                 self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
+
+                self.catalog_mut().set_optimized_plan(id, df.clone());
                 self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
-                self.must_ship_dataflow(df, cluster_id).await;
+
+                let df = self.must_ship_dataflow(df, cluster_id).await;
+                self.catalog_mut().set_physical_plan(id, df);
+
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
@@ -2796,7 +2801,7 @@ impl Coordinator {
         } = plan;
 
         let Explainee::MaterializedView(id) = explainee else {
-            // This is currently asserted in the `sequence_explain` code that
+            // This is currently asserted in the `sequence_explain_plan` code that
             // calls this method.
             unreachable!()
         };
@@ -2891,7 +2896,7 @@ impl Coordinator {
         };
 
         let pipeline_result = {
-            self.explain_optimizer_pipeline(
+            self.explain_query_optimizer_pipeline(
                 raw_plan,
                 broken,
                 target_cluster,
@@ -2971,7 +2976,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn explain_optimizer_pipeline(
+    async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
@@ -3004,6 +3009,7 @@ impl Coordinator {
 
         let catalog = self.catalog();
         let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        // Set parameter values for optimizing one-shot SELECT queries.
         let explainee_id = GlobalId::Explain;
         let is_oneshot = true;
 

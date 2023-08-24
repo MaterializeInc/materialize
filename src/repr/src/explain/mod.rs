@@ -257,8 +257,8 @@ pub enum Explainee {
     ///
     /// This variant is deprecated and will be removed in #18089.
     Dataflow(GlobalId),
-    /// The object to be explained is a one-off query and may or may not served
-    /// using a dataflow.
+    /// The object to be explained is a one-off query and may or may not be
+    /// served using a dataflow.
     Query,
 }
 
