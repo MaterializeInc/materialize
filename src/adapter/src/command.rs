@@ -22,61 +22,55 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
-use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::role_id::RoleId;
 use mz_repr::statement_logging::StatementEndedExecutionReason;
-use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, WebhookValidation, WebhookValidationSecret};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
+use uuid::Uuid;
 
+use crate::catalog::Catalog;
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::util::Transmittable;
+use crate::AdapterNotice;
+
+#[derive(Debug)]
+pub struct CatalogSnapshot {
+    pub catalog: Arc<Catalog>,
+}
 
 #[derive(Debug)]
 pub enum Command {
+    CatalogSnapshot {
+        tx: oneshot::Sender<CatalogSnapshot>,
+    },
+
     Startup {
-        session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
-        tx: oneshot::Sender<Response<StartupResponse>>,
+        tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         /// keys of settings that were set on statup, and thus should not be
         /// overridden by defaults.
         set_setting_keys: Vec<String>,
-    },
-
-    Declare {
-        name: String,
-        stmt: Statement<Raw>,
-        inner_sql: String,
-        param_types: Vec<Option<ScalarType>>,
-        session: Session,
-        tx: oneshot::Sender<Response<ExecuteResponse>>,
-    },
-
-    Prepare {
-        name: String,
-        stmt: Option<Statement<Raw>>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
-    },
-
-    VerifyPreparedStatement {
-        name: String,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        user: User,
+        conn_id: ConnectionId,
+        secret_key: u32,
+        uuid: Uuid,
+        application_name: String,
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     },
 
     Execute {
@@ -140,8 +134,8 @@ pub enum Command {
     },
 
     Terminate {
-        session: Session,
-        tx: Option<oneshot::Sender<Response<()>>>,
+        conn_id: ConnectionId,
+        tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
     },
 
     /// Performs any cleanup and logging actions necessary for
@@ -159,40 +153,36 @@ pub enum Command {
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Startup { session, .. }
-            | Command::Declare { session, .. }
-            | Command::Prepare { session, .. }
-            | Command::VerifyPreparedStatement { session, .. }
-            | Command::Execute { session, .. }
+            Command::Execute { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. }
-            | Command::Terminate { session, .. } => Some(session),
+            | Command::SetSystemVars { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::Startup { .. }
+            | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
+            | Command::Terminate { .. }
             | Command::RetireExecute { .. } => None,
         }
     }
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Startup { session, .. }
-            | Command::Declare { session, .. }
-            | Command::Prepare { session, .. }
-            | Command::VerifyPreparedStatement { session, .. }
-            | Command::Execute { session, .. }
+            Command::Execute { session, .. }
             | Command::Commit { session, .. }
             | Command::DumpCatalog { session, .. }
             | Command::CopyRows { session, .. }
             | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. }
-            | Command::Terminate { session, .. } => Some(session),
+            | Command::SetSystemVars { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::Startup { .. }
+            | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
+            | Command::Terminate { .. }
             | Command::RetireExecute { .. } => None,
         }
     }
@@ -209,8 +199,11 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
-    /// Notifications associated with session startup.
-    pub messages: Vec<StartupMessage>,
+    /// RoleId for the user.
+    pub role_id: RoleId,
+    /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
+    pub set_vars: Vec<(String, String)>,
+    pub catalog: Arc<Catalog>,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`
@@ -219,42 +212,6 @@ impl Transmittable for StartupResponse {
     type Allowed = bool;
     fn to_allowed(&self) -> Self::Allowed {
         true
-    }
-}
-
-/// Messages in a [`StartupResponse`].
-#[derive(Debug)]
-pub enum StartupMessage {
-    /// The database specified in the initial session does not exist.
-    UnknownSessionDatabase(String),
-}
-
-impl StartupMessage {
-    /// Reports additional details about the error, if any are available.
-    pub fn detail(&self) -> Option<String> {
-        None
-    }
-
-    /// Reports a hint for the user about how the error could be fixed.
-    pub fn hint(&self) -> Option<String> {
-        match self {
-            StartupMessage::UnknownSessionDatabase(_) => Some(
-                "Create the database with CREATE DATABASE \
-                 or pick an extant database with SET DATABASE = name. \
-                 List available databases with SHOW DATABASES."
-                    .into(),
-            ),
-        }
-    }
-}
-
-impl fmt::Display for StartupMessage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            StartupMessage::UnknownSessionDatabase(name) => {
-                write!(f, "session database {} does not exist", name.quoted())
-            }
-        }
     }
 }
 

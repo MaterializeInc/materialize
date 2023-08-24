@@ -473,7 +473,7 @@ impl AuthedClient {
                 set_setting_keys.push(key);
             }
         }
-        let (adapter_client, _) = adapter_client.startup(session, set_setting_keys).await?;
+        let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
         Ok(AuthedClient {
             client: adapter_client,
             drop_connection,

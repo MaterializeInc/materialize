@@ -106,7 +106,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
@@ -1635,7 +1635,7 @@ impl CatalogState {
     fn add_to_audit_log(
         &self,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
@@ -5147,11 +5147,16 @@ impl Catalog {
             .map(Op::DropObject)
             .collect()
     }
+
+    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
+    /// Returns Ok if conn_id's temp schema does not exist.
     pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        if !self.state.temporary_schemas[conn_id].items.is_empty() {
+        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
+            return Ok(());
+        };
+        if !schema.items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
-        self.state.temporary_schemas.remove(conn_id);
         Ok(())
     }
 
@@ -5395,7 +5400,7 @@ impl Catalog {
     pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         ops: Vec<Op>,
         f: F,
     ) -> Result<TransactionResult<R>, AdapterError>
@@ -5476,7 +5481,7 @@ impl Catalog {
     #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,

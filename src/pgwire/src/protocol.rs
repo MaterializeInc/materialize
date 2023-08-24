@@ -310,8 +310,8 @@ where
     conn.flush().await?;
 
     // Register session with adapter.
-    let (adapter_client, startup) = match adapter_client.startup(session, setting_keys).await {
-        Ok(startup) => startup,
+    let mut adapter_client = match adapter_client.startup(session, setting_keys).await {
+        Ok(adapter_client) => adapter_client,
         Err(e) => {
             return conn
                 .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
@@ -323,8 +323,8 @@ where
     // NoticeResponse messages can be sent at any time
     // (https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-ASYNC),
     // so it is within spec to send them after the initial ReadyForQuery.
-    for startup_message in startup.messages {
-        buf.push(ErrorResponse::from_startup_message(startup_message).into());
+    for notice in adapter_client.session().drain_notices() {
+        buf.push(ErrorResponse::from_adapter_notice(notice).into());
     }
     conn.send_all(buf).await?;
     conn.flush().await?;

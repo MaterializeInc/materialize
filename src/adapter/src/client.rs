@@ -28,9 +28,10 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
-use mz_sql::catalog::EnvironmentId;
+use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
+use mz_sql::session::vars::VarInput;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -38,16 +39,17 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
 
+use crate::catalog::Catalog;
 use crate::command::{
-    AppendWebhookResponse, Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse,
-    Response, StartupResponse,
+    AppendWebhookResponse, Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse,
+    GetVariablesResponse, Response,
 };
-use crate::coord::ExecuteContextExtra;
+use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
-use crate::PeekResponseUnary;
+use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
 
 /// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
 ///
@@ -134,7 +136,7 @@ impl Client {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, conn_id, user, (self.now)())
+        Session::new(self.build_info, conn_id, user)
     }
 
     /// Upgrades this client to a session client.
@@ -152,7 +154,7 @@ impl Client {
         // keys of settings that were set on statup, and thus should not be
         // overridden by defaults.
         set_setting_keys: Vec<String>,
-    ) -> Result<(SessionClient, StartupResponse), AdapterError> {
+    ) -> Result<SessionClient, AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -161,6 +163,12 @@ impl Client {
         // an in-progress statement.
         let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
+        let user = session.user().clone();
+        let conn_id = session.conn_id().clone();
+        let secret_key = session.secret_key();
+        let uuid = session.uuid();
+        let application_name = session.application_name().into();
+        let notice_tx = session.retain_notice_transmitter();
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
@@ -171,23 +179,56 @@ impl Client {
             segment_client: self.segment_client.clone(),
         };
         let response = client
-            .send(|tx, session| Command::Startup {
-                session,
+            .send_without_session(|tx| Command::Startup {
                 cancel_tx,
                 tx,
                 set_setting_keys,
+                user,
+                conn_id,
+                secret_key,
+                uuid,
+                application_name,
+                notice_tx,
             })
             .await;
-        match response {
-            Ok(response) => Ok((client, response)),
+        let response = match response {
+            Ok(response) => response,
             Err(e) => {
                 // When startup fails, no need to call terminate. Remove the
                 // session from the client to sidestep the panic in the `Drop`
                 // implementation.
                 client.session.take();
-                Err(e)
+                return Err(e);
             }
+        };
+
+        let StartupResponse {
+            role_id,
+            set_vars,
+            catalog,
+        } = response;
+        client.session().initialize_role_metadata(role_id);
+        for (name, val) in set_vars {
+            client
+                .session()
+                .vars_mut()
+                .set(None, &name, VarInput::Flat(&val), false)
+                .expect("constrained to be valid");
         }
+        client
+            .session()
+            .vars_mut()
+            .end_transaction(EndTransactionAction::Commit);
+
+        let catalog = catalog.for_session(client.session());
+        if catalog.active_database().is_none() {
+            let db = client.session().vars().database().into();
+            client
+                .session()
+                .add_notice(AdapterNotice::UnknownSessionDatabase(db));
+        }
+
+        Ok(client)
     }
 
     /// Cancels the query currently running on the specified connection.
@@ -204,7 +245,7 @@ impl Client {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(conn_id, SUPPORT_USER.clone());
-        let (mut session_client, _) = self.startup(session, vec![]).await?;
+        let mut session_client = self.startup(session, vec![]).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;
@@ -363,12 +404,8 @@ impl SessionClient {
         &mut self,
         name: &str,
     ) -> Result<&PreparedStatement, AdapterError> {
-        self.send(|tx, session| Command::VerifyPreparedStatement {
-            name: name.to_string(),
-            session,
-            tx,
-        })
-        .await?;
+        let catalog = self.catalog_snapshot().await;
+        Coordinator::verify_prepared_statement(&catalog, self.session(), name)?;
         Ok(self
             .session()
             .get_prepared_statement_unverified(name)
@@ -386,15 +423,31 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Prepare {
+        let catalog = self.catalog_snapshot().await;
+
+        // Note: This failpoint is used to simulate a request outliving the external connection
+        // that made it.
+        let mut async_pause = false;
+        (|| {
+            fail::fail_point!("async_prepare", |val| {
+                async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
+            });
+        })();
+        if async_pause {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        };
+
+        let desc = Coordinator::describe(&catalog, self.session(), stmt.clone(), param_types)?;
+        let now = self.now();
+        self.session().set_prepared_statement(
             name,
             stmt,
             sql,
-            param_types,
-            session,
-            tx,
-        })
-        .await
+            desc,
+            catalog.transient_revision(),
+            now,
+        );
+        Ok(())
     }
 
     /// Binds a statement to a portal.
@@ -405,16 +458,32 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Declare {
+        let catalog = self.catalog_snapshot().await;
+        self.declare_inner(&catalog, name, stmt, sql, param_types)
+    }
+
+    fn declare_inner(
+        &mut self,
+        catalog: &Catalog,
+        name: String,
+        stmt: Statement<Raw>,
+        sql: String,
+        param_types: Vec<Option<ScalarType>>,
+    ) -> Result<(), AdapterError> {
+        let desc = Coordinator::describe(catalog, self.session(), Some(stmt.clone()), param_types)?;
+        let params = vec![];
+        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let logging = self.session().mint_logging(sql);
+        self.session().set_portal(
             name,
-            stmt,
-            inner_sql: sql,
-            param_types,
-            session,
-            tx,
-        })
-        .await
-        .map(|_| ())
+            desc,
+            Some(stmt),
+            logging,
+            params,
+            result_formats,
+            catalog.transient_revision(),
+        )?;
+        Ok(())
     }
 
     /// Executes a previously-bound portal.
@@ -488,6 +557,14 @@ impl SessionClient {
         self.session = Some(session);
     }
 
+    /// Fetches the catalog.
+    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+        let CatalogSnapshot { catalog } = self
+            .send_without_session(|tx| Command::CatalogSnapshot { tx })
+            .await;
+        catalog
+    }
+
     /// Dumps the catalog to a JSON string.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
@@ -503,7 +580,7 @@ impl SessionClient {
     ) {
         if !data.is_trivial() {
             let cmd = Command::RetireExecute { data, reason };
-            self.inner_mut().send(cmd);
+            self.inner().send(cmd);
         }
     }
 
@@ -547,9 +624,10 @@ impl SessionClient {
 
     /// Terminates the client session.
     pub async fn terminate(&mut self) {
+        let conn_id = self.session().conn_id().clone();
         let res = self
-            .send(|tx, session| Command::Terminate {
-                session,
+            .send_without_session(|tx| Command::Terminate {
+                conn_id,
                 tx: Some(tx),
             })
             .await;
@@ -571,9 +649,13 @@ impl SessionClient {
         self.inner.as_ref().expect("inner invariant violated")
     }
 
-    /// Returns a mutable reference to the inner client.
-    pub fn inner_mut(&mut self) -> &mut Client {
-        self.inner.as_mut().expect("inner invariant violated")
+    async fn send_without_session<T, F>(&self, f: F) -> T
+    where
+        F: FnOnce(oneshot::Sender<T>) -> Command,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.inner().send(f(tx));
+        rx.await.expect("sender dropped")
     }
 
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
@@ -597,18 +679,16 @@ impl SessionClient {
         let name_hint = ApplicationNameHint::from_str(application_name);
         let (tx, mut rx) = oneshot::channel();
         let conn_id = session.conn_id().clone();
-        self.inner_mut().send({
+        self.inner().send({
             let cmd = f(tx, session);
             // Measure the success and error rate of certain commands:
             // - declare reports success of SQL statement planning
             // - execute reports success of dataflow execution
             match cmd {
-                Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::AppendWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
-                | Command::Prepare { .. }
-                | Command::VerifyPreparedStatement { .. }
+                | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }
@@ -695,7 +775,10 @@ impl Drop for SessionClient {
             // We may not have a connection to the Coordinator if the session was
             // prematurely terminated, for example due to a timeout.
             if let Some(inner) = &self.inner {
-                inner.send(Command::Terminate { session, tx: None })
+                inner.send(Command::Terminate {
+                    conn_id: session.conn_id().clone(),
+                    tx: None,
+                })
             }
         }
     }

@@ -337,7 +337,11 @@ impl Coordinator {
     }
 
     pub(super) async fn create_cluster(&mut self, cluster_id: ClusterId) {
-        let (catalog, controller) = self.catalog_and_controller_mut();
+        let Coordinator {
+            catalog,
+            controller,
+            ..
+        } = self;
         let cluster = catalog.get_cluster(cluster_id);
         let cluster_id = cluster.id;
         let introspection_source_ids: Vec<_> =
