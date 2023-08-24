@@ -111,7 +111,7 @@ def run_with_concurrency(
     for measurement in measurements:
         df_detail = pd.concat([df_detail, pd.DataFrame([measurement])])
     print("Best and worst individual measurements:")
-    print(df_detail)
+    print(df_detail.sort_values(by=["wallclock"]))
 
     print(
         f"concurrency: {concurrency}; wallclock_total: {wallclock_total}; tps = {count/wallclock_total}"
@@ -171,6 +171,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--target",
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
+        action="append",
+        default=["HEAD"],
     )
 
     parser.add_argument(
@@ -203,7 +205,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         metavar="COUNT",
         type=int,
         default=2048,
-        help="Number of individual operations to benchmark.",
+        help="Number of individual operations to benchmark",
     )
 
     parser.add_argument(
@@ -222,31 +224,37 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--materialize-url", type=str, help="URL to connect to for remote targets"
+        "--materialize-url",
+        type=str,
+        help="URL to connect to for remote targets",
+        action="append",
     )
 
     parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER to")
 
     args = parser.parse_args()
 
-    if args.materialize_url is not None and args.target != "remote":
+    if args.materialize_url is not None and "remote" not in args.target:
         assert False, "--materialize_url requires --target=remote"
 
-    endpoint: Optional[Endpoint] = None
-    if args.target == "local":
-        endpoint = MaterializeLocal()
-    if args.target == "remote":
-        endpoint = MaterializeRemote(materialize_url=args.materialize_url)
-    elif args.target == "postgres":
-        endpoint = PostgresContainer(composition=c)
-    elif args.target == "HEAD" or args.target is None:
-        endpoint = MaterializeContainer(composition=c)
-    else:
-        endpoint = MaterializeContainer(
-            composition=c, image=f"materialize/materialized:{args.target}"
-        )
+    endpoints: list[Endpoint] = []
+    for i, target in enumerate(args.target):
+        endpoint: Optional[Endpoint] = None
+        if target == "local":
+            endpoint = MaterializeLocal()
+        if target == "remote":
+            endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
+        elif target == "postgres":
+            endpoint = PostgresContainer(composition=c)
+        elif target == "HEAD":
+            endpoint = MaterializeContainer(composition=c)
+        else:
+            endpoint = MaterializeContainer(
+                composition=c, image=f"materialize/materialized:{target}"
+            )
+        assert endpoint is not None
 
-    assert endpoint is not None
+        endpoints.append(endpoint)
 
     workloads = (
         [globals()[workload] for workload in args.workload]
@@ -266,7 +274,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for workload in workloads:
         assert issubclass(workload, Workload), f"{workload} is not a Workload"
-        run_workload(c, args, endpoint, schema, workload())
+        for endpoint in endpoints:
+            run_workload(c, args, endpoint, schema, workload())
 
 
 def workflow_lab(c: Composition) -> None:
