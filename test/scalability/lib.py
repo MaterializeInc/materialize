@@ -21,9 +21,17 @@ def plotit(csv_file_name: str) -> None:
     fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
     for i, target in enumerate(targets):
         target_sha = target.split(" ")[1].strip("()")
-        target_comment = subprocess.check_output(
-            ["git", "log", "-1", "--pretty=format:%s", target_sha], text=True
-        )
+
+        target_comment = None
+        try:
+            target_comment = subprocess.check_output(
+                ["git", "log", "-1", "--pretty=format:%s", target_sha], text=True
+            )
+        except subprocess.CalledProcessError:
+            # Sometimes mz_version() will report a Git SHA that is not available
+            # in the current repository
+            pass
+
         legend.append(f"{target} - {target_comment}")
 
         df = pd.read_csv(f"results/{target}/{csv_file_name}.csv")
