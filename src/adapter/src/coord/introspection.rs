@@ -160,7 +160,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     if (has_dependencies && valid_dependencies)
         || (!has_dependencies && !could_run_expensive_function)
     {
-        tracing::info!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
+        tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
         // If we're running on a different cluster than the active one, notify the user.
         if MZ_INTROSPECTION_CLUSTER.name != session.vars().cluster() {

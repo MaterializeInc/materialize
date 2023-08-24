@@ -2752,13 +2752,7 @@ impl Coordinator {
         let cluster_id = {
             let catalog = self.catalog();
             let cluster = match explainee {
-                Explainee::Dataflow(_) => {
-                    if target_cluster != TargetCluster::Active {
-                        coord_bail!("Explaining a dataflow was autorouted to the introspection cluster \
-                        but we can't satisfy that request since a dataflow lives on a specific cluster");
-                    }
-                    catalog.active_cluster(ctx.session())?
-                }
+                Explainee::Dataflow(_) => catalog.active_cluster(ctx.session())?,
                 Explainee::Query => {
                     catalog.resolve_target_cluster(target_cluster, ctx.session())?
                 }
