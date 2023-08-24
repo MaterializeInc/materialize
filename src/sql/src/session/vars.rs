@@ -915,7 +915,7 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
 /// `storage_dataflow_max_inflight_bytes_disk_only` flag
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes"),
-    value: &Some(268435456),
+    value: &Some(256 * 1024 * 1024),
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   storage dataflows. Defaults to backpressure enabled (Materialize).",
     internal: true,
