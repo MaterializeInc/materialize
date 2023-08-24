@@ -64,8 +64,8 @@ def workflow_default(c: Composition) -> None:
     # Create the `mzdata/prometheus|tempo` directories that will be bind mounted into
     # the containers before invoking Docker Compose, since otherwise the Docker daemon
     # will create the directory as root, and `environmentd` won't be able to write to them.
-    (ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
-    (ROOT / "mzdata" / "tempo").mkdir(parents=True, exist_ok=True)
+    (MZ_ROOT / "mzdata" / "prometheus").mkdir(parents=True, exist_ok=True)
+    (MZ_ROOT / "mzdata" / "tempo").mkdir(parents=True, exist_ok=True)
     c.up()
     print(f"Prometheus running at http://localhost:{c.default_port('prometheus')}")
     print(f"Tempo running at http://localhost:{c.default_port('tempo')}")

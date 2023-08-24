@@ -146,8 +146,6 @@ _automatically_ collected and exported to analysis tools with _no additional wor
 - For local setup, use the instructions here:
 <https://github.com/MaterializeInc/materialize/tree/main/misc/monitoring> to setup a local OpenTelemetry collector
   (Tempo) and UI (Grafana) to view traces.
-- TODO(guswynn): cloud honeycomb setup when its available
-- TODO(guswynn): link to demo video
 
 ### Span visualization
 
