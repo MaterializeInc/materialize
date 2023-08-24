@@ -1116,7 +1116,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn untrimmable_columns() {
         let untrimmable = UntrimmableColumns {
             equals: vec!["abc".to_string(), "def".to_string()],
