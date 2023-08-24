@@ -39,7 +39,7 @@ use crate::internal::encoding::UntypedState;
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
+use crate::internal::state::{ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
@@ -225,10 +225,12 @@ pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serializ
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
-    let state = state_versions
-        .fetch_current_state::<u64>(&shard_id, versions.0.clone())
-        .await
-        .into_proto();
+    // let state = state_versions
+    //     .fetch_current_state::<u64>(&shard_id, versions.0.clone())
+    //     .await
+    //     .into_proto();
+    // WIP
+    let state = "abc";
     Ok(state)
 }
 
@@ -253,7 +255,7 @@ pub async fn fetch_state_rollup(
         .get(&rollup_key.complete(&shard_id))
         .await?
         .expect("fetching the specified state rollup");
-    let proto = ProtoStateRollup::decode(rollup_buf).expect("invalid encoded state");
+    let proto = ProtoRollup::decode(rollup_buf).expect("invalid encoded state");
     Ok(proto)
 }
 
@@ -286,7 +288,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
             .await
             .unwrap();
         if let Some(rollup_buf) = rollup_buf {
-            let proto = ProtoStateRollup::decode(rollup_buf).expect("invalid encoded state");
+            let proto = ProtoRollup::decode(rollup_buf).expect("invalid encoded state");
             rollup_states.insert(key.to_string(), proto);
         }
     }
@@ -301,14 +303,15 @@ pub async fn fetch_state_diffs(
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
 
-    let mut live_states = vec![];
+    // WIP
+    let mut live_states: Vec<&str> = vec![];
     let mut state_iter = state_versions
         .fetch_all_live_states::<u64>(shard_id)
         .await
         .expect("requested shard should exist")
         .check_ts_codec()?;
     while let Some(_) = state_iter.next(|_| {}) {
-        live_states.push(state_iter.into_proto());
+        // live_states.push(state_iter.into_proto());
     }
 
     Ok(live_states)

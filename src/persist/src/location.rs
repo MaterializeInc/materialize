@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
+use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -44,12 +45,6 @@ pub struct SeqNo(pub u64);
 impl std::fmt::Display for SeqNo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "v{}", self.0)
-    }
-}
-
-impl timely::PartialOrder for SeqNo {
-    fn less_equal(&self, other: &Self) -> bool {
-        self <= other
     }
 }
 
@@ -86,6 +81,50 @@ impl RustType<u64> for SeqNo {
 
     fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
         Ok(SeqNo(proto))
+    }
+}
+
+impl Default for SeqNo {
+    fn default() -> Self {
+        Self::minimum()
+    }
+}
+
+impl timely::PartialOrder for SeqNo {
+    fn less_equal(&self, other: &Self) -> bool {
+        self <= other
+    }
+}
+
+impl timely::progress::Timestamp for SeqNo {
+    type Summary = SeqNo;
+
+    fn minimum() -> Self {
+        SeqNo::minimum()
+    }
+}
+
+impl timely::progress::PathSummary<SeqNo> for SeqNo {
+    fn results_in(&self, src: &SeqNo) -> Option<SeqNo> {
+        Some(SeqNo(self.0.checked_add(src.0)?))
+    }
+
+    fn followed_by(&self, other: &Self) -> Option<Self> {
+        Some(SeqNo(self.0.checked_add(other.0)?))
+    }
+}
+
+impl Codec64 for SeqNo {
+    fn codec_name() -> String {
+        "seqno".to_string()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        SeqNo(u64::from_le_bytes(buf))
     }
 }
 

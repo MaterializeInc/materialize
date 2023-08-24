@@ -78,7 +78,12 @@ message ProtoHandleDebugState {
     string purpose = 2;
 }
 
-message ProtoStateRollup {
+message ProtoInlinedDiffs {
+    ProtoU64Description description = 1;
+    repeated bytes diffs = 2;
+}
+
+message ProtoRollup {
     string applier_version = 11;
 
     string shard_id = 1;
@@ -96,6 +101,8 @@ message ProtoStateRollup {
     map<string, ProtoLeasedReaderState> leased_readers = 8;
     map<string, ProtoCriticalReaderState> critical_readers = 13;
     map<string, ProtoWriterState> writers = 9;
+
+    ProtoInlinedDiffs diffs = 17;
 
     // MIGRATION: We previously stored rollups as a `SeqNo -> string Key` map,
     // but now the value is a `struct HollowRollup`.

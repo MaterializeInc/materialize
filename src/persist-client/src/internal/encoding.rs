@@ -39,9 +39,9 @@ use crate::internal::state::{
     CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
     IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
-    ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoRollup, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -571,80 +571,7 @@ where
     Ok(())
 }
 
-impl<K, V, T, D> TypedState<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Codec64,
-{
-    pub fn encode<B>(&self, buf: &mut B)
-    where
-        B: bytes::BufMut,
-    {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    pub(crate) fn into_proto(&self) -> ProtoStateRollup {
-        self.state
-            .into_proto(K::codec_name(), V::codec_name(), D::codec_name())
-    }
-}
-
-impl<T> State<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    pub(crate) fn into_proto(
-        &self,
-        key_codec: String,
-        val_codec: String,
-        diff_codec: String,
-    ) -> ProtoStateRollup {
-        ProtoStateRollup {
-            applier_version: self.applier_version.to_string(),
-            shard_id: self.shard_id.into_proto(),
-            seqno: self.seqno.into_proto(),
-            walltime_ms: self.walltime_ms.into_proto(),
-            hostname: self.hostname.into_proto(),
-            key_codec,
-            val_codec,
-            ts_codec: T::codec_name(),
-            diff_codec,
-            last_gc_req: self.collections.last_gc_req.into_proto(),
-            rollups: self
-                .collections
-                .rollups
-                .iter()
-                .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
-                .collect(),
-            deprecated_rollups: Default::default(),
-            leased_readers: self
-                .collections
-                .leased_readers
-                .iter()
-                .map(|(id, state)| (id.into_proto(), state.into_proto()))
-                .collect(),
-            critical_readers: self
-                .collections
-                .critical_readers
-                .iter()
-                .map(|(id, state)| (id.into_proto(), state.into_proto()))
-                .collect(),
-            writers: self
-                .collections
-                .writers
-                .iter()
-                .map(|(id, state)| (id.into_proto(), state.into_proto()))
-                .collect(),
-            trace: Some(self.collections.trace.into_proto()),
-        }
-    }
-}
-
-/// A decoded version of [ProtoStateRollup] for which we have not yet checked
+/// A decoded version of [ProtoRollup::state] for which we have not yet checked
 /// that codecs match the ones in durable state.
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
@@ -733,28 +660,121 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
     }
 
     pub fn decode(build_version: &Version, buf: impl Buf) -> Self {
-        let proto = ProtoStateRollup::decode(buf)
+        let proto = ProtoRollup::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        let state = Self::from_proto(proto).expect("internal error: invalid encoded state");
+        let state = StateRollup::from_proto(proto)
+            .expect("internal error: invalid encoded state")
+            .state;
         check_applier_version(build_version, &state.state.applier_version);
         state
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedState<T> {
-    fn into_proto(&self) -> ProtoStateRollup {
-        self.state.into_proto(
-            self.key_codec.clone(),
-            self.val_codec.clone(),
-            self.diff_codec.clone(),
-        )
+#[derive(Debug)]
+struct StateRollup<T> {
+    pub(crate) state: UntypedState<T>,
+    pub(crate) diffs: Option<InlinedDiffs>,
+}
+
+#[derive(Debug)]
+struct InlinedDiffs {
+    description: Description<SeqNo>,
+    diffs: Vec<VersionedData>,
+}
+
+impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
+    fn into_proto(&self) -> ProtoInlinedDiffs {
+        ProtoInlinedDiffs {
+            description: Some(self.description.into_proto()),
+            diffs: self
+                .diffs
+                .iter()
+                // cloning a Bytes is cheap
+                .map(|x| x.data.clone().into())
+                .collect::<Vec<_>>(),
+        }
     }
 
-    fn from_proto(x: ProtoStateRollup) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoInlinedDiffs) -> Result<Self, TryFromProtoError> {
+        let description: Description<SeqNo> = proto.description.into_rust_if_some("description")?;
+        let mut seqno = description.lower().first().expect("lower seqno").clone();
+        let mut diffs = Vec::with_capacity(proto.diffs.len());
+
+        for data in proto.diffs {
+            diffs.push(VersionedData {
+                seqno,
+                data: Bytes::from(data),
+            });
+            seqno = seqno.next();
+        }
+
+        assert_eq!(
+            seqno.next(),
+            *description.upper().first().expect("upper seqno")
+        );
+
+        Ok(Self { description, diffs })
+    }
+}
+
+impl<T> StateRollup<T> {}
+
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for StateRollup<T> {
+    fn into_proto(&self) -> ProtoRollup {
+        ProtoRollup {
+            applier_version: self.state.state.applier_version.to_string(),
+            shard_id: self.state.state.shard_id.into_proto(),
+            seqno: self.state.state.seqno.into_proto(),
+            walltime_ms: self.state.state.walltime_ms.into_proto(),
+            hostname: self.state.state.hostname.into_proto(),
+            key_codec: self.state.key_codec.into_proto(),
+            val_codec: self.state.val_codec.into_proto(),
+            ts_codec: T::codec_name(),
+            diff_codec: self.state.diff_codec.into_proto(),
+            last_gc_req: self.state.state.collections.last_gc_req.into_proto(),
+            rollups: self
+                .state
+                .state
+                .collections
+                .rollups
+                .iter()
+                .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
+                .collect(),
+            deprecated_rollups: Default::default(),
+            leased_readers: self
+                .state
+                .state
+                .collections
+                .leased_readers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            critical_readers: self
+                .state
+                .state
+                .collections
+                .critical_readers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            writers: self
+                .state
+                .state
+                .collections
+                .writers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            trace: Some(self.state.state.collections.trace.into_proto()),
+            diffs: self.diffs.as_ref().map(|x| x.into_proto()),
+        }
+    }
+
+    fn from_proto(x: ProtoRollup) -> Result<Self, TryFromProtoError> {
         let applier_version = if x.applier_version.is_empty() {
             // Backward compatibility with versions of ProtoState before we set
             // this field: if it's missing (empty), assume an infinitely old
@@ -810,12 +830,15 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedSta
             hostname: x.hostname,
             collections,
         };
-        Ok(UntypedState {
-            state,
-            key_codec: x.key_codec.into_rust()?,
-            val_codec: x.val_codec.into_rust()?,
-            ts_codec: x.ts_codec.into_rust()?,
-            diff_codec: x.diff_codec.into_rust()?,
+        Ok(StateRollup {
+            state: UntypedState {
+                state,
+                key_codec: x.key_codec.into_rust()?,
+                val_codec: x.val_codec.into_rust()?,
+                ts_codec: x.ts_codec.into_rust()?,
+                diff_codec: x.diff_codec.into_rust()?,
+            },
+            diffs: x.diffs.into_rust_if_some("diffs").ok(),
         })
     }
 }

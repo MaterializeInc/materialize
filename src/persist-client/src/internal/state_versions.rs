@@ -643,7 +643,8 @@ impl StateVersions {
     {
         let buf = self.metrics.codecs.state.encode(|| {
             let mut buf = Vec::new();
-            state.encode(&mut buf);
+            // WIP: replace
+            // state.encode(&mut buf);
             Bytes::from(buf)
         });
         shard_metrics
@@ -902,14 +903,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
 
     pub fn state(&self) -> &State<T> {
         &self.state
-    }
-
-    pub fn into_proto(&self) -> impl serde::Serialize {
-        self.state.into_proto(
-            self.key_codec.clone(),
-            self.val_codec.clone(),
-            self.diff_codec.clone(),
-        )
     }
 }
 
