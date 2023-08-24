@@ -60,9 +60,10 @@ interval, the next number in the sequence is emitted.
 
 ### Clock
 
-The clock load generator produces the currrent value of the system time at every
-tick interval. It always updates a singleton value, rather than appending new
-values.
+The clock load generator produces the currrent value of the system
+time at every tick interval, expressed in milliseconds since midnight
+UTC on January 1st, 1970. It always updates a singleton value, rather
+than appending new values.
 
 ### Auction
 
