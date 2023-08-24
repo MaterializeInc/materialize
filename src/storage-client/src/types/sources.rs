@@ -62,9 +62,9 @@ include!(concat!(
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
+pub struct IngestionDescription<S = ()> {
     /// The source description
-    pub desc: SourceDesc<C>,
+    pub desc: SourceDesc,
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
@@ -1653,15 +1653,15 @@ impl RustType<ProtoCompression> for Compression {
 
 /// An external source of updates for a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceDesc<C = GenericSourceConnection> {
-    pub connection: C,
+pub struct SourceDesc {
+    pub connection: GenericSourceConnection,
     pub encoding: encoding::SourceDataEncoding,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
     pub timestamp_interval: Duration,
 }
 
-impl Arbitrary for SourceDesc<GenericSourceConnection> {
+impl Arbitrary for SourceDesc {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -1686,7 +1686,7 @@ impl Arbitrary for SourceDesc<GenericSourceConnection> {
     }
 }
 
-impl RustType<ProtoSourceDesc> for SourceDesc<GenericSourceConnection> {
+impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
@@ -1716,7 +1716,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc<GenericSourceConnection> {
     }
 }
 
-impl SourceDesc<GenericSourceConnection> {
+impl SourceDesc {
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1782,7 +1782,7 @@ impl SourceDesc<GenericSourceConnection> {
         for compatible in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "SourceDesc<GenericSourceConnection> incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "SourceDesc incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
