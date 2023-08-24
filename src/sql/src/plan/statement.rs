@@ -205,7 +205,8 @@ pub fn describe(
         // DML statements.
         Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
-        Statement::Explain(stmt) => dml::describe_explain(&scx, stmt)?,
+        Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
+        Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
         Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
         Statement::Subscribe(stmt) => dml::describe_subscribe(&scx, stmt)?,
@@ -332,7 +333,8 @@ pub fn plan(
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
-        Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
+        Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
+        Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
         Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, None),

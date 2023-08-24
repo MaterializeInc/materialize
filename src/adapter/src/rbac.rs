@@ -284,7 +284,8 @@ pub fn generate_required_role_membership(
         | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::CopyFrom(_)
-        | Plan::Explain(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainTimestamp(_)
         | Plan::Insert(_)
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterReplicaRename(_)
@@ -350,7 +351,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowCreate(_)
         | Plan::ShowColumns(_)
         | Plan::CopyFrom(_)
-        | Plan::Explain(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainTimestamp(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterSystemSet(_)
@@ -800,14 +802,16 @@ fn generate_required_privileges(
             }
             privileges
         }
-        Plan::Explain(plan::ExplainPlan {
-            raw_plan: _,
-            row_set_finishing: _,
+        Plan::ExplainPlan(plan::ExplainPlanPlan {
             stage: _,
             format: _,
             config: _,
             no_errors: _,
             explainee: _,
+        }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
+        Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
+            format: _,
+            raw_plan: _,
         }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
         Plan::CopyFrom(plan::CopyFromPlan {
             id,

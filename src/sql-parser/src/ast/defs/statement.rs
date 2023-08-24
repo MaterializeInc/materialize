@@ -86,7 +86,8 @@ pub enum Statement<T: AstInfo> {
     Commit(CommitStatement),
     Rollback(RollbackStatement),
     Subscribe(SubscribeStatement<T>),
-    Explain(ExplainStatement<T>),
+    ExplainPlan(ExplainPlanStatement<T>),
+    ExplainTimestamp(ExplainTimestampStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -151,7 +152,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Commit(stmt) => f.write_node(stmt),
             Statement::Rollback(stmt) => f.write_node(stmt),
             Statement::Subscribe(stmt) => f.write_node(stmt),
-            Statement::Explain(stmt) => f.write_node(stmt),
+            Statement::ExplainPlan(stmt) => f.write_node(stmt),
+            Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
@@ -219,7 +221,8 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Commit => "commit",
         StatementKind::Rollback => "rollback",
         StatementKind::Subscribe => "subscribe",
-        StatementKind::Explain => "explain",
+        StatementKind::ExplainPlan => "explain_plan",
+        StatementKind::ExplainTimestamp => "explain_timestamp",
         StatementKind::Declare => "declare",
         StatementKind::Fetch => "fetch",
         StatementKind::Close => "close",
@@ -2631,7 +2634,7 @@ impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {
 impl_display_t!(SubscribeRelation);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainStatement<T: AstInfo> {
+pub struct ExplainPlanStatement<T: AstInfo> {
     pub stage: ExplainStage,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
@@ -2639,7 +2642,7 @@ pub struct ExplainStatement<T: AstInfo> {
     pub explainee: Explainee<T>,
 }
 
-impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
+impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         f.write_node(&self.stage);
@@ -2657,7 +2660,23 @@ impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
         f.write_node(&self.explainee);
     }
 }
-impl_display_t!(ExplainStatement);
+impl_display_t!(ExplainPlanStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainTimestampStatement<T: AstInfo> {
+    pub format: ExplainFormat,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN TIMESTAMP AS ");
+        f.write_node(&self.format);
+        f.write_str(" FOR ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(ExplainTimestampStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsertSource<T: AstInfo> {
@@ -2933,8 +2952,7 @@ impl<T: AstInfo> AstDisplay for Assignment<T> {
 }
 impl_display_t!(Assignment);
 
-/// Specifies what [Statement::Explain] is actually explaining
-/// The new API
+/// Specifies what [Statement::ExplainPlan] is actually explaining The new API
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExplainStage {
     /// The mz_sql::HirRelationExpr after parsing
@@ -2947,8 +2965,6 @@ pub enum ExplainStage {
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
-    /// The dependent and selected timestamps
-    Timestamp,
 }
 
 impl ExplainStage {
@@ -2960,7 +2976,6 @@ impl ExplainStage {
             ExplainStage::OptimizedPlan => "optimize/global",
             ExplainStage::PhysicalPlan => "optimize/finalize_dataflow",
             ExplainStage::Trace => unreachable!(),
-            ExplainStage::Timestamp => unreachable!(),
         }
     }
 }
@@ -2973,7 +2988,6 @@ impl AstDisplay for ExplainStage {
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
             ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             ExplainStage::Trace => f.write_str("OPTIMIZER TRACE"),
-            ExplainStage::Timestamp => f.write_str("TIMESTAMP"),
         }
     }
 }
@@ -2984,12 +2998,6 @@ pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
     Query(Query<T>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainOptions {
-    pub typed: bool,
-    pub timing: bool,
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {

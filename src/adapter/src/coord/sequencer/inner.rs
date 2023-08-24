@@ -36,9 +36,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{
-    Explain, ExplainConfig, ExplainFormat, Explainee, ExprHumanizer, UsedIndexes,
-};
+use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, ExprHumanizer, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -54,8 +52,9 @@ use mz_sql::names::{
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan;
 use mz_sql::plan::{
-    AlterOptionParameter, IndexOption, MaterializedView, MutationKind, OptimizerConfig, Params,
-    Plan, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege,
+    AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
+    Params, Plan, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom,
+    UpdatePrivilege,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -2729,52 +2728,41 @@ impl Coordinator {
         }
     }
 
-    pub(super) async fn sequence_explain(
+    pub(super) async fn sequence_explain_plan(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainPlanPlan,
         target_cluster: TargetCluster,
     ) {
-        match plan.stage {
-            ExplainStage::Timestamp => {
-                self.sequence_explain_timestamp_begin(ctx, plan, target_cluster)
+        let result = match plan.explainee {
+            Explainee::Query { .. } => {
+                let result = self.explain_query(&mut ctx, plan, target_cluster);
+                result.await
             }
-            _ => {
-                let result = match plan.explainee {
-                    Explainee::Query | Explainee::Dataflow(_) => {
-                        let result = self.explain_query(&mut ctx, plan, target_cluster);
-                        result.await
-                    }
-                    Explainee::MaterializedView(_) => {
-                        let result = self.explain_materialized_view(&mut ctx, plan);
-                        result
-                    }
-                    Explainee::Index(_) => {
-                        let result = self.explain_index(&mut ctx, plan);
-                        result
-                    }
-                };
-                ctx.retire(result);
+            Explainee::MaterializedView(_) => {
+                let result = self.explain_materialized_view(&mut ctx, plan);
+                result
             }
-        }
+            Explainee::Index(_) => {
+                let result = self.explain_index(&mut ctx, plan);
+                result
+            }
+        };
+        ctx.retire(result);
     }
 
     fn explain_materialized_view(
         &mut self,
         ctx: &mut ExecuteContext,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlan {
-            raw_plan: _,
-            row_set_finishing,
+        let plan::ExplainPlanPlan {
             stage,
             format,
             config,
             no_errors: _,
             explainee,
         } = plan;
-
-        assert!(row_set_finishing.is_none());
 
         let Explainee::MaterializedView(id) = explainee else {
             // This is currently asserted in the `sequence_explain` code that
@@ -2858,7 +2846,7 @@ impl Coordinator {
     fn explain_index(
         &mut self,
         _ctx: &mut ExecuteContext,
-        _plan: plan::ExplainPlan,
+        _plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         coord_bail!("unsupported operation: explain_index");
     }
@@ -2866,12 +2854,10 @@ impl Coordinator {
     async fn explain_query(
         &mut self,
         ctx: &mut ExecuteContext,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainPlanPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlan {
-            raw_plan,
-            row_set_finishing,
+        let plan::ExplainPlanPlan {
             stage,
             format,
             config,
@@ -2879,11 +2865,11 @@ impl Coordinator {
             explainee,
         } = plan;
 
-        assert_ne!(stage, ExplainStage::Timestamp);
-        assert!(matches!(
-            explainee,
-            Explainee::Dataflow(_) | Explainee::Query
-        ));
+        let Explainee::Query { raw_plan, row_set_finishing } = explainee else {
+            // This is currently asserted in the `sequence_explain` code that
+            // calls this method.
+            unreachable!()
+        };
 
         let optimizer_trace = match stage {
             ExplainStage::Trace => OptimizerTrace::new(), // collect all trace entries
@@ -2892,7 +2878,6 @@ impl Coordinator {
 
         let pipeline_result = {
             self.explain_optimizer_pipeline(
-                explainee,
                 raw_plan,
                 no_errors,
                 target_cluster,
@@ -2970,7 +2955,6 @@ impl Coordinator {
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
     async fn explain_optimizer_pipeline(
         &mut self,
-        explainee: Explainee,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
         target_cluster: TargetCluster,
@@ -3001,17 +2985,9 @@ impl Coordinator {
         }
 
         let catalog = self.catalog();
-        let (explainee_id, is_oneshot, cluster_id) = match explainee {
-            Explainee::Dataflow(id) => {
-                let cluster_id = catalog.active_cluster(session)?.id;
-                (id, false, cluster_id)
-            }
-            Explainee::Query => {
-                let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
-                (GlobalId::Explain, true, cluster_id)
-            }
-            _ => unreachable!(),
-        };
+        let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        let explainee_id = GlobalId::Explain;
+        let is_oneshot = true;
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
@@ -3028,8 +3004,7 @@ impl Coordinator {
 
         let mut timeline_context =
             self.validate_timeline_context(decorrelated_plan.depends_on())?;
-        if matches!(explainee, Explainee::Query)
-            && matches!(timeline_context, TimelineContext::TimestampIndependent)
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && decorrelated_plan.contains_temporal()
         {
             // If the source IDs are timestamp independent but the query contains temporal functions,
@@ -3110,35 +3085,30 @@ impl Coordinator {
         );
 
         // Determine if fast path plan will be used for this explainee.
-        let fast_path_plan = match explainee {
-            Explainee::Query => {
-                dataflow.set_as_of(query_as_of);
-                let style = ExprPrepStyle::OneShot {
-                    logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
-                    session,
-                };
-                let state = self.catalog().state();
-                dataflow.visit_children(
-                    |r| prep_relation_expr(state, r, style),
-                    |s| prep_scalar_expr(state, s, style),
-                )?;
-                peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-            }
-            _ => None,
+        let fast_path_plan = {
+            dataflow.set_as_of(query_as_of);
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                session,
+            };
+            let state = self.catalog().state();
+            dataflow.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
+            )?;
+            peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
         };
 
         if let Some(fast_path_plan) = &fast_path_plan {
             used_indexes = fast_path_plan.used_indexes(finishing);
         }
 
-        if matches!(explainee, Explainee::Query) {
-            // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-            // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-            if let Some(as_of) = dataflow.as_of.as_ref() {
-                if !as_of.is_empty() {
-                    if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
-                        dataflow.until = timely::progress::Antichain::from_elem(next);
-                    }
+        // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+        // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+        if let Some(as_of) = dataflow.as_of.as_ref() {
+            if !as_of.is_empty() {
+                if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
+                    dataflow.until = timely::progress::Antichain::from_elem(next);
                 }
             }
         }
@@ -3156,10 +3126,10 @@ impl Coordinator {
         Ok((used_indexes, fast_path_plan))
     }
 
-    fn sequence_explain_timestamp_begin(
+    pub fn sequence_explain_timestamp(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainTimestampPlan,
         target_cluster: TargetCluster,
     ) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
@@ -3216,7 +3186,7 @@ impl Coordinator {
     fn sequence_explain_timestamp_begin_inner(
         &mut self,
         session: &Session,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainTimestampPlan,
         target_cluster: TargetCluster,
     ) -> Result<
         (
@@ -3228,9 +3198,7 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let plan::ExplainPlan {
-            raw_plan, format, ..
-        } = plan;
+        let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
