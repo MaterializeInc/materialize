@@ -39,7 +39,7 @@ CREATE INDEX accounts_balance_idx ON accounts(balance);
 
 # ensure that the index is still not used
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Filter (#1 = 100)
@@ -50,6 +50,17 @@ Source materialize.public.accounts
 
 EOF
 
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Get::Collection materialize.public.accounts
+    raw=true
+
+Source materialize.public.accounts
+  filter=((#1 = 100))
+
+EOF
 
 # re-create the view so it can pick up the index
 statement ok
@@ -70,19 +81,68 @@ Used Indexes:
 
 EOF
 
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=1, key=[#0] }
+    Get::PassArrangements materialize.public.accounts
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Constant
+        - (100)
+
+Used Indexes:
+  - materialize.public.accounts_balance_idx (lookup)
+
+EOF
 
 # rename the index
 statement ok
 ALTER INDEX accounts_balance_idx RENAME TO accounts_balance_index;
 
 
-# ensure that the index is now used by the view
+# ensure that the index is still used by the view
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMiZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
     ReadExistingIndex materialize.public.accounts lookup_value=(100)
+
+Used Indexes:
+  - materialize.public.accounts_balance_index (lookup)
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=1, key=[#0] }
+    Get::PassArrangements materialize.public.accounts
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Constant
+        - (100)
 
 Used Indexes:
   - materialize.public.accounts_balance_index (lookup)
@@ -102,6 +162,31 @@ EXPLAIN MATERIALIZED VIEW mv;
 materialize.public.mv:
   Project (#0, #1)
     ReadExistingIndex materialize.public.accounts lookup_value=(100)
+
+Used Indexes:
+  - [DELETED INDEX] (lookup)
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=1, key=[#0] }
+    Get::PassArrangements materialize.public.accounts
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Constant
+        - (100)
 
 Used Indexes:
   - [DELETED INDEX] (lookup)

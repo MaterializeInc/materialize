@@ -37,7 +37,9 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{Explain, ExplainFormat, Explainee, UsedIndexes};
+use mz_repr::explain::{
+    Explain, ExplainConfig, ExplainFormat, Explainee, ExprHumanizer, UsedIndexes,
+};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -1049,7 +1051,8 @@ impl Coordinator {
                 self.catalog_mut().set_optimized_plan(id, df.clone());
 
                 df.set_as_of(as_of);
-                self.must_ship_dataflow(df, cluster_id).await;
+                let df = self.must_ship_dataflow(df, cluster_id).await;
+                self.catalog_mut().set_physical_plan(id, df);
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -2783,35 +2786,68 @@ impl Coordinator {
             unreachable!()
         };
 
-        if !matches!(stage, ExplainStage::OptimizedPlan) {
-            coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+        fn explain<T>(
+            mut plan: DataflowDescription<T>,
+            format: ExplainFormat,
+            config: &ExplainConfig,
+            humanizer: &dyn ExprHumanizer,
+        ) -> Result<String, AdapterError>
+        where
+            for<'a> Explainable<'a, DataflowDescription<T>>:
+                Explain<'a, Context = ExplainContext<'a>>,
+        {
+            // Collect the list of indexes used by the dataflow at this point.
+            let used_indexes = UsedIndexes::new(
+                plan
+                    .index_imports
+                    .iter()
+                    .map(|(id, index_import)| {
+                        (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
+                    })
+                    .collect(),
+            );
+
+            let context = ExplainContext {
+                config,
+                humanizer,
+                used_indexes,
+                finishing: None,
+                duration: Duration::default(),
+            };
+
+            Ok(Explainable::new(&mut plan).explain(&format, &context)?)
         }
 
-        let Some(mut optimized_plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-            tracing::error!("cannot find OPTIMIZED PLAN FOR MATERIALIZED VIEW {id} in catalog");
-            coord_bail!("cannot find OPTIMIZED PLAN FOR MATERIALIZED VIEW in catalog");
+        let explain = match stage {
+            ExplainStage::OptimizedPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
+                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                };
+                explain(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
+                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                };
+                explain(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+            }
         };
 
-        // Collect the list of indexes used by the dataflow at this point.
-        let used_indexes = UsedIndexes::new(
-            optimized_plan
-                .index_imports
-                .iter()
-                .map(|(id, index_import)| {
-                    (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
-                })
-                .collect(),
-        );
-
-        let context = ExplainContext {
-            config: &config,
-            humanizer: &self.catalog().for_session(ctx.session()),
-            used_indexes,
-            finishing: None,
-            duration: Duration::default(),
-        };
-
-        let explain = Explainable::new(&mut optimized_plan).explain(&format, &context)?;
         let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
 
         Ok(Self::send_immediate_rows(rows))
