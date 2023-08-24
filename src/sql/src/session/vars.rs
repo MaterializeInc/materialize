@@ -741,16 +741,17 @@ mod upsert_rocksdb {
     };
 
     /// Controls whether automatic spill to disk should be turned on when using `DISK`.
+    /// Defaults to true, i.e. autospill will always be on when using `DISK`.
     pub const UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_auto_spill_to_disk"),
-        value: &false,
+        value: &true,
         description:
             "Controls whether automatic spill to disk should be turned on when using `DISK`",
         internal: true,
     };
 
     /// The upsert in memory state size threshold after which it will spill to disk.
-    /// The default is 256 MB = 268435456 bytes
+    /// The default is 85 MiB = 89128960 bytes
     pub const UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_auto_spill_threshold_bytes"),
         value: &mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD,
@@ -909,11 +910,14 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
 /// dataflows_. This is distinct from `DATAFLOW_MAX_INFLIGHT_BYTES`, as this will
 /// supports more granular control (within a single timestamp).
+/// Currently defaults to 256MiB = 268435456 bytes
+/// Note: Backpressure will only be turned on if disk is enabled based on
+/// `storage_dataflow_max_inflight_bytes_disk_only` flag
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes"),
-    value: &None,
+    value: &Some(268435456),
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
-                  storage dataflows. Defaults to not backpressure enabled (Materialize).",
+                  storage dataflows. Defaults to backpressure enabled (Materialize).",
     internal: true,
 };
 
@@ -931,16 +935,18 @@ const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerV
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: ServerVar<Option<Numeric>> =
-    ServerVar {
-        name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
-        value: &None,
-        description:
-            "The fraction of the cluster replica size to be used as the maximum number of \
+static DEFAULT_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<Option<Numeric>> =
+    Lazy::new(|| Some(0.0025.into()));
+pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<
+    ServerVar<Option<Numeric>>,
+> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
+    value: &DEFAULT_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION,
+    description: "The fraction of the cluster replica size to be used as the maximum number of \
     in-flight bytes emitted by persist_sources feeding storage dataflows. \
     If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
-        internal: true,
-    };
+    internal: true,
+});
 
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes_disk_only"),
