@@ -14,7 +14,9 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Optional, Union
 
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint, retry
+from materialize.cloudtest.util.web_request import WebRequests
 
 
 @dataclass
@@ -54,6 +56,9 @@ class ControllerDefinition:
             raise RuntimeError("Endpoint not configured")
 
         return self.endpoint.base_url
+
+    def requests(self, auth: Optional[AuthConfig]) -> WebRequests:
+        return WebRequests(auth, self.configured_base_url())
 
 
 def wait_for_connectable(
