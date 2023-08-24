@@ -111,7 +111,17 @@ where
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
-        let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
+        let state = self.applier.clone_state_for_rollup();
+        let rollup = self
+            .applier
+            .state_versions
+            .write_rollup_for_state(self.applier.shard_metrics.as_ref(), state, &RollupId::new())
+            .await;
+
+        let Some(rollup) = rollup else {
+            return RoutineMaintenance::default();
+        };
+
         let (applied, maintenance) = self.add_rollup((rollup.seqno, &rollup.to_hollow())).await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't

@@ -674,16 +674,78 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
     }
 }
 
+impl<K, V, T, D> From<TypedState<K, V, T, D>> for UntypedState<T>
+where
+    K: Codec,
+    V: Codec,
+    T: Codec64,
+    D: Codec64,
+{
+    fn from(typed_state: TypedState<K, V, T, D>) -> Self {
+        UntypedState {
+            key_codec: K::codec_name(),
+            val_codec: V::codec_name(),
+            ts_codec: T::codec_name(),
+            diff_codec: D::codec_name(),
+            state: typed_state.state,
+        }
+    }
+}
+
 #[derive(Debug)]
-struct StateRollup<T> {
+pub(crate) struct StateRollup<T> {
     pub(crate) state: UntypedState<T>,
     pub(crate) diffs: Option<InlinedDiffs>,
 }
 
+impl<T> StateRollup<T> {
+    // WIP: use this instead of direct construction
+    pub(crate) fn from(state: UntypedState<T>, diffs: InlinedDiffs) -> Self {
+        // WIP: validations
+        // - check that seqnos in latest rollup match diffs.lower, current = diffs.upper
+
+        // let latest_rollup_seqno = *state.latest_rollup().0;
+        //
+        // let mut verify_seqno = latest_rollup_seqno;
+        // for diff in &diffs {
+        //     assert_eq!(verify_seqno.next(), diff.seqno);
+        //     verify_seqno = diff.seqno;
+        // }
+        // assert_eq!(verify_seqno, state.seqno);
+        // diffs.description.lower().
+        Self {
+            state,
+            diffs: Some(diffs),
+        }
+    }
+}
+
 #[derive(Debug)]
-struct InlinedDiffs {
+pub(crate) struct InlinedDiffs {
     description: Description<SeqNo>,
     diffs: Vec<VersionedData>,
+}
+
+impl InlinedDiffs {
+    pub(crate) fn from(diffs: Vec<VersionedData>) -> Option<Self> {
+        if diffs.is_empty() {
+            return None;
+        }
+
+        // WIP: validations. check that diffs are consecutive
+        Some(Self {
+            description: Description::new(
+                diffs
+                    .first()
+                    .map_or_else(Antichain::new, |x| Antichain::from_elem(x.seqno)),
+                diffs
+                    .last()
+                    .map_or_else(Antichain::new, |x| Antichain::from_elem(x.seqno.next())),
+                Antichain::from_elem(SeqNo::minimum()),
+            ),
+            diffs,
+        })
+    }
 }
 
 impl RustType<ProtoInlinedDiffs> for InlinedDiffs {

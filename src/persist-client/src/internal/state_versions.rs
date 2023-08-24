@@ -25,17 +25,21 @@ use mz_persist::location::{
 };
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::RustType;
+use prost::Message;
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
-use crate::internal::encoding::UntypedState;
+use crate::internal::encoding::{InlinedDiffs, StateRollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
+use crate::internal::state::{
+    HollowBlobRef, HollowRollup, NoOpStateTransition, ProtoRollup, State, TypedState,
+};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -620,7 +624,12 @@ impl StateVersions {
             "add_and_remove_rollups should apply to the empty state"
         );
 
-        let rollup = self.encode_rollup_blob(shard_metrics, &initial_state, rollup.key);
+        let rollup = self.encode_rollup_blob(
+            shard_metrics,
+            initial_state.clone_for_rollup(),
+            vec![],
+            rollup.key,
+        );
         let () = self.write_rollup_blob(&rollup).await;
         assert_eq!(initial_state.seqno, rollup.seqno);
 
@@ -628,11 +637,79 @@ impl StateVersions {
         (initial_state, diff)
     }
 
+    pub async fn write_rollup_for_state<K, V, T, D>(
+        &self,
+        shard_metrics: &ShardMetrics,
+        state: TypedState<K, V, T, D>,
+        rollup_id: &RollupId,
+    ) -> Option<EncodedRollup>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        let (latest_rollup_seqno, _rollup) = state.latest_rollup();
+        let seqno = state.seqno();
+
+        let diffs: Vec<_> = self
+            .fetch_all_live_diffs_gt_seqno::<K, V, T, D>(&state.shard_id, *latest_rollup_seqno)
+            .await;
+
+        match diffs.first() {
+            None => {
+                // early-out because these are no diffs past our latest rollup.
+                //
+                // this should only occur in the initial state, but we can write a more
+                // general assertion: if no live diffs exist past this state's latest
+                // known rollup, then that rollup must be for the latest known state.
+                self.metrics.state.rollup_write_noop_latest.inc();
+                assert_eq!(seqno, *latest_rollup_seqno);
+                return None;
+            }
+            Some(first) => {
+                // early-out if it is no longer possible to inline all the diffs from
+                // the last known rollup to the current state. some or all of the diffs
+                // have already been truncated by another process.
+                self.metrics.state.rollup_write_noop_truncated.inc();
+                if first.seqno != latest_rollup_seqno.next() {
+                    assert!(
+                        first.seqno > latest_rollup_seqno.next(),
+                        "diff: {}, rollup: {}",
+                        first.seqno,
+                        latest_rollup_seqno,
+                    );
+                    return None;
+                }
+            }
+        }
+
+        // we may have fetched more diffs than we need: trim anything beyond the state's seqno
+        let diffs: Vec<_> = diffs.into_iter().filter(|x| x.seqno <= seqno).collect();
+
+        // verify that we've done all the filtering correctly and that our
+        // diffs have seqnos bounded by (last_rollup, current_state]
+        assert_eq!(
+            diffs.first().map(|x| x.seqno),
+            Some(latest_rollup_seqno.next())
+        );
+        assert_eq!(diffs.last().map(|x| x.seqno), Some(state.seqno));
+
+        let key = PartialRollupKey::new(state.seqno, rollup_id);
+        let rollup = self.encode_rollup_blob(shard_metrics, state, diffs, key);
+        let () = self.write_rollup_blob(&rollup).await;
+
+        self.metrics.state.rollup_write_success.inc();
+
+        Some(rollup)
+    }
+
     /// Encodes the given state as a rollup to be written to the specified key.
     pub fn encode_rollup_blob<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
-        state: &TypedState<K, V, T, D>,
+        state: TypedState<K, V, T, D>,
+        diffs: Vec<VersionedData>,
         key: PartialRollupKey,
     ) -> EncodedRollup
     where
@@ -641,18 +718,34 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
+        let shard_id = state.shard_id;
+        let rollup_seqno = state.seqno;
+        let latest_rollup_seqno = *state.latest_rollup().0;
+
+        let mut verify_seqno = latest_rollup_seqno;
+        for diff in &diffs {
+            assert_eq!(verify_seqno.next(), diff.seqno);
+            verify_seqno = diff.seqno;
+        }
+        assert_eq!(verify_seqno, state.seqno);
         let buf = self.metrics.codecs.state.encode(|| {
             let mut buf = Vec::new();
-            // WIP: replace
-            // state.encode(&mut buf);
+            let rollup = StateRollup {
+                state: UntypedState::<T>::from(state),
+                diffs: InlinedDiffs::from(diffs),
+            };
+            rollup
+                .into_proto()
+                .encode(&mut buf)
+                .expect("no required fields means no initialization errors");
             Bytes::from(buf)
         });
         shard_metrics
             .latest_rollup_size
             .set(u64::cast_from(buf.len()));
         EncodedRollup {
-            shard_id: state.shard_id,
-            seqno: state.seqno,
+            shard_id,
+            seqno: rollup_seqno,
             key,
             buf,
         }
