@@ -168,12 +168,15 @@ where
         )
         .await?;
 
+        let idle_merge_effort = isize::cast_from(config.idle_arrangement_merge_effort);
+        // We want a value of `0` to disable idle merging. DD will only disable idle merging if we
+        // configure the effort to `None`, not when we set it to `Some(0)`.
+        let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
+
         let mut worker_config = WorkerConfig::default();
         differential_dataflow::configure(
             &mut worker_config,
-            &differential_dataflow::Config {
-                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
-            },
+            &differential_dataflow::Config { idle_merge_effort },
         );
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
