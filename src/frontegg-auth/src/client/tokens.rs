@@ -19,18 +19,16 @@ impl Client {
         secret: Uuid,
         admin_api_token_url: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        self.request(|client| async move {
-            let res: ApiTokenResponse = client
-                .post(admin_api_token_url)
-                .json(&ApiTokenArgs { client_id, secret })
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<ApiTokenResponse>()
-                .await?;
-            Ok(res)
-        })
-        .await
+        let res = self
+            .client
+            .post(admin_api_token_url)
+            .json(&ApiTokenArgs { client_id, secret })
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ApiTokenResponse>()
+            .await?;
+        Ok(res)
     }
 
     /// Exchanges a client id and secret for a jwt token.
@@ -39,18 +37,16 @@ impl Client {
         refresh_url: &str,
         refresh_token: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        self.request(|client| async move {
-            let res: ApiTokenResponse = client
-                .post(refresh_url)
-                .json(&RefreshToken { refresh_token })
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<ApiTokenResponse>()
-                .await?;
-            Ok(res)
-        })
-        .await
+        let res = self
+            .client
+            .post(refresh_url)
+            .json(&RefreshToken { refresh_token })
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ApiTokenResponse>()
+            .await?;
+        Ok(res)
     }
 }
 
