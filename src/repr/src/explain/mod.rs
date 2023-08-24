@@ -249,7 +249,13 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 /// The type of object to be explained
 #[derive(Clone, Debug)]
 pub enum Explainee {
-    /// An object that will be served using a dataflow
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// An object that will be served using a dataflow.
+    ///
+    /// This variant is deprecated and will be removed in #18089.
     Dataflow(GlobalId),
     /// The object to be explained is a one-off query and may or may not served
     /// using a dataflow.
@@ -527,6 +533,10 @@ impl fmt::Display for Attributes {
 }
 
 /// A set of indexes that are used in the explained plan.
+///
+/// Each vector element consists of the following components:
+/// 1. The id of the index.
+/// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
 #[derive(Debug)]
 pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
 

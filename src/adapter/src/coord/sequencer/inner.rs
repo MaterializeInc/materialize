@@ -25,6 +25,7 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_expr::explain::ExplainContext;
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -36,7 +37,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, Explainee, UsedIndexes};
+use mz_repr::explain::{Explain, ExplainFormat, Explainee, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -101,6 +102,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::explain::Explainable;
 use crate::notice::AdapterNotice;
 use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -969,9 +971,9 @@ impl Coordinator {
         // Allocate a unique ID that can be used by the dataflow builder to
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
-
         let optimized_expr = self.view_optimizer.optimize(view_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
+        let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
 
         // Pick the least valid read timestamp as the as-of for the view
         // dataflow. This makes the materialized view include the maximum possible
@@ -1005,9 +1007,19 @@ impl Coordinator {
             .catalog_transact_with(Some(session), ops, |txn| {
                 // Create a dataflow that materializes the view query and sinks
                 // it to storage.
-                let df = txn
-                    .dataflow_builder(cluster_id)
-                    .build_materialized_view_dataflow(id, internal_view_id)?;
+                let CatalogItem::MaterializedView(mv) = txn.catalog.get_entry(&id).item() else {
+                    unreachable!()
+                };
+
+                let mut builder = txn.dataflow_builder(cluster_id);
+                let df = builder.build_materialized_view(
+                    id,
+                    internal_view_id,
+                    debug_name,
+                    &mv.optimized_expr,
+                    &mv.desc,
+                )?;
+
                 Ok(df)
             })
             .await
@@ -1033,6 +1045,8 @@ impl Coordinator {
                     Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                 )
                 .await;
+
+                self.catalog_mut().set_optimized_plan(id, df.clone());
 
                 df.set_as_of(as_of);
                 self.must_ship_dataflow(df, cluster_id).await;
@@ -2721,22 +2735,102 @@ impl Coordinator {
         match plan.stage {
             ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
             _ => {
-                let result = self
-                    .sequence_explain_plan(&mut ctx, plan, target_cluster)
-                    .await;
+                let result = match plan.explainee {
+                    Explainee::Query | Explainee::Dataflow(_) => {
+                        let result = self.explain_query(&mut ctx, plan, target_cluster);
+                        result.await
+                    }
+                    Explainee::MaterializedView(_) => {
+                        let result = self.explain_materialized_view(&mut ctx, plan);
+                        result
+                    }
+                    Explainee::Index(_) => {
+                        let result = self.explain_index(&mut ctx, plan);
+                        result
+                    }
+                };
                 ctx.retire(result);
             }
         }
     }
 
-    async fn sequence_explain_plan(
+    fn explain_materialized_view(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: plan::ExplainPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::ExplainPlan {
+            raw_plan: _,
+            row_set_finishing,
+            stage,
+            format,
+            config,
+            no_errors: _,
+            explainee,
+        } = plan;
+
+        assert!(row_set_finishing.is_none());
+
+        let Explainee::MaterializedView(id) = explainee else {
+            // This is currently asserted in the `sequence_explain` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
+            // This is currently asserted in the planner. However, this
+            // assumption might change when we make changes for #18089.
+            unreachable!()
+        };
+
+        if !matches!(stage, ExplainStage::OptimizedPlan) {
+            coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+        }
+
+        let Some(mut optimized_plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+            tracing::error!("cannot find OPTIMIZED PLAN FOR MATERIALIZED VIEW {id} in catalog");
+            coord_bail!("cannot find OPTIMIZED PLAN FOR MATERIALIZED VIEW in catalog");
+        };
+
+        // Collect the list of indexes used by the dataflow at this point.
+        let used_indexes = UsedIndexes::new(
+            optimized_plan
+                .index_imports
+                .iter()
+                .map(|(id, index_import)| {
+                    (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
+                })
+                .collect(),
+        );
+
+        let context = ExplainContext {
+            config: &config,
+            humanizer: &self.catalog().for_session(ctx.session()),
+            used_indexes,
+            finishing: None,
+            duration: Duration::default(),
+        };
+
+        let explain = Explainable::new(&mut optimized_plan).explain(&format, &context)?;
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
+    }
+
+    fn explain_index(
+        &mut self,
+        _ctx: &mut ExecuteContext,
+        _plan: plan::ExplainPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        coord_bail!("unsupported operation: explain_index");
+    }
+
+    async fn explain_query(
         &mut self,
         ctx: &mut ExecuteContext,
         plan: plan::ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use ExplainStage::*;
-
         let plan::ExplainPlan {
             raw_plan,
             row_set_finishing,
@@ -2747,30 +2841,23 @@ impl Coordinator {
             explainee,
         } = plan;
 
-        let cluster_id = {
-            let catalog = self.catalog();
-            let cluster = match explainee {
-                Explainee::Dataflow(_) => catalog.active_cluster(ctx.session())?,
-                Explainee::Query => {
-                    catalog.resolve_target_cluster(target_cluster, ctx.session())?
-                }
-            };
-            cluster.id
-        };
-
         assert_ne!(stage, ExplainStage::Timestamp);
+        assert!(matches!(
+            explainee,
+            Explainee::Dataflow(_) | Explainee::Query
+        ));
 
         let optimizer_trace = match stage {
-            Trace => OptimizerTrace::new(), // collect all trace entries
+            ExplainStage::Trace => OptimizerTrace::new(), // collect all trace entries
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
         let pipeline_result = {
-            self.sequence_explain_plan_pipeline(
+            self.explain_optimizer_pipeline(
                 explainee,
                 raw_plan,
                 no_errors,
-                cluster_id,
+                target_cluster,
                 ctx.session_mut(),
                 &row_set_finishing,
             )
@@ -2804,7 +2891,7 @@ impl Coordinator {
         )?;
 
         let rows = match stage {
-            Trace => {
+            ExplainStage::Trace => {
                 // For the `Trace` (pseudo-)stage, return the entire trace as (time,
                 // path, plan) triples.
                 let rows = trace
@@ -2843,12 +2930,12 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn sequence_explain_plan_pipeline(
+    async fn explain_optimizer_pipeline(
         &mut self,
         explainee: Explainee,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
-        cluster_id: mz_storage_client::types::instances::StorageInstanceId,
+        target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
     ) -> Result<(UsedIndexes, Option<FastPathPlan>), AdapterError> {
@@ -2875,9 +2962,17 @@ impl Coordinator {
             }
         }
 
-        let (explainee_id, is_oneshot) = match explainee {
-            Explainee::Dataflow(id) => (id, false),
-            Explainee::Query => (GlobalId::Explain, true),
+        let catalog = self.catalog();
+        let (explainee_id, is_oneshot, cluster_id) = match explainee {
+            Explainee::Dataflow(id) => {
+                let cluster_id = catalog.active_cluster(session)?.id;
+                (id, false, cluster_id)
+            }
+            Explainee::Query => {
+                let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+                (GlobalId::Explain, true, cluster_id)
+            }
+            _ => unreachable!(),
         };
 
         // Execute the various stages of the optimization pipeline
@@ -2965,7 +3060,7 @@ impl Coordinator {
             )
         })?;
 
-        // Save the list of indexes used by the dataflow at this point
+        // Collect the list of indexes used by the dataflow at this point
         let mut used_indexes = UsedIndexes::new(
             dataflow
                 .index_imports

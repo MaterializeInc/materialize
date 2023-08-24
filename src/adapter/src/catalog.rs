@@ -28,6 +28,7 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
     ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
@@ -155,6 +156,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
+    plans: CatalogPlans,
     storage: Arc<tokio::sync::Mutex<storage::Connection>>,
     transient_revision: u64,
 }
@@ -165,6 +167,7 @@ impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            plans: self.plans.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
         }
@@ -1713,6 +1716,40 @@ impl CatalogState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CatalogPlans {
+    optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
+}
+
+impl Catalog {
+    /// Set the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn set_optimized_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<OptimizedMirRelationExpr>,
+    ) {
+        self.plans.optimized_plan_by_id.insert(id, plan);
+    }
+
+    /// Try to get the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn try_get_optimized_plan(
+        &self,
+        id: &GlobalId,
+    ) -> Option<&DataflowDescription<OptimizedMirRelationExpr>> {
+        self.plans.optimized_plan_by_id.get(id)
+    }
+
+    /// Drop all optimized and physical plans for the item identified by `id`.
+    ///
+    /// Ignore requests for non-existing plans.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn drop_plans(&mut self, id: GlobalId) {
+        self.plans.optimized_plan_by_id.remove(&id);
+    }
+}
+
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     state: Cow<'a, CatalogState>,
@@ -3254,6 +3291,9 @@ impl Catalog {
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
             },
+            plans: CatalogPlans {
+                optimized_plan_by_id: Default::default(),
+            },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
@@ -4403,6 +4443,7 @@ impl Catalog {
         );
         for id in migration_metadata.all_drop_ops.drain(..) {
             self.state.drop_item(id);
+            self.drop_plans(id);
         }
         for (id, oid, name, owner_id, privileges, item_rebuilder) in
             migration_metadata.all_create_ops.drain(..)
@@ -5402,7 +5443,7 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-            drop_ids,
+            &drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -5420,6 +5461,10 @@ impl Catalog {
         drop(storage);
         self.state = state;
         self.transient_revision += 1;
+
+        for id in drop_ids {
+            self.drop_plans(id);
+        }
 
         Ok(TransactionResult {
             builtin_table_updates,
@@ -5440,7 +5485,7 @@ impl Catalog {
         state: &mut CatalogState,
         // Provide all of the IDs that are being dropped in this transaction so we can provide
         // stronger invariants about when we change items' dependencies.
-        drop_ids: BTreeSet<GlobalId>,
+        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         // NOTE(benesch): to support altering legacy sized sources and sinks
         // (those with linked clusters), we need to generate retractions for
@@ -5508,7 +5553,7 @@ impl Catalog {
                     tx,
                     builtin_table_updates,
                     oracle_write_ts,
-                    &drop_ids,
+                    drop_ids,
                     audit_events,
                     session,
                     id,
@@ -5609,7 +5654,7 @@ impl Catalog {
                         id,
                         to_name,
                         sink.item,
-                        &drop_ids,
+                        drop_ids,
                     )?;
                 }
                 Op::AlterSource { id, cluster_config } => {
@@ -5709,7 +5754,7 @@ impl Catalog {
                         id,
                         to_name,
                         source.item,
-                        &drop_ids,
+                        drop_ids,
                     )?;
                 }
                 Op::CreateDatabase {
@@ -6927,7 +6972,7 @@ impl Catalog {
                             id,
                             to_name,
                             to_item,
-                            &drop_ids,
+                            drop_ids,
                         )?;
                     }
                 }
@@ -7114,7 +7159,7 @@ impl Catalog {
                         id,
                         name.clone(),
                         to_item.clone(),
-                        &drop_ids,
+                        drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry)?;
