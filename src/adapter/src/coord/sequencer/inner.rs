@@ -2736,7 +2736,9 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
+            ExplainStage::Timestamp => {
+                self.sequence_explain_timestamp_begin(ctx, plan, target_cluster)
+            }
             _ => {
                 let result = match plan.explainee {
                     Explainee::Query | Explainee::Dataflow(_) => {
@@ -3158,9 +3160,10 @@ impl Coordinator {
         &mut self,
         mut ctx: ExecuteContext,
         plan: plan::ExplainPlan,
+        target_cluster: TargetCluster,
     ) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan),
+            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
             ctx
         );
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
@@ -3214,6 +3217,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan: plan::ExplainPlan,
+        target_cluster: TargetCluster,
     ) -> Result<
         (
             ExplainFormat,
@@ -3231,7 +3235,9 @@ impl Coordinator {
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
-        let cluster = self.catalog().active_cluster(session)?;
+        let cluster = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, session)?;
         let id_bundle = self
             .index_oracle(cluster.id)
             .sufficient_collections(&source_ids);
