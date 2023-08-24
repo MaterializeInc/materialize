@@ -38,6 +38,7 @@ SHOW TABLES FROM information_schema
 ----
 administrable_role_authorizations
 applicable_roles
+character_sets
 column_privileges
 columns
 constraint_column_usage
@@ -144,6 +145,7 @@ SHOW TABLES FROM test.information_schema
 ----
 administrable_role_authorizations
 applicable_roles
+character_sets
 column_privileges
 columns
 constraint_column_usage

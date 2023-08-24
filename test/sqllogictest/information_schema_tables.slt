@@ -41,6 +41,10 @@ applicable_roles
 VIEW
 materialize
 information_schema
+character_sets
+VIEW
+materialize
+information_schema
 columns
 VIEW
 materialize

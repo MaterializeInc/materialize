@@ -3830,6 +3830,20 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+pub const INFORMATION_SCHEMA_CHARACTER_SETS: BuiltinView = BuiltinView {
+    name: "character_sets",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.character_sets AS SELECT
+    NULL as character_set_catalog,
+    NULL as character_set_schema,
+    'UTF8' as character_set_name,
+    'UCS' as character_repertoire,
+    'UTF8' as form_of_use,
+    current_database() as default_collate_catalog,
+    'pg_catalog' as default_collate_schema,
+    'en_US.utf8' as default_collate_name",
+};
+
 // MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
 // codes a collation of 'C' for every database, so we could copy that here.
 pub const PG_COLLATION: BuiltinView = BuiltinView {
@@ -5003,6 +5017,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_ROLE_TABLE_GRANTS),
         Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
         Builtin::View(&INFORMATION_SCHEMA_VIEWS),
+        Builtin::View(&INFORMATION_SCHEMA_CHARACTER_SETS),
         Builtin::View(&MZ_SHOW_ROLE_MEMBERS),
         Builtin::View(&MZ_SHOW_MY_ROLE_MEMBERS),
         Builtin::View(&MZ_SHOW_SYSTEM_PRIVILEGES),
