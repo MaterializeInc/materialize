@@ -48,7 +48,7 @@ use crate::ast::{
 };
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, RawDatabaseSpecifier};
+use crate::names::Aug;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
@@ -495,37 +495,8 @@ async fn purify_create_source(
                 Some(ReferencedSubsources::SubsetSchemas(..)) => {
                     sql_bail!("FOR SCHEMAS (..) invalid for LOAD GENERATOR sources");
                 }
-                Some(ReferencedSubsources::SubsetTables(selected_subsources)) => {
-                    let available_subsources = match &available_subsources {
-                        Some(available_subsources) => available_subsources,
-                        None => {
-                            sql_bail!("FOR TABLES (..) is only valid for multi-output sources")
-                        }
-                    };
-                    // The user manually selected a subset of upstream tables so we need to
-                    // validate that the names actually exist and are not ambiguous
-
-                    // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = BTreeMap::new();
-                    for (subsource_name, (_, desc)) in available_subsources {
-                        let database = match &subsource_name.database {
-                            RawDatabaseSpecifier::Name(database) => database.clone(),
-                            RawDatabaseSpecifier::Ambient => unreachable!(),
-                        };
-                        tables_by_name
-                            .entry(subsource_name.item.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(subsource_name.schema.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(database)
-                            .or_insert(desc);
-                    }
-
-                    validated_requested_subsources.extend(subsource_gen(
-                        selected_subsources,
-                        &ErsatzCatalog(tables_by_name),
-                        source_name,
-                    )?);
+                Some(ReferencedSubsources::SubsetTables(_)) => {
+                    sql_bail!("FOR TABLES (..) invalid for LOAD GENERATOR sources")
                 }
                 None => {
                     if available_subsources.is_some() {
