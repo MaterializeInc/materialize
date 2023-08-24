@@ -862,3 +862,35 @@ SELECT row_number() OVER (ORDER BY x NULLS LAST), x FROM t;
 2 b
 3 c
 4 NULL
+
+# TopK is inserted by `pre_finish_one_shot_select`
+query T multiline
+EXPLAIN
+SELECT * FROM t
+LIMIT 2;
+----
+Explained Query:
+  Finish limit=2 output=[#0]
+    TopK limit=2
+      Get materialize.public.t
+
+EOF
+
+# But if we have an index, then we do fast path despite the TopK.
+
+statement ok
+CREATE INDEX t_idx ON t(x);
+
+query T multiline
+EXPLAIN
+SELECT * FROM t
+LIMIT 2;
+----
+Explained Query (fast path):
+  Finish limit=2 output=[#0]
+    ReadExistingIndex materialize.public.t_idx
+
+Used Indexes:
+  - materialize.public.t_idx (fast path limit)
+
+EOF

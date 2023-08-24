@@ -142,12 +142,11 @@ query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 VIEW ov
 ----
-Project (#0, #1)
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
+TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+  CrossJoin
+    Constant
+      - ()
+    Get materialize.public.t
 
 EOF
 
@@ -157,10 +156,11 @@ EXPLAIN DECORRELATED PLAN AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
-  CrossJoin
-    Constant
-      - ()
-    Get materialize.public.t
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
 
 EOF
 

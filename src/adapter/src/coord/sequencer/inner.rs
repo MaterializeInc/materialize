@@ -2316,6 +2316,7 @@ impl Coordinator {
             real_time_recency_ts,
             key,
             typ,
+            &finishing,
         )?;
 
         let determination = peek_plan.determination.clone();
@@ -2480,6 +2481,7 @@ impl Coordinator {
         real_time_recency_ts: Option<Timestamp>,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
+        finishing: &RowSetFinishing,
     ) -> Result<PlannedPeek, AdapterError> {
         let conn_id = session.conn_id().clone();
         let determination = self.sequence_peek_timestamp(
@@ -2516,6 +2518,7 @@ impl Coordinator {
             key,
             permutation,
             thinning.len(),
+            finishing,
         )?;
 
         Ok(PlannedPeek {
@@ -3084,7 +3087,7 @@ impl Coordinator {
                     |r| prep_relation_expr(state, r, style),
                     |s| prep_scalar_expr(state, s, style),
                 )?;
-                peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain, finishing.as_ref())?
             }
             _ => None,
         };

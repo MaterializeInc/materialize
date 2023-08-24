@@ -124,6 +124,10 @@ pub fn plan_root_query(
 
     if lifetime.is_maintained() {
         expr.finish_maintained(&mut finishing);
+    } else if lifetime.is_one_shot() {
+        expr.pre_finish_one_shot_select(&finishing);
+    } else {
+        unreachable!()
     }
 
     let typ = qcx.relation_type(&expr);

@@ -1116,75 +1116,67 @@ VIEW ov
       }
     },
     "body": {
-      "Project": {
+      "TopK": {
         "input": {
-          "TopK": {
-            "input": {
-              "Join": {
-                "inputs": [
-                  {
-                    "Get": {
-                      "id": {
-                        "Local": 0
-                      },
-                      "typ": {
-                        "column_types": [],
-                        "keys": [
-                          []
-                        ]
-                      }
-                    }
-                  },
-                  {
-                    "Get": {
-                      "id": {
-                        "Global": {
-                          "User": 1
-                        }
-                      },
-                      "typ": {
-                        "column_types": [
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          }
-                        ],
-                        "keys": []
-                      }
-                    }
-                  }
-                ],
-                "equivalences": [],
-                "implementation": "Unimplemented"
-              }
-            },
-            "group_key": [],
-            "order_key": [
+          "Join": {
+            "inputs": [
               {
-                "column": 1,
-                "desc": false,
-                "nulls_last": true
+                "Get": {
+                  "id": {
+                    "Local": 0
+                  },
+                  "typ": {
+                    "column_types": [],
+                    "keys": [
+                      []
+                    ]
+                  }
+                }
               },
               {
-                "column": 0,
-                "desc": true,
-                "nulls_last": false
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  }
+                }
               }
             ],
-            "limit": 5,
-            "offset": 0,
-            "monotonic": false,
-            "expected_group_size": null
+            "equivalences": [],
+            "implementation": "Unimplemented"
           }
         },
-        "outputs": [
-          0,
-          1
-        ]
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false,
+            "nulls_last": true
+          },
+          {
+            "column": 0,
+            "desc": true,
+            "nulls_last": false
+          }
+        ],
+        "limit": 5,
+        "offset": 0,
+        "monotonic": false,
+        "expected_group_size": null
       }
     }
   }
@@ -1218,46 +1210,67 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
       }
     },
     "body": {
-      "Join": {
-        "inputs": [
-          {
-            "Get": {
-              "id": {
-                "Local": 0
-              },
-              "typ": {
-                "column_types": [],
-                "keys": [
-                  []
-                ]
-              }
-            }
-          },
-          {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
+      "TopK": {
+        "input": {
+          "Join": {
+            "inputs": [
+              {
+                "Get": {
+                  "id": {
+                    "Local": 0
+                  },
+                  "typ": {
+                    "column_types": [],
+                    "keys": [
+                      []
+                    ]
+                  }
                 }
               },
-              "typ": {
-                "column_types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
+              {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
                   },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
                   }
-                ],
-                "keys": []
+                }
               }
-            }
+            ],
+            "equivalences": [],
+            "implementation": "Unimplemented"
+          }
+        },
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false,
+            "nulls_last": true
+          },
+          {
+            "column": 0,
+            "desc": true,
+            "nulls_last": false
           }
         ],
-        "equivalences": [],
-        "implementation": "Unimplemented"
+        "limit": 5,
+        "offset": 0,
+        "monotonic": false,
+        "expected_group_size": null
       }
     }
   }

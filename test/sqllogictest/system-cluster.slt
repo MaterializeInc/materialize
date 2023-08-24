@@ -310,12 +310,13 @@ LIMIT 10;
 ----
 Explained Query:
   Finish order_by=[#0 desc nulls_first] limit=10 output=[#0..=#2]
-    Project (#1, #0, #2)
-      Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000)), count(*)]
-        Project (#0, #3)
-          Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
-            Map (timestamp_tz_to_mz_timestamp(#0))
-              ReadExistingIndex mz_internal.mz_source_status_history lookup_value=("u6")
+    TopK order_by=[#0 desc nulls_first] limit=10
+      Project (#1, #0, #2)
+        Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000)), count(*)]
+          Project (#0, #3)
+            Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
+              Map (timestamp_tz_to_mz_timestamp(#0))
+                ReadExistingIndex mz_internal.mz_source_status_history lookup_value=("u6")
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (lookup)

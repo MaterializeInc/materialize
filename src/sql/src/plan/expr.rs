@@ -1679,22 +1679,62 @@ impl HirRelationExpr {
         if !finishing.is_trivial(self.arity()) {
             let old_finishing =
                 mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
-            *self = HirRelationExpr::Project {
-                input: Box::new(HirRelationExpr::TopK {
-                    input: Box::new(std::mem::replace(
-                        self,
-                        HirRelationExpr::Constant {
-                            rows: vec![],
-                            typ: RelationType::new(Vec::new()),
-                        },
-                    )),
-                    group_key: vec![],
-                    order_key: old_finishing.order_by,
-                    limit: old_finishing.limit,
-                    offset: old_finishing.offset,
-                    expected_group_size: None,
-                }),
-                outputs: old_finishing.project,
+            *self = HirRelationExpr::TopK {
+                input: Box::new(std::mem::replace(
+                    self,
+                    HirRelationExpr::Constant {
+                        rows: vec![],
+                        typ: RelationType::new(Vec::new()),
+                    },
+                )),
+                group_key: vec![],
+                order_key: old_finishing.order_by,
+                limit: old_finishing.limit,
+                offset: old_finishing.offset,
+                expected_group_size: None,
+            }
+            .project(old_finishing.project)
+        }
+    }
+
+    /// This function adds a `TopK` at the top of a one-shot select plan based on the given
+    /// `RowSetFinishing`. The `TopK` will apply the LIMIT part of the `RowSetFinishing` to reduce
+    /// the data that actually reaches the `RowSetFinishing`. Even though this `TopK` won't change
+    /// anything semantically (it will remove data that would be removed by the `RowSetFinishing`
+    /// anyway), but in some cases it can execute the LIMIT using much less memory than a
+    /// `RowSetFinishing` would. Specifically, for (physically) monotonic data, it will execute the
+    /// LIMIT in a pipelined fashion, using a buffer whose size is proportional to OFFSET + LIMIT.
+    /// This is in contrast to what happens with a `RowSetFinishing`, where an arrangement with the
+    /// full results will be built before applying the LIMIT. (Note that we don't get this benefit
+    /// for non-monotonic inputs, where an extra consolidation will happen, which you can observe in
+    /// the LIR plan.)
+    ///
+    /// This function should only be called on one-shot selects. Constructing a somewhat similar
+    /// `TopK` on top of a view should be done by `finish_maintained`. Note that `finish_maintained`
+    /// applies the entire `RowSetFinishing`, not just the LIMIT, which means that the finishing can
+    /// be omitted in that case, but not in our case.
+    pub fn pre_finish_one_shot_select(&mut self, finishing: &RowSetFinishing) {
+        if let Some(limit) = finishing.limit {
+            *self = HirRelationExpr::TopK {
+                input: Box::new(mem::replace(
+                    self,
+                    HirRelationExpr::Constant {
+                        rows: vec![],
+                        typ: RelationType::new(Vec::new()),
+                    },
+                )),
+                group_key: vec![],
+                // The order_by is needed.
+                order_key: finishing.order_by.clone(),
+                // Be careful to start counting the limit only after the offset.
+                limit: Some(limit + finishing.offset.clone()),
+                // It's important to not apply offset here, because the `RowSetFinishing` will
+                // apply it, and it's not idempotent (in contrast to LIMIT).
+                offset: 0,
+                // We don't need an `expected_group_size`, as this will never be rendered by a
+                // hierarchical aggregation, because this function should only be used for a
+                // one-shot select.
+                expected_group_size: None,
             };
         }
     }

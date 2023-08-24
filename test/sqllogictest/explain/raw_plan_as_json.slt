@@ -313,53 +313,45 @@ EXPLAIN RAW PLAN AS JSON FOR
 VIEW ov
 ----
 {
-  "Project": {
+  "TopK": {
     "input": {
-      "TopK": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 1
-              }
-            },
-            "typ": {
-              "column_types": [
-                {
-                  "scalar_type": "Int32",
-                  "nullable": true
-                },
-                {
-                  "scalar_type": "Int32",
-                  "nullable": true
-                }
-              ],
-              "keys": []
-            }
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 1
           }
         },
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 1,
-            "desc": false,
-            "nulls_last": true
-          },
-          {
-            "column": 0,
-            "desc": true,
-            "nulls_last": false
-          }
-        ],
-        "limit": 5,
-        "offset": 0,
-        "expected_group_size": null
+        "typ": {
+          "column_types": [
+            {
+              "scalar_type": "Int32",
+              "nullable": true
+            },
+            {
+              "scalar_type": "Int32",
+              "nullable": true
+            }
+          ],
+          "keys": []
+        }
       }
     },
-    "outputs": [
-      0,
-      1
-    ]
+    "group_key": [],
+    "order_key": [
+      {
+        "column": 1,
+        "desc": false,
+        "nulls_last": true
+      },
+      {
+        "column": 0,
+        "desc": true,
+        "nulls_last": false
+      }
+    ],
+    "limit": 5,
+    "offset": 0,
+    "expected_group_size": null
   }
 }
 EOF
@@ -370,25 +362,45 @@ EXPLAIN RAW PLAN AS JSON FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 {
-  "Get": {
-    "id": {
-      "Global": {
-        "User": 1
+  "TopK": {
+    "input": {
+      "Get": {
+        "id": {
+          "Global": {
+            "User": 1
+          }
+        },
+        "typ": {
+          "column_types": [
+            {
+              "scalar_type": "Int32",
+              "nullable": true
+            },
+            {
+              "scalar_type": "Int32",
+              "nullable": true
+            }
+          ],
+          "keys": []
+        }
       }
     },
-    "typ": {
-      "column_types": [
-        {
-          "scalar_type": "Int32",
-          "nullable": true
-        },
-        {
-          "scalar_type": "Int32",
-          "nullable": true
-        }
-      ],
-      "keys": []
-    }
+    "group_key": [],
+    "order_key": [
+      {
+        "column": 1,
+        "desc": false,
+        "nulls_last": true
+      },
+      {
+        "column": 0,
+        "desc": true,
+        "nulls_last": false
+      }
+    ],
+    "limit": 5,
+    "offset": 0,
+    "expected_group_size": null
   }
 }
 EOF
