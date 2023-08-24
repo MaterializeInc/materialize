@@ -208,7 +208,6 @@ async fn main() -> ExitCode {
         },
         None => None,
     };
-    let mut bad_file = false;
     let mut outcomes = Outcomes::default();
     let mut runner = Runner::start(&config).await.unwrap();
     let mut paths = args.paths;
@@ -253,24 +252,25 @@ async fn main() -> ExitCode {
                         Err(err) => {
                             writeln!(
                                 config.stderr,
-                                "error: running file {}: {}",
+                                "FAIL: error: running file {}: {}",
                                 entry.file_name().to_string_lossy(),
                                 err
                             );
-                            bad_file = true;
+                            return ExitCode::FAILURE;
                         }
                     }
                 }
                 Ok(_) => (),
                 Err(err) => {
-                    writeln!(config.stderr, "error: reading directory entry: {}", err);
-                    bad_file = true;
+                    writeln!(
+                        config.stderr,
+                        "FAIL: error: reading directory entry: {}",
+                        err
+                    );
+                    return ExitCode::FAILURE;
                 }
             }
         }
-    }
-    if bad_file {
-        return ExitCode::FAILURE;
     }
 
     writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
@@ -312,7 +312,6 @@ async fn rewrite(config: &RunConfig<'_>, args: Args) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut bad_file = false;
     let mut runner = Runner::start(config).await.unwrap();
     let mut paths = args.paths;
 
@@ -326,20 +325,21 @@ async fn rewrite(config: &RunConfig<'_>, args: Args) -> ExitCode {
                 Ok(entry) => {
                     if entry.file_type().is_file() {
                         if let Err(err) = runner::rewrite_file(&mut runner, entry.path()).await {
-                            writeln!(config.stderr, "error: rewriting file: {}", err);
-                            bad_file = true;
+                            writeln!(config.stderr, "FAIL: error: rewriting file: {}", err);
+                            return ExitCode::FAILURE;
                         }
                     }
                 }
                 Err(err) => {
-                    writeln!(config.stderr, "error: reading directory entry: {}", err);
-                    bad_file = true;
+                    writeln!(
+                        config.stderr,
+                        "FAIL: error: reading directory entry: {}",
+                        err
+                    );
+                    return ExitCode::FAILURE;
                 }
             }
         }
-    }
-    if bad_file {
-        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }
