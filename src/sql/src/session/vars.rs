@@ -4242,7 +4242,7 @@ impl Value for UntrimmableColumns {
     }
 
     fn format(&self) -> String {
-        format!("{}", self)
+        serde_json::to_string(self).expect("serializable")
     }
 }
 

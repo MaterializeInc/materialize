@@ -10,7 +10,7 @@
 //! A handle to a batch of updates
 
 use std::collections::VecDeque;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
@@ -258,12 +258,6 @@ impl UntrimmableColumns {
             }
         }
         false
-    }
-}
-
-impl std::fmt::Display for UntrimmableColumns {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&serde_json::to_string(self).expect("serializable"))
     }
 }
 
