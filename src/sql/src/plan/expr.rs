@@ -1679,23 +1679,21 @@ impl HirRelationExpr {
         if !finishing.is_trivial(self.arity()) {
             let old_finishing =
                 mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
-            *self = HirRelationExpr::Project {
-                input: Box::new(HirRelationExpr::TopK {
-                    input: Box::new(std::mem::replace(
-                        self,
-                        HirRelationExpr::Constant {
-                            rows: vec![],
-                            typ: RelationType::new(Vec::new()),
-                        },
-                    )),
-                    group_key: vec![],
-                    order_key: old_finishing.order_by,
-                    limit: old_finishing.limit,
-                    offset: old_finishing.offset,
-                    expected_group_size: None,
-                }),
-                outputs: old_finishing.project,
-            };
+            *self = HirRelationExpr::TopK {
+                input: Box::new(std::mem::replace(
+                    self,
+                    HirRelationExpr::Constant {
+                        rows: vec![],
+                        typ: RelationType::new(Vec::new()),
+                    },
+                )),
+                group_key: vec![],
+                order_key: old_finishing.order_by,
+                limit: old_finishing.limit,
+                offset: old_finishing.offset,
+                expected_group_size: None,
+            }
+            .project(old_finishing.project)
         }
     }
 

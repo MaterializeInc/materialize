@@ -5614,7 +5614,7 @@ pub enum QueryLifetime {
 impl QueryLifetime {
     /// (This used to impact whether the query is allowed to reason about the time at which it is
     /// running, e.g., by calling the `now()` function. Nowadays, this is decided by a different
-    /// mechanism.)
+    /// mechanism, see `ExprPrepStyle`.)
     pub fn is_one_shot(&self) -> bool {
         let result = match self {
             QueryLifetime::OneShot => true,

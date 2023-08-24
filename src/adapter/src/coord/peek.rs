@@ -181,9 +181,10 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
-    dataflow_plan: &mut DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
+pub fn create_fast_path_plan<T: Timestamp>(
+    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
+    finishing: Option<&RowSetFinishing>,
 ) -> Result<Option<FastPathPlan>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -192,7 +193,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
-        let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
+        let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
@@ -202,12 +203,40 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                 mir.typ(),
             )));
         } else {
+            // If there is a TopK that would be completely covered by the finishing, then jump
+            // through the TopK.
+            if let MirRelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic: _,
+                expected_group_size: _,
+            } = mir
+            {
+                if let Some(finishing) = finishing {
+                    if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
+                        // The following is roughly `limit >= finishing.limit`, but with Options.
+                        let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
+                            (None, _) => true,
+                            (Some(..), None) => false,
+                            (Some(topk_limit), Some(finishing_limit)) => {
+                                *topk_limit >= finishing_limit
+                            }
+                        };
+                        if finishing_limits_at_least_as_topk {
+                            mir = input;
+                        }
+                    }
+                }
+            }
             // In the case of a linear operator around an indexed view, we
             // can skip creating a dataflow and instead pull all the rows in
             // index and apply the linear operator against them.
             let (mfp, mir) = mz_expr::MapFilterProject::extract_from_expression(mir);
             match mir {
-                mz_expr::MirRelationExpr::Get { id, .. } => {
+                MirRelationExpr::Get { id, .. } => {
                     // Just grab any arrangement
                     // Nothing to be done if an arrangement does not exist
                     for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
@@ -220,7 +249,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                         }
                     }
                 }
-                mz_expr::MirRelationExpr::Join { implementation, .. } => {
+                MirRelationExpr::Join { implementation, .. } => {
                     if let mz_expr::JoinImplementation::IndexedFilter(id, key, vals) =
                         implementation
                     {
@@ -286,9 +315,10 @@ impl crate::coord::Coordinator {
         key: Vec<MirScalarExpr>,
         permutation: BTreeMap<usize, usize>,
         thinned_arity: usize,
+        finishing: &RowSetFinishing,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id)?;
+        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id, Some(finishing))?;
         // derive a PeekPlan from the optional FastPathPlan
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default

@@ -862,3 +862,163 @@ SELECT row_number() OVER (ORDER BY x NULLS LAST), x FROM t;
 2 b
 3 c
 4 NULL
+
+## TopK removal when it's completely covered by the finishing.
+## See https://github.com/MaterializeInc/materialize/issues/8194
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x int, y int);
+
+# We could remove the TopK, but we don't do this on the slow path currently.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK limit=10
+      Get materialize.public.t
+
+EOF
+
+statement ok
+CREATE INDEX t_idx on t(x);
+
+# Same as above, but for fast path recognition we already do the TopK removal.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10) LIMIT 8;
+----
+Explained Query (fast path):
+  Finish limit=8 output=[#0, #1]
+    ReadExistingIndex materialize.public.t_idx
+
+Used Indexes:
+  - materialize.public.t_idx (fast path limit)
+
+EOF
+
+# Same as above, but the finishing would need to be modified (merge the TopK into the finishing), because the TopK's
+# LIMIT is smaller. We don't do this currently, but it wouldn't be too difficult.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 8) LIMIT 10;
+----
+Explained Query:
+  Finish limit=10 output=[#0, #1]
+    TopK limit=8
+      Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# A negative example for the TopK removal: The TopK has a grouping key, so it shouldn't be removed.
+
+query T multiline
+EXPLAIN SELECT * FROM (
+  SELECT * FROM
+    (SELECT DISTINCT x FROM t) grp,
+    LATERAL (
+        SELECT y FROM t
+        WHERE x = grp.x
+        ORDER BY y LIMIT 4
+    )
+) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=4
+      Filter (#0) IS NOT NULL
+        Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# A negative example for the TopK removal: The TopK has a different ordering key, so it shouldn't be removed.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10) ORDER BY y LIMIT 8;
+----
+Explained Query:
+  Finish order_by=[#1 asc nulls_last] limit=8 output=[#0, #1]
+    TopK order_by=[#0 asc nulls_last] limit=10
+      Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# The TopK has an ordering key, but the finishing doesn't. We could merge the TopK into the finishing, but we don't
+# currently do this.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK order_by=[#0 asc nulls_last] limit=10
+      Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# Trivial finishing. We could merge the TopK into the finishing, but we don't currently do this.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10);
+----
+Explained Query:
+  TopK order_by=[#0 asc nulls_last] limit=10
+    Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# A negative example for the TopK removal: The TopK's ordering key is a prefix of the RowSetFinishing's, so it shouldn't
+# be removed.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10) ORDER BY x, y LIMIT 8;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] limit=8 output=[#0, #1]
+    TopK order_by=[#0 asc nulls_last] limit=10
+      Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# 3 nested LIMITs, so TopK fusion is needed to be able to go to fast path.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM (SELECT * FROM t LIMIT 8) LIMIT 10) LIMIT 6;
+----
+Explained Query (fast path):
+  Finish limit=6 output=[#0, #1]
+    ReadExistingIndex materialize.public.t_idx
+
+Used Indexes:
+  - materialize.public.t_idx (fast path limit)
+
+EOF
+
+# The TopK has an offset, so we shouldn't remove it. (We could merge it into the finishing, but we don't do that
+# currently.)
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10 OFFSET 3) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK limit=10 offset=3
+      Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
