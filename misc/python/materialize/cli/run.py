@@ -125,6 +125,12 @@ def main() -> int:
         "--wrapper",
         help="Wrapper command for the program",
     )
+    parser.add_argument(
+        "--monitoring",
+        help="Automatically send monitoring data.",
+        default=False,
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -174,9 +180,13 @@ def main() -> int:
             # opposite order.
             if args.reset:
                 # Remove everything in the `mzdata`` directory *except* for
-                # the `prometheus` directory.
+                # the `prometheus` directory and all contents of `tempo`.
                 paths = list(mzdata.glob("prometheus/*"))
-                paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                paths.extend(
+                    p
+                    for p in mzdata.glob("*")
+                    if p.name != "prometheus" and p.name != "tempo"
+                )
                 paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
@@ -213,6 +223,8 @@ def main() -> int:
                 "--bootstrap-role=materialize",
                 *args.args,
             ]
+            if args.monitoring:
+                command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
