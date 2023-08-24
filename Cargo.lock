@@ -4422,6 +4422,7 @@ dependencies = [
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
+ "once_cell",
  "prometheus",
  "proptest",
  "proptest-derive",

@@ -65,6 +65,7 @@
 
 use std::any::Any;
 use std::borrow::Borrow;
+use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::RangeBounds;
@@ -78,6 +79,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -994,6 +996,27 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
     internal: true,
 };
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_budget_bytes`].
+const PERSIST_STATS_BUDGET_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_stats_budget_bytes"),
+    value: &PersistConfig::DEFAULT_STATS_BUDGET_BYTES,
+    description: "The budget (in bytes) of how many stats to maintain per batch part.",
+    internal: true,
+};
+
+static PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS: Lazy<UntrimmableColumns> =
+    Lazy::new(|| PersistConfig::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone());
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_untrimmable_columns`].
+static PERSIST_STATS_UNTRIMMABLE_COLUMNS: Lazy<ServerVar<UntrimmableColumns>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("persist_stats_untrimmable_columns"),
+        value: &PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS,
+        description: "Which columns to always retain during persist stats trimming. The expected \
+        format is JSON (ex. `{\"equals\": [\"foo\"], \"prefixes\": [], \"suffixes\": [\"_bar\"]}`) \
+        and all strings must be lowercase.",
+        internal: true,
+    });
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
 const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
@@ -2138,6 +2161,8 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_STATS_BUDGET_BYTES)
+            .with_var(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
@@ -2670,6 +2695,17 @@ impl SystemVars {
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
+    }
+
+    /// Returns the `persist_stats_budget_bytes` configuration parameter.
+    pub fn persist_stats_budget_bytes(&self) -> usize {
+        *self.expect_value(&PERSIST_STATS_BUDGET_BYTES)
+    }
+
+    /// Returns the `persist_stats_untrimmable_columns` configuration parameter.
+    pub fn persist_stats_untrimmable_columns(&self) -> UntrimmableColumns {
+        self.expect_value(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
+            .clone()
     }
 
     /// Returns the `persist_pubsub_client_enabled` configuration parameter.
@@ -4186,6 +4222,30 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
     }
 }
 
+impl Value for UntrimmableColumns {
+    fn type_name() -> String {
+        "UntrimmableColumns".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let cols: UntrimmableColumns =
+            serde_json::from_str(s).map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: vec![s.to_string()],
+                reason: format!("{}", e),
+            })?;
+        Ok(cols)
+    }
+
+    fn format(&self) -> String {
+        serde_json::to_string(self).expect("serializable")
+    }
+}
+
 impl Value for CloneableEnvFilter {
     fn type_name() -> String {
         "EnvFilter".to_string()
@@ -4274,6 +4334,8 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_STATS_BUDGET_BYTES.name()
+        || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
 }
