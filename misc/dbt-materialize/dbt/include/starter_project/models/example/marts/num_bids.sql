@@ -19,15 +19,11 @@
 
 {{ config(materialized='materialized_view', indexes=[{'columns': ['item']}]) }}
 
--- Dependent on auction source but cannot reference subsource directly
-dep as (
-    SELECT * FROM {{ ref('auction') }}
-),
-
 SELECT
   auctions.item,
   count(bids.id) AS number_of_bids
-FROM bids
-JOIN auctions ON bids.auction_id = auctions.id
+FROM {{ source('auction','bids') }} AS bids
+JOIN FROM {{ source('auction','auctions') }} AS auctions
+  ON bids.auction_id = auctions.id
 WHERE bids.bid_time < auctions.end_time
 GROUP BY auctions.item
