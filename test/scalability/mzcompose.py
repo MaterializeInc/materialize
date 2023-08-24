@@ -12,6 +12,7 @@ import pathlib
 import sys
 import time
 from concurrent import futures
+from math import floor, sqrt
 from typing import Any, Optional, Tuple
 
 import pandas as pd
@@ -149,11 +150,16 @@ def run_workload(
         for c in concurrencies
         if c >= args.min_concurrency and c <= args.max_concurrency
     ]
-    print(f"Concurrencies to benchmark: {concurrencies}")
+    print(f"Concurrencies: {concurrencies}")
 
     for concurrency in concurrencies:
         df_total, df_detail = run_with_concurrency(
-            c, endpoint, schema, workload, concurrency, args.count
+            c,
+            endpoint,
+            schema,
+            workload,
+            concurrency,
+            floor(args.count * sqrt(concurrency)),
         )
         df_totals = pd.concat([df_totals, df_total])
         df_details = pd.concat([df_details, df_detail])
@@ -203,8 +209,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--count",
         metavar="COUNT",
         type=int,
-        default=2048,
-        help="Number of individual operations to benchmark",
+        default=512,
+        help="Number of individual operations to benchmark at concurrency 1 (and COUNT * SQRT(concurrency) for higher concurrencies)",
     )
 
     parser.add_argument(

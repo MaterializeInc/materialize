@@ -68,7 +68,7 @@ In both of those cases, Materialize, CRDB and Python will run within the same ma
 ./mzcompose run default --target=remote \--materialize-url="postgres://user:password@host:6875/materialize?sslmode=require" --cluster-name= ...
 ```
 
-## Specifying the number of datapoints
+## Specifying the concurrencies to be benchmarked
 
 The framework uses an exponential function to determine what concurrencies to test. By default, exponent base of 2 is used, with a default
 minimum value of 1 and maximum of 256. To get more data points, you can modify the exponent base to be less than 2:
@@ -76,6 +76,14 @@ minimum value of 1 and maximum of 256. To get more data points, you can modify t
 ```
 ./mzcompose run default --exponent-base=1.5 --min-concurrency=N --max-concurrency=M
 ```
+
+## Specifying the number of operations
+
+The framework will run `--count=256` operations for concurrency=1 and then multiply the count by sqrt(concurrency) for higher concurrencies.
+
+This way, a larger number of operations will be performed for the higher concurrencies, leading to more stable results. If `--count`
+operations was used when benchmarking concurrency 256, the test would complete in a second, leading to unstable results.
+
 
 # Accuracy
 
