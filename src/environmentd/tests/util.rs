@@ -429,7 +429,6 @@ impl Listeners {
                             secrets_reader_aws_region: None,
                             secrets_reader_aws_prefix: None,
                         },
-                        variable_length_row_encoding: true,
                     },
                     secrets_controller,
                     cloud_resource_controller: None,
