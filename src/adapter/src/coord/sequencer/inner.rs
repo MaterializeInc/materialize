@@ -1960,21 +1960,33 @@ impl Coordinator {
                 if ctx.session().vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
-                self.strict_serializable_reads_tx
-                    .send(PendingReadTxn {
-                        txn: PendingRead::Read {
-                            txn: PendingTxn {
-                                ctx,
-                                response,
-                                action,
-                            },
-                            timestamp_context: determination.timestamp_context,
-                        },
-                        created: Instant::now(),
-                        num_requeues: 0,
-                    })
-                    .expect("sending to strict_serializable_reads_tx cannot fail");
-                return;
+                match (
+                    determination.oracle_read_ts.as_ref(),
+                    determination.timestamp_context.timestamp(),
+                ) {
+                    (Some(oracle_ts), Some(determined_ts)) if oracle_ts < determined_ts => {
+                        // The timestamp we picked for the query was beyond the
+                        // read timestamp provided by the oracle, meaning we
+                        // have to delay it.
+                        self.strict_serializable_reads_tx
+                            .send(PendingReadTxn {
+                                txn: PendingRead::Read {
+                                    txn: PendingTxn {
+                                        ctx,
+                                        response,
+                                        action,
+                                    },
+                                    timestamp_context: determination.timestamp_context,
+                                },
+                                created: Instant::now(),
+                                num_requeues: 0,
+                            })
+                            .expect("sending to strict_serializable_reads_tx cannot fail");
+                        return;
+                    }
+                    _ => (), // all good!
+                }
+                (response, action)
             }
             Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
                 self.internal_cmd_tx
