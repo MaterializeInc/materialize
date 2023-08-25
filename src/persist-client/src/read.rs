@@ -1102,12 +1102,11 @@ where
                     schemas.clone(),
                 )
                 .await;
+                lease_returner.return_leased_part(part);
 
                 while let Some(next) = fetched_part.next() {
                     yield next;
                 }
-
-                lease_returner.return_leased_part(part);
             }
         };
 
