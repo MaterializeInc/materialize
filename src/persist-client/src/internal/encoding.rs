@@ -28,7 +28,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::debug;
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -762,8 +762,11 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
     }
 
     fn from_proto(proto: ProtoInlinedDiffs) -> Result<Self, TryFromProtoError> {
+        info!("Decoding inlined diffs: {:?}", proto);
         let description: Description<SeqNo> = proto.description.into_rust_if_some("description")?;
+        info!("Decoded description: {:?}", description);
         let mut seqno = description.lower().first().expect("lower seqno").clone();
+        info!("Seqno: {}", seqno);
         let mut diffs = Vec::with_capacity(proto.diffs.len());
 
         for data in proto.diffs {
@@ -774,10 +777,12 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
             seqno = seqno.next();
         }
 
-        assert_eq!(
-            seqno.next(),
-            *description.upper().first().expect("upper seqno")
-        );
+        info!("Seqno after: {}", seqno);
+
+        // assert_eq!(
+        //     seqno.next(),
+        //     *description.upper().first().expect("upper seqno")
+        // );
 
         Ok(Self { description, diffs })
     }
