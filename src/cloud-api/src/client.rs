@@ -57,15 +57,7 @@ impl Client {
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        let mut endpoint = self.endpoint.clone();
-        endpoint.set_host(Some(&format!(
-            "api.{}",
-            self.endpoint
-                .domain()
-                .ok_or_else(|| Error::InvalidEndpointDomain)?
-        )))?;
-
-        self.build_request(method, path, endpoint).await
+        self.build_request(method, path, self.endpoint.clone()).await
     }
 
     /// Builds a request towards the `Client`'s endpoint
