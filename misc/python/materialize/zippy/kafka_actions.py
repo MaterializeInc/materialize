@@ -43,7 +43,7 @@ $ set schema={
 class KafkaStart(Action):
     """Start a Kafka instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [KafkaRunning()]
 
     def run(self, c: Composition) -> None:
@@ -82,7 +82,7 @@ class CreateTopicParameterized(ActionFactory):
         self.max_topics = max_topics
         self.envelopes_with_weights = envelopes_with_weights
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_topic_name = capabilities.get_free_capability_name(
             TopicExists, self.max_topics
         )
@@ -110,7 +110,7 @@ class CreateTopic(Action):
         self.topic = topic
         super().__init__(capabilities)
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.topic]
 
     def run(self, c: Composition) -> None:

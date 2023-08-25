@@ -41,7 +41,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 def run(args: argparse.Namespace) -> None:
     check_required_vars()
     instance_ids = []
-    filters: List[FilterTypeDef] = [
+    filters: list[FilterTypeDef] = [
         {
             "Name": "instance-state-name",
             "Values": ["pending", "running", "stopping", "stopped"],

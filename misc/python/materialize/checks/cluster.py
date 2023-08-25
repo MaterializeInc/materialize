@@ -14,7 +14,7 @@ from materialize.checks.checks import Check
 
 
 class CreateCluster(Check):
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         # This list MUST be of length 2.
         return [
             Testdrive(dedent(s))
@@ -76,7 +76,7 @@ class CreateCluster(Check):
 
 
 class DropCluster(Check):
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

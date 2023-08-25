@@ -78,5 +78,5 @@ class SshService(K8sService):
         )
 
 
-def ssh_resources(namespace: str = DEFAULT_K8S_NAMESPACE) -> List[K8sResource]:
+def ssh_resources(namespace: str = DEFAULT_K8S_NAMESPACE) -> list[K8sResource]:
     return [SshDeployment(namespace), SshService(namespace)]

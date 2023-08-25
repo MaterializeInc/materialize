@@ -52,7 +52,7 @@ class OptbenchRun(MeasurementSource):
         self._optbench_scenario = optbench_scenario
         self._query = query
 
-    def run(self, executor: Optional[Executor] = None) -> List[Timestamp]:
+    def run(self, executor: Optional[Executor] = None) -> list[Timestamp]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
         e = executor or self._executor
@@ -85,7 +85,7 @@ class OptbenchTPCH(Scenario):
 
     QUERY = 1
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [OptbenchInit("tpch")]
 
     def benchmark(self) -> MeasurementSource:

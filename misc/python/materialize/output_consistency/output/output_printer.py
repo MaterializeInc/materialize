@@ -55,7 +55,7 @@ class OutputPrinter(BaseOutputPrinter):
         )
         self.print_empty_line()
 
-    def print_reproduction_code(self, errors: List[ValidationError]) -> None:
+    def print_reproduction_code(self, errors: list[ValidationError]) -> None:
         self.reproduction_code_printer.print_reproduction_code(errors)
 
     def flush(self) -> None:

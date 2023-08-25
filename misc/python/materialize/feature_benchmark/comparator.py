@@ -19,7 +19,7 @@ class Comparator(Generic[T]):
         self.name = name
         self.type = type
         self.threshold = threshold
-        self._points: List[T] = []
+        self._points: list[T] = []
 
     def append(self, point: T) -> None:
         self._points.append(point)

@@ -18,7 +18,7 @@ class DynamicReturnTypeSpec(ReturnTypeSpec):
         super().__init__(DataTypeCategory.DYNAMIC, [param_index_to_take_type])
 
     def resolve_type_category(
-        self, input_arg_type_hints: List[DataTypeCategory]
+        self, input_arg_type_hints: list[DataTypeCategory]
     ) -> DataTypeCategory:
         if input_arg_type_hints is None:
             raise RuntimeError(

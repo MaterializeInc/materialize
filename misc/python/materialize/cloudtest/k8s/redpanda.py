@@ -101,5 +101,5 @@ class RedpandaService(K8sService):
 
 def redpanda_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
-) -> List[K8sResource]:
+) -> list[K8sResource]:
     return [RedpandaDeployment(namespace), RedpandaService(namespace)]

@@ -27,7 +27,7 @@ class CreateRole(Check):
     def initialize(self) -> Testdrive:
         return Testdrive("")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -87,7 +87,7 @@ class DropRole(CreateRole):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

@@ -41,7 +41,7 @@ class MzStart(Action):
                 print_statement=False,
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [MzIsRunning()]
 
 

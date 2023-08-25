@@ -35,6 +35,6 @@ class BooleanOperationParam(OperationParam):
         )
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return data_type.identifier == BOOLEAN_TYPE_IDENTIFIER

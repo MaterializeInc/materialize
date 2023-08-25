@@ -35,7 +35,7 @@ class DbOperationOrFunction:
 
     def __init__(
         self,
-        params: List[OperationParam],
+        params: list[OperationParam],
         min_param_count: int,
         max_param_count: int,
         return_type_spec: ReturnTypeSpec,
@@ -74,7 +74,7 @@ class DbOperationOrFunction:
             )
 
     def derive_characteristics(
-        self, args: List[Expression]
+        self, args: list[Expression]
     ) -> Set[ExpressionCharacteristics]:
         # a non-trivial implementation will be helpful for nested expressions
         return set()
@@ -82,10 +82,10 @@ class DbOperationOrFunction:
     def __str__(self) -> str:
         raise NotImplementedError
 
-    def try_resolve_exact_data_type(self, args: List[Expression]) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self, args: list[Expression]) -> Optional[DataType]:
         return None
 
-    def is_expected_to_cause_db_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_db_error(self, args: list[Expression]) -> bool:
         """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
         data_type)
         """
@@ -111,7 +111,7 @@ class DbOperation(DbOperationOrFunction):
     def __init__(
         self,
         pattern: str,
-        params: List[OperationParam],
+        params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
@@ -149,7 +149,7 @@ class DbFunction(DbOperationOrFunction):
     def __init__(
         self,
         function_name: str,
-        params: List[OperationParam],
+        params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
@@ -170,7 +170,7 @@ class DbFunction(DbOperationOrFunction):
         )
         self.function_name_in_lower_case = function_name.lower()
 
-    def validate_params(self, params: List[OperationParam]) -> None:
+    def validate_params(self, params: list[OperationParam]) -> None:
         optional_param_seen = False
 
         for param in params:
@@ -180,7 +180,7 @@ class DbFunction(DbOperationOrFunction):
             if param.optional:
                 optional_param_seen = True
 
-    def get_min_param_count(self, params: List[OperationParam]) -> int:
+    def get_min_param_count(self, params: list[OperationParam]) -> int:
         for index, param in enumerate(params):
             if param.optional:
                 return index
@@ -201,7 +201,7 @@ class DbFunctionWithCustomPattern(DbFunction):
         self,
         function_name: str,
         pattern_per_param_count: Dict[int, str],
-        params: List[OperationParam],
+        params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,

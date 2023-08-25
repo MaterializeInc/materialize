@@ -23,7 +23,7 @@ from materialize.output_consistency.input_data.types.text_type_provider import (
     TEXT_DATA_TYPE,
 )
 
-DATA_TYPES: List[DataType] = list(
+DATA_TYPES: list[DataType] = list(
     itertools.chain(
         NUMERIC_DATA_TYPES, [BOOLEAN_DATA_TYPE], DATE_TIME_DATA_TYPES, [TEXT_DATA_TYPE]
     )

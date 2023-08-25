@@ -34,7 +34,7 @@ class ExpressionWithArgs(Expression):
     def __init__(
         self,
         operation: DbOperationOrFunction,
-        args: List[Expression],
+        args: list[Expression],
         is_aggregate: bool,
         is_expect_error: bool,
     ):
@@ -112,7 +112,7 @@ class ExpressionWithArgs(Expression):
 
         return involved_characteristics
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         leaves = []
 
         for arg in self.args:
@@ -146,7 +146,7 @@ class ExpressionWithArgs(Expression):
         return False
 
 
-def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
+def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
     mutual_storage_layout: Optional[ValueStorageLayout] = None
 
     for arg in args:

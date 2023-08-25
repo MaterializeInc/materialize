@@ -28,7 +28,7 @@ from materialize.output_consistency.operation.operation import (
 )
 
 # note that for all types with relevance DEFAULT the relevance is reduced to LOW at the end of this file
-TRIGONOMETRIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
+TRIGONOMETRIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(

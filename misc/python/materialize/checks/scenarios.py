@@ -42,7 +42,7 @@ from materialize.util import MzVersion
 
 class Scenario:
     def __init__(
-        self, checks: List[Type[Check]], executor: Executor, seed: Optional[str] = None
+        self, checks: list[Type[Check]], executor: Executor, seed: Optional[str] = None
     ) -> None:
         self._checks = checks
         self.executor = executor
@@ -54,12 +54,12 @@ class Scenario:
             check_class(self.base_version(), self.rng) for check_class in self.checks()
         ]
 
-    def checks(self) -> List[Type[Check]]:
+    def checks(self) -> list[Type[Check]]:
         if self.rng:
             self.rng.shuffle(self._checks)
         return self._checks
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         assert False
 
     def base_version(self) -> MzVersion:
@@ -84,7 +84,7 @@ class Scenario:
 
 
 class NoRestartNoUpgrade(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -95,7 +95,7 @@ class NoRestartNoUpgrade(Scenario):
 
 
 class RestartEntireMz(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -112,7 +112,7 @@ class RestartEntireMz(Scenario):
 
 
 class DropCreateDefaultReplica(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -126,7 +126,7 @@ class DropCreateDefaultReplica(Scenario):
 class RestartClusterdCompute(Scenario):
     """Restart clusterd by having it run in a separate container that is then killed and restarted."""
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             StartClusterdCompute(),
@@ -147,7 +147,7 @@ class RestartClusterdCompute(Scenario):
 class RestartEnvironmentdClusterdStorage(Scenario):
     """Restart environmentd and storage clusterds (as spawned from it), while keeping computed running by placing it in a separate container."""
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             StartClusterdCompute(),
@@ -171,7 +171,7 @@ class RestartEnvironmentdClusterdStorage(Scenario):
 class KillClusterdStorage(Scenario):
     """Kill storage clusterd while it is running inside the enviromentd container. The process orchestrator will (try to) start it again."""
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             StartClusterdCompute(),
@@ -187,7 +187,7 @@ class KillClusterdStorage(Scenario):
 
 
 class RestartCockroach(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -201,7 +201,7 @@ class RestartCockroach(Scenario):
 
 
 class RestartSourcePostgres(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -215,7 +215,7 @@ class RestartSourcePostgres(Scenario):
 
 
 class RestartRedpandaDebezium(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),

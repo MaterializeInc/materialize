@@ -87,7 +87,7 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> List[Version]:
+def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
     """List all the version-like tags in the repo
 
     Args:

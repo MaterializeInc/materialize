@@ -29,7 +29,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    filters: List[FilterTypeDef] = []
+    filters: list[FilterTypeDef] = []
     if not args.all:
         filters.append({"Name": "tag:LaunchedBy", "Values": args.who or [whoami()]})
     print_instances(

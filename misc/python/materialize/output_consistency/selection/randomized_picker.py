@@ -40,12 +40,12 @@ class RandomizedPicker:
         return random.randint(min_value_incl, max_value_incl)
 
     def random_operation(
-        self, operations: List[DbOperationOrFunction], weights: List[float]
+        self, operations: list[DbOperationOrFunction], weights: list[float]
     ) -> DbOperationOrFunction:
         return random.choices(operations, k=1, weights=weights)[0]
 
     def random_type_with_values(
-        self, types_with_values: List[DataTypeWithValues]
+        self, types_with_values: list[DataTypeWithValues]
     ) -> DataTypeWithValues:
         return random.choice(types_with_values)
 
@@ -57,7 +57,7 @@ class RandomizedPicker:
         )
         return set(selected_rows)
 
-    def random_value(self, values: List[DataValue]) -> DataValue:
+    def random_value(self, values: list[DataValue]) -> DataValue:
         return random.choice(values)
 
     def convert_operation_relevance_to_number(

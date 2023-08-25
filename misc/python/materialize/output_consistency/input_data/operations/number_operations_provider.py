@@ -31,7 +31,7 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
-NUMERIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
+NUMERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(

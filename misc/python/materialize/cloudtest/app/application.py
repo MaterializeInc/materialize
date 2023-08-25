@@ -17,8 +17,8 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class Application:
-    resources: List[K8sResource]
-    images: List[str]
+    resources: list[K8sResource]
+    images: list[str]
     release_mode: bool
     aws_region: Optional[str]
 

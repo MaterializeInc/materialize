@@ -34,7 +34,7 @@ class NumericOperationParam(OperationParam):
         optional: bool = False,
         incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
         incompatibility_combinations: Optional[
-            List[Set[ExpressionCharacteristics]]
+            list[Set[ExpressionCharacteristics]]
         ] = None,
         only_int_type: bool = False,
         no_int_type_larger_int4: bool = False,
@@ -59,7 +59,7 @@ class NumericOperationParam(OperationParam):
         self.no_unsigned_type = no_unsigned_type
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         if not isinstance(data_type, NumberDataType):
             return False

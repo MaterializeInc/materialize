@@ -29,7 +29,7 @@ class QueryTemplate:
     def __init__(
         self,
         expect_error: bool,
-        select_expressions: List[Expression],
+        select_expressions: list[Expression],
         where_expression: Optional[Expression],
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
@@ -37,7 +37,7 @@ class QueryTemplate:
     ) -> None:
         assert storage_layout != ValueStorageLayout.ANY
         self.expect_error = expect_error
-        self.select_expressions: List[Expression] = select_expressions
+        self.select_expressions: list[Expression] = select_expressions
         self.where_expression = where_expression
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
@@ -47,7 +47,7 @@ class QueryTemplate:
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
 
-    def add_multiple_select_expressions(self, expressions: List[Expression]) -> None:
+    def add_multiple_select_expressions(self, expressions: list[Expression]) -> None:
         self.select_expressions.extend(expressions)
 
     def to_sql(

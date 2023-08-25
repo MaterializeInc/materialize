@@ -21,8 +21,8 @@ from materialize.parallel_workload.executor import Executor, QueryError
 
 class Worker:
     rng: random.Random
-    actions: List[Action]
-    weights: List[float]
+    actions: list[Action]
+    weights: list[float]
     end_time: float
     num_queries: int
     autocommit: bool
@@ -33,8 +33,8 @@ class Worker:
     def __init__(
         self,
         rng: random.Random,
-        actions: List[Action],
-        weights: List[float],
+        actions: list[Action],
+        weights: list[float],
         end_time: float,
         autocommit: bool,
         system: bool,

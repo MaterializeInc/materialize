@@ -58,7 +58,7 @@ class DateTimeOperationParam(OperationParam):
             self.supported_type_identifiers.append(TIMESTAMPTZ_TYPE_IDENTIFIER)
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
@@ -90,7 +90,7 @@ class TimeIntervalOperationParam(OperationParam):
         )
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)

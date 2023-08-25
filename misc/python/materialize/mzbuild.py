@@ -94,14 +94,14 @@ class RepositoryDetails:
         self.stable = stable
 
     def cargo(
-        self, subcommand: str, rustflags: List[str], channel: Optional[str] = None
-    ) -> List[str]:
+        self, subcommand: str, rustflags: list[str], channel: Optional[str] = None
+    ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
             arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags
         )
 
-    def tool(self, name: str) -> List[str]:
+    def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
         return xcompile.tool(self.arch, name)
 
@@ -331,7 +331,7 @@ class CargoPreImage(PreImage):
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether coverage is
         # enabled.
-        flags: List[str] = []
+        flags: list[str] = []
         if self.rd.release_mode:
             flags += "release"
         if self.rd.coverage:
@@ -358,9 +358,9 @@ class CargoBuild(CargoPreImage):
     @staticmethod
     def generate_cargo_build_command(
         rd: RepositoryDetails,
-        bins: List[str],
-        examples: List[str],
-    ) -> List[str]:
+        bins: list[str],
+        examples: list[str],
+    ) -> list[str]:
         rustflags = rustc_flags.coverage if rd.coverage else []
 
         cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
@@ -529,7 +529,7 @@ class Image:
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
-        self.pre_images: List[PreImage] = []
+        self.pre_images: list[PreImage] = []
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
@@ -702,7 +702,7 @@ class ResolvedImage:
             return True
         return False
 
-    def run(self, args: List[str] = [], docker_args: List[str] = []) -> None:
+    def run(self, args: list[str] = [], docker_args: list[str] = []) -> None:
         """Run a command in the image.
 
         Creates a container from the image and runs the command described by
@@ -827,7 +827,7 @@ class DependencySet:
             image.acquired = image.spec() in known_images
             self._dependencies[d.name] = image
 
-    def _prepare_batch(self, images: List[ResolvedImage]) -> None:
+    def _prepare_batch(self, images: list[ResolvedImage]) -> None:
         pre_images = collections.defaultdict(list)
         for image in images:
             for pre_image in image.image.pre_images:
@@ -1024,7 +1024,7 @@ class Repository:
         resolved = OrderedDict()
         visiting = set()
 
-        def visit(image: Image, path: List[str] = []) -> None:
+        def visit(image: Image, path: list[str] = []) -> None:
             if image.name in resolved:
                 return
             if image.name in visiting:

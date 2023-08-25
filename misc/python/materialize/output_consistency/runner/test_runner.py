@@ -45,7 +45,7 @@ class ConsistencyTestRunner:
         self,
         config: ConsistencyTestConfiguration,
         input_data: ConsistencyTestInputData,
-        evaluation_strategies: List[EvaluationStrategy],
+        evaluation_strategies: list[EvaluationStrategy],
         expression_generator: ExpressionGenerator,
         query_generator: QueryGenerator,
         outcome_comparator: ResultComparator,

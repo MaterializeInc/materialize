@@ -48,9 +48,9 @@ class ValidationOutcome:
     def __init__(self) -> None:
         self.success_reason: Optional[str] = None
         self.count_ignored_errors = 0
-        self.errors: List[ValidationError] = []
-        self.warnings: List[ValidationWarning] = []
-        self.remarks: List[ValidationRemark] = []
+        self.errors: list[ValidationError] = []
+        self.warnings: list[ValidationWarning] = []
+        self.remarks: list[ValidationRemark] = []
 
     def add_error(
         self, ignore_filter: InconsistencyIgnoreFilter, error: ValidationError

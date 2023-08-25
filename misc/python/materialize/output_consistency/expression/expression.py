@@ -56,7 +56,7 @@ class Expression:
         """Get all involved characteristics through recursion"""
         raise NotImplementedError
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         raise NotImplementedError
 
     def __str__(self) -> str:
@@ -120,7 +120,7 @@ class LeafExpression(Expression):
     def to_sql_as_column(self) -> str:
         return self.column_name
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         return [self]
 
     def is_leaf(self) -> bool:

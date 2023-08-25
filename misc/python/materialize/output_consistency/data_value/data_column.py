@@ -26,7 +26,7 @@ from materialize.output_consistency.selection.selection import DataRowSelection
 class DataColumn(LeafExpression):
     """A column with a value per row (in contrast to an `ExpressionWithArgs`) for VERTICAL storage"""
 
-    def __init__(self, data_type: DataType, row_values_of_column: List[DataValue]):
+    def __init__(self, data_type: DataType, row_values_of_column: list[DataValue]):
         column_name = f"{data_type.identifier.lower()}_val"
         super().__init__(
             column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
@@ -56,7 +56,7 @@ class DataColumn(LeafExpression):
 
         return involved_characteristics
 
-    def get_filtered_values(self, row_selection: DataRowSelection) -> List[DataValue]:
+    def get_filtered_values(self, row_selection: DataRowSelection) -> list[DataValue]:
         if row_selection.includes_all():
             return self.values
 
@@ -68,7 +68,7 @@ class DataColumn(LeafExpression):
 
         return selected_rows
 
-    def get_values_at_rows(self, row_selection: DataRowSelection) -> List[DataValue]:
+    def get_values_at_rows(self, row_selection: DataRowSelection) -> list[DataValue]:
         if row_selection.keys is None:
             return self.values
 

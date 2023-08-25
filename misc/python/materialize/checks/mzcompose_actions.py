@@ -29,7 +29,7 @@ class StartMz(MzcomposeAction):
     def __init__(
         self,
         tag: Optional[MzVersion] = None,
-        environment_extra: List[str] = [],
+        environment_extra: list[str] = [],
         system_parameter_defaults: Optional[Dict[str, str]] = None,
     ) -> None:
         self.tag = tag

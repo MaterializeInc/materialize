@@ -263,7 +263,7 @@ class PostExecutionInconsistencyIgnoreFilter:
         return NoIgnore()
 
     def _uses_shortcut_optimization(
-        self, expressions: List[Expression], contains_aggregation: bool
+        self, expressions: list[Expression], contains_aggregation: bool
     ) -> bool:
         if self._uses_aggregation_shortcut_optimization(
             expressions, contains_aggregation
@@ -275,7 +275,7 @@ class PostExecutionInconsistencyIgnoreFilter:
         return False
 
     def _uses_aggregation_shortcut_optimization(
-        self, expressions: List[Expression], contains_aggregation: bool
+        self, expressions: list[Expression], contains_aggregation: bool
     ) -> bool:
         if not contains_aggregation:
             # all current known optimizations causing issues involve aggregations
@@ -301,7 +301,7 @@ class PostExecutionInconsistencyIgnoreFilter:
         return False
 
     def _might_use_null_shortcut_optimization(
-        self, expressions: List[Expression]
+        self, expressions: list[Expression]
     ) -> bool:
         def is_null_expression(expression: Expression) -> bool:
             return isinstance(

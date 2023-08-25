@@ -174,26 +174,26 @@ DOUBLE_TYPE = NumberDataType(
     is_floating_point_type=True,
 )
 
-SIGNED_INT_TYPES: List[NumberDataType] = [
+SIGNED_INT_TYPES: list[NumberDataType] = [
     INT2_TYPE,
     INT4_TYPE,
     INT8_TYPE,
 ]
 
-UNSIGNED_INT_TYPES: List[NumberDataType] = [
+UNSIGNED_INT_TYPES: list[NumberDataType] = [
     UINT2_TYPE,
     UINT4_TYPE,
     UINT8_TYPE,
 ]
 
-FLOAT_OR_DECIMAL_DATA_TYPES: List[NumberDataType] = [
+FLOAT_OR_DECIMAL_DATA_TYPES: list[NumberDataType] = [
     DECIMAL39_0_TYPE,
     DECIMAL39_8_TYPE,
     REAL_TYPE,
     DOUBLE_TYPE,
 ]
 
-NUMERIC_DATA_TYPES: List[NumberDataType] = []
+NUMERIC_DATA_TYPES: list[NumberDataType] = []
 NUMERIC_DATA_TYPES.extend(SIGNED_INT_TYPES)
 NUMERIC_DATA_TYPES.extend(UNSIGNED_INT_TYPES)
 NUMERIC_DATA_TYPES.extend(FLOAT_OR_DECIMAL_DATA_TYPES)

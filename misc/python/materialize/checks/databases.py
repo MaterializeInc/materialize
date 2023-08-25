@@ -14,7 +14,7 @@ from materialize.checks.checks import Check
 
 
 class CheckDatabaseCreate(Check):
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -78,7 +78,7 @@ class CheckDatabaseCreate(Check):
 
 
 class CheckDatabaseDrop(Check):
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

@@ -233,7 +233,7 @@ class Identifiers(Check):
 
         return Testdrive(schemas() + cluster() + dedent(cmds))
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         cmds = [
             f"""
             > SET CLUSTER=identifiers;

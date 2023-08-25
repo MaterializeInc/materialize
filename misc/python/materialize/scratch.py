@@ -79,7 +79,7 @@ def instance_host(instance: Instance, user: Optional[str] = None) -> str:
     return f"{user}@{instance.id}"
 
 
-def print_instances(ists: List[Instance], format: str) -> None:
+def print_instances(ists: list[Instance], format: str) -> None:
     field_names = [
         "Name",
         "Instance ID",
@@ -267,7 +267,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
 
     rev = git.rev_parse(rev)
 
-    cmd: List[str] = [
+    cmd: list[str] = [
         "git",
         "push",
         "--no-verify",
@@ -302,7 +302,7 @@ class MachineDesc(BaseModel):
 
 
 def launch_cluster(
-    descs: List[MachineDesc],
+    descs: list[MachineDesc],
     *,
     nonce: Optional[str] = None,
     key_name: Optional[str] = None,
@@ -312,7 +312,7 @@ def launch_cluster(
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
     extra_env: Dict[str, str] = {},
-) -> List[Instance]:
+) -> list[Instance]:
     """Launch a cluster of instances with a given nonce"""
 
     if not nonce:
@@ -366,7 +366,7 @@ def whoami() -> str:
     return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
 
 
-def get_instances_by_tag(k: str, v: str) -> List[InstanceTypeDef]:
+def get_instances_by_tag(k: str, v: str) -> list[InstanceTypeDef]:
     return [
         i
         for r in boto3.client("ec2").describe_instances()["Reservations"]
@@ -375,7 +375,7 @@ def get_instances_by_tag(k: str, v: str) -> List[InstanceTypeDef]:
     ]
 
 
-def get_old_instances() -> List[InstanceTypeDef]:
+def get_old_instances() -> list[InstanceTypeDef]:
     def exists(i: InstanceTypeDef) -> bool:
         return i["State"]["Name"] != "terminated"
 
@@ -398,7 +398,7 @@ def mssh(
     instance: Instance,
     command: str,
     *,
-    extra_ssh_args: List[str] = [],
+    extra_ssh_args: list[str] = [],
     input: Optional[bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""

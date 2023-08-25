@@ -34,7 +34,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
     def __init__(self, input_data: ConsistencyTestInputData):
         self.input_data = input_data
 
-    def print_reproduction_code(self, errors: List[ValidationError]) -> None:
+    def print_reproduction_code(self, errors: list[ValidationError]) -> None:
         for error in errors:
             self.__print_reproduction_code_of_error(error)
 

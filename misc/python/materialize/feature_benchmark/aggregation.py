@@ -17,7 +17,7 @@ from materialize.feature_benchmark.measurement import Measurement
 
 class Aggregation:
     def __init__(self) -> None:
-        self._data: List[float] = []
+        self._data: list[float] = []
 
     def append(self, measurement: Measurement) -> None:
         self._data.append(measurement.value)

@@ -27,7 +27,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 
-GENERIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
+GENERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 GENERIC_OPERATION_TYPES.append(
     DbFunction(

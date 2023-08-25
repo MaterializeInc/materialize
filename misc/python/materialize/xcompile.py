@@ -55,8 +55,8 @@ def target(arch: Arch) -> str:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: List[str], channel: Optional[str] = None
-) -> List[str]:
+    arch: Arch, subcommand: str, rustflags: list[str], channel: Optional[str] = None
+) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
     Args:
@@ -121,7 +121,7 @@ def cargo(
 
 def tool(
     arch: Arch, name: str, channel: Optional[str] = None, prefix_name: bool = True
-) -> List[str]:
+) -> list[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
@@ -143,7 +143,7 @@ def tool(
     ]
 
 
-def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
+def _enter_builder(arch: Arch, channel: Optional[str] = None) -> list[str]:
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:

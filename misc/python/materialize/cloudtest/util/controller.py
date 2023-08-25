@@ -102,7 +102,7 @@ def parse_url(s: str) -> urllib.parse.ParseResult:
     return parsed
 
 
-def launch_controllers(controller_names: List[str]) -> None:
+def launch_controllers(controller_names: list[str]) -> None:
     try:
         subprocess.run(
             [

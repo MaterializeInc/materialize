@@ -98,7 +98,7 @@ def run(
     threads = []
     for i in range(num_threads):
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        weights: List[float]
+        weights: list[float]
         if complexity == Complexity.DDL:
             weights = [60, 30, 30, 30, 10]
         elif complexity == Complexity.DML:

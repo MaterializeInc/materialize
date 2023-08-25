@@ -24,7 +24,7 @@ class Executor:
     def Td(self, input: str) -> Any:
         raise NotImplementedError
 
-    def Kgen(self, topic: str, args: List[str]) -> Any:
+    def Kgen(self, topic: str, args: list[str]) -> Any:
         raise NotImplementedError
 
     def add_known_fragment(self, fragment: str) -> bool:
@@ -70,7 +70,7 @@ class Docker(Executor):
             capture=True,
         ).stdout
 
-    def Kgen(self, topic: str, args: List[str]) -> Any:
+    def Kgen(self, topic: str, args: list[str]) -> Any:
         return self._composition.run(
             "kgen", f"--topic=testdrive-{topic}-{self._seed}", *args
         )
@@ -173,6 +173,6 @@ class MzCloud(Executor):
             capture=True,
         ).stdout
 
-    def Kgen(self, topic: str, args: List[str]) -> Any:
+    def Kgen(self, topic: str, args: list[str]) -> Any:
         # TODO: Implement
         assert False

@@ -26,7 +26,7 @@ class CreateViewParameterized(ActionFactory):
     """Emits CreateView Actions within the constraints specified in the constructor."""
 
     @classmethod
-    def requires(cls) -> List[Set[Type[Capability]]]:
+    def requires(cls) -> list[Set[Type[Capability]]]:
         return [
             {MzIsRunning, SourceExists},
             {MzIsRunning, TableExists},
@@ -44,7 +44,7 @@ class CreateViewParameterized(ActionFactory):
         self.max_inputs = max_inputs
         self.expensive_aggregates = expensive_aggregates
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_view_name = capabilities.get_free_capability_name(
             ViewExists, self.max_views
         )
@@ -118,7 +118,7 @@ class CreateView(Action):
             + index
         )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.view]
 
 

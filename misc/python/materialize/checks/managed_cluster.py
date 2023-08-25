@@ -19,7 +19,7 @@ class CreateManagedCluster(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.58.0-dev")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -71,7 +71,7 @@ class DropManagedCluster(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.58.0-dev")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

@@ -57,7 +57,7 @@ class RenameSource(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(self._source_schema() + dedent(s))
             for s in [

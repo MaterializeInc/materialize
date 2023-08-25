@@ -16,7 +16,7 @@ from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.watermarks import Watermarks
 
-WatermarkedObjects = List[
+WatermarkedObjects = list[
     Union[
         TableExists,
         SourceExists,

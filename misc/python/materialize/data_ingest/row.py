@@ -20,11 +20,11 @@ class Operation(Enum):
 
 
 class Row:
-    fields: List[Field]
-    values: List[Any]
+    fields: list[Field]
+    values: list[Any]
     operation: Operation
 
-    def __init__(self, fields: List[Field], values: List[Any], operation: Operation):
+    def __init__(self, fields: list[Field], values: list[Any], operation: Operation):
         self.fields = fields
         self.values = values
         self.operation = operation

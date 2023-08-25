@@ -335,7 +335,7 @@ class PgDisruption:
         )
 
 
-disruptions: List[Disruption] = [
+disruptions: list[Disruption] = [
     KafkaDisruption(
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),

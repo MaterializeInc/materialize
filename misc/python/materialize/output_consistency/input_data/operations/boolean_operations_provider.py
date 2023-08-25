@@ -23,7 +23,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 
-BOOLEAN_OPERATION_TYPES: List[DbOperationOrFunction] = []
+BOOLEAN_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 BOOLEAN_OPERATION_TYPES.append(
     DbOperation(

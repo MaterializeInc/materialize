@@ -89,7 +89,7 @@ class PostgresDeployment(K8sDeployment):
 
 def postgres_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
-) -> List[K8sResource]:
+) -> list[K8sResource]:
     return [
         PostgresService(namespace),
         PostgresDeployment(namespace),

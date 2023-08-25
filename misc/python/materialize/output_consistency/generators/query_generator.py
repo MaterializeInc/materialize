@@ -50,19 +50,19 @@ class QueryGenerator:
 
         self.count_pending_expressions = 0
         # ONE query PER expression using the storage layout specified in the expression, expressions presumably fail
-        self.any_layout_presumably_failing_expressions: List[Expression] = []
+        self.any_layout_presumably_failing_expressions: list[Expression] = []
         # ONE query FOR ALL expressions accessing the horizontal storage layout; expressions presumably succeed and do
         # not contain aggregations
-        self.horizontal_layout_normal_expressions: List[Expression] = []
+        self.horizontal_layout_normal_expressions: list[Expression] = []
         # ONE query FOR ALL expressions accessing the horizontal storage layout and applying aggregations; expressions
         # presumably succeed
-        self.horizontal_layout_aggregate_expressions: List[Expression] = []
+        self.horizontal_layout_aggregate_expressions: list[Expression] = []
         # ONE query FOR ALL expressions accessing the vertical storage layout; expressions presumably succeed and do not
         # contain aggregations
-        self.vertical_layout_normal_expressions: List[Expression] = []
+        self.vertical_layout_normal_expressions: list[Expression] = []
         # ONE query FOR ALL expressions accessing the vertical storage layout and applying aggregations; expressions
         # presumably succeed
-        self.vertical_layout_aggregate_expressions: List[Expression] = []
+        self.vertical_layout_aggregate_expressions: list[Expression] = []
 
     def push_expression(self, expression: Expression) -> None:
         if expression.is_expect_error:
@@ -93,7 +93,7 @@ class QueryGenerator:
     def consume_queries(
         self,
         logger: ConsistencyTestLogger,
-    ) -> List[QueryTemplate]:
+    ) -> list[QueryTemplate]:
         queries = []
         queries.extend(
             self._create_multi_column_queries(
@@ -144,11 +144,11 @@ class QueryGenerator:
     def _create_multi_column_queries(
         self,
         logger: ConsistencyTestLogger,
-        expressions: List[Expression],
+        expressions: list[Expression],
         expect_error: bool,
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
-    ) -> List[QueryTemplate]:
+    ) -> list[QueryTemplate]:
         """Creates queries not exceeding the maximum column count"""
         if len(expressions) == 0:
             return []
@@ -182,8 +182,8 @@ class QueryGenerator:
         return queries
 
     def _create_single_column_queries(
-        self, logger: ConsistencyTestLogger, expressions: List[Expression]
-    ) -> List[QueryTemplate]:
+        self, logger: ConsistencyTestLogger, expressions: list[Expression]
+    ) -> list[QueryTemplate]:
         """Creates one query per expression"""
 
         queries = []
@@ -244,9 +244,9 @@ class QueryGenerator:
     def _remove_known_inconsistencies(
         self,
         logger: ConsistencyTestLogger,
-        expressions: List[Expression],
+        expressions: list[Expression],
         row_selection: DataRowSelection,
-    ) -> List[Expression]:
+    ) -> list[Expression]:
         indices_to_remove: list[int] = []
 
         for index, expression in enumerate(expressions):

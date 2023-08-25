@@ -36,7 +36,7 @@ class Target(Enum):
 
 
 class Definition:
-    def generate(self, fields: List[Field]) -> Iterator[RowList]:
+    def generate(self, fields: list[Field]) -> Iterator[RowList]:
         raise NotImplementedError
 
 
@@ -53,7 +53,7 @@ class Insert(Definition):
             )
         return self.count
 
-    def generate(self, fields: List[Field]) -> Iterator[RowList]:
+    def generate(self, fields: list[Field]) -> Iterator[RowList]:
         if self.count < 1:
             raise ValueError(
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
@@ -88,7 +88,7 @@ class Upsert(Definition):
         self.count = count.value
         self.record_size = record_size
 
-    def generate(self, fields: List[Field]) -> Iterator[RowList]:
+    def generate(self, fields: list[Field]) -> Iterator[RowList]:
         if self.count < 1:
             raise ValueError(
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
@@ -124,7 +124,7 @@ class Delete(Definition):
         self.record_size = record_size
         self.num = num
 
-    def generate(self, fields: List[Field]) -> Iterator[RowList]:
+    def generate(self, fields: list[Field]) -> Iterator[RowList]:
 
         if self.number_of_records == Records.ONE:
             values = [

@@ -134,7 +134,7 @@ class Database:
         with self.conn.cursor() as cursor:
             cursor.execute(statement)
 
-    def execute_all(self, statements: List[str]) -> None:
+    def execute_all(self, statements: list[str]) -> None:
         with self.conn.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
@@ -154,6 +154,6 @@ class Database:
 # -----------------
 
 
-def parse_from_file(path: Path) -> List[str]:
+def parse_from_file(path: Path) -> list[str]:
     """Parses a *.sql file to a list of queries."""
     return sqlparse.split(path.read_text())

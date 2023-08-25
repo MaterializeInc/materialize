@@ -32,7 +32,7 @@ class UpgradeEntireMz(Scenario):
     def base_version(self) -> MzVersion:
         return last_version
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         return [
             StartMz(tag=self.base_version()),
@@ -63,7 +63,7 @@ class UpgradeEntireMzTwoVersions(Scenario):
     def base_version(self) -> MzVersion:
         return previous_version
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         print(
             f"Upgrading starting from tag {self.base_version()} going through {last_version}"
         )
@@ -93,7 +93,7 @@ class UpgradeEntireMzSkipVersion(Scenario):
     def base_version(self) -> MzVersion:
         return previous_version
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         print(f"Upgrading starting from tag {self.base_version()} directly to HEAD")
         return [
             # Start with previous_version
@@ -118,7 +118,7 @@ class UpgradeEntireMzFourVersions(Scenario):
     def base_version(self) -> MzVersion:
         return minor_versions[-4]
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         print(
             f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {minor_versions[-2]} -> {minor_versions[-1]}"
         )
@@ -157,7 +157,7 @@ class UpgradeClusterdComputeLast(Scenario):
     def base_version(self) -> MzVersion:
         return last_version
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(tag=self.base_version()),
             StartClusterdCompute(tag=self.base_version()),
@@ -189,7 +189,7 @@ class UpgradeClusterdComputeFirst(Scenario):
     def base_version(self) -> MzVersion:
         return last_version
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(tag=self.base_version()),
             StartClusterdCompute(tag=self.base_version()),

@@ -233,7 +233,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     killer = Thread(target=kill_sqlsmith_with_delay)
     killer.start()
 
-    threads: List[Thread] = []
+    threads: list[Thread] = []
     aggregate: Dict[str, Any] = {"errors": [], "version": "", "queries": 0}
     for i in range(args.num_sqlsmith):
         cmd = [
@@ -256,7 +256,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: Dict[FrozenSet[Tuple[str, Any]], List[Dict[str, Any]]] = {}
+    new_errors: Dict[FrozenSet[Tuple[str, Any]], list[Dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(

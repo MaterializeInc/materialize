@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Type, Union
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource
 
-BenchmarkingSequence = Union[MeasurementSource, List[Union[Action, MeasurementSource]]]
+BenchmarkingSequence = Union[MeasurementSource, list[Union[Action, MeasurementSource]]]
 
 
 class RootScenario:
@@ -25,10 +25,10 @@ class RootScenario:
         self._scale = scale
         self._n: int = int(10**scale)
 
-    def shared(self) -> Optional[Union[Action, List[Action]]]:
+    def shared(self) -> Optional[Union[Action, list[Action]]]:
         return None
 
-    def init(self) -> Optional[Union[Action, List[Action]]]:
+    def init(self) -> Optional[Union[Action, list[Action]]]:
         return None
 
     def before(self) -> Action:

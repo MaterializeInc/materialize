@@ -29,17 +29,17 @@ class ConsistencyTestInputData:
     def __init__(
         self,
     ) -> None:
-        self.all_data_types_with_values: List[
+        self.all_data_types_with_values: list[
             DataTypeWithValues
         ] = ALL_DATA_TYPES_WITH_VALUES
-        self.all_operation_types: List[
+        self.all_operation_types: list[
             DbOperationOrFunction
         ] = self._get_without_disabled_operations(ALL_OPERATION_TYPES)
         self.max_value_count = self._get_max_value_count_of_all_types()
 
     def _get_without_disabled_operations(
-        self, operations: List[DbOperationOrFunction]
-    ) -> List[DbOperationOrFunction]:
+        self, operations: list[DbOperationOrFunction]
+    ) -> list[DbOperationOrFunction]:
         filtered_operations = []
 
         for operation in operations:

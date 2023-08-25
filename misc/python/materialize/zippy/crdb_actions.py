@@ -21,7 +21,7 @@ class CockroachStart(Action):
     def run(self, c: Composition) -> None:
         c.up("cockroach")
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [CockroachIsRunning()]
 
 

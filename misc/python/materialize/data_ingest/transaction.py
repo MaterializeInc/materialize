@@ -13,9 +13,9 @@ from materialize.data_ingest.rowlist import RowList
 
 
 class Transaction:
-    row_lists: List[RowList]
+    row_lists: list[RowList]
 
-    def __init__(self, row_lists: List[RowList]):
+    def __init__(self, row_lists: list[RowList]):
         self.row_lists = row_lists
 
     def __repr__(self) -> str:

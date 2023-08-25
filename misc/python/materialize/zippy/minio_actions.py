@@ -21,7 +21,7 @@ class MinioStart(Action):
     def run(self, c: Composition) -> None:
         c.up("minio")
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [MinioIsRunning()]
 
 

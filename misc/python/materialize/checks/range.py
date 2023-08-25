@@ -70,7 +70,7 @@ class Range(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         manipulation = """
                 > CREATE MATERIALIZED VIEW $view_name$ AS
                   SELECT

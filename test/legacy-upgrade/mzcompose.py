@@ -108,7 +108,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def test_upgrade_from_version(
     c: Composition,
     from_version: str,
-    priors: List[MzVersion],
+    priors: list[MzVersion],
     filter: str,
     style: str = "",
 ) -> None:

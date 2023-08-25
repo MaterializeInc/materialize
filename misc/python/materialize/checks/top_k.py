@@ -38,7 +38,7 @@ class BasicTopK(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -100,7 +100,7 @@ class MonotonicTopK(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schema() + dedent(s))
             for s in [
@@ -166,7 +166,7 @@ class MonotonicTop1(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schema() + dedent(s))
             for s in [

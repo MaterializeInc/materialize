@@ -27,7 +27,7 @@ from materialize.zippy.storaged_capabilities import StoragedRunning
 class DebeziumStart(Action):
     """Start a Debezium instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [DebeziumRunning()]
 
     def run(self, c: Composition) -> None:
@@ -128,5 +128,5 @@ class CreateDebeziumSource(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.debezium_source] if self.new_debezium_source else []

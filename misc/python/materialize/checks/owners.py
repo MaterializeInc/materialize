@@ -146,7 +146,7 @@ class Owners(Check):
             + self._alter_object_owners(2, expensive=True)
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [

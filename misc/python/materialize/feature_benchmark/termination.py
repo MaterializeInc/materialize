@@ -19,7 +19,7 @@ from materialize.feature_benchmark.measurement import Measurement
 class TerminationCondition:
     def __init__(self, threshold: float) -> None:
         self._threshold = threshold
-        self._data: List[float] = []
+        self._data: list[float] = []
 
     def terminate(self, measurement: Measurement) -> bool:
         assert False

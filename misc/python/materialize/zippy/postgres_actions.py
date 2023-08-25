@@ -20,7 +20,7 @@ from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTab
 class PostgresStart(Action):
     """Start a PostgresInstance instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [PostgresRunning()]
 
     def run(self, c: Composition) -> None:
@@ -95,7 +95,7 @@ class CreatePostgresTable(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.postgres_table] if self.new_postgres_table else []
 
 

@@ -24,7 +24,7 @@ SERVICES = [
 class TestCase:
     name: str
     dbt_env: Dict[str, str]
-    materialized_options: List[str]
+    materialized_options: list[str]
     materialized_image: Optional[str] = None
 
 

@@ -167,7 +167,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 )
 
             # Convert the Nodes from the path into Checks Actions
-            def actions(self) -> List[Action]:
+            def actions(self) -> list[Action]:
                 actions = []
                 for node in upgrade_scenario:
                     actions.extend(node.actions(self))
@@ -183,9 +183,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def random_simple_paths(
     G: nx.DiGraph, source: Node, target: Node
-) -> Generator[List[Node], None, None]:
+) -> Generator[list[Node], None, None]:
     current: Node = source
-    path: List[Node] = [source]
+    path: list[Node] = [source]
 
     def reset() -> None:
         nonlocal current, path
@@ -212,8 +212,8 @@ def random_simple_paths(
 
 
 def get_upgrade_scenarios(
-    versions: List[MzVersion], num_scenarios: int
-) -> List[List[Node]]:
+    versions: list[MzVersion], num_scenarios: int
+) -> list[list[Node]]:
     g = nx.DiGraph()
 
     # Nodes for the start and end of the upgrade scenario

@@ -18,12 +18,12 @@ from materialize.output_consistency.expression.expression_characteristics import
 class OperationArgsValidator:
     """Validator that performs heuristic checks to determine if a database error is to be expected"""
 
-    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         raise NotImplementedError
 
     def index_of(
         self,
-        args: List[Expression],
+        args: list[Expression],
         match_argument_fn: Callable[
             [Expression, Set[ExpressionCharacteristics], int], bool
         ],
@@ -43,7 +43,7 @@ class OperationArgsValidator:
 
     def index_of_characteristic_combination(
         self,
-        args: List[Expression],
+        args: list[Expression],
         characteristic_combination: Set[ExpressionCharacteristics],
         skip_argument_indices: Optional[Set[int]] = None,
     ) -> int:

@@ -45,7 +45,7 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
-DATE_TIME_OPERATION_TYPES: List[DbOperationOrFunction] = []
+DATE_TIME_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(

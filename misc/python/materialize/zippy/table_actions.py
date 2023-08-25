@@ -30,7 +30,7 @@ class CreateTableParameterized(ActionFactory):
     def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_table_name = capabilities.get_free_capability_name(
             TableExists, self.max_tables
         )
@@ -76,7 +76,7 @@ class CreateTable(Action):
             )
         )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.table]
 
 

@@ -26,7 +26,7 @@ class DataTypeWithValues:
             "NULL", "NULL", {ExpressionCharacteristics.NULL}
         )
         # values (and implicitly a column for each value for horizontal storage)
-        self.raw_values: List[DataValue] = [self.null_value]
+        self.raw_values: list[DataValue] = [self.null_value]
 
     def _create_raw_value(
         self,

@@ -62,5 +62,5 @@ class EnumConstant(Expression):
     def to_sql(self, is_root_level: bool) -> str:
         return self.value
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         return []

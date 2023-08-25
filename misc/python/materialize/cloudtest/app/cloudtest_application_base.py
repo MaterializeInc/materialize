@@ -34,10 +34,10 @@ class CloudtestApplicationBase(Application):
         self.create_resources()
         self.wait_resource_creation_completed()
 
-    def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
+    def get_resources(self, log_filter: Optional[str]) -> list[K8sResource]:
         raise NotImplementedError
 
-    def get_images(self) -> List[str]:
+    def get_images(self) -> list[str]:
         raise NotImplementedError
 
     def wait_resource_creation_completed(self) -> None:

@@ -96,7 +96,7 @@ class CreateReplica(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.replica] if self.new_replica else []
 
 

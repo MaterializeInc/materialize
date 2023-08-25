@@ -75,7 +75,7 @@ class Column:
 
 
 class DBObject:
-    columns: List[Column]
+    columns: list[Column]
 
 
 class Table(DBObject):
@@ -110,8 +110,8 @@ class View(DBObject):
     view_id: int
     base_object: DBObject
     base_object2: Optional[DBObject]
-    columns: List[Column]
-    source_columns: List[Column]
+    columns: list[Column]
+    source_columns: list[Column]
     materialized: bool
     join_column: Optional[Column]
     join_column2: Optional[Column]
@@ -213,7 +213,7 @@ class Cluster(DBObject):
     cluster_id: int
     managed: bool
     size: str
-    replicas: List[ClusterReplica]
+    replicas: list[ClusterReplica]
     replica_id: int
     introspection_interval: str
 
@@ -257,13 +257,13 @@ class Database:
     host: str
     port: int
     system_port: int
-    tables: List[Table]
+    tables: list[Table]
     table_id: int
-    views: List[View]
+    views: list[View]
     view_id: int
-    roles: List[Role]
+    roles: list[Role]
     role_id: int
-    clusters: List[Cluster]
+    clusters: list[Cluster]
     cluster_id: int
     indexes: Set[str]
     lock: threading.Lock

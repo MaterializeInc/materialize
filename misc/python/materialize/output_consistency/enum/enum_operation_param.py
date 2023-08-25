@@ -28,7 +28,7 @@ class EnumConstantOperationParam(OperationParam):
         self.add_quotes = add_quotes
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return isinstance(data_type, EnumDataType)
 

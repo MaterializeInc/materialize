@@ -25,7 +25,7 @@ class ParseError(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [
@@ -57,7 +57,7 @@ class ParseHexError(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [
@@ -94,7 +94,7 @@ class DataflowErrorRetraction(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [
@@ -160,7 +160,7 @@ class DecodeError(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schemas() + dedent(s))
             for s in [

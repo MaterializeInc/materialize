@@ -164,7 +164,7 @@ class Composition:
         self._write_compose()
 
     def _munge_services(
-        self, services: List[Tuple[str, dict]]
+        self, services: list[Tuple[str, dict]]
     ) -> mzbuild.DependencySet:
         images = []
 
@@ -582,7 +582,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: List[str]) -> None:
+    def pull_if_variable(self, services: list[str]) -> None:
         """Pull fresh service images in case the tag indicates thee underlying image may change over time.
 
         Args:
@@ -789,7 +789,7 @@ class Composition:
         input: str,
         service: str = "testdrive",
         persistent: bool = True,
-        args: List[str] = [],
+        args: list[str] = [],
         caller: Optional[Traceback] = None,
     ) -> None:
         """Run a string as a testdrive script.
@@ -815,7 +815,7 @@ class ServiceHealthcheck(TypedDict, total=False):
     """Configuration for a check to determine whether the containers for this
     service are healthy."""
 
-    test: Union[List[str], str]
+    test: Union[list[str], str]
     """A specification of a command to run."""
 
     interval: str
@@ -892,13 +892,13 @@ class ServiceConfig(TypedDict, total=False):
     By default, the name of the service is used as the hostname.
     """
 
-    extra_hosts: List[str]
+    extra_hosts: list[str]
     """Additional hostname mappings."""
 
-    entrypoint: List[str]
+    entrypoint: list[str]
     """Override the entrypoint specified in the image."""
 
-    command: List[str]
+    command: list[str]
     """Override the command specified in the image."""
 
     init: bool
@@ -907,7 +907,7 @@ class ServiceConfig(TypedDict, total=False):
     ports: Sequence[Union[int, str]]
     """Service ports to expose to the host."""
 
-    environment: List[str]
+    environment: list[str]
     """Additional environment variables to set.
 
     Each entry must be in the form `NAME=VALUE`.
@@ -915,16 +915,16 @@ class ServiceConfig(TypedDict, total=False):
     TODO(benesch): this should accept a `Dict[str, str]` instead.
     """
 
-    depends_on: Union[List[str], Dict[str, ServiceDependency]]
+    depends_on: Union[list[str], Dict[str, ServiceDependency]]
     """The list of other services that must be started before this one."""
 
-    tmpfs: List[str]
+    tmpfs: list[str]
     """Paths at which to mount temporary file systems inside the container."""
 
-    volumes: List[str]
+    volumes: list[str]
     """Volumes to attach to the service."""
 
-    networks: Dict[str, Dict[str, List[str]]]
+    networks: Dict[str, Dict[str, list[str]]]
     """Additional networks to join.
 
     TODO(benesch): this should use a nested TypedDict.
@@ -972,7 +972,7 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
     the arguments that the user provided to the workflow.
     """
 
-    def __init__(self, name: str, description: Optional[str], args: List[str]):
+    def __init__(self, name: str, description: Optional[str], args: list[str]):
         self.args = args
         super().__init__(prog=f"mzcompose run {name}", description=description)
 
@@ -980,7 +980,7 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[str]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
+    ) -> Tuple[argparse.Namespace, list[str]]:
         if args is None:
             args = self.args
         return super().parse_known_args(args, namespace)
@@ -988,8 +988,8 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
 
 # TODO(benesch): replace with Docker health checks.
 def _check_tcp(
-    cmd: List[str], host: str, port: int, timeout_secs: int, kind: str = ""
-) -> List[str]:
+    cmd: list[str], host: str, port: int, timeout_secs: int, kind: str = ""
+) -> list[str]:
     cmd.extend(
         [
             "timeout",

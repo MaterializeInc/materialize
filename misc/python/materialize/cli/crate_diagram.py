@@ -31,11 +31,11 @@ import toml
 
 from materialize import MZ_ROOT, spawn
 
-DepBuilder = DefaultDict[str, List[str]]
-DepMap = Dict[str, List[str]]
+DepBuilder = DefaultDict[str, list[str]]
+DepMap = Dict[str, list[str]]
 
 
-def split_list(items: str) -> List[str]:
+def split_list(items: str) -> list[str]:
     if items:
         return items.split(",")
     return []
@@ -58,7 +58,7 @@ def split_list(items: str) -> List[str]:
     default=None,
     help="The diagram file to generate. Default is 'crates{roots}.svg'",
 )
-def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
+def main(show: bool, diagram_file: Optional[str], roots: list[str]) -> None:
     if diagram_file is None:
         if roots:
             diagram_file = "crates-{}.svg".format("-".join(sorted(roots)))
@@ -70,7 +70,7 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
         data = toml.load(fh)
 
     members = set()
-    areas: DefaultDict[str, List[str]] = defaultdict(list)
+    areas: DefaultDict[str, list[str]] = defaultdict(list)
     member_meta = {}
     all_deps = {}
     for member_path in data["workspace"]["members"]:
@@ -133,7 +133,7 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
 
 
 def filter_to_roots(
-    areas: DepBuilder, local_deps: DepMap, roots: List[str]
+    areas: DepBuilder, local_deps: DepMap, roots: list[str]
 ) -> Tuple[DepMap, DepBuilder]:
     new_deps = defaultdict(set)
 
@@ -158,7 +158,7 @@ def filter_to_roots(
 
 
 def add_deps(
-    deps: DepMap, new_deps: DefaultDict[str, Set[str]], roots: List[str]
+    deps: DepMap, new_deps: DefaultDict[str, Set[str]], roots: list[str]
 ) -> None:
     for root in roots:
         for dep in deps[root]:
@@ -169,7 +169,7 @@ def add_deps(
 def write_dot_graph(
     member_meta: Dict[str, Dict[str, str]],
     local_deps: DepMap,
-    areas: Dict[str, List[str]],
+    areas: Dict[str, list[str]],
     out: IO,
 ) -> None:
     def disp(val: str, out: IO = out, **kwargs: Any) -> None:

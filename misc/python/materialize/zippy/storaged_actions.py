@@ -27,7 +27,7 @@ class StoragedStart(Action):
     def run(self, c: Composition) -> None:
         c.up("storaged")
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [StoragedRunning()]
 
 

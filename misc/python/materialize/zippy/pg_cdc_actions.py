@@ -81,5 +81,5 @@ class CreatePostgresCdcTable(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.postgres_cdc_table] if self.new_postgres_cdc_table else []

@@ -70,7 +70,7 @@ def make_filter(args: argparse.Namespace) -> Filter:
         return FilterFirst()
 
 
-def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCondition]:
+def make_termination_conditions(args: argparse.Namespace) -> list[TerminationCondition]:
     return [
         NormalDistributionOverlap(threshold=0.95),
         ProbForMin(threshold=0.90),
@@ -107,7 +107,7 @@ SERVICES = [
 
 def run_one_scenario(
     c: Composition, scenario: Type[Scenario], args: argparse.Namespace
-) -> List[Comparator]:
+) -> list[Comparator]:
     name = scenario.__name__
     print(f"--- Now benchmarking {name} ...")
 

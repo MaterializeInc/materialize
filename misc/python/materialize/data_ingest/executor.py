@@ -68,13 +68,13 @@ class KafkaExecutor(Executor):
     key_serialization_context: SerializationContext
     topic: str
     table: str
-    fields: List[Field]
+    fields: list[Field]
 
     def __init__(
         self,
         num: int,
         ports: Dict[str, int],
-        fields: List[Field],
+        fields: list[Field],
     ):
         super().__init__(ports)
 
@@ -215,7 +215,7 @@ class PgExecutor(Executor):
         self,
         num: int,
         ports: Dict[str, int],
-        fields: List[Field],
+        fields: list[Field],
     ):
         super().__init__(ports)
         self.pg_conn = pg8000.connect(

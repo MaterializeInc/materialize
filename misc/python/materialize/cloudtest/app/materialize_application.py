@@ -57,7 +57,7 @@ class MaterializeApplication(CloudtestApplicationBase):
 
         self.create_resources_and_wait()
 
-    def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
+    def get_resources(self, log_filter: Optional[str]) -> list[K8sResource]:
         return [
             *cockroach_resources(),
             *postgres_resources(),
@@ -79,7 +79,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             self.testdrive,
         ]
 
-    def get_images(self) -> List[str]:
+    def get_images(self) -> list[str]:
         return ["environmentd", "clusterd", "testdrive", "postgres"]
 
     def register_vpc_endpoint(self) -> None:

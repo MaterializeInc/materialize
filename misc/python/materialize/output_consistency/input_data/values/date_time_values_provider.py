@@ -23,7 +23,7 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
     DateTimeDataType,
 )
 
-DATE_TIME_DATA_TYPES_WITH_VALUES: List[DataTypeWithValues] = []
+DATE_TIME_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = []
 
 
 def __create_values(

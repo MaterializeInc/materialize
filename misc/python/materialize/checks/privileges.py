@@ -145,7 +145,7 @@ class Privileges(Check):
             + self._grant_privileges("role_2", 1, expensive=True)
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [

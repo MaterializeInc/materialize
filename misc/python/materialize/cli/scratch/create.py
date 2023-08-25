@@ -28,7 +28,7 @@ from materialize.scratch import (
 MAX_AGE_DAYS = 1.5
 
 
-def multi_json(s: str) -> List[Dict[Any, Any]]:
+def multi_json(s: str) -> list[Dict[Any, Any]]:
     """Read zero or more JSON objects from a string,
     without requiring each of them to be on its own line.
 

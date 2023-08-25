@@ -43,7 +43,7 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
-AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
+AGGREGATE_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 # array_agg without ordering (currently ignored)
 AGGREGATE_OPERATION_TYPES.append(

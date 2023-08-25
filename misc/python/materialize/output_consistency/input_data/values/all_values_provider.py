@@ -25,7 +25,7 @@ from materialize.output_consistency.input_data.values.text_values_provider impor
     TEXT_DATA_TYPE_WITH_VALUES,
 )
 
-ALL_DATA_TYPES_WITH_VALUES: List[DataTypeWithValues] = list(
+ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
     itertools.chain(
         list(VALUES_PER_NUMERIC_DATA_TYPE.values()),
         [BOOLEAN_DATA_TYPE_WITH_VALUES],

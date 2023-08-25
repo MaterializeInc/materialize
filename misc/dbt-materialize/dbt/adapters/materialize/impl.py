@@ -29,7 +29,7 @@ from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 @dataclass
 class MaterializeIndexConfig(dbtClassMixin):
-    columns: Optional[List[str]] = None
+    columns: Optional[list[str]] = None
     default: Optional[bool] = False
     name: Optional[str] = None
     cluster: Optional[str] = None
@@ -95,7 +95,7 @@ class MaterializeAdapter(PostgresAdapter):
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
-    ) -> List[MaterializeRelation]:
+    ) -> list[MaterializeRelation]:
         kwargs = {"schema_relation": schema_relation}
         results = self.execute_macro(LIST_RELATIONS_MACRO_NAME, kwargs=kwargs)
 

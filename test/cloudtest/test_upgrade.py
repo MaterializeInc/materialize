@@ -31,7 +31,7 @@ class CloudtestUpgrade(Scenario):
     def base_version(self) -> MzVersion:
         return LAST_RELEASED_VERSION
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             Initialize(self),
             Manipulate(self, phase=1),

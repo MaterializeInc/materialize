@@ -125,7 +125,7 @@ def cockroach_resources(
     / "misc"
     / "cockroach"
     / "setup_materialize.sql",
-) -> List[K8sResource]:
+) -> list[K8sResource]:
     return [
         CockroachConfigMap(namespace, path_to_setup_script),
         CockroachService(namespace),

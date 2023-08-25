@@ -16,7 +16,7 @@ from materialize.feature_benchmark.measurement import Measurement
 
 class Filter:
     def __init__(self) -> None:
-        self._data: List[float] = []
+        self._data: list[float] = []
 
     def filter(self, measurement: Measurement) -> bool:
         raise NotImplementedError
