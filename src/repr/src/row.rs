@@ -479,9 +479,9 @@ enum Tag {
 }
 
 impl Tag {
-    fn actual_int_length(self) -> usize {
+    fn actual_int_length(self) -> Option<usize> {
         use Tag::*;
-        match self {
+        let val = match self {
             NonNegativeInt16_0 | NonNegativeInt32_0 | NonNegativeInt64_0 => 0,
             NonNegativeInt16_8 | NonNegativeInt32_8 | NonNegativeInt64_8 => 1,
             NonNegativeInt16_16 | NonNegativeInt32_16 | NonNegativeInt64_16 => 2,
@@ -501,8 +501,9 @@ impl Tag {
             NegativeInt64_56 => 7,
             NegativeInt64_64 => 8,
 
-            _ => panic!(),
-        }
+            _ => return None,
+        };
+        Some(val)
     }
 }
 
@@ -559,6 +560,13 @@ fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
     byte
 }
 
+/// Read `length` bytes from `data` at `offset`, updating the
+/// latter. Extend the resulting buffer to an array of `N` bytes by
+/// inserting `FILL` in the k most significant bytes, where k = N - length.
+///
+/// SAFETY:
+///   * length <= N
+///   * offset + length <= data.len()
 unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
     data: &[u8],
     offset: &mut usize,
@@ -573,7 +581,13 @@ unsafe fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
     *offset += length;
     raw
 }
-
+/// Read `length` bytes from `data` at `offset`, updating the
+/// latter. Extend the resulting buffer to a negative `N`-byte
+/// twos complement integer by filling the remaining bits with 1.
+///
+/// SAFETY:
+///   * length <= N
+///   * offset + length <= data.len()
 unsafe fn read_byte_array_extending_negative<const N: usize>(
     data: &[u8],
     offset: &mut usize,
@@ -582,6 +596,13 @@ unsafe fn read_byte_array_extending_negative<const N: usize>(
     read_byte_array_sign_extending::<N, 255>(data, offset, length)
 }
 
+/// Read `length` bytes from `data` at `offset`, updating the
+/// latter. Extend the resulting buffer to a positive or zero `N`-byte
+/// twos complement integer by filling the remaining bits with 0.
+///
+/// SAFETY:
+///   * length <= N
+///   * offset + length <= data.len()
 unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
     data: &[u8],
     offset: &mut usize,
@@ -633,10 +654,14 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::Int16(i)
         }
         Tag::NonNegativeInt16_0 | Tag::NonNegativeInt16_16 | Tag::NonNegativeInt16_8 => {
+            // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
+            // and `data` is big enough because it was encoded validly. These assumptions
+            // are checked in debug asserts.
             let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
-                tag.actual_int_length(),
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int16(i)
         }
@@ -649,10 +674,14 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::NonNegativeInt32_8
         | Tag::NonNegativeInt32_16
         | Tag::NonNegativeInt32_24 => {
+            // SAFETY:`tag.actual_int_length()` is <= 32 for these tags,
+            // and `data` is big enough because it was encoded validly. These assumptions
+            // are checked in debug asserts.
             let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
-                tag.actual_int_length(),
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int32(i)
         }
@@ -669,18 +698,27 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::NonNegativeInt64_40
         | Tag::NonNegativeInt64_48
         | Tag::NonNegativeInt64_56 => {
+            // SAFETY:`tag.actual_int_length()` is <= 64 for these tags,
+            // and `data` is big enough because it was encoded validly. These assumptions
+            // are checked in debug asserts.
+
             let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
                 data,
                 offset,
-                tag.actual_int_length(),
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int64(i)
         }
         Tag::NegativeInt16_0 | Tag::NegativeInt16_16 | Tag::NegativeInt16_8 => {
+            // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
+            // and `data` is big enough because it was encoded validly. These assumptions
+            // are checked in debug asserts.
             let i = i16::from_le_bytes(read_byte_array_extending_negative(
                 data,
                 offset,
-                tag.actual_int_length(),
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int16(i)
         }
@@ -689,10 +727,14 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::NegativeInt32_8
         | Tag::NegativeInt32_16
         | Tag::NegativeInt32_24 => {
+            // SAFETY:`tag.actual_int_length()` is <= 32 for these tags,
+            // and `data` is big enough because it was encoded validly. These assumptions
+            // are checked in debug asserts.
             let i = i32::from_le_bytes(read_byte_array_extending_negative(
                 data,
                 offset,
-                tag.actual_int_length(),
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int32(i)
         }
@@ -705,10 +747,14 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::NegativeInt64_40
         | Tag::NegativeInt64_48
         | Tag::NegativeInt64_56 => {
+            // SAFETY:`tag.actual_int_length()` is <= 64 for these tags,
+            // and `data` is big enough because the row was encoded validly. These assumptions
+            // are checked in debug asserts.
             let i = i64::from_le_bytes(read_byte_array_extending_negative(
                 data,
                 offset,
-                tag.actual_int_length(),
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int64(i)
         }

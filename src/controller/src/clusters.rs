@@ -10,7 +10,7 @@
 //! Cluster management.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
