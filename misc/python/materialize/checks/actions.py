@@ -9,6 +9,7 @@
 
 import time
 from inspect import getframeinfo, stack
+from textwrap import dedent
 from typing import TYPE_CHECKING, Any, Optional
 
 from materialize.checks.executors import Executor
@@ -30,14 +31,29 @@ class Testdrive(Action):
     # Instruct pytest this class does not contain actual tests
     __test__ = False
 
-    def __init__(self, input: str) -> None:
+    def __init__(self, input: str, schema: Optional[str] = None) -> None:
+        self.schema: Optional[str] = schema
         self.input = input
         self.handle: Optional[Any] = None
         self.caller = getframeinfo(stack()[1][0])
 
     def execute(self, e: Executor) -> None:
         """Pass testdrive actions to be run by an Executor-specific implementation."""
-        self.handle = e.testdrive(self.input, self.caller)
+
+        td_input: str = self.input
+
+        if self.schema is not None:
+            td_input = (
+                dedent(
+                    f"""
+                > CREATE SCHEMA IF NOT EXISTS {self.schema};
+                > SET SCHEMA = {self.schema};
+                """
+                )
+                + td_input
+            )
+
+        self.handle = e.testdrive(td_input, self.caller)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)

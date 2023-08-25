@@ -62,7 +62,7 @@ class CreateTable(Check):
                 2
 
                 > SHOW CREATE TABLE create_table1;
-                materialize.public.create_table1 "CREATE TABLE \\"materialize\\".\\"public\\".\\"create_table1\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
+                materialize.createtable.create_table1 "CREATE TABLE \\"materialize\\".\\"createtable\\".\\"create_table1\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
 
                 ! INSERT INTO create_table1 (f2) VALUES (NULL);
                 contains: null value in column
@@ -74,7 +74,7 @@ class CreateTable(Check):
                 > DELETE FROM create_table1 WHERE f1 = 999;
 
                 > SHOW CREATE TABLE create_table2;
-                materialize.public.create_table2 "CREATE TABLE \\"materialize\\".\\"public\\".\\"create_table2\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
+                materialize.createtable.create_table2 "CREATE TABLE \\"materialize\\".\\"createtable\\".\\"create_table2\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
 
                 ! INSERT INTO create_table2 (f2) VALUES (NULL);
                 contains: null value in column
@@ -86,7 +86,7 @@ class CreateTable(Check):
                 > DELETE FROM create_table2 WHERE f1 = 999;
 
                 > SHOW CREATE TABLE create_table3;
-                materialize.public.create_table3 "CREATE TABLE \\"materialize\\".\\"public\\".\\"create_table3\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
+                materialize.createtable.create_table3 "CREATE TABLE \\"materialize\\".\\"createtable\\".\\"create_table3\\" (\\"f1\\" \\"pg_catalog\\".\\"int4\\", \\"f2\\" \\"pg_catalog\\".\\"int4\\" NOT NULL DEFAULT 1234)"
 
                 ! INSERT INTO create_table3 (f2) VALUES (NULL);
                 contains: null value in column

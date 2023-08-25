@@ -20,6 +20,9 @@ class Check:
         self.base_version = base_version
         self.rng = rng
 
+    def schema(self) -> str:
+        return self.__class__.__name__
+
     def _can_run(self) -> bool:
         return True
 
@@ -36,6 +39,7 @@ class Check:
         if self._can_run():
             self.current_version = e.current_mz_version
             self._initialize = self.initialize()
+            self._initialize.schema = self.schema()
             self._initialize.execute(e)
 
     def join_initialize(self, e: Executor) -> None:
@@ -49,6 +53,7 @@ class Check:
             assert (
                 len(self._manipulate) == 2
             ), f"manipulate() should return a list with exactly 2 elements, but actually returns {len(self._manipulate)} elements"
+            self._manipulate[phase].schema = self.schema()
             self._manipulate[phase].execute(e)
 
     def join_manipulate(self, e: Executor, phase: int) -> None:
@@ -59,6 +64,7 @@ class Check:
         if self._can_run():
             self.current_version = e.current_mz_version
             self._validate = self.validate()
+            self._validate.schema = self.schema()
             self._validate.execute(e)
 
     def join_validate(self, e: Executor) -> None:

@@ -66,6 +66,7 @@ class SinkUpsert(Check):
             for s in [
                 """
                 $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                SET SCHEMA=sinkupsert
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -108,6 +109,7 @@ class SinkUpsert(Check):
             dedent(
                 """
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                SET schema=sinkupsert
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize

@@ -96,6 +96,7 @@ class PgCdcBase:
                 ),
                 f"""
                 $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                SET SCHEMA = PgCdc
                 GRANT USAGE ON CONNECTION pg2 TO materialize
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -156,6 +157,7 @@ class PgCdcBase:
             dedent(
                 f"""
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                SET SCHEMA = PgCdc
                 GRANT SELECT ON postgres_source_tableA TO materialize
                 GRANT SELECT ON postgres_source_tableB TO materialize
                 GRANT SELECT ON postgres_source_tableC TO materialize
@@ -201,10 +203,10 @@ class PgCdcBase:
                     ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
                     Explained Query (fast path):
                       Project (#0, #1)
-                        ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
+                        ReadExistingIndex materialize.pgcdc.postgres_source_tablea_primary_idx
 
                     Used Indexes:
-                      - materialize.public.postgres_source_tablea_primary_idx (*** full scan ***)
+                      - materialize.pgcdc.postgres_source_tablea_primary_idx (*** full scan ***)
                     """
                 )
                 if self.base_version >= MzVersion.parse("0.50.0-dev")

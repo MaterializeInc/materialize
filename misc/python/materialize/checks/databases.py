@@ -14,6 +14,9 @@ from materialize.checks.checks import Check
 
 
 class CheckDatabaseCreate(Check):
+    def schema(self) -> str:
+        return "public"
+
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))
@@ -78,6 +81,9 @@ class CheckDatabaseCreate(Check):
 
 
 class CheckDatabaseDrop(Check):
+    def schema(self) -> str:
+        return "public"
+
     def manipulate(self) -> List[Testdrive]:
         return [
             Testdrive(dedent(s))

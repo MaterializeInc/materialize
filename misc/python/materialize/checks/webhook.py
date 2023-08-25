@@ -39,15 +39,15 @@ class Webhook(Check):
 
                 > CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;
 
-                $ webhook-append database=materialize schema=public name=webhook_text
+                $ webhook-append database=materialize schema=webhook name=webhook_text
                 fooä
 
-                $ webhook-append database=materialize schema=public name=webhook_json content-type=application/json app=platform-checks1
+                $ webhook-append database=materialize schema=webhook name=webhook_json content-type=application/json app=platform-checks1
                 {
                   "hello": "wörld"
                 }
 
-                $ webhook-append database=materialize schema=public name=webhook_bytes
+                $ webhook-append database=materialize schema=webhook name=webhook_bytes
                 \u0001
                 """
             )
@@ -58,26 +58,26 @@ class Webhook(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                $ webhook-append database=materialize schema=public name=webhook_text
+                $ webhook-append database=materialize schema=webhook name=webhook_text
                 bar❤️
 
-                $ webhook-append database=materialize schema=public name=webhook_json content-type=application/json app=
+                $ webhook-append database=materialize schema=webhook name=webhook_json content-type=application/json app=
                 {
                   "still": 123,
                   "foo": []
                 }
 
-                $ webhook-append database=materialize schema=public name=webhook_bytes
+                $ webhook-append database=materialize schema=webhook name=webhook_bytes
                 \u0000\u0000\u0000\u0000
                 """,
                 """
-                $ webhook-append database=materialize schema=public name=webhook_text
+                $ webhook-append database=materialize schema=webhook name=webhook_text
                 baz１２３
 
-                $ webhook-append database=materialize schema=public name=webhook_json content-type=application/json app=null
+                $ webhook-append database=materialize schema=webhook name=webhook_json content-type=application/json app=null
                 [{"good": "bye"}, 42, null]
 
-                $ webhook-append database=materialize schema=public name=webhook_bytes
+                $ webhook-append database=materialize schema=webhook name=webhook_bytes
                 \u0001\u0002\u0003\u0004
                 """,
             ]

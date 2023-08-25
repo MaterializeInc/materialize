@@ -193,6 +193,10 @@ class Identifiers(Check):
         self.ident = rng.choice(self.IDENTS) if rng else self.IDENTS[0]
         super().__init__(base_version, rng)
 
+    def schema(self) -> str:
+        # This Check does not use a dedicated schema
+        return "public"
+
     def initialize(self) -> Testdrive:
         cmds = f"""
             > SET cluster=identifiers;

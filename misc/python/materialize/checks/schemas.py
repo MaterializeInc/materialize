@@ -34,8 +34,7 @@ class CheckSchemas(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW SCHEMAS;
-                public
+                > SELECT name FROM mz_schemas WHERE name = 'to_be_created';
                 to_be_created
 
                 > SET DATABASE=to_be_dropped;

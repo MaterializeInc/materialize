@@ -15,6 +15,10 @@ from materialize.util import MzVersion
 
 
 class Owners(Check):
+    def schema(self) -> str:
+        # This Check does not use its own schema
+        return "public"
+
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
