@@ -2048,7 +2048,9 @@ pub async fn serve(
             }
 
             let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
-            let variable_length_row_encoding = catalog.system_config().variable_length_row_encoding_DANGEROUS();
+            let variable_length_row_encoding = catalog
+                .system_config()
+                .variable_length_row_encoding_DANGEROUS();
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(

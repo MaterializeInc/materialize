@@ -71,7 +71,7 @@ use std::fmt::Debug;
 use std::ops::RangeBounds;
 use std::str::FromStr;
 use std::string::ToString;
-use std::sync::{Arc, Mutex, atomic};
+use std::sync::{atomic, Arc, Mutex};
 use std::time::Duration;
 
 use itertools::Itertools;

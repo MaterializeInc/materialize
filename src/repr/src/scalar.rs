@@ -16,7 +16,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc, NaiveDate};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -2874,7 +2874,7 @@ impl<'a> ScalarType {
                             .and_hms_milli_opt(14, 32, 11, 1234)
                             .unwrap(),
                     )
-                        .unwrap(),
+                    .unwrap(),
                 ),
             ])
         });

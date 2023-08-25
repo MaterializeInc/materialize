@@ -307,7 +307,11 @@ impl CommandSpecialization {
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command<T>(&self, command: &mut ComputeCommand<T>) {
-        if let ComputeCommand::CreateInstance{logging_config, variable_length_row_encoding: _} = command {
+        if let ComputeCommand::CreateInstance {
+            logging_config,
+            variable_length_row_encoding: _,
+        } = command
+        {
             *logging_config = self.logging_config.clone();
         }
 

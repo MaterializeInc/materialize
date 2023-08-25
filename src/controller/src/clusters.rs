@@ -10,7 +10,7 @@
 //! Cluster management.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, atomic};
+use std::sync::{atomic, Arc};
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -240,7 +240,8 @@ where
         variable_length_row_encoding: bool,
     ) -> Result<(), anyhow::Error> {
         self.storage.create_instance(id);
-        self.compute.create_instance(id, config.arranged_logs, variable_length_row_encoding)?;
+        self.compute
+            .create_instance(id, config.arranged_logs, variable_length_row_encoding)?;
         Ok(())
     }
 

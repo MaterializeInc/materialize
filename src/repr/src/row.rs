@@ -1383,8 +1383,9 @@ pub fn datum_size_deterministic<const VAR: bool>(datum: &Datum) -> usize {
 /// This method can be used to right-size the allocation for a `Row`
 /// before calling [`RowPacker::extend`].
 pub fn datums_size_deterministic<'a, I, D, const VAR: bool>(iter: I) -> usize
-where I: IntoIterator<Item = D>,
-D: Borrow<Datum<'a>>,
+where
+    I: IntoIterator<Item = D>,
+    D: Borrow<Datum<'a>>,
 {
     iter.into_iter()
         .map(|d| datum_size_deterministic::<VAR>(d.borrow()))
