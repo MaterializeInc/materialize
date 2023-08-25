@@ -79,6 +79,9 @@ impl Coordinator {
             Message::RemovePendingPeeks { conn_id } => {
                 self.cancel_pending_peeks(&conn_id);
             }
+            Message::DetermineLinearizedReadTs(pending_peeks) => {
+                self.peek_stage_timestamp(pending_peeks).await;
+            }
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
@@ -770,6 +773,7 @@ impl Coordinator {
                 view_id,
                 index_id,
                 timeline_context,
+                oracle_read_ts,
                 source_ids,
                 in_immediate_multi_stmt_txn: _,
                 key,
@@ -790,6 +794,7 @@ impl Coordinator {
                         view_id,
                         index_id,
                         timeline_context,
+                        oracle_read_ts,
                         source_ids,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         key,

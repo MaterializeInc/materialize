@@ -243,6 +243,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         stmt: Statement<Raw>,
         params: mz_sql::plan::Params,
     },
+    DetermineLinearizedReadTs(Vec<PeekStageTimestamp>),
     PeekStageReady {
         ctx: ExecuteContext,
         stage: PeekStage,
@@ -286,6 +287,7 @@ impl Message {
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
+            Message::DetermineLinearizedReadTs(_) => "determine_linearized_read_ts",
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
         }
@@ -351,6 +353,7 @@ pub enum RealTimeRecencyContext {
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
         key: Vec<MirScalarExpr>,
@@ -394,6 +397,13 @@ pub struct PeekStageValidate {
 }
 
 #[derive(Debug)]
+pub struct PeekStageTimestamp {
+    ctx: ExecuteContext,
+    linearized_timeline: Timeline,
+    optimize_stage: PeekStageOptimize,
+}
+
+#[derive(Debug)]
 pub struct PeekStageOptimize {
     validity: PlanValidity,
     source: MirRelationExpr,
@@ -406,6 +416,7 @@ pub struct PeekStageOptimize {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
 }
 
@@ -423,6 +434,7 @@ pub struct PeekStageReadHolds {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
@@ -442,6 +454,7 @@ pub struct PeekStageFinish {
     view_id: GlobalId,
     index_id: GlobalId,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     key: Vec<MirScalarExpr>,
@@ -951,6 +964,9 @@ pub struct Coordinator {
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
+
+    /// Channel for reads that need a linearized read timestamp.
+    linearized_reads_ts_tx: mpsc::UnboundedSender<PeekStageTimestamp>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -1856,6 +1872,7 @@ impl Coordinator {
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
+        mut linearized_reads_ts_rx: mpsc::UnboundedReceiver<PeekStageTimestamp>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) {
@@ -1951,6 +1968,15 @@ impl Coordinator {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                Some(pending_peek) = linearized_reads_ts_rx.recv() => {
+                    let mut pending_peeks = vec![pending_peek];
+                    while let Ok(pending_peek) = linearized_reads_ts_rx.try_recv() {
+                        pending_peeks.push(pending_peek);
+                    }
+                    Message::DetermineLinearizedReadTs(pending_peeks)
+                }
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
@@ -2087,6 +2113,7 @@ pub async fn serve(
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (group_commit_tx, group_commit_rx) = appends::notifier();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
+    let (linearized_reads_ts_tx, linearized_reads_ts_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
@@ -2192,6 +2219,7 @@ pub async fn serve(
                 internal_cmd_tx,
                 group_commit_tx,
                 strict_serializable_reads_tx,
+                linearized_reads_ts_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: BTreeMap::new(),
@@ -2244,6 +2272,7 @@ pub async fn serve(
                 handle.block_on(coord.serve(
                     internal_cmd_rx,
                     strict_serializable_reads_rx,
+                    linearized_reads_ts_rx,
                     cmd_rx,
                     group_commit_rx,
                 ));

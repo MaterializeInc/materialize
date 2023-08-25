@@ -320,6 +320,29 @@ fn test_timestamp_selection() {
                         Some(isolation),
                     );
 
+                    // TODO: Factor out into method, or somesuch!
+                    let timeline_ctx = TimelineContext::TimestampDependent;
+                    let timeline = match &timeline_ctx {
+                        TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
+                        // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+                        TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
+                        TimelineContext::TimestampIndependent => None,
+                    };
+                    let isolation_level = IsolationLevel::from(isolation);
+                    let when = parse_query_when(&det.when);
+
+                    let oracle_read_ts = match &timeline {
+                        Some(timeline)
+                            if when.must_advance_to_timeline_ts()
+                                || (when.can_advance_to_timeline_ts()
+                                    && isolation_level == IsolationLevel::StrictSerializable) =>
+                        {
+                            // WIP: we're reaching into the TimestampProvider here. yikes!
+                            matches!(timeline, Timeline::EpochMilliseconds).then(|| f.oracle)
+                        }
+                        _ => None,
+                    };
+
                     let ts = block_on(f.determine_timestamp_for(
                         &catalog,
                         &session,
@@ -327,7 +350,8 @@ fn test_timestamp_selection() {
                         &parse_query_when(&det.when),
                         det.instance.parse().unwrap(),
                         &TimelineContext::TimestampDependent,
-                        None,
+                        oracle_read_ts,
+                        None, /* real_time_recency_ts */
                         &IsolationLevel::from(isolation),
                     ))
                     .unwrap();

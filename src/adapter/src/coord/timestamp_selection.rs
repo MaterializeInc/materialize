@@ -223,6 +223,7 @@ pub trait TimestampProvider {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
         isolation_level: &IsolationLevel,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
@@ -247,22 +248,6 @@ pub trait TimestampProvider {
             // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
             TimelineContext::TimestampIndependent => None,
-        };
-
-        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
-        // context we would use the timestamp oracle in the following scenarios:
-        // - The isolation level is Strict Serializable and the `when` allows us to use the
-        //   the timestamp oracle (ex: queries with no AS OF).
-        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
-        let oracle_read_ts = match &timeline {
-            Some(timeline)
-                if when.must_advance_to_timeline_ts()
-                    || (when.can_advance_to_timeline_ts()
-                        && isolation_level == &IsolationLevel::StrictSerializable) =>
-            {
-                self.oracle_read_ts(timeline).await
-            }
-            _ => None,
         };
 
         // Initialize candidate to the minimum correct time.
@@ -432,6 +417,7 @@ impl Coordinator {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
@@ -443,6 +429,7 @@ impl Coordinator {
                 when,
                 compute_instance,
                 timeline_context,
+                oracle_read_ts,
                 real_time_recency_ts,
                 isolation_level,
             )
@@ -471,6 +458,7 @@ impl Coordinator {
                         when,
                         compute_instance,
                         timeline_context,
+                        oracle_read_ts,
                         real_time_recency_ts,
                         &IsolationLevel::Serializable,
                     )
