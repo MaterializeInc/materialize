@@ -9,7 +9,7 @@
 
 import subprocess
 from textwrap import dedent
-from typing import List, Optional
+from typing import Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME

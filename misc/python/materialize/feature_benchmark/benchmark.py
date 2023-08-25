@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import sys
-from typing import Iterable, List, Optional, Type
+from typing import Iterable, Optional
 
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator

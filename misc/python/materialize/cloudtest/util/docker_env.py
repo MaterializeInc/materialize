@@ -9,7 +9,7 @@
 
 import os
 import uuid
-from typing import Any, Dict
+from typing import Any
 
 from materialize.cloudtest.util.jwt_key import JWK_PUBLIC_KEY
 

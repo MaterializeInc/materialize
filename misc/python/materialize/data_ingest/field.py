@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Callable, Optional, Type
+from typing import Any, Callable, Optional
 
 from pg8000.native import literal
 

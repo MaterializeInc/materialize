@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import List, Set
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,

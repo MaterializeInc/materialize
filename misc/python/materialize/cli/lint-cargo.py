@@ -11,7 +11,7 @@
 
 import sys
 from pprint import pprint
-from typing import Dict, List, Optional
+from typing import Optional
 
 from materialize import MZ_ROOT
 from materialize.cargo import Workspace

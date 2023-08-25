@@ -24,7 +24,7 @@ import webbrowser
 from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Any, DefaultDict, Dict, List, Optional, Set, Tuple
+from typing import IO, Any, DefaultDict, Optional
 
 import click
 import toml

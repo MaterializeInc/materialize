@@ -16,7 +16,7 @@ necessary to support this repository are implemented.
 """
 
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Optional
 
 import semver
 import toml

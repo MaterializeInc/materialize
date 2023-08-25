@@ -17,7 +17,7 @@ import shlex
 import subprocess
 import sys
 from subprocess import CalledProcessError
-from typing import Dict, List, NamedTuple, Optional, cast
+from typing import NamedTuple, Optional, cast
 
 import boto3
 from botocore.exceptions import ClientError

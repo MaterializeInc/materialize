@@ -13,7 +13,7 @@ import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Optional, Union
 
 try:
     from semver.version import Version

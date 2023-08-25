@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 import confluent_kafka  # type: ignore
 import pg8000

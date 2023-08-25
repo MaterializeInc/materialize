@@ -9,7 +9,7 @@
 
 from pathlib import Path
 from re import match
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 import numpy as np
 

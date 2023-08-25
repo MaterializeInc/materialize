@@ -9,7 +9,7 @@
 
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Sequence, Set, Type, TypeVar, Union
+from typing import Optional, Sequence, TypeVar, Union
 
 from materialize.mzcompose import Composition
 

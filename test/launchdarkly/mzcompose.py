@@ -11,7 +11,7 @@ from itertools import chain
 from os import environ
 from textwrap import dedent
 from time import sleep
-from typing import Any, List, Optional
+from typing import Any, Optional
 from uuid import uuid1
 
 import launchdarkly_api  # type: ignore

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import List, Optional
+from typing import Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor

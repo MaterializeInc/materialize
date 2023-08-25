@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 from collections import OrderedDict
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 import junit_xml
 

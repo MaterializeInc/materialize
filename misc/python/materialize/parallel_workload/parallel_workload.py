@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
-from typing import DefaultDict, List, Optional, Type
+from typing import DefaultDict, Optional
 
 import pg8000
 

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import List, Optional, Type
+from typing import Optional
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check

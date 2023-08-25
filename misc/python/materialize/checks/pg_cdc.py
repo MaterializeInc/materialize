@@ -9,7 +9,7 @@
 
 from random import Random
 from textwrap import dedent
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, CheckDisabled

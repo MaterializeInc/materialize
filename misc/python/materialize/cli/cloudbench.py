@@ -18,7 +18,7 @@ import os
 import shlex
 import sys
 import time
-from typing import List, NamedTuple, Optional, Union, cast
+from typing import NamedTuple, Optional, Union, cast
 
 import boto3
 

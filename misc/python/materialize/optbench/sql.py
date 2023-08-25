@@ -12,7 +12,7 @@ import re
 import ssl
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Optional, cast
 
 import numpy as np
 import pg8000

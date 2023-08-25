@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor

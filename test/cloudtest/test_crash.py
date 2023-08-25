@@ -10,7 +10,6 @@
 
 import subprocess
 from textwrap import dedent
-from typing import Tuple
 
 from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError

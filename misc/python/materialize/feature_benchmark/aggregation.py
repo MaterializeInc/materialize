@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import statistics
-from typing import Any, Callable, List
+from typing import Any, Callable
 
 import numpy as np
 

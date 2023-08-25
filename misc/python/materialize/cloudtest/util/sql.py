@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, List, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import psycopg
 from psycopg.connection import Connection

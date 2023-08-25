@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from math import ceil
-from typing import Dict, List, Optional, Type, Union
+from typing import Optional, Union
 
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource

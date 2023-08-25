@@ -13,7 +13,7 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Optional
 
 from materialize import MZ_ROOT, spawn
 

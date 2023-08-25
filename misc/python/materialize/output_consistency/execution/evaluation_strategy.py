@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,

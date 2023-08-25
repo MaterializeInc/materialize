@@ -10,7 +10,7 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Any, Optional
 
 from parameterized import parameterized_class  # type: ignore
 

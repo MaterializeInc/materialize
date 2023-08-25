@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Any, List
+from typing import Any
 
 from materialize.data_ingest.field import Field
 

@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import itertools
-from typing import List
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.input_data.types.boolean_type_provider import (

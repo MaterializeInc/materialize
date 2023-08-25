@@ -10,7 +10,7 @@
 import random
 import time
 from enum import Enum
-from typing import Iterator, List, Optional
+from typing import Iterator, Optional
 
 from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field

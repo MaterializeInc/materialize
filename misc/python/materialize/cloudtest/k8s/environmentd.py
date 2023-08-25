@@ -9,7 +9,7 @@
 
 import operator
 import urllib.parse
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 from kubernetes.client import (
     V1Container,

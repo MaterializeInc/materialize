@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Dbt, Materialized, Redpanda

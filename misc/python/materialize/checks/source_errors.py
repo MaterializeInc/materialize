@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check

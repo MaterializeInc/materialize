@@ -9,7 +9,7 @@
 
 import random
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Optional
 
 import pg8000
 

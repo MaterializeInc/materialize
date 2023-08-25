@@ -13,7 +13,7 @@ import sys
 import time
 from concurrent import futures
 from math import floor, sqrt
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main

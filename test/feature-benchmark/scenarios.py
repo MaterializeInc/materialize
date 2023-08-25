@@ -9,7 +9,6 @@
 
 
 from math import ceil, floor
-from typing import List
 
 from parameterized import parameterized_class  # type: ignore
 

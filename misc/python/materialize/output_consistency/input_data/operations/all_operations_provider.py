@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import itertools
-from typing import List
 
 from materialize.output_consistency.input_data.operations.aggregate_operations_provider import (
     AGGREGATE_OPERATION_TYPES,

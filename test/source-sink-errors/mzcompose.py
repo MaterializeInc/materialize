@@ -10,7 +10,7 @@
 import random
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, List, Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (

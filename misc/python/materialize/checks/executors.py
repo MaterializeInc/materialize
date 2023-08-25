@@ -10,7 +10,7 @@
 import random
 import threading
 from inspect import Traceback
-from typing import Any, Optional, Set
+from typing import Any, Optional
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mzcompose import Composition

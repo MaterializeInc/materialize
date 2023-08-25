@@ -11,7 +11,6 @@ import distutils.core
 import os
 import sys
 from pathlib import Path
-from typing import Set
 
 import requests
 

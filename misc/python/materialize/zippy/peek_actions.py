@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capability

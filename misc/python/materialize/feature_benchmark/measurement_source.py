@@ -9,7 +9,7 @@
 
 import re
 import time
-from typing import Callable, List, Optional, Union
+from typing import Callable, Optional, Union
 
 from materialize.feature_benchmark.executor import Executor
 

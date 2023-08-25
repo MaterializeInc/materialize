@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import time
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capability

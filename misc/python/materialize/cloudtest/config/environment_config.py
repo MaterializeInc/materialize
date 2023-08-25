@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 import pytest
 

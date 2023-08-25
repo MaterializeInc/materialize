@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import statistics
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 from scipy import stats  # type: ignore

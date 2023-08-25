@@ -9,7 +9,6 @@
 
 import datetime
 import uuid
-from typing import Tuple
 
 import jwt
 import requests

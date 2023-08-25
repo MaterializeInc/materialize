@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Iterator, List, Optional
+from typing import Callable, Iterator, Optional
 
 from materialize.feature_benchmark.executor import Executor
 

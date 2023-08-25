@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport

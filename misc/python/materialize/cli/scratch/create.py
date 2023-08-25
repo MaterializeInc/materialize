@@ -11,7 +11,7 @@ import argparse
 import datetime
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any
 
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (

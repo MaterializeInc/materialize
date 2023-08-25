@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional, Type
+from typing import Optional
 
 from dbt.adapters.postgres import PostgresRelation
 from dbt.dataclass_schema import StrEnum

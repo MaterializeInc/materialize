@@ -29,7 +29,7 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import IO, Any, List, Optional, Sequence, Text, Tuple, Union
+from typing import IO, Any, Optional, Sequence, Text, Union
 
 import junit_xml
 from humanize import naturalsize

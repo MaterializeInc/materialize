@@ -13,7 +13,6 @@ import sys
 import time
 import uuid
 from textwrap import dedent
-from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path

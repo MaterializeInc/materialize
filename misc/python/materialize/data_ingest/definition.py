@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Iterator, List, Optional
+from typing import Iterator, Optional
 
 from materialize.data_ingest.data_type import RecordSize
 from materialize.data_ingest.field import Field

@@ -12,7 +12,7 @@ import socket
 import subprocess
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from materialize.cloudtest.util.common import eprint, retry
 from materialize.cloudtest.util.docker_env import docker_env

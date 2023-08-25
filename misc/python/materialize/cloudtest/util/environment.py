@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import requests
 from requests import Response

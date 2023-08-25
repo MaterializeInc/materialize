@@ -9,7 +9,7 @@
 
 import random
 from textwrap import dedent
-from typing import List, Optional, Set, Type
+from typing import Optional
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability

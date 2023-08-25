@@ -31,18 +31,7 @@ from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import (
-    IO,
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    cast,
-)
+from typing import IO, Any, Iterable, Iterator, Optional, Sequence, cast
 
 import boto3
 import yaml

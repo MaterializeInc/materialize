@@ -12,7 +12,6 @@ operational after an upgrade.
 """
 
 import random
-from typing import Dict, List, Tuple
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (

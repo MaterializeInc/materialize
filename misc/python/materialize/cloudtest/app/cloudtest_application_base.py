@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from typing import List, Optional
+from typing import Optional
 
 from materialize import MZ_ROOT, mzbuild
 from materialize.cloudtest.app.application import Application

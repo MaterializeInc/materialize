@@ -10,7 +10,7 @@
 import random
 import threading
 from copy import copy
-from typing import List, Optional, Set, Type
+from typing import Optional
 
 from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor

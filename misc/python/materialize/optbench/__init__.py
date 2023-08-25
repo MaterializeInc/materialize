@@ -9,7 +9,7 @@
 
 from importlib import resources
 from pathlib import Path
-from typing import List, cast
+from typing import cast
 
 
 def resource_path(name: str) -> Path:

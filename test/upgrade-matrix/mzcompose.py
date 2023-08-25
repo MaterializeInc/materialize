@@ -11,7 +11,7 @@ import os
 import random
 import sys
 import time
-from typing import Generator, List
+from typing import Generator
 
 import networkx as nx
 

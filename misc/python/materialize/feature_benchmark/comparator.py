@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, List, Optional, Protocol, TypeVar
+from typing import Generic, Optional, Protocol, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
 

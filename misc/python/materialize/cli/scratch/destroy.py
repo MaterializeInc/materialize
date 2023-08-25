@@ -9,7 +9,6 @@
 
 import argparse
 import sys
-from typing import List
 
 import boto3
 from mypy_boto3_ec2.type_defs import FilterTypeDef

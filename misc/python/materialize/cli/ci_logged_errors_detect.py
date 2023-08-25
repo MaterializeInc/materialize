@@ -14,7 +14,7 @@ import argparse
 import os
 import re
 import sys
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Optional
 
 import requests
 
