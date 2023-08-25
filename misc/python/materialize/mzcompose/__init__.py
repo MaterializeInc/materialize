@@ -628,7 +628,7 @@ class Composition:
         )
 
         if persistent:
-            self.compose = old_compose
+            self.compose = old_compose  # type: ignore
             self._write_compose()
 
     def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
