@@ -119,15 +119,16 @@ use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::{self, ProbeNotify};
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::BranchWhen;
+use timely::dataflow::operators::{BranchWhen, Operator};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker as TimelyWorker;
-use timely::PartialOrder;
+use timely::{Data, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -240,6 +241,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
+
+                    // To avoid a memory spike during arrangement hydration (#21165), need to
+                    // ensure that the first frontier we report into the dataflow is beyond the
+                    // `as_of`.
+                    if let Some(as_of) = dataflow.as_of.clone() {
+                        ok_stream = suppress_early_progress(ok_stream, as_of);
+                    }
 
                     // If logging is enabled, log source frontier advancements. Note that we do
                     // this here instead of in the server.rs worker loop since we want to catch the
@@ -1003,4 +1011,57 @@ impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> 
     fn step_back(&self) -> Self {
         Product::new(self.outer.saturating_sub(1), self.inner.clone())
     }
+}
+
+/// Suppress progress messages for times before the given `as_of`.
+///
+/// This operator exists specifically to work around a memory spike we'd otherwise see when
+/// hydrating arrangements (#21165). The memory spike happens because when the `arrange_core`
+/// operator observes a frontier advancement without data it inserts an empty batch into the spine.
+/// When it later inserts the snapshot batch into the spine, an empty batch is already there and
+/// the spine initiates a merge of these batches, which requires allocating a new batch the size of
+/// the snapshot batch.
+///
+/// The strategy to avoid the spike is to prevent the insertion of that initial empty batch by
+/// ensuring that the first frontier advancement downstream `arrange_core` operators observe is
+/// beyond the `as_of`, so the snapshot data has already been collected.
+///
+/// To ensure this, this operator needs to take two measures:
+///  * Keep around a minimum capability until the input announces progress beyond the `as_of`.
+///  * Reclock all updates emitted at times not beyond the `as_of` to the minimum time.
+///
+/// The second measure requires elaboration: If we wouldn't reclock snapshot updates, they might
+/// still be upstream of `arrange_core` operators when those get to know about us dropping the
+/// minimum capability. The in-flight snapshot updates would hold back the input frontiers of
+/// `arrange_core` operators to the `as_of`, which would cause them to insert empty batches.
+fn suppress_early_progress<G, D>(
+    stream: Stream<G, D>,
+    as_of: Antichain<G::Timestamp>,
+) -> Stream<G, D>
+where
+    G: Scope,
+    D: Data,
+{
+    stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
+        let mut early_cap = Some(default_cap);
+
+        let mut buffer = Default::default();
+        move |input, output| {
+            input.for_each(|data_cap, data| {
+                data.swap(&mut buffer);
+                let mut session = if as_of.less_than(data_cap.time()) {
+                    output.session(&data_cap)
+                } else {
+                    let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
+                    output.session(cap)
+                };
+                session.give_vec(&mut buffer);
+            });
+
+            let frontier = input.frontier().frontier();
+            if !PartialOrder::less_equal(&frontier, &as_of.borrow()) {
+                early_cap.take();
+            }
+        }
+    })
 }
