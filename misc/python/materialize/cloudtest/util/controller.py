@@ -68,7 +68,7 @@ def wait_for_connectable(
     retry(
         f,
         max_attempts=max_attempts,
-        exception_types=[ConnectionRefusedError, socket.gaierror],
+        exception_types=[ConnectionRefusedError, socket.gaierror, socket.timeout],
         message=f"Error connecting to {address}. Tried {max_attempts} times.",
     )
 

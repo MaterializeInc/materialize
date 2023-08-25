@@ -90,7 +90,7 @@ def delete_environment_assignment(config: EnvironmentConfig) -> None:
             timeout=305,
         )
 
-    retry(delete_environment, 10, [requests.exceptions.HTTPError])
+    retry(delete_environment, 20, [requests.exceptions.HTTPError])
 
     env_kubectl = Kubectl(config.environment_context)
     sys_kubectl = Kubectl(config.system_context)
