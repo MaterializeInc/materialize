@@ -41,7 +41,8 @@ def wait_for_confluent(host: str) -> None:
 
 def mz_proc(container: Container) -> psutil.Process:
     container.reload()
-    docker_init = psutil.Process(container.attrs["State"]["Pid"])
+    pid = container.attrs["State"]["Pid"]  # type: ignore
+    docker_init = psutil.Process(pid)
     for child in docker_init.children(recursive=True):
         if child.name() == "materialized":
             return child
