@@ -8,9 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import sys
+from collections.abc import Callable
 from functools import partial
 from time import sleep
-from typing import Any, Callable, Optional, cast
+from typing import Any, cast
 
 eprint = partial(print, file=sys.stderr)
 
@@ -20,7 +21,7 @@ def retry(
     max_attempts: int,
     exception_types: list[type[Exception]],
     sleep_secs: int = 1,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> Any:
     result: Any = None
     for attempt in range(1, max_attempts + 1):

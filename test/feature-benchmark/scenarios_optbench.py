@@ -10,7 +10,7 @@
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -27,11 +27,11 @@ from materialize.feature_benchmark.scenario import Scenario
 
 class OptbenchInit(Action):
     def __init__(self, scenario: str, no_indexes: bool = False) -> None:
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
         self._scenario = scenario
         self._no_indexes = no_indexes
 
-    def run(self, executor: Optional[Executor] = None) -> None:
+    def run(self, executor: Executor | None = None) -> None:
         e = executor or self._executor
         statements = materialize.optbench.sql.parse_from_file(
             Path(f"misc/python/materialize/optbench/schema/{self._scenario}.sql")
@@ -48,11 +48,11 @@ class OptbenchInit(Action):
 
 class OptbenchRun(MeasurementSource):
     def __init__(self, optbench_scenario: str, query: int):
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
         self._optbench_scenario = optbench_scenario
         self._query = query
 
-    def run(self, executor: Optional[Executor] = None) -> list[Timestamp]:
+    def run(self, executor: Executor | None = None) -> list[Timestamp]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
         e = executor or self._executor

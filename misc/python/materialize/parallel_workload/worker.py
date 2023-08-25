@@ -11,7 +11,6 @@ import random
 import threading
 import time
 from collections import Counter, defaultdict
-from typing import DefaultDict, Optional
 
 import pg8000
 
@@ -27,8 +26,8 @@ class Worker:
     num_queries: int
     autocommit: bool
     system: bool
-    exe: Optional[Executor]
-    ignored_errors: DefaultDict[str, Counter[type[Action]]]
+    exe: Executor | None
+    ignored_errors: defaultdict[str, Counter[type[Action]]]
 
     def __init__(
         self,

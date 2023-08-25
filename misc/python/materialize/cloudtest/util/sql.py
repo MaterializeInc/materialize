@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Optional
+from typing import Any
 
 import psycopg
 from psycopg.abc import Params, Query
@@ -22,7 +22,7 @@ from materialize.cloudtest.util.web_request import WebRequests
 def sql_query(
     conn: Connection[Any],
     query: Query,
-    vars: Optional[Params] = None,
+    vars: Params | None = None,
 ) -> list[list[Any]]:
     cur = conn.cursor()
     cur.execute(query, vars)
@@ -32,7 +32,7 @@ def sql_query(
 def sql_execute(
     conn: Connection[Any],
     query: Query,
-    vars: Optional[Params] = None,
+    vars: Params | None = None,
 ) -> None:
     cur = conn.cursor()
     cur.execute(query, vars)
@@ -41,7 +41,7 @@ def sql_execute(
 def sql_execute_ddl(
     conn: Connection[Any],
     query: Query,
-    vars: Optional[Params] = None,
+    vars: Params | None = None,
 ) -> None:
     cur = psycopg.ClientCursor(conn)
     cur.execute(query, vars)
@@ -67,7 +67,7 @@ def sql_query_pgwire(
     auth: AuthConfig,
     environment: Environment,
     query: Query,
-    vars: Optional[Params] = None,
+    vars: Params | None = None,
 ) -> list[list[Any]]:
     with pgwire_sql_conn(auth, environment) as conn:
         eprint(f"QUERY: {query}")
@@ -78,7 +78,7 @@ def sql_execute_pgwire(
     auth: AuthConfig,
     environment: Environment,
     query: Query,
-    vars: Optional[Params] = None,
+    vars: Params | None = None,
 ) -> None:
     with pgwire_sql_conn(auth, environment) as conn:
         eprint(f"QUERY: {query}")

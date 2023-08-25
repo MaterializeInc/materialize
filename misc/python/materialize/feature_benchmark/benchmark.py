@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import sys
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
@@ -28,7 +28,7 @@ class Benchmark:
         filter: Filter,
         termination_conditions: list[TerminationCondition],
         aggregation_class: type[Aggregation],
-        scale: Optional[str] = None,
+        scale: str | None = None,
         measure_memory: bool = True,
     ) -> None:
         self._scale = scale

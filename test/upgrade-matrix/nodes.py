@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.mzcompose_actions import ConfigureMz, KillMz, StartMz
@@ -31,7 +30,7 @@ class EndUpgradeScenario(Node):
 
 
 class BeginVersion(Node):
-    def __init__(self, version: Optional[MzVersion]):
+    def __init__(self, version: MzVersion | None):
         self.version = version
 
     def __repr__(self) -> str:
@@ -47,7 +46,7 @@ class BeginVersion(Node):
 
 
 class EndVersion(Node):
-    def __init__(self, version: Optional[MzVersion]):
+    def __init__(self, version: MzVersion | None):
         self.version = version
 
     def __repr__(self) -> str:

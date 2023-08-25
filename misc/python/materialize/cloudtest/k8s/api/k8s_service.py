@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from typing import Any, Optional
+from typing import Any
 
 import pg8000
 import sqlparse
@@ -30,7 +30,7 @@ class K8sService(K8sResource):
             body=self.service, namespace=self.namespace()
         )
 
-    def node_port(self, name: Optional[str] = None) -> int:
+    def node_port(self, name: str | None = None) -> int:
         assert self.service and self.service.metadata and self.service.metadata.name
         service = self.api().read_namespaced_service(
             self.service.metadata.name, self.namespace()
@@ -52,7 +52,7 @@ class K8sService(K8sResource):
 
     def sql_conn(
         self,
-        port: Optional[str] = None,
+        port: str | None = None,
         user: str = "materialize",
     ) -> Connection:
         """Get a connection to run SQL queries against the service"""
@@ -64,7 +64,7 @@ class K8sService(K8sResource):
 
     def sql_cursor(
         self,
-        port: Optional[str] = None,
+        port: str | None = None,
         user: str = "materialize",
         autocommit: bool = True,
     ) -> Cursor:
@@ -76,7 +76,7 @@ class K8sService(K8sResource):
     def sql(
         self,
         sql: str,
-        port: Optional[str] = None,
+        port: str | None = None,
         user: str = "materialize",
     ) -> None:
         """Run a batch of SQL statements against the service."""
@@ -88,7 +88,7 @@ class K8sService(K8sResource):
     def sql_query(
         self,
         sql: str,
-        port: Optional[str] = None,
+        port: str | None = None,
         user: str = "materialize",
     ) -> Any:
         """Execute a SQL query against the service and return results."""

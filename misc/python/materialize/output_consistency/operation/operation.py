@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
@@ -39,7 +38,7 @@ class DbOperationOrFunction:
         min_param_count: int,
         max_param_count: int,
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
@@ -82,7 +81,7 @@ class DbOperationOrFunction:
     def __str__(self) -> str:
         raise NotImplementedError
 
-    def try_resolve_exact_data_type(self, args: list[Expression]) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self, args: list[Expression]) -> DataType | None:
         return None
 
     def is_expected_to_cause_db_error(self, args: list[Expression]) -> bool:
@@ -113,7 +112,7 @@ class DbOperation(DbOperationOrFunction):
         pattern: str,
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
     ):
@@ -151,7 +150,7 @@ class DbFunction(DbOperationOrFunction):
         function_name: str,
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
@@ -203,7 +202,7 @@ class DbFunctionWithCustomPattern(DbFunction):
         pattern_per_param_count: dict[int, str],
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,

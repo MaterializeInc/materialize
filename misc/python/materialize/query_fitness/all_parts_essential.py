@@ -21,7 +21,6 @@ or execution, the entire query will start producing a different result.
 Such queries are suitable for inclusion in regression tests
 """
 
-from typing import Optional
 
 from pg8000.dbapi import DatabaseError
 
@@ -29,7 +28,7 @@ from materialize.query_fitness.fitness_function import FitnessFunction
 
 
 class AllPartsEssential(FitnessFunction):
-    def _result_checksum(self, query: str) -> Optional[str]:
+    def _result_checksum(self, query: str) -> str | None:
         """Execute the query and return a 'checksum' of the result.
         In this implementation, the checksum is simply the serialization of the entire result set
         """

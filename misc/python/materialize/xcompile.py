@@ -13,7 +13,6 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import Optional
 
 from materialize import MZ_ROOT, spawn
 
@@ -55,7 +54,7 @@ def target(arch: Arch) -> str:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: list[str], channel: Optional[str] = None
+    arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
 ) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
@@ -120,7 +119,7 @@ def cargo(
 
 
 def tool(
-    arch: Arch, name: str, channel: Optional[str] = None, prefix_name: bool = True
+    arch: Arch, name: str, channel: str | None = None, prefix_name: bool = True
 ) -> list[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
@@ -143,7 +142,7 @@ def tool(
     ]
 
 
-def _enter_builder(arch: Arch, channel: Optional[str] = None) -> list[str]:
+def _enter_builder(arch: Arch, channel: str | None = None) -> list[str]:
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:

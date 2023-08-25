@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import re
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
@@ -29,7 +28,7 @@ DATE_TIME_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = []
 def __create_values(
     _values_of_type: DataTypeWithValues,
     _date_time_data_type: DateTimeDataType,
-    _timezone: Optional[str],
+    _timezone: str | None,
 ) -> None:
     timezone_value_suffix = f" {_timezone}" if _timezone else ""
     timezone_column_suffix = f"_{_timezone}" if _timezone else ""

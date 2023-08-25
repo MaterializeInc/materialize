@@ -122,6 +122,10 @@ class KafkaExecutor(Executor):
             f.result()
             print(f"Topic {topic} created")
 
+        # NOTE: this _could_ be refactored, but since we are fairly certain at
+        # this point there will be exactly one topic it should be fine.
+        topic = list(fs.keys())[0]
+
         schema_registry_conf = {"url": f"http://localhost:{ports['schema-registry']}"}
         registry = SchemaRegistryClient(schema_registry_conf)
 

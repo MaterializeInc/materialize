@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
@@ -114,7 +114,7 @@ class ExpressionGenerator:
     def pick_random_operation(
         self,
         include_aggregates: bool,
-        accept_op_filter: Optional[Callable[[DbOperationOrFunction], bool]] = None,
+        accept_op_filter: Callable[[DbOperationOrFunction], bool] | None = None,
     ) -> DbOperationOrFunction:
         all_weights = (
             self.operation_weights
@@ -138,9 +138,9 @@ class ExpressionGenerator:
     def generate_boolean_expression(
         self,
         use_aggregation: bool,
-        storage_layout: Optional[ValueStorageLayout],
+        storage_layout: ValueStorageLayout | None,
         nesting_level: int = NESTING_LEVEL_ROOT,
-    ) -> Optional[ExpressionWithArgs]:
+    ) -> ExpressionWithArgs | None:
         def accept_op(operation: DbOperationOrFunction) -> bool:
             if operation.is_aggregation != use_aggregation:
                 return False
@@ -157,9 +157,9 @@ class ExpressionGenerator:
     def generate_expression(
         self,
         operation: DbOperationOrFunction,
-        storage_layout: Optional[ValueStorageLayout] = None,
+        storage_layout: ValueStorageLayout | None = None,
         nesting_level: int = NESTING_LEVEL_ROOT,
-    ) -> Optional[ExpressionWithArgs]:
+    ) -> ExpressionWithArgs | None:
         if storage_layout is None:
             storage_layout = self._select_storage_layout(operation)
 

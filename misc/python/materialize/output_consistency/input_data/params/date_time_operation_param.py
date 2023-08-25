@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -38,7 +37,7 @@ class DateTimeOperationParam(OperationParam):
         support_time: bool = True,
         support_timestamp: bool = True,
         support_timestamp_tz: bool = True,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibilities: set[ExpressionCharacteristics] | None = None,
     ):
         super().__init__(
             DataTypeCategory.DATE_TIME,
@@ -80,7 +79,7 @@ class TimeIntervalOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibilities: set[ExpressionCharacteristics] | None = None,
     ):
         super().__init__(
             DataTypeCategory.DATE_TIME,

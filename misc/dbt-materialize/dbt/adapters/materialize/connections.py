@@ -15,7 +15,8 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
+
+import psycopg2
 
 import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
@@ -30,7 +31,7 @@ logger = AdapterLogger("Materialize")
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: Optional[str] = "default"
+    cluster: str | None = "default"
 
     @property
     def type(self):

@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
-
 import pg8000
 
 from materialize.mzcompose import Composition
@@ -32,7 +30,7 @@ class MaterializeRemote(Endpoint):
 class PostgresContainer(Endpoint):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
-        self._port: Optional[int] = None
+        self._port: int | None = None
         super().__init__()
 
     def host(self) -> str:
@@ -95,10 +93,10 @@ class MaterializeLocal(MaterializeNonRemote):
 
 
 class MaterializeContainer(MaterializeNonRemote):
-    def __init__(self, composition: Composition, image: Optional[str] = None) -> None:
+    def __init__(self, composition: Composition, image: str | None = None) -> None:
         self.composition = composition
         self.image = image
-        self._port: Optional[int] = None
+        self._port: int | None = None
         super().__init__()
 
     def port(self) -> int:

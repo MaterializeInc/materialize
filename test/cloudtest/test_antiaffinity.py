@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 import pytest
 
@@ -18,7 +17,7 @@ from materialize.cloudtest.util.wait import wait
 
 def zones_used(
     mz: MaterializeApplication,
-    replica_names: Optional[list[str]] = None,
+    replica_names: list[str] | None = None,
     cluster_name: str = "antiaffinity_cluster1",
 ) -> int:
     if replica_names is None:

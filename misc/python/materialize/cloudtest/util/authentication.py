@@ -9,8 +9,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import Callable, Optional
 
 import requests
 from requests.exceptions import ConnectionError
@@ -23,8 +23,8 @@ from materialize.cloudtest.util.jwt_key import fetch_jwt, make_jwt
 class AuthConfig:
     organization_id: str
     token: str
-    app_user: Optional[str]
-    app_password: Optional[str]
+    app_user: str | None
+    app_password: str | None
 
     refresh_fn: Callable[[AuthConfig], None]
 

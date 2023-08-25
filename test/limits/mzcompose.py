@@ -1185,7 +1185,7 @@ class ArrayAgg(Generator):
         slt = dedent(
             f"""
             > CREATE TABLE t ({
-                f", ".join(
+                ", ".join(
                     ", ".join([
                         f"a{i} STRING",
                         f"b{i} STRING",
@@ -1199,7 +1199,7 @@ class ArrayAgg(Generator):
             > INSERT INTO t DEFAULT VALUES;
 
             > CREATE MATERIALIZED VIEW v2 AS SELECT {
-                f", ".join(
+                ", ".join(
                     f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
                     for i in cls.all()
                 )
@@ -1236,7 +1236,7 @@ class FilterSubqueries(Generator):
             $ set-sql-timeout duration=600s
 
             > SELECT * FROM t1 AS a1 WHERE {
-                f" AND ".join(
+                " AND ".join(
                     f"f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})"
                     for i in cls.all()
                 )

@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from pg8000.native import literal
 
@@ -37,7 +38,7 @@ class Field:
         name: str,
         data_type: type[DataType],
         is_key: bool,
-        value_fn: Optional[Callable[[Any], Any]] = None,
+        value_fn: Callable[[Any], Any] | None = None,
     ):
         self.name = name
         self.data_type = data_type

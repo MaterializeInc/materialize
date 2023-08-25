@@ -28,15 +28,15 @@ import stat
 import subprocess
 import sys
 from collections import OrderedDict
-from functools import lru_cache
+from collections.abc import Iterable, Iterator, Sequence
+from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import IO, Any, Iterable, Iterator, Optional, Sequence, cast
+from typing import IO, Any, cast
 
 import boto3
 import yaml
 from botocore.exceptions import NoCredentialsError
-from typing_extensions import Self
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.elf import get_build_id
@@ -83,7 +83,7 @@ class RepositoryDetails:
         self.stable = stable
 
     def cargo(
-        self, subcommand: str, rustflags: list[str], channel: Optional[str] = None
+        self, subcommand: str, rustflags: list[str], channel: str | None = None
     ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
@@ -156,7 +156,7 @@ class PreImage:
         self.path = path
 
     @classmethod
-    def prepare_batch(cls, instances: list[Self]) -> None:
+    def prepare_batch(cls, instances: list["PreImage"]) -> None:
         """Prepare a batch of actions.
 
         This is useful for `PreImage` actions that are more efficient when
@@ -365,20 +365,21 @@ class CargoBuild(CargoPreImage):
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list[Self]) -> None:
+    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> None:
         super().prepare_batch(cargo_builds)
 
         if not cargo_builds:
             return
 
-        # Building all binaries and exmaples in the same `cargo build` command
+        # Building all binaries and examples in the same `cargo build` command
         # allows Cargo to link in parallel with other work, which can
         # meaningfully speed up builds.
 
-        rd: Optional[RepositoryDetails] = None
+        rd: RepositoryDetails | None = None
+        builds = cast(list[CargoBuild], cargo_builds)
         bins = set()
         examples = set()
-        for build in cargo_builds:
+        for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
@@ -523,7 +524,7 @@ class Image:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
             self.publish: bool = data.pop("publish", True)
-            self.description: Optional[str] = data.pop("description", None)
+            self.description: str | None = data.pop("description", None)
             self.mainline: bool = data.pop("mainline", True)
             for pre_image in data.pop("pre-image", []):
                 typ = pre_image.pop("type", None)
@@ -743,7 +744,7 @@ class ResolvedImage:
                 paths |= dep.inputs(transitive)
         return paths
 
-    @lru_cache(maxsize=None)
+    @cache
     def fingerprint(self) -> Fingerprint:
         """Fingerprint the inputs to the image.
 

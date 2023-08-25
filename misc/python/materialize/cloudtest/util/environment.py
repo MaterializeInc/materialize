@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from requests import Response
@@ -34,7 +34,7 @@ class Environment:
 
     def create_environment_assignment(
         self,
-        image: Optional[str] = None,
+        image: str | None = None,
     ) -> dict[str, Any]:
         environment_assignment = f"{self.auth.organization_id}-0"
         environment = f"environment-{environment_assignment}"

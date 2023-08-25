@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Iterator
 from enum import Enum
-from typing import Iterator, Optional
 
 from materialize.data_ingest.data_type import RecordSize
 from materialize.data_ingest.field import Field
@@ -118,7 +118,7 @@ class Delete(Definition):
         self,
         number_of_records: Records,
         record_size: RecordSize,
-        num: Optional[int] = None,
+        num: int | None = None,
     ):
         self.number_of_records = number_of_records
         self.record_size = record_size

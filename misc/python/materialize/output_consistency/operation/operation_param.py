@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -25,10 +24,9 @@ class OperationParam:
         self,
         type_category: DataTypeCategory,
         optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
-        incompatibility_combinations: Optional[
-            list[set[ExpressionCharacteristics]]
-        ] = None,
+        incompatibilities: set[ExpressionCharacteristics] | None = None,
+        incompatibility_combinations: list[set[ExpressionCharacteristics]]
+        | None = None,
     ):
         """
         Create a parameter for an operation.
