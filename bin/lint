@@ -65,6 +65,7 @@ copyright_files=$(grep -vE \
     -e 'test/pgtest/.*\.pt' \
     -e 'test/pgtest-mz/.*\.pt' \
     -e 'test/coordtest/.*\.ct' \
+    -e 'test/ldbc-bi/.*\.sql' \
     -e 'gen/.*\.rs' \
     -e 'misc/python/MANIFEST\.in' \
     -e 'misc/completions/.*' \

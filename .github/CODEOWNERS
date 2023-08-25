@@ -53,7 +53,9 @@
 /src/orchestrator-tracing           @benesch
 /src/ore                            @benesch
 /src/persist                        @MaterializeInc/persist
+/src/persist-cli                    @MaterializeInc/persist
 /src/persist-client                 @MaterializeInc/persist
+/src/persist-txn                    @MaterializeInc/persist
 /src/persist-types                  @MaterializeInc/persist
 /src/pgcopy                         @MaterializeInc/adapter
 /src/pgrepr                         @MaterializeInc/adapter
@@ -80,7 +82,10 @@
 # layer, despite being located in the `sql` crate.
 /src/sql/src/plan/lowering.rs       @MaterializeInc/compute
 /src/sql-lexer                      @MaterializeInc/adapter
-/src/sql-parser                     @MaterializeInc/adapter
+# DevEx is added as an owner of /src/sql-parser to increase awareness of
+# cross-team dependencies via notifications. The code is solely owned by the
+# Adapter team.
+/src/sql-parser                     @MaterializeInc/adapter @MaterializeInc/devex
 /src/sqllogictest                   @MaterializeInc/adapter
 /src/ssh-util                       @MaterializeInc/storage
 /src/stash                          @MaterializeInc/adapter

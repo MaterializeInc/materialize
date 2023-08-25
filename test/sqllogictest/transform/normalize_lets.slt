@@ -527,3 +527,64 @@ Explained Query:
                   Get l0
 
 EOF
+
+## Make sure that we run `NormalizeLets` just before `CollectIndexRequests`.
+## Regression test for https://github.com/MaterializeInc/materialize/issues/21175
+
+statement ok
+CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
+
+statement ok
+explain
+select
+  subq_0."c2" as c0,
+  ((select "attlen" from pg_catalog.pg_attribute limit 1 offset 4)
+      ) # ((pg_catalog.abs(
+        CAST((select "a" from public.t limit 1 offset 1)
+           as int2))) # (case when ((cast(null as oid)) < (cast(null as oid)))
+          or (((subq_0."c2" is not NULL)
+              and ((numrange(0,0)) <= (numrange(0,0))))
+            and ((((select "time" from mz_internal.mz_global_frontiers limit 1 offset 1)
+                  ) <> ((select pg_catalog.max("time") from mz_internal.mz_compute_import_frontiers_per_worker)
+                  ))
+              or (false))) then pg_catalog.abs(
+          CAST((select "tgtype" from pg_catalog.pg_trigger limit 1 offset 6)
+             as int2)) else pg_catalog.abs(
+          CAST((select "tgtype" from pg_catalog.pg_trigger limit 1 offset 6)
+             as int2)) end
+        )) as c1,
+  subq_0."c0" as c2
+from
+  (select
+        ref_0."credits_per_hour" as c0,
+        ref_0."credits_per_hour" as c1,
+        ref_0."replica_id" as c2,
+        ref_0."cluster_name" as c3,
+        (select "id" from mz_internal.mz_scheduling_elapsed_raw limit 1 offset 57)
+           as c4
+      from
+        mz_internal.mz_cluster_replica_history as ref_0
+      where ref_0."replica_id" is NULL
+      limit 102) as subq_0
+where (~ (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset 5)
+      ) <= (~ case when (case when (((((select "details" from mz_internal.mz_sink_statuses limit 1 offset 4)
+                    ) >= ((select pg_catalog.jsonb_agg("id") from mz_internal.mz_dataflow_operators)
+                    ))
+                or ((cast(0 as name)) >= (cast(null as name))))
+              or (subq_0."c1" is NULL))
+            and (((select pg_catalog.min("tgtype") from pg_catalog.pg_trigger)
+                   is not NULL)
+              and (true)) then (select "d" from public.t limit 1 offset 4)
+             else (select "d" from public.t limit 1 offset 4)
+             end
+          ) <> (pg_catalog.mod(
+          CAST(cast(coalesce((select pg_catalog.max("d") from public.t)
+              ,
+            (select "d" from public.t limit 1 offset 2)
+              ) as uint2) as uint2),
+          CAST((select "d" from public.t limit 1 offset 3)
+             as uint2))) then (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset 2)
+         else (select "replication_factor" from mz_catalog.mz_clusters limit 1 offset 2)
+         end
+      )
+limit 117;

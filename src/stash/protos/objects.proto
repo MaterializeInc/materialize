@@ -264,7 +264,10 @@ message SchemaId {
 }
 
 message ReplicaId {
-    uint64 value = 1;
+    oneof value {
+        uint64 system = 1;
+        uint64 user = 2;
+    }
 }
 
 message ReplicaLogging {
@@ -458,7 +461,7 @@ message AuditLogEventV1 {
 
     message CreateClusterReplicaV1 {
         string cluster_id = 1;
-        string cluser_name = 2;
+        string cluster_name = 2;
         StringWrapper replica_id = 3;
         string replica_name = 4;
         string logical_size = 5;

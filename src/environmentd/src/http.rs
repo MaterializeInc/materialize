@@ -452,12 +452,28 @@ impl AuthedClient {
         adapter_client: &Client,
         user: AuthedUser,
         active_connection_count: SharedConnectionCounter,
+        options: BTreeMap<String, String>,
     ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
         let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let conn_id = adapter_client.new_conn_id()?;
-        let session = adapter_client.new_session(conn_id, user);
-        let (adapter_client, _) = adapter_client.startup(session).await?;
+        let mut session = adapter_client.new_session(conn_id, user);
+        let mut set_setting_keys = Vec::new();
+        for (key, val) in options {
+            const LOCAL: bool = false;
+            if let Err(err) = session
+                .vars_mut()
+                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            {
+                session.add_notice(AdapterNotice::BadStartupSetting {
+                    name: key.to_string(),
+                    reason: err.to_string(),
+                })
+            } else {
+                set_setting_keys.push(key);
+            }
+        }
+        let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
         Ok(AuthedClient {
             client: adapter_client,
             drop_connection,
@@ -498,43 +514,31 @@ where
             )
         })?;
         let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
-        let mut client = AuthedClient::new(
+
+        let options = if params.options.is_empty() {
+            // It's possible 'options' simply wasn't provided, we don't want that to
+            // count as a failure to deserialize
+            BTreeMap::<String, String>::default()
+        } else {
+            match serde_json::from_str(&params.options) {
+                Ok(options) => options,
+                Err(_e) => {
+                    // If we fail to deserialize options, fail the request.
+                    let code = StatusCode::BAD_REQUEST;
+                    let msg = format!("Failed to deserialize {} map", "options".quoted());
+                    return Err((code, msg));
+                }
+            }
+        };
+
+        let client = AuthedClient::new(
             &adapter_client,
             user.clone(),
             Arc::clone(active_connection_count),
+            options,
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        // Apply options that were provided in query params.
-        let session = client.client.session();
-        let maybe_options = if params.options.is_empty() {
-            // It's possible 'options' simply wasn't provided, we don't want that to
-            // count as a failure to deserialize
-            Ok(BTreeMap::<String, String>::default())
-        } else {
-            serde_json::from_str(&params.options)
-        };
-
-        if let Ok(options) = maybe_options {
-            for (key, val) in options {
-                const LOCAL: bool = false;
-                if let Err(err) = session
-                    .vars_mut()
-                    .set(None, &key, VarInput::Flat(&val), LOCAL)
-                {
-                    session.add_notice(AdapterNotice::BadStartupSetting {
-                        name: key.to_string(),
-                        reason: err.to_string(),
-                    })
-                }
-            }
-        } else {
-            // If we fail to deserialize options, fail the request.
-            let code = StatusCode::BAD_REQUEST;
-            let msg = format!("Failed to deserialize {} map", "options".quoted());
-            return Err((code, msg));
-        }
 
         Ok(client)
     }
@@ -678,23 +682,13 @@ async fn init_ws(
     };
     let user = auth(frontegg, creds).await?;
 
-    let mut client =
-        AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
-
-    // Assign any options we got from our WebSocket startup.
-    let session = client.client.session();
-    for (key, val) in options {
-        const LOCAL: bool = false;
-        if let Err(err) = session
-            .vars_mut()
-            .set(None, &key, VarInput::Flat(&val), LOCAL)
-        {
-            session.add_notice(AdapterNotice::BadStartupSetting {
-                name: key,
-                reason: err.to_string(),
-            })
-        }
-    }
+    let client = AuthedClient::new(
+        adapter_client,
+        user,
+        Arc::clone(active_connection_count),
+        options,
+    )
+    .await?;
 
     Ok(client)
 }

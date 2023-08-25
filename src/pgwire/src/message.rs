@@ -11,11 +11,8 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_adapter::session::TransactionCode;
-use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
+use mz_adapter::{AdapterError, AdapterNotice, Severity};
 use mz_repr::{ColumnName, RelationDesc};
-use mz_sql::ast::NoticeSeverity;
-use mz_sql::plan::PlanNotice;
-use mz_sql::session::vars::ClientSeverity as AdapterClientSeverity;
 use postgres::error::SqlState;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -323,166 +320,9 @@ impl ErrorResponse {
         }
     }
 
-    pub fn from_startup_message(message: StartupMessage) -> ErrorResponse {
-        ErrorResponse {
-            severity: Severity::Notice,
-            code: SqlState::SUCCESSFUL_COMPLETION,
-            message: message.to_string(),
-            detail: message.detail(),
-            hint: message.hint(),
-            position: None,
-        }
-    }
-
     pub fn with_position(mut self, position: usize) -> ErrorResponse {
         self.position = Some(position);
         self
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Severity {
-    Panic,
-    Fatal,
-    Error,
-    Warning,
-    Notice,
-    Debug,
-    Info,
-    Log,
-}
-
-impl Severity {
-    pub fn is_error(&self) -> bool {
-        matches!(self, Severity::Panic | Severity::Fatal | Severity::Error)
-    }
-
-    pub fn is_fatal(&self) -> bool {
-        matches!(self, Severity::Fatal)
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Severity::Error => "ERROR",
-            Severity::Fatal => "FATAL",
-            Severity::Panic => "PANIC",
-            Severity::Warning => "WARNING",
-            Severity::Notice => "NOTICE",
-            Severity::Debug => "DEBUG",
-            Severity::Info => "INFO",
-            Severity::Log => "LOG",
-        }
-    }
-
-    /// Checks if a message of a given severity level should be sent to a client.
-    ///
-    /// The ordering of severity levels used for client-level filtering differs from the
-    /// one used for server-side logging in two aspects: INFO messages are always sent,
-    /// and the LOG severity is considered as below NOTICE, while it is above ERROR for
-    /// server-side logs.
-    ///
-    /// Postgres only considers the session setting after the client authentication
-    /// handshake is completed. Since this function is only called after client authentication
-    /// is done, we are not treating this case right now, but be aware if refactoring it.
-    pub fn should_output_to_client(&self, minimum_client_severity: &AdapterClientSeverity) -> bool {
-        match (minimum_client_severity, self) {
-            // INFO messages are always sent
-            (_, Severity::Info) => true,
-            (AdapterClientSeverity::Error, Severity::Error | Severity::Fatal | Severity::Panic) => {
-                true
-            }
-            (
-                AdapterClientSeverity::Warning,
-                Severity::Error | Severity::Fatal | Severity::Panic | Severity::Warning,
-            ) => true,
-            (
-                AdapterClientSeverity::Notice,
-                Severity::Error
-                | Severity::Fatal
-                | Severity::Panic
-                | Severity::Warning
-                | Severity::Notice,
-            ) => true,
-            (
-                AdapterClientSeverity::Info,
-                Severity::Error
-                | Severity::Fatal
-                | Severity::Panic
-                | Severity::Warning
-                | Severity::Notice,
-            ) => true,
-            (
-                AdapterClientSeverity::Log,
-                Severity::Error
-                | Severity::Fatal
-                | Severity::Panic
-                | Severity::Warning
-                | Severity::Notice
-                | Severity::Log,
-            ) => true,
-            (
-                AdapterClientSeverity::Debug1
-                | AdapterClientSeverity::Debug2
-                | AdapterClientSeverity::Debug3
-                | AdapterClientSeverity::Debug4
-                | AdapterClientSeverity::Debug5,
-                _,
-            ) => true,
-
-            (
-                AdapterClientSeverity::Error,
-                Severity::Warning | Severity::Notice | Severity::Log | Severity::Debug,
-            ) => false,
-            (
-                AdapterClientSeverity::Warning,
-                Severity::Notice | Severity::Log | Severity::Debug,
-            ) => false,
-            (AdapterClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
-            (AdapterClientSeverity::Info, Severity::Log | Severity::Debug) => false,
-            (AdapterClientSeverity::Log, Severity::Debug) => false,
-        }
-    }
-
-    pub fn for_adapter_notice(notice: &AdapterNotice) -> Severity {
-        match notice {
-            AdapterNotice::DatabaseAlreadyExists { .. } => Severity::Notice,
-            AdapterNotice::SchemaAlreadyExists { .. } => Severity::Notice,
-            AdapterNotice::TableAlreadyExists { .. } => Severity::Notice,
-            AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
-            AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
-            AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
-            AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
-            AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
-            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
-            AdapterNotice::UserRequested { severity } => match severity {
-                NoticeSeverity::Debug => Severity::Debug,
-                NoticeSeverity::Info => Severity::Info,
-                NoticeSeverity::Log => Severity::Log,
-                NoticeSeverity::Notice => Severity::Notice,
-                NoticeSeverity::Warning => Severity::Warning,
-            },
-            AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
-            AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
-            AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
-            AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
-            AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
-            AdapterNotice::QueryTrace { .. } => Severity::Notice,
-            AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
-            AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
-            AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
-            AdapterNotice::RbacSystemDisabled => Severity::Notice,
-            AdapterNotice::RbacUserDisabled => Severity::Notice,
-            AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
-            AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
-            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
-            AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
-            AdapterNotice::CannotRevoke { .. } => Severity::Warning,
-            AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
-            AdapterNotice::PlanNotice(notice) => match notice {
-                PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
-                PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
-            },
-        }
     }
 }
 
@@ -516,46 +356,4 @@ pub fn encode_row_description(
             }
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[mz_ore::test]
-    fn test_should_output_to_client() {
-        #[rustfmt::skip]
-        let test_cases = [
-            (AdapterClientSeverity::Debug1, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Debug2, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Debug3, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Debug4, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Debug5, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Log, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Log, vec![Severity::Debug], false),
-            (AdapterClientSeverity::Info, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Info, vec![Severity::Debug, Severity::Log], false),
-            (AdapterClientSeverity::Notice, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Notice, vec![Severity::Debug, Severity::Log], false),
-            (AdapterClientSeverity::Warning, vec![Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Warning, vec![Severity::Debug, Severity::Log, Severity::Notice], false),
-            (AdapterClientSeverity::Error, vec![Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
-            (AdapterClientSeverity::Error, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning], false),
-        ];
-
-        for test_case in test_cases {
-            run_test(test_case)
-        }
-
-        fn run_test(test_case: (AdapterClientSeverity, Vec<Severity>, bool)) {
-            let client_min_messages_setting = test_case.0;
-            let expected = test_case.2;
-            for message_severity in test_case.1 {
-                assert!(
-                    message_severity.should_output_to_client(&client_min_messages_setting)
-                        == expected
-                )
-            }
-        }
-    }
 }

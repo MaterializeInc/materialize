@@ -489,6 +489,19 @@ steps:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
+  - id: checks-no-restart-no-upgrade
+    label: "Checks without restart or upgrade"
+    depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+
   - id: checks-restart-clusterd-compute
     label: "Checks + restart clusterd compute"
     depends_on: build-x86_64

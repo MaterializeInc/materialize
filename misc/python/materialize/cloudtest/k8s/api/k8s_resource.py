@@ -14,7 +14,7 @@ from typing import Optional
 from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
 from kubernetes.config import new_client_from_config  # type: ignore
 
-from materialize import ROOT, mzbuild, ui
+from materialize import MZ_ROOT, mzbuild, ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 from materialize.cloudtest.util.wait import wait
 
@@ -34,7 +34,9 @@ class K8sResource:
                 *args,
             ]
 
-            return subprocess.check_output(cmd, text=True, input=input)
+            return subprocess.run(
+                cmd, text=True, input=input, check=True, stdout=subprocess.PIPE
+            ).stdout
         except subprocess.CalledProcessError as e:
             print(
                 dedent(
@@ -80,7 +82,7 @@ class K8sResource:
         else:
             coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
             repo = mzbuild.Repository(
-                ROOT, release_mode=release_mode, coverage=coverage
+                MZ_ROOT, release_mode=release_mode, coverage=coverage
             )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]

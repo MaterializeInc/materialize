@@ -87,4 +87,16 @@ pub enum Error {
     /// but not ready yet.
     #[error("The region is not ready yet.")]
     NotReadyRegion,
+    /// Error that raises when the region is enabled
+    /// but not resolvable yet.
+    #[error("The region is not resolvable yet.")]
+    NotResolvableRegion,
+    /// Error that raises when a timeout is reached.
+    #[error("Timeout reached. Error: {0}")]
+    // It uses a Box<> to avoid recursion issues.
+    TimeoutError(Box<Error>),
+    /// Error that raises when the region is enabled and resolvable
+    /// but `pg_isready` fails
+    #[error("The region is not ready to accept SQL statements. `pg_isready` failed.")]
+    NotPgReadyError,
 }

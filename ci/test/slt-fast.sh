@@ -147,7 +147,6 @@ tests_without_views=(
     test/sqllogictest/show_create_system_objects.slt
     test/sqllogictest/slt.slt
     test/sqllogictest/source_sizing.slt
-    test/sqllogictest/source_with_schema.slt
     test/sqllogictest/string.slt
     test/sqllogictest/subquery.slt
     test/sqllogictest/subscribe_error.slt

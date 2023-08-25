@@ -11,13 +11,14 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
 class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.60.0-dev")
 
     def initialize(self) -> Testdrive:

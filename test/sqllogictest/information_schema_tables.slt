@@ -41,6 +41,10 @@ applicable_roles
 VIEW
 materialize
 information_schema
+character_sets
+VIEW
+materialize
+information_schema
 columns
 VIEW
 materialize
@@ -310,11 +314,7 @@ SOURCE
 materialize
 mz_internal
 mz_compute_dependencies
-VIEW
-materialize
-mz_internal
-mz_compute_dependencies_per_worker
-SOURCE
+BASE TABLE
 materialize
 mz_internal
 mz_compute_exports

@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import ROOT, spawn, ui
+from materialize import MZ_ROOT, spawn, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Cockroach,
@@ -68,7 +68,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
         # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
         # aggregate the data.
-        (ROOT / "coverage").mkdir(exist_ok=True)
+        (MZ_ROOT / "coverage").mkdir(exist_ok=True)
         env["CARGO_LLVM_COV_SETUP"] = "no"
         # There is no pure build command in cargo-llvm-cov, so run with
         # --version as a workaround.

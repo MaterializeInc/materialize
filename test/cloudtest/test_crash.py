@@ -113,8 +113,8 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 
     def get_replica() -> Tuple[V1Pod, V1StatefulSet]:
         """Find the stateful set for the replica of the default cluster"""
-        compute_pod_name = "cluster-u1-replica-1-0"
-        ss_name = "cluster-u1-replica-1"
+        compute_pod_name = "cluster-u1-replica-u1-0"
+        ss_name = "cluster-u1-replica-u1"
         compute_pod = mz.environmentd.api().read_namespaced_pod(
             compute_pod_name, mz.environmentd.namespace()
         )

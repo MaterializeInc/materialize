@@ -1621,6 +1621,10 @@ fn plan_set_expr(
             Ok((relation_expr, scope))
         }
         SetExpr::Values(Values(values)) => plan_values(qcx, values),
+        SetExpr::Table(name) => {
+            let (expr, scope) = qcx.resolve_table_name(name.clone())?;
+            Ok((expr, scope))
+        }
         SetExpr::Query(query) => {
             let (expr, scope) = plan_nested_query(qcx, query)?;
             Ok((expr, scope))

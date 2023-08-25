@@ -343,6 +343,7 @@ impl std::ops::AddAssign for MergeStats {
 #[derive(Clone, Default, Debug)]
 pub struct PutStats {
     /// The number of puts/deletes processed
+    /// Should be equal to number of inserts + updates + deletes
     pub processed_puts: u64,
     /// The aggregated number of values inserted or deleted into `state`
     pub values_diff: i64,
@@ -350,6 +351,12 @@ pub struct PutStats {
     /// If the current call to `multi_put` deletes a lot of values,
     /// or updates values to smaller ones, this can be negative!
     pub size_diff: i64,
+    /// The number of inserts
+    pub inserts: u64,
+    /// The number of updates
+    pub updates: u64,
+    /// The number of deletes
+    pub deletes: u64,
 }
 
 /// Statistics for a single call to `multi_get`.
@@ -425,10 +432,12 @@ impl UpsertStateBackend for InMemoryHashMap {
                         Some(previous_size) => {
                             stats.size_diff -= previous_size;
                             stats.size_diff += size;
+                            stats.updates += 1;
                         }
                         None => {
                             stats.values_diff += 1;
                             stats.size_diff += size;
+                            stats.inserts += 1;
                         }
                     }
                     self.state.insert(key, value);
@@ -437,6 +446,7 @@ impl UpsertStateBackend for InMemoryHashMap {
                     if let Some(previous_size) = p_value.previous_persisted_size {
                         stats.size_diff -= previous_size;
                         stats.values_diff -= 1;
+                        stats.deletes += 1;
                     }
                     self.state.remove(&key);
                 }
@@ -823,6 +833,9 @@ where
         self.worker_metrics
             .multi_put_size
             .inc_by(stats.processed_puts);
+        self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
+        self.worker_metrics.upsert_updates.inc_by(stats.updates);
+        self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
         self.stats.update_envelope_state_bytes_by(stats.size_diff);
         self.stats.update_envelope_state_count_by(stats.values_diff);

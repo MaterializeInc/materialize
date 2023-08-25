@@ -10,14 +10,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use std::iter::once;
+use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -68,7 +71,8 @@ const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
 const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
 const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
-const REPLICA_ID_ALLOC_KEY: &str = "replica";
+const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
+const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
@@ -137,7 +141,8 @@ fn add_new_builtin_cluster_replicas_migration(
         if matches!(replica_names, None)
             || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
         {
-            let replica_id = txn.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
+            let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
+            let replica_id = ReplicaId::System(replica_id);
             let config = builtin_cluster_replica_config(bootstrap_args);
             txn.insert_cluster_replica(
                 *cluster_id,
@@ -199,28 +204,71 @@ impl Connection {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = pin::pin!(retry);
+        loop {
+            match Self::open_inner(stash, now.clone(), bootstrap_args, deploy_generation).await {
+                Ok(conn) => {
+                    return Ok(conn);
+                }
+                Err((given_stash, err)) => {
+                    stash = given_stash;
+                    let should_retry =
+                        matches!(&err, Error{ kind: ErrorKind::Stash(se)} if se.should_retry());
+                    if !should_retry || retry.next().await.is_none() {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+    }
+
+    #[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
+    async fn open_inner(
+        mut stash: Stash,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, (Stash, Error)> {
         // Initialize the Stash if it hasn't been already
-        let mut conn = if !stash.is_initialized().await? {
+        let mut conn = if !match stash.is_initialized().await {
+            Ok(is_init) => is_init,
+            Err(e) => {
+                return Err((stash, e.into()));
+            }
+        } {
             // Get the current timestamp so we can record when we booted.
             let previous_now = mz_repr::Timestamp::MIN;
             let boot_ts = timeline::monotonic_now(now, previous_now);
 
             // Initialize the Stash
             let args = bootstrap_args.clone();
-            stash
+            match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
                         stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
                     })
                 })
-                .await?;
+                .await
+            {
+                Ok(()) => {}
+                Err(e) => return Err((stash, e.into())),
+            }
 
             Connection { stash, boot_ts }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
             if !stash.is_readonly() {
-                stash.upgrade().await?;
+                match stash.upgrade().await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        return Err((stash, e.into()));
+                    }
+                }
             }
 
             // Choose a time at which to boot. This is the time at which we will run
@@ -229,19 +277,35 @@ impl Connection {
             //
             // This time is usually the current system time, but with protection
             // against backwards time jumps, even across restarts.
-            let previous = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
-                .await?
-                .unwrap_or(mz_repr::Timestamp::MIN);
+            let previous =
+                match try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds).await {
+                    Ok(ts) => ts.unwrap_or(mz_repr::Timestamp::MIN),
+                    Err(e) => {
+                        return Err((stash, e));
+                    }
+                };
             let boot_ts = timeline::monotonic_now(now, previous);
 
             let mut conn = Connection { stash, boot_ts };
 
             if !conn.stash.is_readonly() {
                 // IMPORTANT: we durably record the new timestamp before using it.
-                conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await?;
+                match conn
+                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        return Err((conn.stash, e));
+                    }
+                }
                 if let Some(deploy_generation) = deploy_generation {
-                    conn.persist_deploy_generation(deploy_generation).await?;
+                    match conn.persist_deploy_generation(deploy_generation).await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            return Err((conn.stash, e));
+                        }
+                    }
                 }
             }
 
@@ -250,10 +314,31 @@ impl Connection {
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            let mut txn = transaction(&mut conn.stash).await?;
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-            txn.commit().await?;
+            let mut txn = match transaction(&mut conn.stash).await {
+                Ok(txn) => txn,
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            };
+
+            match add_new_builtin_clusters_migration(&mut txn) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+            match txn.commit().await {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
         }
 
         Ok(conn)
@@ -675,19 +760,20 @@ impl Connection {
         Ok(ClusterId::User(id))
     }
 
-    pub async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
-        let id = self.allocate_id(REPLICA_ID_ALLOC_KEY, 1).await?;
-        Ok(id.into_element())
+    pub async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ReplicaId::User(id))
     }
 
-    /// Get the next user id without allocating it.
-    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
-        self.get_next_id("user").await.map(GlobalId::User)
+    /// Get the next system replica id without allocating it.
+    pub async fn get_next_system_replica_id(&mut self) -> Result<u64, Error> {
+        self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
     }
 
-    /// Get the next replica id without allocating it.
-    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
-        self.get_next_id(REPLICA_ID_ALLOC_KEY).await
+    /// Get the next user replica id without allocating it.
+    pub async fn get_next_user_replica_id(&mut self) -> Result<u64, Error> {
+        self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
@@ -1156,6 +1242,24 @@ impl<'a> Transaction<'a> {
                 "Expected to update single cluster {cluster_name} ({cluster_id}), updated {n}"
             ),
         }
+    }
+
+    pub(crate) fn check_migration_has_run(&mut self, name: String) -> Result<bool, Error> {
+        let key = SettingKey { name };
+        // If the key does not exist, then the migration has not been run.
+        let has_run = self.settings.get(&key).as_ref().is_some();
+
+        Ok(has_run)
+    }
+
+    pub(crate) fn mark_migration_has_run(&mut self, name: String) -> Result<(), Error> {
+        let key = SettingKey { name };
+        let val = SettingValue {
+            value: true.to_string(),
+        };
+        self.settings.insert(key, val)?;
+
+        Ok(())
     }
 
     pub(crate) fn rename_cluster_replica(

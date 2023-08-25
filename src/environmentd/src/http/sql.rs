@@ -26,12 +26,11 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
-    SessionClient,
+    SessionClient, Severity,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
 use mz_ore::result::ResultExt;
-use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
@@ -970,7 +969,7 @@ async fn execute_stmt<S: ResultSender>(
         .expect("unnamed portal should be present");
 
     let (res, execute_started) = match client
-        .execute(EMPTY_PORTAL.into(), futures::future::pending())
+        .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
         .await
     {
         Ok(res) => res,
@@ -1071,11 +1070,23 @@ async fn execute_stmt<S: ResultSender>(
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
         }
-        ExecuteResponse::Subscribing { rx }  => {
+        ExecuteResponse::SendingRowsImmediate { rows, span: _} => {
+            let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+            let mut datum_vec = mz_repr::DatumVec::new();
+            let desc = desc.relation_desc.expect("RelationDesc must exist");
+            let types = &desc.typ().column_types;
+            for row in rows {
+                let datums = datum_vec.borrow_with(&row);
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+            }
+            let tag = format!("SELECT {}", sql_rows.len());
+            SqlResult::rows(client, tag, sql_rows, desc).into()
+        }
+        ExecuteResponse::Subscribing { rx, ctx_extra: _ }  => {
             StatementResult::Subscribe {
-                tag: "SUBSCRIBE".into(),
+                tag:"SUBSCRIBE".into(),
                 desc: desc.relation_desc.unwrap(),
-                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client),
+                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client)
             }
         },
         res @ (ExecuteResponse::Fetch { .. }

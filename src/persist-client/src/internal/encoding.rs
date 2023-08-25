@@ -49,7 +49,6 @@ use crate::internal::state_diff::{
 use crate::internal::trace::Trace;
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
-use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
@@ -1008,6 +1007,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 .map(|key| HollowBatchPart {
                     key: PartialBatchKey(key),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 }),
         );
@@ -1025,6 +1025,7 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
             key_stats: self.stats.into_proto(),
         }
     }
@@ -1033,6 +1034,7 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+            key_lower: proto.key_lower.into(),
             stats: proto.key_stats.into_rust()?,
         })
     }
@@ -1153,43 +1155,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeWriterEnrichedHollowBatch {
-    pub(crate) shard_id: ShardId,
-    pub(crate) version: Version,
-    pub(crate) batch: Vec<u8>,
-}
-
-impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterEnrichedHollowBatch {
-    fn from(x: WriterEnrichedHollowBatch<T>) -> Self {
-        SerdeWriterEnrichedHollowBatch {
-            shard_id: x.shard_id,
-            version: x.version,
-            batch: x.batch.into_proto().encode_to_vec(),
-        }
-    }
-}
-
-impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnrichedHollowBatch<T> {
-    fn from(x: SerdeWriterEnrichedHollowBatch) -> Self {
-        let SerdeWriterEnrichedHollowBatch {
-            shard_id,
-            version,
-            batch,
-        } = x;
-        let proto_batch = ProtoHollowBatch::decode(batch.as_slice())
-            .expect("internal error: could not decode WriterEnrichedHollowBatch");
-        let batch = proto_batch
-            .into_rust()
-            .expect("internal error: could not decode WriterEnrichedHollowBatch");
-        WriterEnrichedHollowBatch {
-            shard_id,
-            version,
-            batch,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
@@ -1282,6 +1247,7 @@ mod tests {
             parts: vec![HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
+                key_lower: vec![],
                 stats: None,
             }],
             runs: vec![],
@@ -1300,6 +1266,7 @@ mod tests {
         expected.parts.push(HollowBatchPart {
             key: PartialBatchKey("b".into()),
             encoded_size_bytes: 0,
+            key_lower: vec![],
             stats: None,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);

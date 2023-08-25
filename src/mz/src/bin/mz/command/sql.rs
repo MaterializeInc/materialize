@@ -19,13 +19,11 @@ use mz::command::sql::RunArgs;
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::{ProfileArg, RegionArg};
+use crate::mixin::ProfileArg;
 
 #[derive(Debug, clap::Args)]
 #[clap(trailing_var_arg = true)]
 pub struct SqlCommand {
-    #[clap(flatten)]
-    region: RegionArg,
     #[clap(flatten)]
     profile: ProfileArg,
     /// Additional arguments to pass to `psql`.
@@ -35,7 +33,7 @@ pub struct SqlCommand {
 pub async fn run(cx: Context, cmd: SqlCommand) -> Result<(), Error> {
     let mut cx = cx
         .activate_profile(cmd.profile.profile)?
-        .activate_region(cmd.region.region)?;
+        .activate_region()?;
     mz::command::sql::run(
         &mut cx,
         RunArgs {

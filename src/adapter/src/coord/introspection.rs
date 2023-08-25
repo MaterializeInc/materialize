@@ -82,6 +82,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
@@ -91,7 +92,6 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
-        | Plan::CopyRows(_)
         | Plan::Explain(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
@@ -250,7 +250,7 @@ pub fn user_privilege_hack(
         //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
         //     details.
         //
-        Plan::ShowCreate(_) => {
+        Plan::ShowCreate(_) | Plan::ShowColumns(_) => {
             return Ok(());
         }
 
@@ -322,7 +322,6 @@ pub fn user_privilege_hack(
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzSupport {

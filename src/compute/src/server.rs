@@ -399,14 +399,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    #[allow(dead_code)]
-    fn shut_down(&mut self, response_tx: &mut ResponseSender) {
-        if let Some(mut compute_state) = self.activate_compute(response_tx) {
-            compute_state.compute_state.traces.del_all_traces();
-            compute_state.shutdown_logging();
-        }
-    }
-
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
@@ -463,6 +455,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         command_rx: &mut CommandReceiverQueue,
         response_tx: &mut ResponseSender,
     ) -> Result<(), RecvError> {
+        let worker_id = self.timely_worker.index();
+
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
@@ -569,7 +563,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             }
 
                             compute_state.metrics.record_dataflow_reconciliation(
-                                self.timely_worker.index(),
+                                worker_id,
                                 compatible,
                                 uncompacted,
                                 subscribe_free,
@@ -694,7 +688,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history = ComputeCommandHistory::new(self.metrics.for_history());
+            let mut command_history =
+                ComputeCommandHistory::new(self.metrics.for_history(worker_id));
             for command in new_commands.iter() {
                 command_history.push(command.clone(), &compute_state.pending_peeks);
             }

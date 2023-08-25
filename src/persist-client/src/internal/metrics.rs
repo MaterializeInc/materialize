@@ -41,7 +41,6 @@ use crate::{PersistConfig, ShardId};
 ///
 /// Intentionally not Clone because we expect this to be passed around in an
 /// Arc.
-#[derive(Debug)]
 pub struct Metrics {
     _vecs: MetricsVecs,
     _uptime: ComputedGauge,
@@ -91,6 +90,12 @@ pub struct Metrics {
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresConsensusMetrics,
+}
+
+impl std::fmt::Debug for Metrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Metrics").finish_non_exhaustive()
+    }
 }
 
 impl Metrics {
@@ -1898,6 +1903,8 @@ pub struct PushdownMetrics {
     pub(crate) parts_fetched_bytes: IntCounter,
     pub(crate) parts_audited_count: IntCounter,
     pub(crate) parts_audited_bytes: IntCounter,
+    pub(crate) parts_stats_trimmed_count: IntCounter,
+    pub(crate) parts_stats_trimmed_bytes: IntCounter,
 }
 
 impl PushdownMetrics {
@@ -1926,6 +1933,14 @@ impl PushdownMetrics {
             parts_audited_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_audited_bytes",
                 help: "total size of parts fetched only for pushdown audit",
+            )),
+            parts_stats_trimmed_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_stats_trimmed_count",
+                help: "count of trimmed part stats",
+            )),
+            parts_stats_trimmed_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
+                help: "total bytes trimmed from part stats",
             )),
         }
     }

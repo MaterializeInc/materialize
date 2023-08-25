@@ -1029,7 +1029,7 @@ pub mod datadriven {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
-        validate_truncate_batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+        validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
     use crate::fetch::{fetch_batch_part, Cursor};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -1360,11 +1360,15 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let stats = args.optional_str("stats");
         let batch = datadriven.batches.get(input).expect("unknown batch");
 
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
+            if stats == Some("lower") && !part.key_lower.is_empty() {
+                writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
+            }
             let blob_batch = datadriven
                 .client
                 .blob
@@ -1554,34 +1558,48 @@ pub mod datadriven {
             .await
             .map_err(|err| anyhow!("{:?}", err))?;
 
-        let mut updates = Vec::new();
+        let mut result = String::new();
+
         for batch in snapshot {
-            for part in batch.parts {
-                let part = fetch_batch_part(
-                    &datadriven.shard_id,
-                    datadriven.client.blob.as_ref(),
-                    datadriven.client.metrics.as_ref(),
-                    datadriven.machine.applier.shard_metrics.as_ref(),
-                    &datadriven.client.metrics.read.batch_fetcher,
-                    &part.key,
-                    &batch.desc,
-                )
-                .await
-                .expect("invalid batch part");
-                let mut cursor = Cursor::default();
-                while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
-                    t.advance_by(as_of.borrow());
-                    updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
+            writeln!(
+                result,
+                "<batch {:?}-{:?}>",
+                batch.desc.lower().elements(),
+                batch.desc.upper().elements()
+            );
+            for (run, parts) in batch.runs().enumerate() {
+                writeln!(result, "<run {run}>");
+                for (part_id, part) in parts.into_iter().enumerate() {
+                    writeln!(result, "<part {part_id}>");
+                    let part = fetch_batch_part(
+                        &datadriven.shard_id,
+                        datadriven.client.blob.as_ref(),
+                        datadriven.client.metrics.as_ref(),
+                        datadriven.machine.applier.shard_metrics.as_ref(),
+                        &datadriven.client.metrics.read.batch_fetcher,
+                        &part.key,
+                        &batch.desc,
+                    )
+                    .await
+                    .expect("invalid batch part");
+
+                    let mut updates = Vec::new();
+                    let mut cursor = Cursor::default();
+                    while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
+                        t.advance_by(as_of.borrow());
+                        updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
+                    }
+
+                    consolidate_updates(&mut updates);
+
+                    for (k, t, d) in updates {
+                        writeln!(result, "{k} {t} {d}");
+                    }
                 }
             }
         }
-        consolidate_updates(&mut updates);
 
-        let mut s = String::new();
-        for (k, t, d) in updates {
-            write!(s, "{k} {t} {d}\n");
-        }
-        Ok(s)
+        Ok(result)
     }
 
     pub async fn register_listen(
@@ -1705,6 +1723,55 @@ pub mod datadriven {
         let (_, maintenance) = datadriven.machine.expire_leased_reader(&reader_id).await;
         datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn compare_and_append_batches(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let expected_upper = args.expect_antichain("expected_upper");
+        let new_upper = args.expect_antichain("new_upper");
+
+        let mut batches: Vec<Batch<String, (), u64, i64>> = args
+            .args
+            .get("batches")
+            .expect("missing batches")
+            .into_iter()
+            .map(|batch| {
+                let hollow = datadriven
+                    .batches
+                    .get(batch)
+                    .expect("unknown batch")
+                    .clone();
+                Batch::new(
+                    Arc::clone(&datadriven.client.blob),
+                    datadriven.shard_id,
+                    datadriven.client.cfg.build_version.clone(),
+                    hollow,
+                )
+            })
+            .collect();
+
+        let mut writer = datadriven
+            .client
+            .open_writer(
+                datadriven.shard_id,
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await?;
+
+        let mut batch_refs: Vec<_> = batches.iter_mut().collect();
+
+        let () = writer
+            .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper)
+            .await?
+            .expect("upper match");
+
+        writer.expire().await;
+
+        Ok("ok\n".into())
     }
 
     pub async fn expire_writer(

@@ -15,7 +15,7 @@ To make Materialize metadata available to Grafana, you must configure and run
 the following additional services:
 
 * A Prometheus SQL Exporter.
-* A [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud users, or [Prometheus](https://prometheus.io/download/) for the self-managed version.
+* A metrics scraper: [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana Cloud users, and [Prometheus](https://prometheus.io/download/) for self-hosted Grafana.
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
@@ -101,13 +101,13 @@ which has been tried and tested in production environments.
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
    to run the service using the configuration file from the previous step.
 
-## Step 2. Set up a scraper
+## Step 2. Set up a metrics scraper
 
 To scrape the metrics available in the Prometheus SQL Exporter endpoint, you
-must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud, or [Prometheus](https://prometheus.io/download/) for the self-managed version:
+must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud, or [Prometheus](https://prometheus.io/download/) for the self-hosted version:
 
 {{< tabs >}}
-{{< tab "Cloud">}}
+{{< tab "Grafana Cloud">}}
 
 1. Follow the [instructions to install and run a Grafana Agent](https://grafana.com/docs/agent/latest/static/set-up/install/)
    in your host.
@@ -142,11 +142,11 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
    </details>
 
 {{< /tab >}}
-{{< tab "Self-managed">}}
+{{< tab "Self-hosted Grafana">}}
 1. Follow the [instructions to install and run Prometheus](https://prometheus.io/docs/prometheus/latest/installation/)
    in your host.
 
-2. To configure a [Prometheus scrape](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config) edit the
+2. To configure a [Prometheus scrape](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config), edit the
    `prometheus.yml` file as follows:
 
    **Filename**: prometheus.yml
@@ -162,7 +162,9 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
 
      **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/local/prometheus.yml) for all available configuration options.
 
-3. Add **Prometheus** as a new source to Grafana.
+3. Follow [the instructions](https://grafana.com/docs/grafana/latest/datasources/prometheus/) to add **Prometheus** as a new data source in Grafana.
+
+   **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/local/misc/datasources/prometheus.yml) for a Prometheus data source configuration.
 
 
 For more details on how to configure, run and troubleshoot Prometheus, see the [Prometheus documentation](https://prometheus.io/docs/introduction/overview/).
@@ -172,15 +174,15 @@ For more details on how to configure, run and troubleshoot Prometheus, see the [
 ## Step 3. Build a monitoring dashboard
 
 With the Prometheus SQL Exporter running SQL queries againt your Materialize
-region and exporting the results as metrics, and the Grafana Agent routing
-these metrics to your Grafana account, you're ready to build a monitoring
+region and exporting the results as metrics, and a scraper routing
+these metrics to Grafana, you're ready to build a monitoring
 dashboard!
 
 **Tip:** use [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/local/misc/dashboards/dashboard.json)
 to bootstrap a new dashboard with the key Materialize metrics and indicators
 defined in the sample `config.yml`.
 
-1. **Log in** to your Grafana account.
+1. **Go to** Grafana.
 
 2. Navigate to **Dashboards**, click **New** and select the option **Import**.
 

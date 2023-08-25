@@ -15,7 +15,7 @@ import sys
 from enum import Enum
 from typing import Dict, List, Optional
 
-from materialize import ROOT, spawn
+from materialize import MZ_ROOT, spawn
 
 
 class Arch(Enum):
@@ -84,7 +84,7 @@ def cargo(
         extra_env = {
             "CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            "CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
+            "CARGO_TARGET_DIR": str(MZ_ROOT / "target-xcompile"),
             "TARGET_AR": f"{_target}-ar",
             "TARGET_CPP": f"{_target}-cpp",
             "TARGET_CC": f"{_target}-cc",
@@ -161,7 +161,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # cross-compiling toolchain on the host and use that instead.
 
     BOOTSTRAP_VERSION = "4"
-    BOOTSTRAP_FILE = ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
+    BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
     except FileNotFoundError:

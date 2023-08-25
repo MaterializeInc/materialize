@@ -1429,11 +1429,8 @@ fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_introspection` tests indexes, `default` tests tables.
     // The bool determines whether we are testing indexes.
-    const CLUSTERS_TO_TRY: &[(&str, bool)] = &[("mz_introspection", true), ("default", false)];
-    const QUERIES_TO_TRY: &[&str] = &[
-        // "SELECT * FROM mz_internal.mz_cluster_replica_utilization",
-        "SELECT * FROM mz_internal.mz_cluster_replica_statuses",
-    ];
+    const CLUSTERS_TO_TRY: &[&str] = &["mz_introspection", "default"];
+    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replica_statuses"];
 
     let now_millis = 619388520000;
     let past_millis = now_millis - THIRTY_DAYS_MS;
@@ -1459,7 +1456,7 @@ fn test_utilization_hold() {
 
     for q in QUERIES_TO_TRY {
         let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
-        for (cluster, should_be_indexed) in CLUSTERS_TO_TRY {
+        for cluster in CLUSTERS_TO_TRY {
             client
                 .execute(&format!("SET cluster={cluster}"), &[])
                 .unwrap();
@@ -1488,11 +1485,7 @@ fn test_utilization_hold() {
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
-                if *should_be_indexed {
-                    assert!(s.name.ends_with("compute)"));
-                } else {
-                    assert!(s.name.ends_with("storage)"));
-                }
+                assert!(s.name.ends_with("compute)"));
             }
 
             // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
@@ -1526,7 +1519,7 @@ fn test_utilization_hold() {
         .unwrap();
     for q in QUERIES_TO_TRY {
         let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
-        for (cluster, _) in CLUSTERS_TO_TRY {
+        for cluster in CLUSTERS_TO_TRY {
             client
                 .execute(&format!("SET cluster={cluster}"), &[])
                 .unwrap();

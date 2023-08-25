@@ -9,6 +9,7 @@
 
 //! Structs and traits for `EXPLAIN AS TEXT`.
 
+use itertools::Itertools;
 use std::fmt;
 
 use mz_ore::str::{separated, Indent, IndentLike};
@@ -72,17 +73,12 @@ where
         writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
         *ctx.as_mut() += 1;
         for (id, usage_types) in &self.0 {
-            let index_name = ctx
-                .as_ref()
-                .humanize_id(*id)
-                .unwrap_or_else(|| id.to_string());
-            writeln!(
-                f,
-                "{}- {} ({})",
-                ctx.as_mut(),
-                index_name,
-                separated(", ", usage_types)
-            )?;
+            let usage_types = separated(", ", usage_types.iter().sorted().dedup());
+            if let Some(name) = ctx.as_ref().humanize_id(*id) {
+                writeln!(f, "{}- {} ({})", ctx.as_mut(), name, usage_types)?;
+            } else {
+                writeln!(f, "{}- [DELETED INDEX] ({})", ctx.as_mut(), usage_types)?;
+            }
         }
         *ctx.as_mut() -= 1;
         Ok(())

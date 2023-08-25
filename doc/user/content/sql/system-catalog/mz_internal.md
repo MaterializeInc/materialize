@@ -130,13 +130,26 @@ each replica, including the times at which it was created and dropped
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_history -->
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `internal_replica_id` | [`text`]                     | An internal identifier of a cluster replica. Guaranteed to be unique, but not guaranteed to correspond to any user-facing replica ID.     |
+| `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
 | `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+
+### `mz_compute_dependencies`
+
+The `mz_compute_dependencies` table describes the dependency structure between each compute object (index, materialized view, or subscription) and the sources of its data.
+
+In contrast to [`mz_object_dependencies`](#mz_object_dependencies), this table only lists dependencies in the compute layer.
+SQL objects that don't exist in the compute layer (such as views) are omitted.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_dependencies -->
+| Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
+| ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
+| `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
+| `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
 ### `mz_frontiers`
 
@@ -204,6 +217,31 @@ all database objects in the system.
 | ----------------------- | ------------ | --------                                                                                      |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
 | `referenced_object_id`  | [`text`]     | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
+### `mz_object_fully_qualified_names`
+
+The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with namespace information.
+
+<!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
+| Field          | Type       | Meaning                                                                                                                                        |
+| ---------------|------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`           | [`text`]   | Materialize's unique ID for the object.                                                                                                        |
+| `name`         | [`text`]   | The name of the object.                                                                                                                        |
+| `object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).            |
+| `database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).      |
+
+### `mz_object_lifetimes`
+
+The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
+| Field          | Type                         | Meaning                                          |
+| ---------------|------------------------------|------------------------------------------------- |
+| `id`           | [`text`]                     | Materialize's unique ID for the object.          |
+| `object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                                              |
+| `event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.   |
+| `occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred. |
 
 ### `mz_object_transitive_dependencies`
 
@@ -727,18 +765,6 @@ The `mz_compute_delays_histogram` view describes a histogram of the wall-clock d
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
 
-### `mz_compute_dependencies`
-
-The `mz_compute_dependencies` view describes the dependency structure between each [dataflow] and the sources of its data.
-
-<!-- RELATION_SPEC mz_internal.mz_compute_dependencies -->
-| Field        | Type         | Meaning                                                                                                                                                                                                                |
-| ------------ | ------------ | --------                                                                                                                                                                                                               |
-| `export_id`  | [`text`]     | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).                                                                                                                   |
-| `import_id`  | [`text`]     | The ID of the dataflow import. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports). |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_dependencies_per_worker -->
-
 ### `mz_compute_exports`
 
 The `mz_compute_exports` view describes the objects exported by [dataflows][dataflow] in the system.
@@ -1023,32 +1049,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 | `slept_for_ns`  | [`uint8`]   | The actual length of the park event in nanoseconds.      |
 | `requested_ns`  | [`uint8`]   | The requested length of the park event in nanoseconds.   |
 | `count`         | [`numeric`] | The (noncumulative) count of park events in this bucket. |
-
-### `mz_object_fully_qualified_names`
-
-The `mz_object_fully_qualified_names` table contains a row for each object in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_object_fully_qualified_names -->
-Field          | Type       | Meaning
----------------|------------|----------
-`id`           | [`text`]   | Materialize's unique ID for the object.
-`name`         | [`text`]   | The name of the object.
-`object_type`  | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
-`schema_name`  | [`text`]   | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`database_name`| [`text`]   | The name of the database to which the object belongs. Corresponds to [`mz_databases.name`](/sql/system-catalog/mz_catalog/#mz_databases).
-
-### `mz_object_lifetimes`
-
-The `mz_object_lifetimes` table contains a row for each object in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
-Field          | Type                         | Meaning
----------------|------------------------------|----------
-`id`           | [`text`]                     | Materialize's unique ID for the object.
-`object_type`  | [`text`]                     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
-`event_type`   | [`text`]                     | The lifetime event, either `create` or `drop`.
-`occurred_at`  | [`timestamp with time zone`] | Wall-clock timestamp of when the event occurred.
-
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->

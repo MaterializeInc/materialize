@@ -401,7 +401,7 @@ steps:
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -412,7 +412,7 @@ steps:
 
   - id: checks-parallel-restart-clusterd-compute
     label: "Checks parallel + restart compute clusterd"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -423,7 +423,7 @@ steps:
 
   - id: checks-parallel-restart-entire-mz
     label: "Checks parallel + restart of the entire Mz"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -434,7 +434,7 @@ steps:
 
   - id: checks-parallel-restart-environmentd-clusterd-storage
     label: "Checks parallel + restart of environmentd & storage clusterd"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -445,7 +445,7 @@ steps:
 
   - id: checks-parallel-kill-clusterd-storage
     label: "Checks parallel + kill storage clusterd"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -456,7 +456,7 @@ steps:
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"
-    timeout_in_minutes: 300
+    timeout_in_minutes: 30
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -586,6 +586,17 @@ steps:
           composition: persist
           args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
+  - id: persist-txn-maelstrom
+    label: Maelstrom coverage of persist-txn
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist
+          args: [--consensus=mem, --blob=mem, --persist-txn]
+
   - id: persistence-failpoints
     label: Persistence failpoints
     timeout_in_minutes: 30
@@ -643,6 +654,8 @@ steps:
     label: "Canary Deploy in Staging Cloud"
     artifact_paths: junit_*.xml
     timeout_in_minutes: 1200
+    concurrency: 1
+    concurrency_group: 'cloud-canary'
     agents:
       queue: linux-x86_64
     plugins:

@@ -258,7 +258,7 @@ class PgCdcMzNow(Check):
                 > CREATE SOURCE postgres_mz_now_source
                   FROM POSTGRES CONNECTION postgres_mz_now_conn
                   (PUBLICATION 'postgres_mz_now_publication')
-                  FOR ALL TABLES;
+                  FOR TABLES (postgres_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS

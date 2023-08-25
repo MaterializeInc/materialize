@@ -122,6 +122,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
+    ShowColumns(ShowColumnsPlan),
     ShowVariable(ShowVariablePlan),
     InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
@@ -133,7 +134,6 @@ pub enum Plan {
     Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
-    CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
@@ -262,6 +262,7 @@ impl Plan {
                 PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
+                PlanKind::ShowColumns,
                 PlanKind::ShowAllVariables,
                 PlanKind::InspectShard,
             ],
@@ -313,6 +314,7 @@ impl Plan {
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
+            Plan::ShowColumns(_) => "show columns",
             Plan::ShowVariable(_) => "show variable",
             Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
@@ -323,7 +325,6 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
-            Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
             Plan::Explain(_) => "explain",
             Plan::Insert(_) => "insert",
@@ -775,17 +776,17 @@ pub struct ShowCreatePlan {
 }
 
 #[derive(Debug)]
+pub struct ShowColumnsPlan {
+    pub id: GlobalId,
+    pub select_plan: SelectPlan,
+    pub new_resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
-}
-
-#[derive(Debug)]
-pub struct CopyRowsPlan {
-    pub id: GlobalId,
-    pub columns: Vec<usize>,
-    pub rows: Vec<Row>,
 }
 
 #[derive(Clone, Debug)]
@@ -1243,7 +1244,7 @@ impl QueryWhen {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum MutationKind {
     Insert,
     Update,

@@ -13,7 +13,7 @@ import sys
 from pprint import pprint
 from typing import Dict, List, Optional
 
-from materialize import ROOT
+from materialize import MZ_ROOT
 from materialize.cargo import Workspace
 
 
@@ -54,7 +54,7 @@ def check_namespaced_features(workspace: Workspace) -> bool:
 
 
 def main() -> None:
-    workspace = Workspace(ROOT)
+    workspace = Workspace(MZ_ROOT)
     lints = [check_rust_versions, check_namespaced_features]
     success = True
     for lint in lints:

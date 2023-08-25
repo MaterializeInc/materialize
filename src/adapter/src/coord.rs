@@ -89,13 +89,13 @@ use mz_controller::clusters::{
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{stack, task};
+use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
@@ -106,9 +106,10 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
@@ -138,12 +139,15 @@ use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, RoleMetadata, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
 
 pub(crate) mod dataflows;
+use self::statement_logging::{StatementLogging, StatementLoggingId};
+
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
@@ -212,16 +216,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-    // Like Command::Execute, but its context has already been allocated.
-    Execute {
-        portal_name: String,
-        ctx: ExecuteContext,
-        span: tracing::Span,
-    },
+
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
     },
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
@@ -232,6 +232,34 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+}
+
+impl Message {
+    /// Returns a string to identify the kind of [`Message`], useful for logging.
+    pub const fn kind(&self) -> &'static str {
+        use Message::*;
+
+        match self {
+            Command(_) => "command",
+            ControllerReady => "controller_ready",
+            PurifiedStatementReady(_) => "purified_statement_ready",
+            CreateConnectionValidationReady(_) => "create_connection_validation_ready",
+            SinkConnectionReady(_) => "sink_connection_ready",
+            WriteLockGrant(_) => "write_lock_grant",
+            GroupCommitInitiate(..) => "group_commit_initiate",
+            GroupCommitApply(..) => "group_commit_apply",
+            AdvanceTimelines => "advance_timelines",
+            ClusterEvent(_) => "cluster_event",
+            RemovePendingPeeks { .. } => "remove_pending_peeks",
+            LinearizeReads(_) => "linearize_reads",
+            StorageUsageFetch => "storage_usage_fetch",
+            StorageUsageUpdate(_) => "storage_usage_update",
+            RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
+            RetireExecute { .. } => "retire_execute",
+            ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
+            PeekStageReady { .. } => "peek_stage_ready",
+        }
+    }
 }
 
 #[derive(Derivative)]
@@ -392,7 +420,7 @@ pub struct PeekStageFinish {
 ///
 /// One example usage would be that if a query depends only on system tables, we might
 /// automatically run it on the introspection cluster to benefit from indexes that exist there.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TargetCluster {
     /// The introspection cluster.
     Introspection,
@@ -498,6 +526,13 @@ pub struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+    /// The time when the session's connection was initiated.
+    connected_at: EpochMillis,
+    user: User,
+    application_name: String,
+    role_metadata: RoleMetadata,
+    uuid: Uuid,
+    conn_id: ConnectionId,
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
@@ -508,6 +543,36 @@ pub struct ConnMeta {
 
     /// The authenticated role of the session, set once at session connection.
     pub(crate) authenticated_role: RoleId,
+}
+
+impl ConnMeta {
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    pub fn user(&self) -> &User {
+        &self.user
+    }
+
+    pub fn application_name(&self) -> &str {
+        &self.application_name
+    }
+
+    pub fn current_role_id(&self) -> &RoleId {
+        &self.role_metadata.current_role
+    }
+
+    pub fn session_role_id(&self) -> &RoleId {
+        &self.role_metadata.session_role
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
+    pub fn connected_at(&self) -> EpochMillis {
+        self.connected_at
+    }
 }
 
 #[derive(Debug)]
@@ -647,10 +712,44 @@ impl PendingRead {
 /// to produce a value that will cause the coordinator to do nothing, and
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
-// Currently nothing; planned to be data related to statement logging
-// at some point in the future.
+///
+/// This struct must not be dropped if it contains non-trivial
+/// state. The only valid way to get rid of it is to pass it to the
+/// coordinator for retirement. To enforce this, we assert in the
+/// `Drop` implementation.
 #[derive(Debug, Default)]
-pub struct ExecuteContextExtra;
+#[must_use]
+pub struct ExecuteContextExtra {
+    statement_uuid: Option<StatementLoggingId>,
+}
+
+impl ExecuteContextExtra {
+    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
+        Self { statement_uuid }
+    }
+    pub fn is_trivial(&self) -> bool {
+        let Self { statement_uuid } = self;
+        statement_uuid.is_none()
+    }
+    /// Take responsibility for the contents.  This should only be
+    /// called from code that knows what to do to finish up logging
+    /// based on the inner value.
+    #[must_use]
+    fn retire(mut self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = &mut self;
+        statement_uuid.take()
+    }
+}
+
+impl Drop for ExecuteContextExtra {
+    fn drop(&mut self) {
+        let Self { statement_uuid } = &*self;
+        soft_assert_or_log!(
+            statement_uuid.is_none(),
+            "execute context dropped without being properly retired."
+        )
+    }
+}
 
 /// Bundle of state related to statement execution.
 ///
@@ -736,10 +835,28 @@ impl ExecuteContext {
             session,
             extra,
         } = self;
+        let reason = if extra.is_trivial() {
+            None
+        } else {
+            Some((&result).into())
+        };
         tx.send(result, session);
-        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
-            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        if let Some(reason) = reason {
+            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                data: extra,
+                reason,
+            }) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         }
+    }
+
+    pub fn extra(&self) -> &ExecuteContextExtra {
+        &self.extra
+    }
+
+    pub fn extra_mut(&mut self) -> &mut ExecuteContextExtra {
+        &mut self.extra
     }
 }
 
@@ -866,6 +983,9 @@ pub struct Coordinator {
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
+
+    /// Data used by the statement logging feature.
+    statement_logging: StatementLogging,
 }
 
 impl Coordinator {
@@ -1068,7 +1188,10 @@ impl Coordinator {
                     source_status_collection_id,
                 ),
                 // Subsources use source statuses.
-                DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                DataSourceDesc::Source => (
+                    DataSource::Other(DataSourceOther::Source),
+                    source_status_collection_id,
+                ),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, source_status_collection_id)
                 }
@@ -1095,11 +1218,17 @@ impl Coordinator {
                             Some((entry.id(), source_desc(source_status_collection_id, source)))
                         }
                         CatalogItem::Table(table) => {
-                            let collection_desc = table.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                table.desc.clone(),
+                                DataSourceOther::TableWrites,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = mview.desc.clone().into();
+                            let collection_desc = CollectionDescription::from_desc(
+                                mview.desc.clone(),
+                                DataSourceOther::Compute,
+                            );
                             Some((entry.id(), collection_desc))
                         }
                         _ => None,
@@ -1116,7 +1245,10 @@ impl Coordinator {
         for entry in &entries {
             match entry.item() {
                 CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
                     collections_to_create.push((entry.id(), collection_desc));
                 }
                 // User sources can have dependencies, so do avoid them in the
@@ -1199,7 +1331,11 @@ impl Coordinator {
                         let mut dataflow = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
-                        let as_of = self.bootstrap_index_as_of(&dataflow, idx.cluster_id);
+                        let as_of = self.bootstrap_index_as_of(
+                            &dataflow,
+                            idx.cluster_id,
+                            idx.is_retained_metrics_object,
+                        );
                         dataflow.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
@@ -1219,7 +1355,10 @@ impl Coordinator {
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
                     // Re-create the storage collection.
-                    let collection_desc = mview.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
                     self.controller
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
@@ -1234,12 +1373,36 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let internal_view_id = self.allocate_transient_id()?;
-                    let mut df = self
-                        .dataflow_builder(mview.cluster_id)
-                        .build_materialized_view_dataflow(entry.id(), internal_view_id)?;
+                    let debug_name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), entry.conn_id())
+                        .to_string();
+
+                    let mut builder = self.dataflow_builder(mview.cluster_id);
+                    let mut df = builder.build_materialized_view(
+                        entry.id(),
+                        internal_view_id,
+                        debug_name,
+                        &mview.optimized_expr,
+                        &mview.desc,
+                    )?;
+
+                    // Note: ideally, the optimized_plan should be computed and
+                    // set when the CatalogItem is re-constructed (in
+                    // parse_item).
+                    //
+                    // However, it's not clear how exactly to change
+                    // `load_catalog_items` to accomodate for the
+                    // `build_materialized_view` call above.
+                    self.catalog_mut()
+                        .set_optimized_plan(entry.id(), df.clone());
+
+                    // The 'as_of' field of the dataflow changes after restart
                     let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
                     df.set_as_of(as_of);
-                    self.must_ship_dataflow(df, mview.cluster_id).await;
+
+                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                    self.catalog_mut().set_physical_plan(entry.id(), df);
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
@@ -1421,7 +1584,7 @@ impl Coordinator {
             .collect();
         self.controller
             .storage
-            .append(appends)
+            .append_table(appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
@@ -1497,11 +1660,12 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ComputeInstanceId,
+        is_retained_metrics_index: bool,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let mut as_of = self.least_valid_read(&id_bundle);
+        let min_as_of = self.least_valid_read(&id_bundle);
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
@@ -1512,11 +1676,32 @@ impl Coordinator {
         // this time either.
         let write_frontier = self.least_valid_write(&id_bundle);
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        if !write_frontier.is_empty() {
-            as_of.join_assign(&write_frontier);
+        if write_frontier.is_empty() {
+            return min_as_of;
         }
 
-        as_of
+        // Advancing the `as_of` to the write frontier means that we lose some historical data.
+        // That might be acceptable for the default 1-second index compaction window, but not for
+        // retained-metrics indexes. So we need to regress the write frontier by the retention
+        // duration of the index.
+        //
+        // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
+        // as well.
+        let lag = if is_retained_metrics_index {
+            let retention = self.catalog().state().system_config().metrics_retention();
+            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+                tracing::error!("absurd metrics retention duration: {retention:?}");
+                u64::MAX
+            }))
+        } else {
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+        };
+
+        let time = write_frontier.into_option().expect("checked above");
+        let time = time.saturating_sub(lag);
+        let max_as_of = Antichain::from_elem(time);
+
+        min_as_of.join(&max_as_of)
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
@@ -1558,26 +1743,64 @@ impl Coordinator {
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        // // Watcher that listens for and reports cluster service status changes.
+        // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
+
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-        spawn(|| "coord idle metric", async move {
+        spawn(|| "coord watchdog", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last
             // processed. If it is idle, this will result in some microseconds
             // of measurement.
             let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // If we end up having to wait more than 5 seconds for the coord to respond, then the
+            // behavior of Delay results in the interval "restarting" from whenever we yield
+            // instead of trying to catch up.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            // Track if we become stuck to de-dupe error reporting.
+            let mut coord_stuck = false;
+
             loop {
                 interval.tick().await;
-                // If the buffer is full (or the channel is closed), ignore and
-                // try again later.
-                let _ = idle_tx.try_send(idle_metric.start_timer());
+
+                // Wait for space in the channel, if we timeout then the coordinator is stuck!
+                let duration = tokio::time::Duration::from_secs(60);
+                let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
+                let Ok(maybe_permit) = timeout else {
+                    // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                    if !coord_stuck {
+                        tracing::error!("Coordinator is stuck, did not respond after {duration:?}");
+                    }
+                    coord_stuck = true;
+
+                    continue;
+                };
+
+                // We got a permit, we're not stuck!
+                if coord_stuck {
+                    tracing::info!("Coordinator became unstuck");
+                }
+                coord_stuck = false;
+
+                // If we failed to acquire a permit it's because we're shutting down.
+                let Ok(permit) = maybe_permit else {
+                    break;
+                };
+
+                permit.send(idle_metric.start_timer());
             }
         });
 
         self.schedule_storage_usage_collection();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
+
+        // Report if the handling of a single message takes longer than this threshold.
+        let reporting_threshold = self
+            .catalog
+            .system_config()
+            .coord_slow_message_reporting_threshold_ms();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1631,10 +1854,19 @@ impl Coordinator {
                 }
             };
 
+            // Track the wall time for each message for reporting.
+            let histogram_metric = self
+                .metrics
+                .slow_message_handling
+                .with_label_values(&[msg.kind()]);
+
             self.handle_message(msg)
                 // All message processing functions trace. Start a parent span for them to make
                 // it easy to find slow messages.
                 .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .wall_time()
+                .observe(histogram_metric)
+                .with_filter(move |wall_time| wall_time >= reporting_threshold)
                 .await;
         }
     }
@@ -1662,13 +1894,6 @@ impl Coordinator {
         Arc::make_mut(&mut self.catalog)
     }
 
-    /// Obtain writeable Catalog and Controller references. This function is
-    /// needed to allow rust to have multiple mutable references on self at the
-    /// same time.
-    fn catalog_and_controller_mut(&mut self) -> (&mut Catalog, &mut mz_controller::Controller) {
-        (Arc::make_mut(&mut self.catalog), &mut self.controller)
-    }
-
     /// Publishes a notice message to all sessions.
     pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
@@ -1678,6 +1903,16 @@ impl Coordinator {
 
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
         &self.active_conns
+    }
+
+    pub(crate) fn retire_execution(
+        &mut self,
+        reason: StatementEndedExecutionReason,
+        ctx_extra: ExecuteContextExtra,
+    ) {
+        if let Some(uuid) = ctx_extra.retire() {
+            self.end_statement_execution(uuid, reason);
+        }
     }
 }
 
@@ -1841,6 +2076,7 @@ pub async fn serve(
                 segment_client,
                 metrics,
                 tracing_handle,
+                statement_logging: StatementLogging::new(),
             };
             let bootstrap = handle.block_on(async {
                 coord
@@ -1849,7 +2085,10 @@ pub async fn serve(
                     .await?;
                 coord
                     .controller
-                    .remove_orphaned_replicas(coord.catalog().get_next_replica_id().await?)
+                    .remove_orphaned_replicas(
+                        coord.catalog().get_next_user_replica_id().await?,
+                        coord.catalog().get_next_system_replica_id().await?,
+                    )
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())

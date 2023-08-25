@@ -95,11 +95,6 @@ impl TraceManager {
     pub fn del_trace(&mut self, id: &GlobalId) -> bool {
         self.traces.remove(id).is_some()
     }
-
-    /// Removes all managed traces.
-    pub fn del_all_traces(&mut self) {
-        self.traces.clear();
-    }
 }
 
 /// Bundles together traces for the successful computations (`oks`), the

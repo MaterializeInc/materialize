@@ -28,6 +28,7 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
     ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
@@ -105,7 +106,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
@@ -155,6 +156,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
+    plans: CatalogPlans,
     storage: Arc<tokio::sync::Mutex<storage::Connection>>,
     transient_revision: u64,
 }
@@ -165,6 +167,7 @@ impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            plans: self.plans.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
         }
@@ -1632,7 +1635,7 @@ impl CatalogState {
     fn add_to_audit_log(
         &self,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
@@ -1710,6 +1713,61 @@ impl CatalogState {
             }
             SystemObjectId::System => SystemObjectType::System,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CatalogPlans {
+    optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
+    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
+}
+
+impl Catalog {
+    /// Set the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn set_optimized_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<OptimizedMirRelationExpr>,
+    ) {
+        self.plans.optimized_plan_by_id.insert(id, plan);
+    }
+
+    /// Set the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn set_physical_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<mz_compute_client::plan::Plan>,
+    ) {
+        self.plans.physical_plan_by_id.insert(id, plan);
+    }
+
+    /// Try to get the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn try_get_optimized_plan(
+        &self,
+        id: &GlobalId,
+    ) -> Option<&DataflowDescription<OptimizedMirRelationExpr>> {
+        self.plans.optimized_plan_by_id.get(id)
+    }
+
+    /// Try to get the optimized plan for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn try_get_physical_plan(
+        &self,
+        id: &GlobalId,
+    ) -> Option<&DataflowDescription<mz_compute_client::plan::Plan>> {
+        self.plans.physical_plan_by_id.get(id)
+    }
+
+    /// Drop all optimized and physical plans for the item identified by `id`.
+    ///
+    /// Ignore requests for non-existing plans.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn drop_plans(&mut self, id: GlobalId) {
+        self.plans.optimized_plan_by_id.remove(&id);
+        self.plans.physical_plan_by_id.remove(&id);
     }
 }
 
@@ -3254,6 +3312,10 @@ impl Catalog {
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
             },
+            plans: CatalogPlans {
+                optimized_plan_by_id: Default::default(),
+                physical_plan_by_id: Default::default(),
+            },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
@@ -4403,6 +4465,7 @@ impl Catalog {
         );
         for id in migration_metadata.all_drop_ops.drain(..) {
             self.state.drop_item(id);
+            self.drop_plans(id);
         }
         for (id, oid, name, owner_id, privileges, item_rebuilder) in
             migration_metadata.all_create_ops.drain(..)
@@ -4825,8 +4888,8 @@ impl Catalog {
         self.storage().await.allocate_user_cluster_id().await
     }
 
-    pub async fn allocate_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage().await.allocate_replica_id().await
+    pub async fn allocate_user_replica_id(&self) -> Result<ReplicaId, Error> {
+        self.storage().await.allocate_user_replica_id().await
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -4840,14 +4903,14 @@ impl Catalog {
         self.storage().await.get_all_persisted_timestamps().await
     }
 
-    /// Get the next user ID without allocating it.
-    pub async fn get_next_user_global_id(&self) -> Result<GlobalId, Error> {
-        self.storage().await.get_next_user_global_id().await
+    /// Get the next system replica id without allocating it.
+    pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
+        self.storage().await.get_next_system_replica_id().await
     }
 
-    /// Get the next replica id without allocating it.
-    pub async fn get_next_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage().await.get_next_replica_id().await
+    /// Get the next user replica id without allocating it.
+    pub async fn get_next_user_replica_id(&self) -> Result<u64, Error> {
+        self.storage().await.get_next_user_replica_id().await
     }
 
     /// Persist new global timestamp for a timeline to disk.
@@ -5106,11 +5169,16 @@ impl Catalog {
             .map(Op::DropObject)
             .collect()
     }
+
+    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
+    /// Returns Ok if conn_id's temp schema does not exist.
     pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        if !self.state.temporary_schemas[conn_id].items.is_empty() {
+        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
+            return Ok(());
+        };
+        if !schema.items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
-        self.state.temporary_schemas.remove(conn_id);
         Ok(())
     }
 
@@ -5354,7 +5422,7 @@ impl Catalog {
     pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         ops: Vec<Op>,
         f: F,
     ) -> Result<TransactionResult<R>, AdapterError>
@@ -5402,7 +5470,7 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-            drop_ids,
+            &drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -5421,6 +5489,10 @@ impl Catalog {
         self.state = state;
         self.transient_revision += 1;
 
+        for id in drop_ids {
+            self.drop_plans(id);
+        }
+
         Ok(TransactionResult {
             builtin_table_updates,
             audit_events,
@@ -5431,7 +5503,7 @@ impl Catalog {
     #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -5440,7 +5512,7 @@ impl Catalog {
         state: &mut CatalogState,
         // Provide all of the IDs that are being dropped in this transaction so we can provide
         // stronger invariants about when we change items' dependencies.
-        drop_ids: BTreeSet<GlobalId>,
+        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         // NOTE(benesch): to support altering legacy sized sources and sinks
         // (those with linked clusters), we need to generate retractions for
@@ -5508,7 +5580,7 @@ impl Catalog {
                     tx,
                     builtin_table_updates,
                     oracle_write_ts,
-                    &drop_ids,
+                    drop_ids,
                     audit_events,
                     session,
                     id,
@@ -5609,7 +5681,7 @@ impl Catalog {
                         id,
                         to_name,
                         sink.item,
-                        &drop_ids,
+                        drop_ids,
                     )?;
                 }
                 Op::AlterSource { id, cluster_config } => {
@@ -5709,7 +5781,7 @@ impl Catalog {
                         id,
                         to_name,
                         source.item,
-                        &drop_ids,
+                        drop_ids,
                     )?;
                 }
                 Op::CreateDatabase {
@@ -6927,7 +6999,7 @@ impl Catalog {
                             id,
                             to_name,
                             to_item,
-                            &drop_ids,
+                            drop_ids,
                         )?;
                     }
                 }
@@ -7114,7 +7186,7 @@ impl Catalog {
                         id,
                         name.clone(),
                         to_item.clone(),
-                        &drop_ids,
+                        drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry)?;
@@ -7247,16 +7319,39 @@ impl Catalog {
         );
 
         let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema = &mut state.get_schema_mut(
+        let schema = state.get_schema_mut(
             &old_entry.name().qualifiers.database_spec,
             &old_entry.name().qualifiers.schema_spec,
             conn_id,
         );
         schema.items.remove(&old_entry.name().item);
+
+        // We only need to install this item on items in the `used_by` of new
+        // dependencies.
+        let new_deps: Vec<_> = to_item
+            .uses()
+            .0
+            .difference(&old_entry.uses().0)
+            .cloned()
+            .collect();
+
         let mut new_entry = old_entry.clone();
         new_entry.name = to_name;
         new_entry.item = to_item;
+
         schema.items.insert(new_entry.name().item.clone(), id);
+
+        for u in new_deps {
+            match state.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.used_by.push(new_entry.id),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while updating {}",
+                    &u,
+                    state.resolve_full_name(&new_entry.name, new_entry.conn_id())
+                ),
+            }
+        }
+
         state.entry_by_id.insert(id, new_entry);
         builtin_table_updates.extend(state.pack_item_update(id, 1));
         Ok(())
@@ -8859,7 +8954,7 @@ mod tests {
     use std::iter;
 
     use itertools::Itertools;
-    use mz_controller::clusters::ClusterId;
+    use mz_controller::clusters::{ClusterId, ReplicaId};
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -9980,7 +10075,10 @@ mod tests {
 
         assert_eq!(
             mz_sql::catalog::ObjectType::ClusterReplica,
-            catalog.get_object_type(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+            catalog.get_object_type(&ObjectId::ClusterReplica((
+                ClusterId::User(1),
+                ReplicaId::User(1)
+            )))
         );
         assert_eq!(
             mz_sql::catalog::ObjectType::Role,
@@ -10002,7 +10100,7 @@ mod tests {
             None,
             catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
                 ClusterId::User(1),
-                1
+                ReplicaId::User(1),
             ))))
         );
         assert_eq!(

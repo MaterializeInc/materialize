@@ -24,7 +24,7 @@ The typical uses of `now()` and `mz_now()` are:
 
 * **Query timestamp introspection**
 
-  An ad-hoc `SELECT` query with `now()` and `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
+  An ad hoc `SELECT` query with `now()` and `mz_now()` can be useful if you need to understand how up to date the data returned by a query is.
   The data returned by the query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
 
 
@@ -105,7 +105,7 @@ INSERT INTO events VALUES (
 );
 ```
 
-Execute this ad-hoc query that adds the current system timestamp and current logical timestamp to the events in the `events` table.
+Execute this ad hoc query that adds the current system timestamp and current logical timestamp to the events in the `events` table.
 
 ```sql
 SELECT now(), mz_now(), * FROM events
