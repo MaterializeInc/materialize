@@ -306,24 +306,6 @@ where
 
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
-
-        // Eagerly downgrade our frontier to the initial as_of. This makes sure
-        // that the output frontier of the `persist_source` closely tracks the
-        // `upper` frontier of the persist shard. It might be that the snapshot
-        // for `as_of` is not initially available yet, but this makes sure we
-        // already downgrade to it.
-        //
-        // Downstream consumers might rely on close frontier tracking for making
-        // progress. For example, the `persist_sink` needs to know the
-        // up-to-date upper of the output shard to make progress because it will
-        // only write out new data once it knows that earlier writes went
-        // through, including the initial downgrade of the shard upper to the
-        // `as_of`.
-        //
-        // NOTE: We have to do this before our `subscribe()` call (which
-        // internally calls `snapshot()` because that call will block when there
-        // is no data yet available in the shard.
-        cap_set.downgrade(as_of.clone());
         let mut current_ts = match as_of.clone().into_option() {
             Some(ts) => ts,
             None => {
