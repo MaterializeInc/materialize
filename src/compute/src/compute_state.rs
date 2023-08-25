@@ -193,7 +193,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         logging: LoggingConfig,
         variable_length_row_encoding: bool,
     ) {
-        println!("[btv] setting vlre to {variable_length_row_encoding}");
         mz_repr::VARIABLE_LENGTH_ROW_ENCODING
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
         self.initialize_logging(&logging);
