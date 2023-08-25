@@ -17,13 +17,13 @@
 -- Most of these macros are direct copies of their PostgreSQL counterparts.
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
-{{ config(materialized='materialized_view', indexes=[{'columns': ['item']}]) }}
+{{ config(materialized='materializedview', indexes=[{'columns': ['item']}]) }}
 
 SELECT
   auctions.item,
   count(bids.id) AS number_of_bids
 FROM {{ source('auction','bids') }} AS bids
-JOIN FROM {{ source('auction','auctions') }} AS auctions
+JOIN {{ source('auction','auctions') }} AS auctions
   ON bids.auction_id = auctions.id
 WHERE bids.bid_time < auctions.end_time
 GROUP BY auctions.item
