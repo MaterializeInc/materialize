@@ -259,7 +259,7 @@ class ListCompositionsCommand(Command):
     name = "list-compositions"
     help = "list the directories that contain compositions and their summaries"
 
-    def run(cls, args: argparse.Namespace) -> None:
+    def run(self, args: argparse.Namespace) -> None:
         repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
             print(os.path.relpath(path, repo.root))
