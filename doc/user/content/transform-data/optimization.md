@@ -17,14 +17,14 @@ Like in any standard relational database, you can use [indexes](/get-started/key
 
 Building an efficient index depends on the clauses used in your queries, as well as your expected access patterns. Use the following as a guide:
 
-* [WHERE](#where)
+* [WHERE](#where-point-lookups)
 * [JOIN](#join)
-* [DEFAULT](#default)
+* [DEFAULT](#default-index)
 
 `GROUP BY`, `ORDER BY` and `LIMIT` clauses currently do not benefit from an index.
 
 
-### `WHERE`
+### `WHERE` point lookups
 Speed up a query involving a `WHERE` clause with equality comparisons to literals (e.g., `42`, or `'foo'`):
 
 | Clause                                            | Index                                    |
@@ -37,7 +37,7 @@ Speed up a query involving a `WHERE` clause with equality comparisons to literal
 | `WHERE 2 * x = 64`                                | `CREATE INDEX ON obj_name (2 * x);`    |
 | `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
 
-You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching elements of the index instead of scanning the entire index:
+You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching records from the index instead of scanning the entire index:
 ```sql
 EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
 ```
@@ -49,21 +49,20 @@ EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
      ReadExistingIndex materialize.public.foo_x_y lookup_value=(42, "hello")+
                                                                             +
  Used Indexes:                                                              +
-   - materialize.public.foo_x_y                                             +
+   - materialize.public.foo_x_y (lookup)                                    +
 ```
 
 #### Matching multi-column indexes to multi-column `WHERE` clauses
 
 In general, your index key should exactly match the columns that are constrained in the `WHERE` clause. In more detail:
-- **_If the `WHERE` clause constrains fewer fields than your index key includes, then the index will not be used_** for a lookup, but will be fully scanned. For example, an index on `(x, y)` cannot be used to execute `WHERE x = 7` as a point lookup.
+{{< warning >}} If the `WHERE` clause constrains fewer fields than your index key includes, then the index will not be used for a lookup, but will be fully scanned. For example, an index on `(x, y)` cannot be used to execute `WHERE x = 7` as a point lookup. {{< /warning >}}
 - If the `WHERE` clause constrains more fields than your index key includes, then the index might still provide some speedup, but it won't necessarily be optimal: In this case, the index lookup is performed using only those constraints that are included in the index key, and the rest of the constraints will be used to subsequently filter the result of the index lookup.
 - If `OR` is used and not all arguments constrain the same fields, create an index for the intersection of the constrained fields. For example, if you have `WHERE (x = 51 AND y = 'bbb') OR (x = 76 AND z = 9)`, create an index just on `x`.
 - If `OR` is used and its arguments constrain completely disjoint sets of fields (e.g. `WHERE x = 5 OR y = 'aaa'`), try to rewrite your query using a `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the original `OR` arguments.
-- If the same input is being used in a join as well as being constrained by equalities to literals, then an index can be used to speed up either the join (see below) or the literal equalities (see above). Which of these will perform better depends on data characteristics.
 
 ### `JOIN`
 
-In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize's in-memory [arrangements](/overview/arrangements) allow the system to share indexes across queries, which means **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
+In general, you can [improve the performance of your joins](https://materialize.com/blog/maintaining-joins-using-few-resources)  by creating indexes on the columns occurring in join keys. This comes at the cost of additional memory usage. Materialize's in-memory [arrangements](/overview/arrangements) (the internal data structure of indexes) allow the system to share indexes across queries: **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
 
 Let's create a few tables to work through examples.
 
@@ -110,6 +109,22 @@ CREATE INDEX pk_teachers ON teachers (id);
 
 If your query filters one or more of the join inputs by a literal equality (e.g., `WHERE t.name = 'Escalante'`), place one of those input collections first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing collections using index lookups rather than full scans.
 
+Note that when the same input is being used in a join as well as being constrained by equalities to literals, _either_ the join _or_ the literal equalities can be sped up by an index (possibly the same index, but usually different indexes). Which of these will perform better depends on the characteristics of your data. For example, the following query can make use of _either_ of the following two indexes, but not both at the same time:
+- on `teachers(name)` to perform the `t.name = 'Escalante'` point lookup before the join,
+- on `teachers(id)` to speed up the join and then perform the `WHERE t.name = 'Escalante'`.
+
+```sql
+SELECT
+    t.name,
+    s.schedule,
+    s.course_id
+FROM teachers t
+INNER JOIN sections s ON t.id = s.teacher_id
+WHERE t.name = 'Escalante';
+```
+
+In this case, the index on `teachers(name)` might work better, as the `WHERE t.name = 'Escalante'` can filter out a very large percentage of the `teachers` table before the table is fed to the join. You can see an example `EXPLAIN` command output for the above query [here](#use-explain-to-verify-index-usage).
+
 #### Optimize Multi-Way Joins with Delta Joins
 
 Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a. **delta joins**, that aggressively re-uses indexes and maintains no intermediate results. Materialize considers this plan only if all the necessary indexes already exist, in which case the additional memory cost of the join is zero. This is typically possible when you index all the join keys.
@@ -141,29 +156,27 @@ EXPLAIN VIEW course_schedule;
 ```
 
 ```
-                  Optimized Plan
---------------------------------------------------
- Explained Query:                                +
-   Project (#1, #5, #7)                          +
-     Filter (#0) IS NOT NULL                     +
-       Join on=(#0 = #3 AND #4 = #6) type=delta  + <--- using delta join
-         ArrangeBy keys=[[#0]]                   +
-           Get materialize.public.teachers       +
-         ArrangeBy keys=[[#1], [#2]]             +
-           Get materialize.public.sections       +
-         ArrangeBy keys=[[#0]]                   +
-           Filter (#0) IS NOT NULL               +
-             Get materialize.public.courses      +
-                                                 +
- Source materialize.public.courses               +
-   filter=((#0) IS NOT NULL)                     +
-                                                 +
- Used Indexes:                                   +
-   - materialize.public.pk_teachers              +
-   - materialize.public.sections_fk_teachers     +
-   - materialize.public.sections_fk_courses      +
-   - materialize.public.pk_courses               +
+                             Optimized Plan
+-----------------------------------------------------------------------
+ materialize.public.course_schedule:                                  +
+   Project (#1, #5, #7)                                               +
+     Filter (#0) IS NOT NULL AND (#4) IS NOT NULL                     +
+       Join on=(#0 = #3 AND #4 = #6) type=delta                       + <-- delta join
+         ArrangeBy keys=[[#0]]                                        +
+           Get materialize.public.teachers                            +
+         ArrangeBy keys=[[#1], [#2]]                                  +
+           Get materialize.public.sections                            +
+         ArrangeBy keys=[[#0]]                                        +
+           Get materialize.public.courses                             +
+                                                                      +
+ Used Indexes:                                                        +
+   - materialize.public.pk_teachers (delta join 1st input (full scan))+
+   - materialize.public.sections_fk_teachers (delta join lookup)      +
+   - materialize.public.pk_courses (delta join lookup)                +
+   - materialize.public.sections_fk_courses (delta join lookup)       +
 ```
+
+For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause.
 
 #### Further Optimize with Late Materialization
 
@@ -216,13 +229,70 @@ In many relational databases, indexes don't replicate the entire collection of d
     INNER JOIN courses c ON s_c.course_id = c.id;
     ```
 
-### Default
+### Default index
 
 Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
 
 Clause                                               | Index                               |
 -----------------------------------------------------|-------------------------------------|
 `SELECT x, y FROM obj_name`                          | `CREATE DEFAULT INDEX ON obj_name;` |
+
+### Use `EXPLAIN` to verify index usage
+
+Use `EXPLAIN` to verify that indexes are used as you expect. For example:
+
+```SQL
+CREATE TABLE teachers (id INT, name TEXT);
+CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
+CREATE TABLE courses (id INT, name TEXT);
+
+CREATE INDEX pk_teachers ON teachers (id);
+CREATE INDEX teachers_name ON teachers (name);
+CREATE INDEX sections_fk_teachers ON sections (teacher_id);
+CREATE INDEX pk_courses ON courses (id);
+CREATE INDEX sections_fk_courses ON sections (course_id);
+
+EXPLAIN
+  SELECT
+      t.name AS teacher_name,
+      s.schedule,
+      c.name AS course_name
+  FROM teachers t
+  INNER JOIN sections s ON t.id = s.teacher_id
+  INNER JOIN courses c ON c.id = s.course_id
+  WHERE t.name = 'Escalante';
+```
+
+```
+                                   Optimized Plan
+------------------------------------------------------------------------------------
+ Explained Query:                                                                  +
+   Project (#1, #6, #8)                                                            +
+     Filter (#0) IS NOT NULL AND (#5) IS NOT NULL                                  +
+       Join on=(#0 = #4 AND #5 = #7) type=delta                                    +
+         ArrangeBy keys=[[#0]]                                                     +
+           ReadExistingIndex materialize.public.teachers lookup_value=("Escalante")+
+         ArrangeBy keys=[[#1], [#2]]                                               +
+           Get materialize.public.sections                                         +
+         ArrangeBy keys=[[#0]]                                                     +
+           Get materialize.public.courses                                          +
+                                                                                   +
+ Used Indexes:                                                                     +
+   - materialize.public.teachers_name (lookup)                                     +
+   - materialize.public.sections_fk_teachers (delta join lookup)                   +
+   - materialize.public.pk_courses (delta join lookup)                             +
+   - materialize.public.sections_fk_courses (delta join lookup)                    +
+```
+
+You can see in the above `EXPLAIN` printout that the system will use `teachers_name` for a point lookup, and use three other indexes for the execution of the delta join. Note that the `pk_teachers` index is not used, as explained [above](#joins-with-filters).
+
+The following are the possible index usage types:
+- `*** full scan ***`: Materialize will read the entire index.
+- `lookup`: Materialize will look up only specific keys in the index.
+- `differential join`: Materialize will use the index to perform a _differential join_. For a differential join between two relations, the amount of memory required is proportional to the sum of the sizes of each of the input relations that are **not** indexed. In other words, if an input is already indexed, then the size of that input won't affect the memory usage of a differential join between two relations. For a join between more than two relations, we recommend aiming for a delta join instead of a differential join, as explained [above](#optimize-multi-way-joins-with-delta-joins). A differential join between more than two relations will perform a series of binary differential joins on top of each other, and each of these binary joins (except the first one) will use memory proportional to the size of the intermediate data that is fed into the join.
+- `delta join 1st input (full scan)`: Materialize will use the index for the first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). Note that the first input of a delta join is always fully scanned. However, executing the join won't require additional memory if the input is indexed.
+- `delta join lookup`: Materialize will use the index for a non-first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). This means that, in an ad hoc query, the join will perform only lookups into the index.
+- `fast path limit`: When a [fast path](/sql/explain/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
 
 ## Learn more
 

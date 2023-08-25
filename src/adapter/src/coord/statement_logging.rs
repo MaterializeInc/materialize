@@ -12,18 +12,18 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
-use mz_repr::statement_logging::{
-    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementPreparedRecord,
-};
 use mz_sql::plan::Params;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use uuid::Uuid;
 
-use crate::coord::Coordinator;
+use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
+use crate::statement_logging::{
+    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
+    StatementEndedExecutionRecord, StatementPreparedRecord,
+};
 
 /// Metadata required for logging a prepared statement.
 #[derive(Debug)]
@@ -263,17 +263,14 @@ impl Coordinator {
     }
 
     /// Record a new connection event
-    pub fn begin_session_for_statement_logging(&mut self, session: &Session) {
+    pub fn begin_session_for_statement_logging(&mut self, session: &ConnMeta) {
         let id = session.uuid();
-        let connected_at = session.connect_time();
-        let application_name = session.application_name().to_owned();
         let session_role = session.session_role_id();
-        let authenticated_user = self.catalog.get_role(session_role).name.clone();
         let event = SessionHistoryEvent {
             id,
-            connected_at,
-            application_name,
-            authenticated_user,
+            connected_at: session.connected_at(),
+            application_name: session.application_name().to_owned(),
+            authenticated_user: self.catalog.get_role(session_role).name.clone(),
         };
         self.statement_logging.unlogged_sessions.insert(id, event);
     }

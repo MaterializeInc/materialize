@@ -11,7 +11,7 @@ import logging
 import re
 import ssl
 from enum import Enum
-from importlib.abc import Traversable
+from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
@@ -154,6 +154,6 @@ class Database:
 # -----------------
 
 
-def parse_from_file(path: Traversable) -> List[str]:
+def parse_from_file(path: Path) -> List[str]:
     """Parses a *.sql file to a list of queries."""
     return sqlparse.split(path.read_text())

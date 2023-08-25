@@ -85,7 +85,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
         {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
-                    session: res.session,
+                    conn_id: res.session.conn_id().clone(),
                     tx: None,
                 }))
                 .expect("coordinator unexpectedly gone");

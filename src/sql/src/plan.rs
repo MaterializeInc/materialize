@@ -134,7 +134,6 @@ pub enum Plan {
     Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
-    CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
@@ -326,7 +325,6 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
-            Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
             Plan::Explain(_) => "explain",
             Plan::Insert(_) => "insert",
@@ -789,13 +787,6 @@ pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
-}
-
-#[derive(Debug)]
-pub struct CopyRowsPlan {
-    pub id: GlobalId,
-    pub columns: Vec<usize>,
-    pub rows: Vec<Row>,
 }
 
 #[derive(Clone, Debug)]

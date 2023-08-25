@@ -75,10 +75,6 @@ pub type ComputeInstanceId = StorageInstanceId;
 /// Identifier of a replica.
 pub type ReplicaId = mz_cluster_client::ReplicaId;
 
-/// Identifier of a replica.
-// TODO(#18377): Replace `ReplicaId` with this type.
-pub type NewReplicaId = mz_cluster_client::NewReplicaId;
-
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
@@ -89,6 +85,12 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+    /// A notification about dependency updates.
+    DependencyUpdate {
+        id: GlobalId,
+        dependencies: Vec<GlobalId>,
+        diff: i64,
+    },
 }
 
 /// Replica configuration

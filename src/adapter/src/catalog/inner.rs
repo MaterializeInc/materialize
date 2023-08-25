@@ -25,7 +25,7 @@ use crate::catalog::{
     catalog_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem,
     CatalogState, DataSourceDesc, Error, ErrorKind, Index, MaterializedView, Sink, Source,
 };
-use crate::session::Session;
+use crate::coord::ConnMeta;
 use crate::AdapterError;
 
 impl Catalog {
@@ -37,7 +37,7 @@ impl Catalog {
         oracle_write_ts: Timestamp,
         drop_ids: &BTreeSet<GlobalId>,
         audit_events: &mut Vec<VersionedEvent>,
-        session: Option<&Session>,
+        session: Option<&ConnMeta>,
         id: GlobalId,
         cluster_id: ClusterId,
     ) -> Result<(), AdapterError> {

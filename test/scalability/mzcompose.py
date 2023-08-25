@@ -8,9 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import pathlib
 import sys
 import time
 from concurrent import futures
+from math import floor, sqrt
 from typing import Any, Optional, Tuple
 
 import pandas as pd
@@ -28,7 +30,7 @@ from materialize.scalability.endpoints import (
 )
 from materialize.scalability.operation import Operation
 from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
@@ -69,7 +71,7 @@ def run_with_concurrency(
     init_cursor = init_conn.cursor()
     for init_sql in init_sqls:
         print(init_sql)
-        init_cursor.execute(init_sql)
+        init_cursor.execute(init_sql.encode("utf8"))
 
     connect_sqls = schema.connect_sqls()
 
@@ -82,7 +84,7 @@ def run_with_concurrency(
         conn.autocommit = True
         cursor = conn.cursor()
         for connect_sql in connect_sqls:
-            cursor.execute(connect_sql)
+            cursor.execute(connect_sql.encode("utf8"))
         cursor_pool.append(cursor)
 
     print(f"Benchmarking workload {type(workload)} at concurrency {concurrency} ...")
@@ -110,7 +112,7 @@ def run_with_concurrency(
     for measurement in measurements:
         df_detail = pd.concat([df_detail, pd.DataFrame([measurement])])
     print("Best and worst individual measurements:")
-    print(df_detail)
+    print(df_detail.sort_values(by=["wallclock"]))
 
     print(
         f"concurrency: {concurrency}; wallclock_total: {wallclock_total}; tps = {count/wallclock_total}"
@@ -140,23 +142,49 @@ def run_workload(
 ) -> None:
     df_totals = pd.DataFrame()
     df_details = pd.DataFrame()
-    for concurrency in range(
-        args.min_concurrency, args.max_concurrency + 1, args.concurrency_step
-    ):
+
+    concurrencies: list[int] = [round(args.exponent_base**c) for c in range(0, 1024)]
+    concurrencies = sorted(set(concurrencies))
+    concurrencies = [
+        c
+        for c in concurrencies
+        if c >= args.min_concurrency and c <= args.max_concurrency
+    ]
+    print(f"Concurrencies: {concurrencies}")
+
+    for concurrency in concurrencies:
         df_total, df_detail = run_with_concurrency(
-            c, endpoint, schema, workload, concurrency, args.count
+            c,
+            endpoint,
+            schema,
+            workload,
+            concurrency,
+            floor(args.count * sqrt(concurrency)),
         )
         df_totals = pd.concat([df_totals, df_total])
         df_details = pd.concat([df_details, df_detail])
 
-        df_totals.to_csv(f"results/{type(workload).__name__}.csv")
-        df_details.to_csv(f"results/{type(workload).__name__}_details.csv")
+        endpoint_name = endpoint.name()
+        pathlib.Path(f"results/{endpoint_name}").mkdir(parents=True, exist_ok=True)
+
+        df_totals.to_csv(f"results/{endpoint_name}/{type(workload).__name__}.csv")
+        df_details.to_csv(
+            f"results/{endpoint_name}/{type(workload).__name__}_details.csv"
+        )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--target",
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
+        action="append",
+    )
+
+    parser.add_argument(
+        "--exponent-base",
+        type=float,
+        help="Exponent base to use when deciding what concurrencies to test",
+        default=2,
     )
 
     parser.add_argument(
@@ -171,10 +199,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--concurrency-step", type=int, help="Maximum concurrency to test", default=10
-    )
-
-    parser.add_argument(
         "--workload",
         metavar="WORKLOAD",
         action="append",
@@ -185,8 +209,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--count",
         metavar="COUNT",
         type=int,
-        default=2048,
-        help="Number of individual operations to benchmark.",
+        default=512,
+        help="Number of individual operations to benchmark at concurrency 1 (and COUNT * SQRT(concurrency) for higher concurrencies)",
     )
 
     parser.add_argument(
@@ -205,36 +229,47 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--materialize-url", type=str, help="URL to connect to for remote targets"
+        "--materialize-url",
+        type=str,
+        help="URL to connect to for remote targets",
+        action="append",
     )
 
     parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER to")
 
     args = parser.parse_args()
 
-    if args.materialize_url is not None and args.target != "remote":
+    if args.materialize_url is not None and "remote" not in args.target:
         assert False, "--materialize_url requires --target=remote"
 
-    endpoint: Optional[Endpoint] = None
-    if args.target == "local":
-        endpoint = MaterializeLocal()
-    if args.target == "remote":
-        endpoint = MaterializeRemote(materialize_url=args.materialize_url)
-    elif args.target == "postgres":
-        endpoint = PostgresContainer(composition=c)
-    elif args.target == "HEAD" or args.target is None:
-        endpoint = MaterializeContainer(composition=c)
-    else:
-        endpoint = MaterializeContainer(
-            composition=c, image=f"materialize/materialized:{args.target}"
-        )
+    if len(args.target) == 0:
+        args.target = ["HEAD"]
 
-    assert endpoint is not None
+    print(f"Targets: {args.target}")
+
+    endpoints: list[Endpoint] = []
+    for i, target in enumerate(args.target):
+        endpoint: Optional[Endpoint] = None
+        if target == "local":
+            endpoint = MaterializeLocal()
+        if target == "remote":
+            endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
+        elif target == "postgres":
+            endpoint = PostgresContainer(composition=c)
+        elif target == "HEAD":
+            endpoint = MaterializeContainer(composition=c)
+        else:
+            endpoint = MaterializeContainer(
+                composition=c, image=f"materialize/materialized:{target}"
+            )
+        assert endpoint is not None
+
+        endpoints.append(endpoint)
 
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else Workload.__subclasses__()
+        else [w for w in Workload.__subclasses__() if not w == WorkloadSelfTest]
     )
 
     schema = Schema(
@@ -249,7 +284,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for workload in workloads:
         assert issubclass(workload, Workload), f"{workload} is not a Workload"
-        run_workload(c, args, endpoint, schema, workload())
+        for endpoint in endpoints:
+            run_workload(c, args, endpoint, schema, workload())
 
 
 def workflow_lab(c: Composition) -> None:

@@ -11,6 +11,7 @@ from typing import Any, List, Optional, Sequence
 
 import psycopg
 from psycopg.connection import Connection
+from typing_extensions import LiteralString
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import eprint
@@ -24,7 +25,7 @@ def sql_query(
     vars: Optional[Sequence[Any]] = None,
 ) -> List[List[Any]]:
     cur = conn.cursor()
-    cur.execute(query, vars)
+    cur.execute(query.encode("utf8"), vars)
     return [list(row) for row in cur]
 
 
@@ -34,6 +35,15 @@ def sql_execute(
     vars: Optional[Sequence[Any]] = None,
 ) -> None:
     cur = conn.cursor()
+    cur.execute(query.encode("utf8"), vars)
+
+
+def sql_execute_ddl(
+    conn: Connection[Any],
+    query: LiteralString,
+    vars: Optional[Sequence[Any]] = None,
+) -> None:
+    cur = psycopg.ClientCursor(conn)
     cur.execute(query, vars)
 
 
@@ -60,7 +70,7 @@ def sql_query_pgwire(
 ) -> List[List[Any]]:
     with pgwire_sql_conn(config) as conn:
         eprint(f"QUERY: {query}")
-    return sql_query(conn, query, vars)
+        return sql_query(conn, query, vars)
 
 
 def sql_execute_pgwire(

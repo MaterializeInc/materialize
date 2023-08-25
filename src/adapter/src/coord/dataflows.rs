@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
@@ -36,7 +37,7 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -145,10 +146,10 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
-    ) {
+    ) -> DataflowDescription<Plan> {
         self.ship_dataflow(dataflow, instance)
             .await
-            .expect("failed to ship dataflow");
+            .expect("failed to ship dataflow")
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
@@ -159,7 +160,7 @@ impl Coordinator {
         &mut self,
         mut dataflow: DataflowDesc,
         instance: ComputeInstanceId,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<DataflowDescription<Plan>, AdapterError> {
         // If the only outputs of the dataflow are sinks, we might
         // be able to turn off the computation early, if they all
         // have non-trivial `up_to`s.
@@ -170,21 +171,21 @@ impl Coordinator {
             }
         }
 
-        let output_ids = dataflow.export_ids().collect();
         let plan = self.finalize_dataflow(dataflow, instance)?;
 
         self.controller
             .active_compute()
-            .create_dataflow(instance, plan)
+            .create_dataflow(instance, plan.clone())
             .unwrap_or_terminate("dataflow creation cannot fail");
+
         self.initialize_compute_read_policies(
-            output_ids,
+            plan.export_ids().collect(),
             instance,
             Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
         )
         .await;
 
-        Ok(())
+        Ok(plan)
     }
 
     /// Finalizes a dataflow.
@@ -482,47 +483,40 @@ impl<'a> DataflowBuilder<'a> {
         Ok(())
     }
 
-    /// Builds a dataflow description for the materialized view specified by `id`.
+    /// Builds a dataflow description for a materialized view.
     ///
-    /// For this, we first build a dataflow for the view expression, then we
-    /// add a sink that writes that dataflow's output to storage.
-    /// `internal_view_id` is the ID we assign to the view dataflow internally,
-    /// so we can connect the sink to it.
-    pub fn build_materialized_view_dataflow(
+    /// For this, we first build a dataflow for the view expression, then we add
+    /// a sink that writes that dataflow's output to storage. `internal_view_id`
+    /// is the ID we assign to the view dataflow internally, so we can connect
+    /// the sink to it.
+    pub fn build_materialized_view(
         &mut self,
-        id: GlobalId,
+        exported_sink_id: GlobalId,
         internal_view_id: GlobalId,
+        debug_name: String,
+        optimized_expr: &OptimizedMirRelationExpr,
+        desc: &RelationDesc,
     ) -> Result<DataflowDesc, AdapterError> {
-        let mview_entry = self.catalog.get_entry(&id);
-        let mview = match mview_entry.item() {
-            CatalogItem::MaterializedView(mv) => mv,
-            _ => unreachable!(
-                "cannot create materialized view dataflow on something that is not a materialized view"
-            ),
-        };
+        let mut dataflow = DataflowDesc::new(debug_name);
 
-        let name = self
-            .catalog
-            .resolve_full_name(mview_entry.name(), mview_entry.conn_id())
-            .to_string();
-        let mut dataflow = DataflowDesc::new(name);
+        self.import_view_into_dataflow(&internal_view_id, optimized_expr, &mut dataflow)?;
 
-        self.import_view_into_dataflow(&internal_view_id, &mview.optimized_expr, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
 
         let sink_description = ComputeSinkDesc {
             from: internal_view_id,
-            from_desc: mview.desc.clone(),
+            from_desc: desc.clone(),
             connection: ComputeSinkConnection::Persist(PersistSinkConnection {
-                value_desc: mview.desc.clone(),
+                value_desc: desc.clone(),
                 storage_metadata: (),
             }),
             with_snapshot: true,
             up_to: Antichain::default(),
         };
-        self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
+
+        self.build_sink_dataflow_into(&mut dataflow, exported_sink_id, sink_description)?;
 
         Ok(dataflow)
     }
@@ -922,9 +916,10 @@ impl Coordinator {
         // this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
 
-        let df = DataflowDesc::new("".into());
-        let _: () = self.must_ship_dataflow(df.clone(), compute_instance).await;
+        let dataflow = || DataflowDesc::new("".into());
         let _: DataflowDescription<mz_compute_client::plan::Plan> =
-            self.must_finalize_dataflow(df, compute_instance);
+            self.must_ship_dataflow(dataflow(), compute_instance).await;
+        let _: DataflowDescription<mz_compute_client::plan::Plan> =
+            self.must_finalize_dataflow(dataflow(), compute_instance);
     }
 }

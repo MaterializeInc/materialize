@@ -39,15 +39,15 @@ This is going to display a URL that you can open in your browser
 
 ## Selecting a target
 
-The framework can be directed to execute its queries against various targets:
+The framework can be directed to execute its queries against various targets. Multiple targets can be specified within a single command line.
 
-# Against your current HEAD in a container
+### Against your current HEAD in a container
 
 ```
 ./mzcompose run default --target HEAD ...
 ```
 
-# Against a specific DockerHub tag:
+### Against a specific DockerHub tag:
 
 ```
 ./mzcompose run default --target v1.2.4 ...
@@ -55,18 +55,35 @@ The framework can be directed to execute its queries against various targets:
 
 In both of those cases, Materialize, CRDB and Python will run within the same machine, possibly interfering with each other
 
-# Against a local containerized Postgres instance
+### Against a local containerized Postgres instance
 
 
 ```
 ./mzcompose run default --target postgres ...
 ```
 
-# Against a remote Materialize instance
+### Against a remote Materialize instance
 
 ```
 ./mzcompose run default --target=remote \--materialize-url="postgres://user:password@host:6875/materialize?sslmode=require" --cluster-name= ...
 ```
+
+## Specifying the concurrencies to be benchmarked
+
+The framework uses an exponential function to determine what concurrencies to test. By default, exponent base of 2 is used, with a default
+minimum value of 1 and maximum of 256. To get more data points, you can modify the exponent base to be less than 2:
+
+```
+./mzcompose run default --exponent-base=1.5 --min-concurrency=N --max-concurrency=M
+```
+
+## Specifying the number of operations
+
+The framework will run `--count=256` operations for concurrency=1 and then multiply the count by sqrt(concurrency) for higher concurrencies.
+
+This way, a larger number of operations will be performed for the higher concurrencies, leading to more stable results. If `--count`
+operations was used when benchmarking concurrency 256, the test would complete in a second, leading to unstable results.
+
 
 # Accuracy
 

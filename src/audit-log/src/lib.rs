@@ -535,7 +535,7 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClust
     fn into_proto(&self) -> proto::audit_log_event_v1::CreateClusterReplicaV1 {
         proto::audit_log_event_v1::CreateClusterReplicaV1 {
             cluster_id: self.cluster_id.to_string(),
-            cluser_name: self.cluster_name.to_string(),
+            cluster_name: self.cluster_name.to_string(),
             replica_id: self.replica_id.as_ref().map(|id| proto::StringWrapper {
                 inner: id.to_string(),
             }),
@@ -550,7 +550,7 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClust
     ) -> Result<Self, TryFromProtoError> {
         Ok(CreateClusterReplicaV1 {
             cluster_id: proto.cluster_id,
-            cluster_name: proto.cluser_name,
+            cluster_name: proto.cluster_name,
             replica_id: proto.replica_id.map(|id| id.inner),
             replica_name: proto.replica_name,
             logical_size: proto.logical_size,

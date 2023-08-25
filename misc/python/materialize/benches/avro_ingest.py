@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 import time
-from typing import IO, NamedTuple
+from typing import IO, NamedTuple, cast
 
 import docker
 import pg8000
@@ -102,10 +102,15 @@ def main() -> None:
 
     docker_client = docker.from_env()
 
-    mz_container = docker_client.containers.run(
-        deps["materialized"].spec(),
-        detach=True,
-        network_mode="host",
+    # NOTE: We have to override the type below because if `detach=True` it
+    # returns a Container, and the typechecker doesn't know that.
+    mz_container: Container = cast(
+        Container,
+        docker_client.containers.run(
+            deps["materialized"].spec(),
+            detach=True,
+            network_mode="host",
+        ),
     )
 
     docker_client.containers.run(
@@ -154,7 +159,9 @@ def main() -> None:
             while True:
                 try:
                     cur.execute("SELECT * FROM cnt")
-                    n = cur.fetchone()[0]
+                    row = cur.fetchone()
+                    assert row is not None
+                    n = row[0]
                     if n >= args.records:
                         break
                 except ProgrammingError:

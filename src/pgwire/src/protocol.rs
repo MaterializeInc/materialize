@@ -21,15 +21,15 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
 };
+use mz_adapter::statement_logging::StatementEndedExecutionReason;
 use mz_adapter::{
-    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture,
+    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture, Severity,
 };
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
@@ -48,9 +48,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
-use crate::message::{
-    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
-};
+use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -312,8 +310,8 @@ where
     conn.flush().await?;
 
     // Register session with adapter.
-    let (adapter_client, startup) = match adapter_client.startup(session, setting_keys).await {
-        Ok(startup) => startup,
+    let mut adapter_client = match adapter_client.startup(session, setting_keys).await {
+        Ok(adapter_client) => adapter_client,
         Err(e) => {
             return conn
                 .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
@@ -325,8 +323,8 @@ where
     // NoticeResponse messages can be sent at any time
     // (https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-ASYNC),
     // so it is within spec to send them after the initial ReadyForQuery.
-    for startup_message in startup.messages {
-        buf.push(ErrorResponse::from_startup_message(startup_message).into());
+    for notice in adapter_client.session().drain_notices() {
+        buf.push(ErrorResponse::from_adapter_notice(notice).into());
     }
     conn.send_all(buf).await?;
     conn.flush().await?;
@@ -1315,21 +1313,7 @@ where
         M: Into<BackendMessage>,
     {
         let message: BackendMessage = message.into();
-        match message {
-            BackendMessage::ErrorResponse(ref err) => {
-                let minimum_client_severity =
-                    self.adapter_client.session().vars().client_min_messages();
-                if err
-                    .severity
-                    .should_output_to_client(minimum_client_severity)
-                {
-                    self.conn.send(message).await
-                } else {
-                    Ok(())
-                }
-            }
-            _ => self.conn.send(message).await,
-        }
+        self.conn.send(message).await
     }
 
     pub async fn send_all(

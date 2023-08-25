@@ -14,7 +14,8 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from materialize.cloudtest.util.common import eprint, retry
+from materialize.cloudtest.util.common import retry
+from materialize.cloudtest.util.wait import wait
 
 
 class KubectlError(AssertionError):
@@ -72,27 +73,26 @@ class Kubectl:
         self,
         namespace: Optional[str],
         resource_type: str,
-        resource_name: str,
+        resource_name: Optional[str],
         wait_for: str,
         timeout_secs: int,
+        label: Optional[str] = None,
     ) -> None:
-        command = [
-            "kubectl",
-            "--context",
-            self.context,
-            "wait",
-            f"{resource_type}/{resource_name}",
-            "--for",
+        if resource_name is None and label is None:
+            raise RuntimeError("Either resource_name or label must be set")
+
+        if resource_name is None:
+            resource = resource_type
+        else:
+            resource = f"{resource_type}/{resource_name}"
+
+        wait(
             wait_for,
-            "--timeout",
-            f"{timeout_secs}s",
-        ]
-        if namespace:
-            command.extend(["-n", namespace])
-        eprint(f"Waiting for {resource_type} {resource_name} to be {wait_for}")
-        subprocess.run(
-            command,
-            check=True,
+            resource,
+            timeout_secs,
+            self.context,
+            label=label,
+            namespace=namespace,
         )
 
     def delete(

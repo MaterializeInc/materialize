@@ -593,7 +593,7 @@ To see the available workflows, run:
             # Upload test report to Buildkite Test Analytics.
             junit_suite = junit_xml.TestSuite(composition.name)
 
-            for (name, result) in composition.test_results.items():
+            for name, result in composition.test_results.items():
                 test_case = junit_xml.TestCase(name, composition.name, result.duration)
                 if result.error:
                     test_case.add_error_info(message=result.error)
@@ -679,6 +679,7 @@ class ArgumentParser(argparse.ArgumentParser):
     ) -> Tuple[argparse.Namespace, List[str]]:
         namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(namespace, "unknown_args", unknown_args)
+        assert namespace is not None
         return namespace, []
 
 
@@ -688,9 +689,10 @@ class ArgumentSubparser(argparse.ArgumentParser):
         args: Optional[Sequence[Text]] = None,
         namespace: Optional[argparse.Namespace] = None,
     ) -> Tuple[argparse.Namespace, List[str]]:
-        namespace, unknown_args = super().parse_known_args(args, namespace)
-        setattr(namespace, "unknown_subargs", unknown_args)
-        return namespace, []
+        new_namespace, unknown_args = super().parse_known_args(args, namespace)
+        setattr(new_namespace, "unknown_subargs", unknown_args)
+        assert new_namespace is not None
+        return new_namespace, []
 
 
 if __name__ == "__main__":

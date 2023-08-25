@@ -12,6 +12,7 @@ SQL standard [`information_schema`](https://www.postgresql.org/docs/current/info
 schema, which is automatically available in all databases:
 
   * [`applicable_roles`](https://www.postgresql.org/docs/current/infoschema-applicable-roles.html)
+  * [`character_sets`](https://www.postgresql.org/docs/current/infoschema-character-sets.html)
   * [`columns`](https://www.postgresql.org/docs/current/infoschema-columns.html)
   * [`enabled_roles`](https://www.postgresql.org/docs/current/infoschema-enabled-roles.html)
   * [`role_table_grants`](https://www.postgresql.org/docs/current/infoschema-role-table-grants.html)

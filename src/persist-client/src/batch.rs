@@ -27,8 +27,9 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::RustType;
+use mz_proto::{RustType, TryFromProtoError};
 use mz_timely_util::order::Reverse;
+use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -36,6 +37,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::cfg::ProtoUntrimmableColumns;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -203,6 +205,7 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
+    pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
 }
 
 impl BatchBuilderConfig {
@@ -216,11 +219,63 @@ impl BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            // TODO: Make a dynamic config for this? This initial constant is
-            // the rough upper bound on what we see for the total serialized
-            // batch size in prod, so it will at worst double it.
-            stats_budget: 1024,
+            stats_budget: value.dynamic.stats_budget_bytes(),
+            stats_untrimmable_columns: Arc::new(value.dynamic.stats_untrimmable_columns()),
         }
+    }
+}
+
+/// A list of (lowercase) column names that persist will always retain
+/// stats for, even if it means going over the stats budget.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
+pub struct UntrimmableColumns {
+    /// Always retain columns whose lowercased names exactly equal any of these strings.
+    pub equals: Vec<String>,
+    /// Always retain columns whose lowercased names start with any of these strings.
+    pub prefixes: Vec<String>,
+    /// Always retain columns whose lowercased names end with any of these strings.
+    pub suffixes: Vec<String>,
+}
+
+impl UntrimmableColumns {
+    pub(crate) fn should_retain(&self, name: &str) -> bool {
+        // TODO: see if there's a better way to match different formats than lowercasing
+        // https://github.com/MaterializeInc/materialize/issues/21353#issue-1863623805
+        let name_lower = name.to_lowercase();
+        for s in &self.equals {
+            if *s == name_lower {
+                return true;
+            }
+        }
+        for s in &self.prefixes {
+            if name_lower.starts_with(s) {
+                return true;
+            }
+        }
+        for s in &self.suffixes {
+            if name_lower.ends_with(s) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl RustType<ProtoUntrimmableColumns> for UntrimmableColumns {
+    fn into_proto(&self) -> ProtoUntrimmableColumns {
+        ProtoUntrimmableColumns {
+            equals: self.equals.into_proto(),
+            prefixes: self.prefixes.into_proto(),
+            suffixes: self.suffixes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoUntrimmableColumns) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            equals: proto.equals.into_proto(),
+            prefixes: proto.prefixes.into_proto(),
+            suffixes: proto.suffixes.into_proto(),
+        })
     }
 }
 
@@ -681,22 +736,6 @@ pub(crate) struct BatchParts<T> {
     consolidated: bool,
 }
 
-// NB: In practice, the inputs to this end up getting downcased before they make
-// it here.
-fn force_keep_stats_col(name: &str) -> bool {
-    // If we trim the "err" column, then we can't ever use pushdown on this part
-    // (because it could have >0 errors).
-    name == "err"
-        // Various flavors of timestamp column names found in the wild.
-        || name == "ts"
-        || name.ends_with("timestamp")
-        || name.ends_with("time")
-        || name.ends_with("_at")
-        || name.starts_with("last_")
-        || name == "receivedat"
-        || name == "createdat"
-}
-
 impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
@@ -744,6 +783,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
         let consolidated = self.consolidated;
+        let untrimmable_columns = Arc::clone(&self.cfg.stats_untrimmable_columns);
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
         let handle = mz_ore::task::spawn(
@@ -771,8 +811,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                 Ok(x) => {
                                     let mut trimmed_bytes = 0;
                                     let x = LazyPartStats::encode(&x, |s| {
-                                        trimmed_bytes =
-                                            trim_to_budget(s, stats_budget, force_keep_stats_col);
+                                        trimmed_bytes = trim_to_budget(s, stats_budget, |s| {
+                                            untrimmable_columns.should_retain(s)
+                                        });
                                     });
                                     Some((x, stats_start.elapsed(), trimmed_bytes))
                                 }
@@ -1073,5 +1114,34 @@ mod tests {
                 _ => panic!("unparseable blob key"),
             }
         }
+    }
+
+    #[mz_ore::test]
+    fn untrimmable_columns() {
+        let untrimmable = UntrimmableColumns {
+            equals: vec!["abc".to_string(), "def".to_string()],
+            prefixes: vec!["123".to_string(), "234".to_string()],
+            suffixes: vec!["xyz".to_string()],
+        };
+
+        // equals
+        assert!(untrimmable.should_retain("abc"));
+        assert!(untrimmable.should_retain("ABC"));
+        assert!(untrimmable.should_retain("aBc"));
+        assert!(!untrimmable.should_retain("abcd"));
+        assert!(untrimmable.should_retain("deF"));
+        assert!(!untrimmable.should_retain("defg"));
+
+        // prefix
+        assert!(untrimmable.should_retain("123"));
+        assert!(untrimmable.should_retain("123-4"));
+        assert!(untrimmable.should_retain("1234"));
+        assert!(untrimmable.should_retain("234"));
+        assert!(!untrimmable.should_retain("345"));
+
+        // suffix
+        assert!(untrimmable.should_retain("ijk_xyZ"));
+        assert!(untrimmable.should_retain("ww-XYZ"));
+        assert!(!untrimmable.should_retain("xya"));
     }
 }

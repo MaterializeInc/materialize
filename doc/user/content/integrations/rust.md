@@ -148,8 +148,6 @@ pub(crate) fn create_materialized_view() -> Result<u64, Error> {
 Materialize is designed to stream changes to views. To subscribe to a stream of updates in Rust, you can use the `SUBSCRIBE` feature. Here's how to subscribe to a stream:
 
 ```rust
-use std::{thread::sleep, time::Duration};
-
 use crate::connection::create_client;
 
 pub(crate) fn subscribe() {
@@ -162,7 +160,6 @@ pub(crate) fn subscribe() {
         for row in results {
             println!("{:}", row.get::<usize, String>(2));
         }
-        sleep(Duration::from_millis(200));
     }
 }
 ```

@@ -15,6 +15,7 @@ from pg8000.converters import literal  # type: ignore
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
@@ -42,7 +43,7 @@ def cluster() -> str:
 
 
 class Identifiers(Check):
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         # CREATE ROLE not compatible with older releases
         return self.base_version >= MzVersion.parse("0.47.0-dev")
 

@@ -316,7 +316,7 @@ pub fn plan_explain(
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
             (
-                mz_repr::explain::Explainee::Dataflow(mview.id()),
+                mz_repr::explain::Explainee::MaterializedView(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
             )
         }
@@ -537,7 +537,6 @@ pub fn plan_subscribe(
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
-            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)?;
             let order_by = key_columns
                 .iter()
                 .map(|ident| OrderByExpr {

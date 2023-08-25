@@ -89,8 +89,8 @@ use mz_controller::clusters::{
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
@@ -99,7 +99,6 @@ use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
@@ -107,6 +106,7 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
@@ -139,7 +139,8 @@ use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::{EndTransactionAction, RoleMetadata, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
@@ -231,6 +232,34 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+}
+
+impl Message {
+    /// Returns a string to identify the kind of [`Message`], useful for logging.
+    pub const fn kind(&self) -> &'static str {
+        use Message::*;
+
+        match self {
+            Command(_) => "command",
+            ControllerReady => "controller_ready",
+            PurifiedStatementReady(_) => "purified_statement_ready",
+            CreateConnectionValidationReady(_) => "create_connection_validation_ready",
+            SinkConnectionReady(_) => "sink_connection_ready",
+            WriteLockGrant(_) => "write_lock_grant",
+            GroupCommitInitiate(..) => "group_commit_initiate",
+            GroupCommitApply(..) => "group_commit_apply",
+            AdvanceTimelines => "advance_timelines",
+            ClusterEvent(_) => "cluster_event",
+            RemovePendingPeeks { .. } => "remove_pending_peeks",
+            LinearizeReads(_) => "linearize_reads",
+            StorageUsageFetch => "storage_usage_fetch",
+            StorageUsageUpdate(_) => "storage_usage_update",
+            RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
+            RetireExecute { .. } => "retire_execute",
+            ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
+            PeekStageReady { .. } => "peek_stage_ready",
+        }
+    }
 }
 
 #[derive(Derivative)]
@@ -391,7 +420,7 @@ pub struct PeekStageFinish {
 ///
 /// One example usage would be that if a query depends only on system tables, we might
 /// automatically run it on the introspection cluster to benefit from indexes that exist there.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TargetCluster {
     /// The introspection cluster.
     Introspection,
@@ -497,6 +526,13 @@ pub struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+    /// The time when the session's connection was initiated.
+    connected_at: EpochMillis,
+    user: User,
+    application_name: String,
+    role_metadata: RoleMetadata,
+    uuid: Uuid,
+    conn_id: ConnectionId,
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
@@ -507,6 +543,36 @@ pub struct ConnMeta {
 
     /// The authenticated role of the session, set once at session connection.
     pub(crate) authenticated_role: RoleId,
+}
+
+impl ConnMeta {
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    pub fn user(&self) -> &User {
+        &self.user
+    }
+
+    pub fn application_name(&self) -> &str {
+        &self.application_name
+    }
+
+    pub fn current_role_id(&self) -> &RoleId {
+        &self.role_metadata.current_role
+    }
+
+    pub fn session_role_id(&self) -> &RoleId {
+        &self.role_metadata.session_role
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
+    pub fn connected_at(&self) -> EpochMillis {
+        self.connected_at
+    }
 }
 
 #[derive(Debug)]
@@ -772,100 +838,7 @@ impl ExecuteContext {
         let reason = if extra.is_trivial() {
             None
         } else {
-            Some(match &result {
-                Ok(ok) => match ok {
-                    ExecuteResponse::CopyTo { resp, .. } => match resp.as_ref() {
-                        // NB [btv]: It's not clear that this combination
-                        // can ever actually happen.
-                        ExecuteResponse::SendingRowsImmediate { rows, .. } => {
-                            StatementEndedExecutionReason::Success {
-                                rows_returned: Some(u64::cast_from(rows.len())),
-                                execution_strategy: Some(StatementExecutionStrategy::Constant),
-                            }
-                        }
-                        ExecuteResponse::SendingRows { .. } => {
-                            panic!("SELECTs terminate on peek finalization, not here.")
-                        }
-                        ExecuteResponse::Subscribing { .. } => {
-                            panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
-                        }
-                        _ => panic!("Invalid COPY response type"),
-                    },
-                    ExecuteResponse::CopyFrom { .. } => {
-                        panic!("COPY FROMs terminate in the protocol layer, not here.")
-                    }
-                    ExecuteResponse::Fetch { .. } => {
-                        panic!("FETCHes terminate after a follow-up message is sent.")
-                    }
-                    ExecuteResponse::SendingRows { .. } => {
-                        panic!("SELECTs terminate on peek finalization, not here.")
-                    }
-                    ExecuteResponse::Subscribing { .. } => {
-                        panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
-                    }
-
-                    ExecuteResponse::SendingRowsImmediate { rows, .. } => {
-                        StatementEndedExecutionReason::Success {
-                            rows_returned: Some(u64::cast_from(rows.len())),
-                            execution_strategy: Some(StatementExecutionStrategy::Constant),
-                        }
-                    }
-                    ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
-
-                    ExecuteResponse::AlteredDefaultPrivileges
-                    | ExecuteResponse::AlteredObject(_)
-                    | ExecuteResponse::AlteredIndexLogicalCompaction
-                    | ExecuteResponse::AlteredRole
-                    | ExecuteResponse::AlteredSystemConfiguration
-                    | ExecuteResponse::ClosedCursor
-                    | ExecuteResponse::CreatedConnection
-                    | ExecuteResponse::CreatedDatabase
-                    | ExecuteResponse::CreatedSchema
-                    | ExecuteResponse::CreatedRole
-                    | ExecuteResponse::CreatedCluster
-                    | ExecuteResponse::CreatedClusterReplica
-                    | ExecuteResponse::CreatedIndex
-                    | ExecuteResponse::CreatedSecret
-                    | ExecuteResponse::CreatedSink
-                    | ExecuteResponse::CreatedSource
-                    | ExecuteResponse::CreatedTable
-                    | ExecuteResponse::CreatedView
-                    | ExecuteResponse::CreatedViews
-                    | ExecuteResponse::CreatedWebhookSource { .. }
-                    | ExecuteResponse::CreatedMaterializedView
-                    | ExecuteResponse::CreatedType
-                    | ExecuteResponse::Deallocate { .. }
-                    | ExecuteResponse::DeclaredCursor
-                    | ExecuteResponse::Deleted(_)
-                    | ExecuteResponse::DiscardedTemp
-                    | ExecuteResponse::DiscardedAll
-                    | ExecuteResponse::DroppedObject(_)
-                    | ExecuteResponse::DroppedOwned
-                    | ExecuteResponse::EmptyQuery
-                    | ExecuteResponse::GrantedPrivilege
-                    | ExecuteResponse::GrantedRole
-                    | ExecuteResponse::Inserted(_)
-                    | ExecuteResponse::Prepare
-                    | ExecuteResponse::Raised
-                    | ExecuteResponse::ReassignOwned
-                    | ExecuteResponse::RevokedPrivilege
-                    | ExecuteResponse::RevokedRole
-                    | ExecuteResponse::SetVariable { .. }
-                    | ExecuteResponse::StartedTransaction
-                    | ExecuteResponse::TransactionCommitted { .. }
-                    | ExecuteResponse::TransactionRolledBack { .. }
-                    | ExecuteResponse::Updated(_)
-                    | ExecuteResponse::ValidatedConnection { .. } => {
-                        StatementEndedExecutionReason::Success {
-                            rows_returned: None,
-                            execution_strategy: None,
-                        }
-                    }
-                },
-                Err(e) => StatementEndedExecutionReason::Errored {
-                    error: e.to_string(),
-                },
-            })
+            Some((&result).into())
         };
         tx.send(result, session);
         if let Some(reason) = reason {
@@ -1358,7 +1331,11 @@ impl Coordinator {
                         let mut dataflow = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
-                        let as_of = self.bootstrap_index_as_of(&dataflow, idx.cluster_id);
+                        let as_of = self.bootstrap_index_as_of(
+                            &dataflow,
+                            idx.cluster_id,
+                            idx.is_retained_metrics_object,
+                        );
                         dataflow.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
@@ -1396,12 +1373,36 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let internal_view_id = self.allocate_transient_id()?;
-                    let mut df = self
-                        .dataflow_builder(mview.cluster_id)
-                        .build_materialized_view_dataflow(entry.id(), internal_view_id)?;
+                    let debug_name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), entry.conn_id())
+                        .to_string();
+
+                    let mut builder = self.dataflow_builder(mview.cluster_id);
+                    let mut df = builder.build_materialized_view(
+                        entry.id(),
+                        internal_view_id,
+                        debug_name,
+                        &mview.optimized_expr,
+                        &mview.desc,
+                    )?;
+
+                    // Note: ideally, the optimized_plan should be computed and
+                    // set when the CatalogItem is re-constructed (in
+                    // parse_item).
+                    //
+                    // However, it's not clear how exactly to change
+                    // `load_catalog_items` to accomodate for the
+                    // `build_materialized_view` call above.
+                    self.catalog_mut()
+                        .set_optimized_plan(entry.id(), df.clone());
+
+                    // The 'as_of' field of the dataflow changes after restart
                     let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
                     df.set_as_of(as_of);
-                    self.must_ship_dataflow(df, mview.cluster_id).await;
+
+                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                    self.catalog_mut().set_physical_plan(entry.id(), df);
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
@@ -1659,11 +1660,12 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ComputeInstanceId,
+        is_retained_metrics_index: bool,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let mut as_of = self.least_valid_read(&id_bundle);
+        let min_as_of = self.least_valid_read(&id_bundle);
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
@@ -1674,11 +1676,32 @@ impl Coordinator {
         // this time either.
         let write_frontier = self.least_valid_write(&id_bundle);
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        if !write_frontier.is_empty() {
-            as_of.join_assign(&write_frontier);
+        if write_frontier.is_empty() {
+            return min_as_of;
         }
 
-        as_of
+        // Advancing the `as_of` to the write frontier means that we lose some historical data.
+        // That might be acceptable for the default 1-second index compaction window, but not for
+        // retained-metrics indexes. So we need to regress the write frontier by the retention
+        // duration of the index.
+        //
+        // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
+        // as well.
+        let lag = if is_retained_metrics_index {
+            let retention = self.catalog().state().system_config().metrics_retention();
+            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+                tracing::error!("absurd metrics retention duration: {retention:?}");
+                u64::MAX
+            }))
+        } else {
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+        };
+
+        let time = write_frontier.into_option().expect("checked above");
+        let time = time.saturating_sub(lag);
+        let max_as_of = Antichain::from_elem(time);
+
+        min_as_of.join(&max_as_of)
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
@@ -1720,7 +1743,7 @@ impl Coordinator {
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        // // Watcher that listens for and reports cluster service status changes.
+        // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
 
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
@@ -1772,6 +1795,12 @@ impl Coordinator {
 
         self.schedule_storage_usage_collection();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
+
+        // Report if the handling of a single message takes longer than this threshold.
+        let reporting_threshold = self
+            .catalog
+            .system_config()
+            .coord_slow_message_reporting_threshold_ms();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1825,10 +1854,19 @@ impl Coordinator {
                 }
             };
 
+            // Track the wall time for each message for reporting.
+            let histogram_metric = self
+                .metrics
+                .slow_message_handling
+                .with_label_values(&[msg.kind()]);
+
             self.handle_message(msg)
                 // All message processing functions trace. Start a parent span for them to make
                 // it easy to find slow messages.
                 .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .wall_time()
+                .observe(histogram_metric)
+                .with_filter(move |wall_time| wall_time >= reporting_threshold)
                 .await;
         }
     }
@@ -1854,13 +1892,6 @@ impl Coordinator {
         // most one clone per catalog mutation, but only if there's a read-only
         // reference to it.
         Arc::make_mut(&mut self.catalog)
-    }
-
-    /// Obtain writeable Catalog and Controller references. This function is
-    /// needed to allow rust to have multiple mutable references on self at the
-    /// same time.
-    fn catalog_and_controller_mut(&mut self) -> (&mut Catalog, &mut mz_controller::Controller) {
-        (Arc::make_mut(&mut self.catalog), &mut self.controller)
     }
 
     /// Publishes a notice message to all sessions.
@@ -2054,7 +2085,10 @@ pub async fn serve(
                     .await?;
                 coord
                     .controller
-                    .remove_orphaned_replicas(coord.catalog().get_next_replica_id().await?)
+                    .remove_orphaned_replicas(
+                        coord.catalog().get_next_user_replica_id().await?,
+                        coord.catalog().get_next_system_replica_id().await?,
+                    )
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())

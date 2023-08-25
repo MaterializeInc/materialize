@@ -1,7 +1,7 @@
 [package]
 name = "mz-clusterd"
 description = "Materialize's cluster server."
-version = "0.66.0-dev"
+version = "0.67.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

@@ -34,6 +34,7 @@ use crate::coord::{
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
     SinkConnectionReady,
 };
+use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -176,7 +177,7 @@ impl Coordinator {
             });
         }
 
-        if let Err(err) = self.catalog_transact(None, ops).await {
+        if let Err(err) = self.catalog_transact(None::<&Session>, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.schedule_storage_usage_collection();
@@ -326,6 +327,18 @@ impl Coordinator {
                     };
                     self.buffer_builtin_table_updates(updates);
                 }
+            }
+            ControllerResponse::ComputeDependencyUpdate {
+                id,
+                dependencies,
+                diff,
+            } => {
+                let state = self.catalog().state();
+                let updates = dependencies
+                    .into_iter()
+                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
+                    .collect();
+                self.buffer_builtin_table_updates(updates);
             }
         }
     }
@@ -608,7 +621,7 @@ impl Coordinator {
             let old_status = replica.status();
 
             self.catalog_transact(
-                None,
+                None::<&Session>,
                 vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],

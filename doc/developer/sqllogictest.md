@@ -275,6 +275,50 @@ same file. Most of the time, we use `mode cockroach`. The times when we use
     314.3820897445435
     ```
 
+3. In `mode standard` when interpreting a Numeric as an Int we round down to the nearest whole
+   number.
+
+    ```
+    mode standard
+
+    query I
+    SELECT '1.9'::numeric
+    ----
+    1
+
+    query I
+    SELECT '1.5'::numeric
+    ----
+    1
+
+    query I
+    SELECT '1.1'::numeric
+    ----
+    1
+    ```
+
+   `mode cockroach` on the otherhand uses a strategy of rounding half up. That is we round to the
+   nearest integer and halfway values are rounded up.
+
+    ```
+    mode cockroach
+
+    query I
+    SELECT '1.9'::numeric
+    ----
+    2
+
+    query I
+    SELECT '1.5'::numeric
+    ----
+    2
+
+    query I
+    SELECT '1.1'::numeric
+    ----
+    1
+    ```
+
 ### multiline
 
 As you can see [above](#differences-between-modes), generally sqllogictest

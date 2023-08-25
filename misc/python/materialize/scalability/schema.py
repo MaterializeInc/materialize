@@ -45,7 +45,12 @@ class Schema:
             "DROP TABLE IF EXISTS t1;",
         ]
         if self.source == Source.TABLE:
-            init_sqls.append("CREATE TABLE t1 (f1 INTEGER);")
+            init_sqls.extend(
+                [
+                    "CREATE TABLE t1 (f1 INTEGER DEFAULT 1);",
+                    "INSERT INTO t1 DEFAULT VALUES;",
+                ]
+            )
 
         if self.create_index:
             init_sqls.append("CREATE INDEX i1 ON t1 (f1);")

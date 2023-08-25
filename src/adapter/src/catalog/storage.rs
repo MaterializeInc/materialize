@@ -71,7 +71,8 @@ const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
 const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
 const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
-const REPLICA_ID_ALLOC_KEY: &str = "replica";
+const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
+const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
@@ -140,7 +141,8 @@ fn add_new_builtin_cluster_replicas_migration(
         if matches!(replica_names, None)
             || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
         {
-            let replica_id = txn.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
+            let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
+            let replica_id = ReplicaId::System(replica_id);
             let config = builtin_cluster_replica_config(bootstrap_args);
             txn.insert_cluster_replica(
                 *cluster_id,
@@ -758,19 +760,20 @@ impl Connection {
         Ok(ClusterId::User(id))
     }
 
-    pub async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
-        let id = self.allocate_id(REPLICA_ID_ALLOC_KEY, 1).await?;
-        Ok(id.into_element())
+    pub async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ReplicaId::User(id))
     }
 
-    /// Get the next user id without allocating it.
-    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
-        self.get_next_id("user").await.map(GlobalId::User)
+    /// Get the next system replica id without allocating it.
+    pub async fn get_next_system_replica_id(&mut self) -> Result<u64, Error> {
+        self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
     }
 
-    /// Get the next replica id without allocating it.
-    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
-        self.get_next_id(REPLICA_ID_ALLOC_KEY).await
+    /// Get the next user replica id without allocating it.
+    pub async fn get_next_user_replica_id(&mut self) -> Result<u64, Error> {
+        self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
@@ -1239,6 +1242,24 @@ impl<'a> Transaction<'a> {
                 "Expected to update single cluster {cluster_name} ({cluster_id}), updated {n}"
             ),
         }
+    }
+
+    pub(crate) fn check_migration_has_run(&mut self, name: String) -> Result<bool, Error> {
+        let key = SettingKey { name };
+        // If the key does not exist, then the migration has not been run.
+        let has_run = self.settings.get(&key).as_ref().is_some();
+
+        Ok(has_run)
+    }
+
+    pub(crate) fn mark_migration_has_run(&mut self, name: String) -> Result<(), Error> {
+        let key = SettingKey { name };
+        let val = SettingValue {
+            value: true.to_string(),
+        };
+        self.settings.insert(key, val)?;
+
+        Ok(())
     }
 
     pub(crate) fn rename_cluster_replica(

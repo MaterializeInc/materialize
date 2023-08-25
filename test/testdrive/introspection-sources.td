@@ -176,30 +176,13 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   SELECT true
   FROM mz_internal.mz_compute_frontiers f, mz_internal.mz_subscriptions s
   WHERE f.export_id = s.id AND time > 0)
-> FETCH 1 c WITH (timeout='5s');
+> FETCH 1 c WITH (timeout='5s')
 <TIMESTAMP> 1 true
 > COMMIT
 
-# Test that the contents of mz_compute_dependencies are correct.
-
-> CREATE TABLE t1 (a int)
-> CREATE TABLE t2 (b int)
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1, t2
-> CREATE DEFAULT INDEX ON mv1
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
-
-> SELECT export.name, import.name
-  FROM mz_internal.mz_compute_dependencies dep
-  LEFT JOIN mz_objects export ON dep.export_id = export.id
-  LEFT JOIN mz_objects import ON dep.import_id = import.id
-  ORDER BY export.name, import.name
-mv1             t1
-mv1             t2
-mv1_primary_idx mv1
-
 # Test that mz_compute_exports contains correct dataflow IDs.
 
-> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t1;
+> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t
 
 > SELECT count(*)
   FROM
@@ -210,7 +193,7 @@ mv1_primary_idx mv1
     mv.name = 'my_unique_mv_name' AND
     mv.id = exp.export_id AND
     exp.dataflow_id = df.id AND
-    df.name LIKE '%my_unique_mv_name%';
+    df.name LIKE '%my_unique_mv_name%'
 1
 
 # Test that each operator has at most one parent
@@ -260,23 +243,22 @@ mv1_primary_idx mv1
   GROUP BY export_id, dataflow_id
 16
 
-> SELECT DISTINCT count(*)
-  FROM mz_internal.mz_compute_dependencies_per_worker
-  GROUP BY export_id, import_id
-16
-
+> CREATE DEFAULT INDEX ON t
 > SELECT DISTINCT count(*)
   FROM mz_internal.mz_arrangement_sharing_per_worker
   GROUP BY operator_id, count
 16
 
+> DROP INDEX t_primary_idx
+
 # Test that the roll-up of arrangement sizes is correct
 
-> INSERT INTO t SELECT * FROM generate_series(1, 100);
+> INSERT INTO t SELECT * FROM generate_series(1, 100)
 
-> INSERT INTO t2 SELECT * FROM generate_series(1, 200);
+> CREATE TABLE t2 (b int)
+> INSERT INTO t2 SELECT * FROM generate_series(1, 200)
 
-> CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b;
+> CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b
 
 > CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
 

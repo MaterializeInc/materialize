@@ -765,8 +765,7 @@ impl<'a> ShowColumnsSelect<'a> {
                     select_plan
                 );
                 Err(PlanError::Unstructured(
-                    "SHOW COLUMNS didn't produce an unexpected plan. Please file a bug."
-                        .to_string(),
+                    "SHOW COLUMNS produced an unexpected plan. Please file a bug.".to_string(),
                 ))
             }
         }

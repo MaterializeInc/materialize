@@ -38,7 +38,7 @@ class DebeziumStop(Action):
     """Stop the Debezium instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {DebeziumRunning}
 
     def withholds(self) -> Set[Type[Capability]]:
@@ -52,7 +52,7 @@ class CreateDebeziumSource(Action):
     """Creates a Debezium source in Materialized."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> Set[Type[Capability]]:
         return {MzIsRunning, StoragedRunning, KafkaRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

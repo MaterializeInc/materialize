@@ -9,7 +9,7 @@
 
 import sys
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any, Generator, Optional
 
 import requests
 
@@ -37,6 +37,7 @@ def get(
     path: str,
     timeout: int = 15,
     use_token: bool = True,
+    client_cert: Optional[tuple[str, str]] = None,
 ) -> requests.Response:
     eprint(f"GET {base_url}{path}")
 
@@ -49,6 +50,7 @@ def get(
                 f"{base_url}{path}",
                 headers=headers,
                 timeout=timeout,
+                cert=client_cert,
             )
             response.raise_for_status()
             return response
@@ -72,6 +74,7 @@ def post(
     json: Any,
     timeout: int = 15,
     use_token: bool = True,
+    client_cert: Optional[tuple[str, str]] = None,
 ) -> requests.Response:
     eprint(f"POST {base_url}{path}")
 
@@ -85,6 +88,7 @@ def post(
                 headers=headers,
                 json=json,
                 timeout=timeout,
+                cert=client_cert,
             )
             response.raise_for_status()
             return response
@@ -108,6 +112,7 @@ def patch(
     json: Any,
     timeout: int = 15,
     use_token: bool = True,
+    client_cert: Optional[tuple[str, str]] = None,
 ) -> requests.Response:
     eprint(f"PATCH {base_url}{path}")
 
@@ -121,6 +126,7 @@ def patch(
                 headers=headers,
                 json=json,
                 timeout=timeout,
+                cert=client_cert,
             )
             response.raise_for_status()
             return response
@@ -144,6 +150,7 @@ def delete(
     params: Any = None,
     timeout: int = 15,
     use_token: bool = True,
+    client_cert: Optional[tuple[str, str]] = None,
 ) -> requests.Response:
     eprint(f"DELETE {base_url}{path}")
 
@@ -156,6 +163,7 @@ def delete(
                 f"{base_url}{path}",
                 headers=headers,
                 timeout=timeout,
+                cert=client_cert,
                 **(
                     {
                         "params": params,
