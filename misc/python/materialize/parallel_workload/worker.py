@@ -53,7 +53,7 @@ class Worker:
         self.conn = pg8000.connect(host=host, port=port, user=user, database=database)
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        self.exe = Executor(self.rng, cur)
+        self.exe = Executor(self.rng, self.conn, cur)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SELECT pg_backend_pid()")
         self.exe.pg_pid = cur.fetchall()[0][0]

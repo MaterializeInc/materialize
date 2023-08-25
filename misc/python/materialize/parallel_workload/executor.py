@@ -34,13 +34,15 @@ class QueryError(Exception):
 
 class Executor:
     rng: random.Random
+    conn: pg8000.Connection
     cur: pg8000.Cursor
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: Optional[int]
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor):
+    def __init__(self, rng: random.Random, conn: pg8000.Connection, cur: pg8000.Cursor):
         self.rng = rng
+        self.conn = conn
         self.cur = cur
         self.pg_pid = -1
         self.insert_table = None
@@ -51,14 +53,14 @@ class Executor:
     def commit(self) -> None:
         self.insert_table = None
         try:
-            self.cur._c.commit()
+            self.conn.commit()
         except Exception as e:
             raise QueryError(str(e), "commit")
 
     def rollback(self) -> None:
         self.insert_table = None
         try:
-            self.cur._c.rollback()
+            self.conn.rollback()
         except Exception as e:
             raise QueryError(str(e), "rollback")
 

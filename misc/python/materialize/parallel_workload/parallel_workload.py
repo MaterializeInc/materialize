@@ -83,7 +83,7 @@ def run(
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        database.create(Executor(rng, cur))
+        database.create(Executor(rng, conn, cur))
     conn.close()
 
     conn = pg8000.connect(
@@ -91,7 +91,7 @@ def run(
     )
     conn.autocommit = True
     with conn.cursor() as cur:
-        database.create_relations(Executor(rng, cur))
+        database.create_relations(Executor(rng, conn, cur))
     conn.close()
 
     workers = []
@@ -213,7 +213,7 @@ def run(
     conn.autocommit = True
     with conn.cursor() as cur:
         print(f"Dropping database {database}")
-        database.drop(Executor(rng, cur))
+        database.drop(Executor(rng, conn, cur))
     conn.close()
 
     ignored_errors: DefaultDict[str, Counter[type[Action]]] = defaultdict(Counter)

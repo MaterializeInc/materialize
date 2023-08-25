@@ -509,7 +509,8 @@ class ReconnectAction(Action):
         self.random_role = random_role
 
     def run(self, exe: Executor) -> None:
-        autocommit = exe.cur._c.autocommit
+        conn = exe.conn
+        autocommit = conn.autocommit
         host = self.db.host
         port = self.db.port
         with self.db.lock:
@@ -520,7 +521,6 @@ class ReconnectAction(Action):
             else:
                 user = "materialize"
 
-        conn = exe.cur._c
         try:
             exe.cur.close()
         except:
