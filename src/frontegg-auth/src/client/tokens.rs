@@ -50,7 +50,7 @@ impl Client {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTokenResponse {
     pub expires: String,
@@ -70,4 +70,99 @@ pub struct ApiTokenArgs {
 #[serde(rename_all = "camelCase")]
 pub struct RefreshToken<'a> {
     pub refresh_token: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{routing::post, Router};
+    use reqwest::StatusCode;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    use super::ApiTokenResponse;
+    use crate::Client;
+
+    const UNUSED_PORT: u16 = 48557;
+    const ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), UNUSED_PORT);
+
+    #[mz_ore::test(tokio::test)]
+    async fn response_retries() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_ = Arc::clone(&count);
+
+        // Fake server that returns the provided status code a few times before returning success.
+        let app = Router::new().route(
+            "/:status_code",
+            post(
+                |axum::extract::Path(code): axum::extract::Path<u16>| async move {
+                    let cnt = count_.fetch_add(1, Ordering::Relaxed);
+
+                    let resp = ApiTokenResponse {
+                        expires: "test".to_string(),
+                        expires_in: 0,
+                        access_token: "test".to_string(),
+                        refresh_token: "test".to_string(),
+                    };
+                    let resp = serde_json::to_string(&resp).unwrap();
+
+                    if cnt >= 2 {
+                        Ok(resp.clone())
+                    } else {
+                        Err(StatusCode::from_u16(code).unwrap())
+                    }
+                },
+            ),
+        );
+        mz_ore::task::spawn(|| "test-server", async move {
+            axum::Server::bind(&ADDR)
+                .serve(app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        let client = Client::default();
+        async fn test_case(
+            client: &Client,
+            count: &Arc<AtomicUsize>,
+            code: u16,
+            should_retry: bool,
+        ) -> Result<(), String> {
+            let exchange_result = client
+                .exchange_client_secret_for_token(
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    &format!("http://{ADDR}/{code}"),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let prev_count = count.swap(0, Ordering::Relaxed);
+            let expected_count = should_retry.then_some(3).unwrap_or(1);
+            assert_eq!(prev_count, expected_count);
+
+            let refresh_result = client
+                .refresh_token(&format!("http://{ADDR}/{code}"), "test")
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let prev_count = count.swap(0, Ordering::Relaxed);
+            let expected_count = should_retry.then_some(3).unwrap_or(1);
+            assert_eq!(prev_count, expected_count);
+
+            assert_eq!(exchange_result, refresh_result);
+            exchange_result
+        }
+
+        // Should get retried which results in eventual success.
+        assert!(test_case(&client, &count, 500, true).await.is_ok());
+        assert!(test_case(&client, &count, 502, true).await.is_ok());
+        assert!(test_case(&client, &count, 429, true).await.is_ok());
+        assert!(test_case(&client, &count, 408, true).await.is_ok());
+
+        // Should not get retried, and thus return an error.
+        assert!(test_case(&client, &count, 404, false).await.is_err());
+        assert!(test_case(&client, &count, 400, false).await.is_err());
+    }
 }

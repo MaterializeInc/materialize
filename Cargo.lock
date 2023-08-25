@@ -4039,6 +4039,7 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64 0.13.1",
  "derivative",
  "jsonwebtoken",
@@ -4048,6 +4049,7 @@ dependencies = [
  "reqwest-middleware",
  "reqwest-retry",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
@@ -6719,7 +6721,7 @@ dependencies = [
 [[package]]
 name = "reqwest-middleware"
 version = "0.2.3"
-source = "git+https://github.com/ParkMyCar/reqwest-middleware.git?branch=disable-wasm-deps#16a34524d26c70cb6eb588bdff60b395fec9a77e"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6732,8 +6734,8 @@ dependencies = [
 
 [[package]]
 name = "reqwest-retry"
-version = "0.2.3"
-source = "git+https://github.com/ParkMyCar/reqwest-middleware.git?branch=disable-wasm-deps#16a34524d26c70cb6eb588bdff60b395fec9a77e"
+version = "0.2.2"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
 dependencies = [
  "anyhow",
  "async-trait",
