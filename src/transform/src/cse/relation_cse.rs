@@ -17,7 +17,7 @@
 use mz_expr::MirRelationExpr;
 
 use crate::normalize_lets::NormalizeLets;
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 use super::anf::ANF;
 
@@ -50,7 +50,7 @@ impl crate::Transform for RelationCSE {
     fn transform(
         &self,
         rel: &mut MirRelationExpr,
-        _args: TransformArgs,
+        _ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // Run ANF.
         self.anf.transform_without_trace(rel)?;

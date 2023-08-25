@@ -99,8 +99,10 @@ mod tests {
     use mz_ore::str::separated;
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
-    use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
-    use mz_transform::{Optimizer, Transform, TransformArgs};
+    use mz_transform::dataflow::{
+        optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
+    };
+    use mz_transform::{Optimizer, Transform, TransformCtx};
     use proc_macro2::TokenTree;
 
     use crate::explain::Explainable;
@@ -214,6 +216,7 @@ mod tests {
                     used_indexes: UsedIndexes::new(vec![]),
                     finishing: None,
                     duration: Duration::default(),
+                    optimizer_notices: Vec::new(),
                 };
 
                 Explainable(&mut rel.clone())
@@ -232,7 +235,10 @@ mod tests {
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
-            get_transform(t)?.transform(&mut rel, TransformArgs::default())?;
+            get_transform(t)?.transform(
+                &mut rel,
+                &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
+            )?;
         }
 
         let format_type = get_format_type(args);
@@ -240,7 +246,10 @@ mod tests {
         let out = match test_type {
             TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                 for transform in transforms.iter() {
-                    transform.transform(&mut rel, TransformArgs::default())?;
+                    transform.transform(
+                        &mut rel,
+                        &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
+                    )?;
                 }
                 Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
@@ -258,7 +267,10 @@ mod tests {
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                     for transform in transforms {
                         let prev = rel.clone();
-                        transform.transform(&mut rel, TransformArgs::default())?;
+                        transform.transform(
+                            &mut rel,
+                            &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
+                        )?;
 
                         if rel != prev {
                             if no_change.len() > 0 {

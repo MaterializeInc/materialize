@@ -25,7 +25,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::RelationType;
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 ///
@@ -44,7 +44,7 @@ impl crate::Transform for Join {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         relation.try_visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);

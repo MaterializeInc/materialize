@@ -60,11 +60,13 @@
 //!        predicate012.clone(),
 //!    ]);
 //!
-//! use mz_transform::{Transform, TransformArgs};
-//! PredicatePushdown::default().transform(&mut expr, TransformArgs {
+//! use mz_transform::{Transform, TransformCtx};
+//! use mz_transform::dataflow::DataflowMetainfo;
+//! PredicatePushdown::default().transform(&mut expr, &mut TransformCtx {
 //!   indexes: &mz_transform::EmptyIndexOracle,
 //!   stats: &mz_transform::EmptyStatisticsOracle,
 //!   global_id: None,
+//!   dataflow_metainfo: &mut DataflowMetainfo::default(),
 //! });
 //!
 //! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
@@ -90,7 +92,7 @@ use mz_expr::{
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, Datum, ScalarType};
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -122,7 +124,7 @@ impl crate::Transform for PredicatePushdown {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let mut empty = BTreeMap::new();
         let result = self.action(relation, &mut empty);

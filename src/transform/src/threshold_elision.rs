@@ -19,7 +19,7 @@ use mz_expr::visit::{Visit, Visitor, VisitorMut};
 use mz_expr::MirRelationExpr;
 
 use crate::attribute::{DerivedAttributes, NonNegative, RequiredAttributes, SubtreeSize};
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Remove Threshold operators that have no effect.
 #[derive(Debug)]
@@ -35,7 +35,7 @@ impl crate::Transform for ThresholdElision {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut visitor = ThresholdElisionAction::default();
         let result = relation.visit_mut(&mut visitor).map_err(From::from);

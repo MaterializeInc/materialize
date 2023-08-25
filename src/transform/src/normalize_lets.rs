@@ -27,7 +27,7 @@
 use mz_expr::{visit::Visit, MirRelationExpr};
 use mz_ore::{id_gen::IdGen, stack::RecursionLimitError};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 pub use renumbering::renumber_bindings;
 
@@ -68,7 +68,7 @@ impl crate::Transform for NormalizeLets {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _args: TransformArgs,
+        _ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.transform_without_trace(relation);
         mz_repr::explain::trace_plan(&*relation);

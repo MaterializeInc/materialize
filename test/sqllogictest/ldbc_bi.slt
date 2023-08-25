@@ -1708,6 +1708,10 @@ Used Indexes:
   - materialize.public.city_id (*** full scan ***)
   - materialize.public.message_messageid (*** full scan ***)
 
+Notices:
+  - Notice: Index materialize.public.person_knows_person_person1id_person2id on person_knows_person(person1id, person2id) is too wide to use for literal equalities `person1id = 6597069770479`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (person1id).
+
 EOF
 
 ######################################################################

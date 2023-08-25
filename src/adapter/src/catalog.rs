@@ -39,6 +39,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
+use mz_ore::option::FallibleMapExt;
 use mz_ore::soft_assert;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -89,6 +90,7 @@ use mz_storage_client::types::sinks::{
 use mz_storage_client::types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -1724,6 +1726,7 @@ impl CatalogState {
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
     physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
+    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo>,
 }
 
 impl Catalog {
@@ -1765,13 +1768,27 @@ impl Catalog {
         self.plans.physical_plan_by_id.get(id)
     }
 
-    /// Drop all optimized and physical plans for the item identified by `id`.
-    ///
-    /// Ignore requests for non-existing plans.
+    /// Set the `DataflowMetainfo` for the item identified by `id`.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn drop_plans(&mut self, id: GlobalId) {
+    pub fn set_dataflow_metainfo(&mut self, id: GlobalId, metainfo: DataflowMetainfo) {
+        self.plans.dataflow_metainfos.insert(id, metainfo);
+    }
+
+    /// Try to get the `DataflowMetainfo` for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn try_get_dataflow_metainfo(&self, id: &GlobalId) -> Option<&DataflowMetainfo> {
+        self.plans.dataflow_metainfos.get(id)
+    }
+
+    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the item identified by
+    /// `id`.
+    ///
+    /// Ignore requests for non-existing plans or `DataflowMetainfo`s.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn drop_plans_and_metainfos(&mut self, id: GlobalId) {
         self.plans.optimized_plan_by_id.remove(&id);
         self.plans.physical_plan_by_id.remove(&id);
+        self.plans.dataflow_metainfos.remove(&id);
     }
 }
 
@@ -3407,6 +3424,7 @@ impl Catalog {
             plans: CatalogPlans {
                 optimized_plan_by_id: Default::default(),
                 physical_plan_by_id: Default::default(),
+                dataflow_metainfos: BTreeMap::new(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
@@ -4580,7 +4598,7 @@ impl Catalog {
         );
         for id in migration_metadata.all_drop_ops.drain(..) {
             self.state.drop_item(id);
-            self.drop_plans(id);
+            self.drop_plans_and_metainfos(id);
         }
         for (id, oid, name, owner_id, privileges, item_rebuilder) in
             migration_metadata.all_create_ops.drain(..)
@@ -5616,7 +5634,7 @@ impl Catalog {
         self.transient_revision += 1;
 
         for id in drop_ids {
-            self.drop_plans(id);
+            self.drop_plans_and_metainfos(id);
         }
 
         Ok(TransactionResult {
@@ -8479,6 +8497,28 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 res
             }
         }
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        self.state
+            .entry_by_id
+            .get(&id)
+            .try_map(|entry| {
+                Ok::<_, SqlCatalogError>(
+                    entry
+                        .item
+                        .desc(&self.resolve_full_name(&entry.name))?
+                        .iter_names()
+                        .cloned()
+                        .map(|col_name| col_name.to_string())
+                        .collect(),
+                )
+            })
+            .unwrap_or(None)
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.state.entry_by_id.get(&id).is_some()
     }
 }
 

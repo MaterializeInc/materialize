@@ -144,7 +144,7 @@ pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<Strin
 
 /// A catalog that holds types of objects previously created for the unit test.
 ///
-/// This is for the purpose of allowing `MirRelationExpr`s can refer to them
+/// This is for the purpose of allowing `MirRelationExpr`s to refer to them
 /// later.
 #[derive(Debug, Default)]
 pub struct TestCatalog {
@@ -248,6 +248,14 @@ impl ExprHumanizer for TestCatalog {
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
+    }
+
+    fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
+        None
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.names.get(&id).is_some()
     }
 }
 

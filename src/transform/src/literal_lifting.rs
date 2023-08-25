@@ -29,7 +29,7 @@ use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIM
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Row, RowPacker};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Hoist literal values from maps wherever possible.
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl crate::Transform for LiteralLifting {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let literals = self.action(relation, &mut BTreeMap::new())?;
         if !literals.is_empty() {
