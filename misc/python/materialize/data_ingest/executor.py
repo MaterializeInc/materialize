@@ -133,6 +133,7 @@ class KafkaExecutor(Executor):
             registry, json.dumps(key_schema), lambda d, ctx: d
         )
 
+        # TODO: Is this correct at all? Should this be self.topic? Check with def-
         registry.register_schema(
             f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
         )

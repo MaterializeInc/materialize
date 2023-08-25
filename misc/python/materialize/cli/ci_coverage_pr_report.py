@@ -121,6 +121,7 @@ def mark_covered_lines(
         # DA:111,15524
         # DA:112,0
         # DA:113,15901
+        # TODO: Is this correct at all? Check with def-
         elif method == "DA" and file in coverage:
             line_str, hit_str = content.split(",", 1)
             line_nr = int(line_str)
