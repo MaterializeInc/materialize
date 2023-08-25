@@ -230,17 +230,21 @@ drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
-explain ::=
+explain_plan ::=
   'EXPLAIN'
-  ( ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )? | 'TIMESTAMP' ? )
+  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
   (
     select_stmt |
-    'VIEW' view_name |
     'MATERIALIZED VIEW' view_name
   )
+explain_timestamp ::=
+  'EXPLAIN' 'TIMESTAMP'
+  ( 'AS' ( 'TEXT' | 'JSON' ) )?
+  'FOR'
+  select_stmt
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?

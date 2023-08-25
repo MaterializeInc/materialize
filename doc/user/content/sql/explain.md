@@ -23,7 +23,13 @@ into Materialize's behavior for specific queries, e.g. performance.
 
 ## Syntax
 
-{{< diagram "explain.svg" >}}
+### `EXPLAIN PLAN`
+
+{{< diagram "explain-plan.svg" >}}
+
+### `EXPLAIN TIMESTAMP`
+
+{{< diagram "explain-timestamp.svg" >}}
 
 ### Explained object
 
@@ -32,7 +38,6 @@ The following three objects can be explained.
 Explained object | Description
 ------|-----
 **select_stmt** | Display the plan for an ad hoc `SELECT` statement.
-**VIEW view_name** | Display the plan for an existing view.
 **MATERIALIZED VIEW view_name** | Display the plan for an existing materialized view.
 
 ### Output format
