@@ -21,7 +21,6 @@ pyright_version=$(sh ci/builder/pyright-version.sh)
 typecheck_cmd="npx pyright@$pyright_version"
 
 python_folders=(ci misc/python)
-flake8_folders=(ci misc/python test)
 
 compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
 
@@ -30,7 +29,10 @@ compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
 # shellcheck disable=SC2086
 try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
 
-try bin/pyactivate -m flake8 --select F --extend-exclude venv "${flake8_folders[@]}"
+try bin/pyactivate -m ruff .
+
+# We need to maintain compatibility with older Python versions for this
+try bin/pyactivate -m ruff --target-version=py38 misc/dbt-materialize
 
 if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
   try bin/pyactivate -m pytest -qq --doctest-modules misc/python
