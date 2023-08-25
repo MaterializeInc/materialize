@@ -31,7 +31,7 @@ class RootScenario:
     def init(self) -> Optional[Union[Action, list[Action]]]:
         return None
 
-    def before(self) -> Action:
+    def before(self) -> Optional[Union[Action, list[Action]]]:
         return DummyAction()
 
     def benchmark(self) -> BenchmarkingSequence:
