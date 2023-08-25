@@ -18,8 +18,8 @@ from materialize.scratch import mkrepo
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     check_required_vars()
 
-    parser.add_argument("instance", help="The ID of the instance to connect to"),
-    parser.add_argument("--rev", help="The git rev to checkout", default="HEAD"),
+    parser.add_argument("instance", help="The ID of the instance to connect to")
+    parser.add_argument("--rev", help="The git rev to checkout", default="HEAD")
 
 
 def run(args: argparse.Namespace) -> None:
