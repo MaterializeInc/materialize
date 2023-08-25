@@ -300,8 +300,11 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::Explain(plan) => {
-                self.sequence_explain(ctx, plan, target_cluster).await;
+            Plan::ExplainPlan(plan) => {
+                self.sequence_explain_plan(ctx, plan, target_cluster).await;
+            }
+            Plan::ExplainTimestamp(plan) => {
+                self.sequence_explain_timestamp(ctx, plan, target_cluster);
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(ctx, plan).await;

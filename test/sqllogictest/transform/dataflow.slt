@@ -34,33 +34,8 @@ Source materialize.public.foo
 
 EOF
 
-query T multiline
-EXPLAIN WITH(arity, join_impls) VIEW foo3
-----
-materialize.public.foo3:
-  Project (#1) // { arity: 1 }
-    Filter (#0 = 5) AND (#1 = 6) // { arity: 2 }
-      Get materialize.public.foo // { arity: 2 }
-
-Source materialize.public.foo
-  filter=((#0 = 5) AND (#1 = 6))
-
-EOF
-
 statement ok
 CREATE DEFAULT INDEX ON foo2
-
-query T multiline
-EXPLAIN WITH(arity, join_impls) VIEW foo3
-----
-materialize.public.foo3:
-  Project (#0) // { arity: 1 }
-    ReadExistingIndex materialize.public.foo2 lookup_value=(6) // { arity: 2 }
-
-Used Indexes:
-  - materialize.public.foo2_primary_idx (lookup)
-
-EOF
 
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * from foo3

@@ -134,7 +134,8 @@ pub enum Plan {
     Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
-    Explain(ExplainPlan),
+    ExplainPlan(ExplainPlanPlan),
+    ExplainTimestamp(ExplainTimestampPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
     AlterNoop(AlterNoopPlan),
@@ -243,7 +244,8 @@ impl Plan {
             StatementKind::DropObjects => vec![PlanKind::DropObjects],
             StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
-            StatementKind::Explain => vec![PlanKind::Explain],
+            StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
+            StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
             StatementKind::Fetch => vec![PlanKind::Fetch],
             StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
@@ -326,7 +328,8 @@ impl Plan {
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
             Plan::CopyFrom(_) => "copy from",
-            Plan::Explain(_) => "explain",
+            Plan::ExplainPlan(_) => "explain plan",
+            Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -790,14 +793,33 @@ pub struct CopyFromPlan {
 }
 
 #[derive(Clone, Debug)]
-pub struct ExplainPlan {
-    pub raw_plan: HirRelationExpr,
-    pub row_set_finishing: Option<RowSetFinishing>,
+pub struct ExplainPlanPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
     pub no_errors: bool,
-    pub explainee: mz_repr::explain::Explainee,
+    pub explainee: Explainee,
+}
+
+/// The type of object to be explained
+#[derive(Clone, Debug)]
+pub enum Explainee {
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// The object to be explained is a one-off query and may or may not served
+    /// using a dataflow.
+    Query {
+        raw_plan: HirRelationExpr,
+        row_set_finishing: Option<RowSetFinishing>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct ExplainTimestampPlan {
+    pub format: ExplainFormat,
+    pub raw_plan: HirRelationExpr,
 }
 
 #[derive(Debug)]
