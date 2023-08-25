@@ -57,7 +57,8 @@ impl Client {
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        self.build_request(method, path, self.endpoint.clone()).await
+        self.build_request(method, path, self.endpoint.clone())
+            .await
     }
 
     /// Builds a request towards the `Client`'s endpoint

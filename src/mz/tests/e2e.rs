@@ -334,7 +334,6 @@ mod tests {
 
         assert!(output.trim() == "aws/us-east-1");
 
-
         // Set the admin-endpoint
         cmd()
             .arg("profile")

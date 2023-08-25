@@ -120,10 +120,12 @@ impl Context {
     /// Otherwise raises a warning message.
     /// This function is temporal.
     /// TODO: Remove after version 0.1.6 and give anyone using `mz` time to apply the fix.
-    pub fn verify_and_return_cloud_endpoint_url(&self, cloud_endpoint: Option<&str>) -> Result<Option<Url>, ParseError> {
+    pub fn verify_and_return_cloud_endpoint_url(
+        &self,
+        cloud_endpoint: Option<&str>,
+    ) -> Result<Option<Url>, ParseError> {
         if let Some(endpoint) = cloud_endpoint {
-            let mut endpoint_url =
-            endpoint.parse::<Url>()?;
+            let mut endpoint_url = endpoint.parse::<Url>()?;
             if let Some(host) = endpoint_url.host_str().as_mut() {
                 if !host.starts_with("api.") {
                     self.print_warning_comment();
