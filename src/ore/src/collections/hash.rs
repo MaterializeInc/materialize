@@ -45,8 +45,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::borrow::Borrow;
-use std::collections::hash_map::{Entry, RandomState};
-use std::collections::hash_set::{Difference, Intersection, SymmetricDifference, Union};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap as StdMap, HashSet as StdSet, TryReserveError};
 use std::hash::Hash;
 use std::ops::{BitAnd, BitOr, BitXor, Index, Sub};
@@ -420,33 +419,6 @@ where
         Q: Hash + Eq,
     {
         self.0.take(value)
-    }
-
-    /// See [`std::collections::HashSet::difference`].
-    #[inline]
-    pub fn difference<'a>(&'a self, other: &'a HashSet<T>) -> Difference<'a, T, RandomState> {
-        self.0.difference(&other.0)
-    }
-
-    /// See [`std::collections::HashSet::symmetric_difference`].
-    #[inline]
-    pub fn symmetric_difference<'a>(
-        &'a self,
-        other: &'a HashSet<T>,
-    ) -> SymmetricDifference<'a, T, RandomState> {
-        self.0.symmetric_difference(&other.0)
-    }
-
-    /// See [`std::collections::HashSet::intersection`].
-    #[inline]
-    pub fn intersection<'a>(&'a self, other: &'a HashSet<T>) -> Intersection<'a, T, RandomState> {
-        self.0.intersection(&other.0)
-    }
-
-    /// See [`std::collections::HashSet::union`].
-    #[inline]
-    pub fn union<'a>(&'a self, other: &'a HashSet<T>) -> Union<'a, T, RandomState> {
-        self.0.union(&other.0)
     }
 }
 
