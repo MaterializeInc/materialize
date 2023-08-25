@@ -29,7 +29,7 @@ class Capability:
 
 
 T = TypeVar("T", bound=Capability)
-ActionOrFactory = Union[Type["Action"], "ActionFactory"]
+ActionOrFactory = Union[type["Action"], "ActionFactory"]
 
 
 class Capabilities:
@@ -52,18 +52,18 @@ class Capabilities:
             cap for cap in self._capabilities if not cap == capability
         ]
 
-    def _remove(self, capabilities: set[Type[T]]) -> None:
+    def _remove(self, capabilities: set[type[T]]) -> None:
         """Remove all existing capabilities of the specified types."""
 
         self._capabilities = [
             cap for cap in self._capabilities if type(cap) not in capabilities
         ]
 
-    def provides(self, capability: Type[T]) -> bool:
+    def provides(self, capability: type[T]) -> bool:
         """Report whether any capability of the specified type exists."""
         return len(self.get(capability)) > 0
 
-    def get(self, capability: Type[T]) -> list[T]:
+    def get(self, capability: type[T]) -> list[T]:
         """Get all capabilities of the specified type."""
         matches: list[T] = [
             # NOTE: unfortunately pyright can't handle this
@@ -74,7 +74,7 @@ class Capabilities:
         return matches
 
     def get_free_capability_name(
-        self, capability: Type[T], max_objects: int
+        self, capability: type[T], max_objects: int
     ) -> Optional[str]:
         all_object_names = [
             capability.format_str().format(i) for i in range(0, max_objects)
@@ -101,11 +101,11 @@ class Action:
         pass
 
     @classmethod
-    def requires(cls) -> Union[set[Type[Capability]], list[set[Type[Capability]]]]:
+    def requires(cls) -> Union[set[type[Capability]], list[set[type[Capability]]]]:
         """Compute the capability classes that this action requires."""
         return set()
 
-    def withholds(self) -> set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         """Compute the capability classes that this action will make unavailable."""
         return set()
 
@@ -133,7 +133,7 @@ class ActionFactory:
         assert False
 
     @classmethod
-    def requires(cls) -> Union[set[Type[Capability]], list[set[Type[Capability]]]]:
+    def requires(cls) -> Union[set[type[Capability]], list[set[type[Capability]]]]:
         """Compute the capability classes that this Action Factory requires."""
         return set()
 
@@ -243,7 +243,7 @@ class Test:
                     return True
             return False
 
-    def _all_subclasses(self, cls: Type[Action]) -> list[ActionOrFactory]:
+    def _all_subclasses(self, cls: type[Action]) -> list[ActionOrFactory]:
         """Return all Actions that are a subclass of the given cls."""
         children = [c for c in cls.__subclasses__() if not c.require_explicit_mention()]
         if len(children) == 0:

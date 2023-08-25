@@ -42,7 +42,7 @@ from materialize.util import MzVersion
 
 class Scenario:
     def __init__(
-        self, checks: list[Type[Check]], executor: Executor, seed: Optional[str] = None
+        self, checks: list[type[Check]], executor: Executor, seed: Optional[str] = None
     ) -> None:
         self._checks = checks
         self.executor = executor
@@ -54,7 +54,7 @@ class Scenario:
             check_class(self.base_version(), self.rng) for check_class in self.checks()
         ]
 
-    def checks(self) -> list[Type[Check]]:
+    def checks(self) -> list[type[Check]]:
         if self.rng:
             self.rng.shuffle(self._checks)
         return self._checks

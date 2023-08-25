@@ -24,7 +24,7 @@ class CreatePostgresCdcTable(Action):
     """Creates a Postgres CDC source in Materialized."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

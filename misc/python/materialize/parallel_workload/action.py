@@ -609,12 +609,12 @@ class KillAction(Action):
 
 
 class ActionList:
-    action_classes: list[Type[Action]]
+    action_classes: list[type[Action]]
     weights: list[float]
     autocommit: bool
 
     def __init__(
-        self, action_classes_weights: list[Tuple[Type[Action], int]], autocommit: bool
+        self, action_classes_weights: list[Tuple[type[Action], int]], autocommit: bool
     ):
         self.action_classes = [action[0] for action in action_classes_weights]
         self.weights = [action[1] for action in action_classes_weights]

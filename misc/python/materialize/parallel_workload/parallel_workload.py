@@ -216,7 +216,7 @@ def run(
         database.drop(Executor(rng, cur))
     conn.close()
 
-    ignored_errors: DefaultDict[str, Counter[Type[Action]]] = defaultdict(Counter)
+    ignored_errors: DefaultDict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
     for worker in workers:
         for action_class, counter in worker.ignored_errors.items():

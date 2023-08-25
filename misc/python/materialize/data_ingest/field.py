@@ -24,7 +24,7 @@ def formatted_value(value: Any) -> str:
 
 class Field:
     name: str
-    data_type: Type[DataType]
+    data_type: type[DataType]
     is_key: bool
     # value_fn can be used to encode a value which is stored in this field, for example:
     # import uuid
@@ -35,7 +35,7 @@ class Field:
     def __init__(
         self,
         name: str,
-        data_type: Type[DataType],
+        data_type: type[DataType],
         is_key: bool,
         value_fn: Optional[Callable[[Any], Any]] = None,
     ):

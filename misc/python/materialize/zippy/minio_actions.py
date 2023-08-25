@@ -29,7 +29,7 @@ class MinioRestart(Action):
     """Restart the Minio instance."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MinioIsRunning}
 
     def run(self, c: Composition) -> None:

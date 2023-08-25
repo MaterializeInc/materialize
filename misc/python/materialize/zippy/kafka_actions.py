@@ -54,10 +54,10 @@ class KafkaStop(Action):
     """Stop the Kafka instance."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {KafkaRunning}
 
-    def withholds(self) -> set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {KafkaRunning}
 
     def run(self, c: Composition) -> None:
@@ -68,7 +68,7 @@ class CreateTopicParameterized(ActionFactory):
     """Creates a Kafka topic and decides on the envelope that will be used."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, KafkaRunning}
 
     def __init__(
@@ -130,7 +130,7 @@ class Ingest(Action):
     """Ingests data (inserts, updates or deletions) into a Kafka topic."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

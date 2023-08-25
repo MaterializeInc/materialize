@@ -78,7 +78,7 @@ def make_termination_conditions(args: argparse.Namespace) -> list[TerminationCon
     ]
 
 
-def make_aggregation_class() -> Type[Aggregation]:
+def make_aggregation_class() -> type[Aggregation]:
     return MinAggregation
 
 
@@ -106,7 +106,7 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario: Type[Scenario], args: argparse.Namespace
+    c: Composition, scenario: type[Scenario], args: argparse.Namespace
 ) -> list[Comparator]:
     name = scenario.__name__
     print(f"--- Now benchmarking {name} ...")

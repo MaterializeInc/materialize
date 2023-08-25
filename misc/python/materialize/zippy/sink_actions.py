@@ -23,7 +23,7 @@ class CreateSinkParameterized(ActionFactory):
     """Creates a sink over an existing view. Then creates a source over that sink and a view over that source."""
 
     @classmethod
-    def requires(cls) -> list[set[Type[Capability]]]:
+    def requires(cls) -> list[set[type[Capability]]]:
         return [{MzIsRunning, StoragedRunning, ViewExists}]
 
     def __init__(self, max_sinks: int = 10) -> None:

@@ -21,7 +21,7 @@ class StoragedStart(Action):
     """Starts a storaged clusterd instance."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -35,7 +35,7 @@ class StoragedRestart(Action):
     """Restarts the entire storaged clusterd instance."""
 
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning}
 
     def run(self, c: Composition) -> None:
@@ -45,11 +45,11 @@ class StoragedRestart(Action):
 
 class StoragedKill(Action):
     @classmethod
-    def requires(cls) -> set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning}
 
     def run(self, c: Composition) -> None:
         c.kill("storaged")
 
-    def withholds(self) -> set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {StoragedRunning}

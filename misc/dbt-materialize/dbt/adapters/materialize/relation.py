@@ -47,5 +47,5 @@ class MaterializeRelation(PostgresRelation):
         return 255
 
     @classproperty
-    def get_relation_type(cls) -> Type[MaterializeRelationType]:
+    def get_relation_type(cls) -> type[MaterializeRelationType]:
         return MaterializeRelationType

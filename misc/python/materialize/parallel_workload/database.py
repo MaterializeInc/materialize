@@ -33,7 +33,7 @@ MAX_INITIAL_ROLES = 3
 # TODO: Create/Drop source (load generator, pg circle from Mz)
 class Column:
     column_id: int
-    data_type: Type[DataType]
+    data_type: type[DataType]
     db_object: "DBObject"
     nullable: bool
     default: Optional[str]
@@ -43,7 +43,7 @@ class Column:
         self,
         rng: random.Random,
         column_id: int,
-        data_type: Type[DataType],
+        data_type: type[DataType],
         db_object: "DBObject",
     ):
         self.column_id = column_id

@@ -23,11 +23,11 @@ class Benchmark:
     def __init__(
         self,
         mz_id: int,
-        scenario: Type[Scenario],
+        scenario: type[Scenario],
         executor: Executor,
         filter: Filter,
         termination_conditions: list[TerminationCondition],
-        aggregation_class: Type[Aggregation],
+        aggregation_class: type[Aggregation],
         scale: Optional[str] = None,
         measure_memory: bool = True,
     ) -> None:
