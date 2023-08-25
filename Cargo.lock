@@ -8984,6 +8984,7 @@ dependencies = [
  "log",
  "lru",
  "memchr",
+ "mime_guess",
  "native-tls",
  "nix",
  "nom",
