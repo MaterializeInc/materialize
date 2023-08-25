@@ -1184,6 +1184,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::pin;
     use std::str::FromStr;
 
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -1194,6 +1195,7 @@ mod tests {
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use tokio_stream::StreamExt;
 
     use crate::async_runtime::IsolatedRuntime;
     use crate::cache::StateCache;
@@ -1282,6 +1284,44 @@ mod tests {
             updates,
             &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
         )
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn snapshot_and_stream() {
+        let data = &mut [
+            (("k1".to_owned(), "v1".to_owned()), 0, 1),
+            (("k2".to_owned(), "v2".to_owned()), 1, 1),
+            (("k3".to_owned(), "v3".to_owned()), 2, 1),
+            (("k4".to_owned(), "v4".to_owned()), 2, 1),
+            (("k5".to_owned(), "v5".to_owned()), 3, 1),
+        ];
+
+        let (mut write, mut read) = {
+            let client = new_test_client().await;
+            client.cfg.dynamic.set_blob_target_size(0); // split batches across multiple parts
+            client
+                .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+                .await
+        };
+
+        write.expect_compare_and_append(&data[0..2], 0, 2).await;
+        write.expect_compare_and_append(&data[2..4], 2, 3).await;
+        write.expect_compare_and_append(&data[4..], 3, 4).await;
+
+        let as_of = Antichain::from_elem(3);
+        let mut snapshot = pin::pin!(read.snapshot_and_stream(as_of.clone()).await.unwrap());
+
+        let mut snapshot_rows = vec![];
+        while let Some(((k, v), t, d)) = snapshot.next().await {
+            snapshot_rows.push(((k.expect("valid key"), v.expect("valid key")), t, d));
+        }
+
+        for ((_k, _v), t, _d) in data.as_mut_slice() {
+            t.advance_by(as_of.borrow());
+        }
+
+        assert_eq!(data.as_slice(), snapshot_rows.as_slice());
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
