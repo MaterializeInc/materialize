@@ -596,6 +596,10 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         &self.state.collections.rollups
     }
 
+    pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
+        self.state.latest_rollup()
+    }
+
     pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
@@ -666,7 +670,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        let state = StateRollup::from_proto(proto)
+        let state = Rollup::from_proto(proto)
             .expect("internal error: invalid encoded state")
             .state;
         check_applier_version(build_version, &state.state.applier_version);
@@ -692,31 +696,38 @@ where
     }
 }
 
+/// A struct that maps 1:1 with ProtoRollup.
+///
+/// Contains State, and optionally the diffs between (state.latest_rollup.seqno, state.seqno].
+///
+/// `diffs` is expected to be `None` for the initial state, and may be `None` when deserializing
+/// persisted rollups that were written before we started inlining diffs.
 #[derive(Debug)]
-pub(crate) struct StateRollup<T> {
+pub(crate) struct Rollup<T> {
     pub(crate) state: UntypedState<T>,
     pub(crate) diffs: Option<InlinedDiffs>,
 }
 
-impl<T> StateRollup<T> {
-    // WIP: use this instead of direct construction
-    pub(crate) fn from(state: UntypedState<T>, diffs: InlinedDiffs) -> Self {
-        // WIP: validations
-        // - check that seqnos in latest rollup match diffs.lower, current = diffs.upper
-
-        // let latest_rollup_seqno = *state.latest_rollup().0;
-        //
-        // let mut verify_seqno = latest_rollup_seqno;
-        // for diff in &diffs {
-        //     assert_eq!(verify_seqno.next(), diff.seqno);
-        //     verify_seqno = diff.seqno;
-        // }
-        // assert_eq!(verify_seqno, state.seqno);
-        // diffs.description.lower().
-        Self {
-            state,
-            diffs: Some(diffs),
+impl<T: Timestamp + Lattice + Codec64> Rollup<T> {
+    /// Creates a `StateRollup` from a state and diffs from its last rollup.
+    /// WIP: explain bounds
+    pub(crate) fn from(state: UntypedState<T>, diffs: Vec<VersionedData>) -> Self {
+        let latest_rollup_seqno = *state.latest_rollup().0;
+        let mut verify_seqno = latest_rollup_seqno;
+        for diff in &diffs {
+            assert_eq!(verify_seqno.next(), diff.seqno);
+            verify_seqno = diff.seqno;
         }
+        assert_eq!(verify_seqno, state.seqno());
+
+        let diffs = InlinedDiffs::from(diffs);
+        // and doublecheck that we've written our Description correctly
+        if let Some(diffs) = &diffs {
+            assert_eq!(latest_rollup_seqno.next(), diffs.lower());
+            assert_eq!(verify_seqno.next(), diffs.upper());
+        }
+
+        Self { state, diffs }
     }
 }
 
@@ -727,20 +738,22 @@ pub(crate) struct InlinedDiffs {
 }
 
 impl InlinedDiffs {
-    pub(crate) fn from(diffs: Vec<VersionedData>) -> Option<Self> {
+    pub(crate) fn lower(&self) -> SeqNo {
+        *self.description.lower().first().expect("seqno")
+    }
+
+    pub(crate) fn upper(&self) -> SeqNo {
+        *self.description.upper().first().expect("seqno")
+    }
+
+    fn from(diffs: Vec<VersionedData>) -> Option<Self> {
         if diffs.is_empty() {
             return None;
         }
-
-        // WIP: validations. check that diffs are consecutive
         Some(Self {
             description: Description::new(
-                diffs
-                    .first()
-                    .map_or_else(Antichain::new, |x| Antichain::from_elem(x.seqno)),
-                diffs
-                    .last()
-                    .map_or_else(Antichain::new, |x| Antichain::from_elem(x.seqno.next())),
+                Antichain::from_elem(diffs.first().expect("not empty").seqno),
+                Antichain::from_elem(diffs.last().expect("not empty").seqno.next()),
                 Antichain::from_elem(SeqNo::minimum()),
             ),
             diffs,
@@ -762,35 +775,31 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
     }
 
     fn from_proto(proto: ProtoInlinedDiffs) -> Result<Self, TryFromProtoError> {
-        info!("Decoding inlined diffs: {:?}", proto);
         let description: Description<SeqNo> = proto.description.into_rust_if_some("description")?;
-        info!("Decoded description: {:?}", description);
         let mut seqno = description.lower().first().expect("lower seqno").clone();
-        info!("Seqno: {}", seqno);
-        let mut diffs = Vec::with_capacity(proto.diffs.len());
 
+        let mut diffs = Vec::with_capacity(proto.diffs.len());
         for data in proto.diffs {
-            diffs.push(VersionedData {
-                seqno,
-                data: Bytes::from(data),
-            });
+            let data = Bytes::from(data);
+
+            debug_assert_eq!(
+                ProtoStateDiff::decode(data.clone())
+                    .expect("decodable state diff")
+                    .seqno_to,
+                seqno.0
+            );
+
+            diffs.push(VersionedData { seqno, data });
             seqno = seqno.next();
         }
 
-        info!("Seqno after: {}", seqno);
-
-        // assert_eq!(
-        //     seqno.next(),
-        //     *description.upper().first().expect("upper seqno")
-        // );
+        assert_eq!(seqno, *description.upper().first().expect("upper seqno"));
 
         Ok(Self { description, diffs })
     }
 }
 
-impl<T> StateRollup<T> {}
-
-impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for StateRollup<T> {
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
     fn into_proto(&self) -> ProtoRollup {
         ProtoRollup {
             applier_version: self.state.state.applier_version.to_string(),
@@ -897,7 +906,16 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for StateRollup<T> 
             hostname: x.hostname,
             collections,
         };
-        Ok(StateRollup {
+
+        let diffs: Option<InlinedDiffs> = x.diffs.into_rust_if_some("diffs").ok();
+        if let Some(diffs) = &diffs {
+            assert_eq!(
+                state.latest_rollup().0.next(),
+                *diffs.description.lower().first().expect("seqno")
+            );
+        }
+
+        Ok(Rollup {
             state: UntypedState {
                 state,
                 key_codec: x.key_codec.into_rust()?,
@@ -905,7 +923,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for StateRollup<T> 
                 ts_codec: x.ts_codec.into_rust()?,
                 diff_codec: x.diff_codec.into_rust()?,
             },
-            diffs: x.diffs.into_rust_if_some("diffs").ok(),
+            diffs,
         })
     }
 }

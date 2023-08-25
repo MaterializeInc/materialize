@@ -31,15 +31,13 @@ use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
-use crate::internal::encoding::{InlinedDiffs, StateRollup, UntypedState};
+use crate::internal::encoding::{InlinedDiffs, Rollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{
-    HollowBlobRef, HollowRollup, NoOpStateTransition, ProtoRollup, State, TypedState,
-};
+use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -652,6 +650,9 @@ impl StateVersions {
         let (latest_rollup_seqno, _rollup) = state.latest_rollup();
         let seqno = state.seqno();
 
+        // TODO: maintain the diffs since the latest rollup in-memory rather than
+        // needing an additional API call here. This would reduce Consensus load
+        // / avoid races with Consensus truncation, but is trickier to write.
         let diffs: Vec<_> = self
             .fetch_all_live_diffs_gt_seqno::<K, V, T, D>(&state.shard_id, *latest_rollup_seqno)
             .await;
@@ -730,10 +731,7 @@ impl StateVersions {
         assert_eq!(verify_seqno, state.seqno);
         let buf = self.metrics.codecs.state.encode(|| {
             let mut buf = Vec::new();
-            let rollup = StateRollup {
-                state: UntypedState::<T>::from(state),
-                diffs: InlinedDiffs::from(diffs),
-            };
+            let rollup = Rollup::from(UntypedState::<T>::from(state), diffs);
             rollup
                 .into_proto()
                 .encode(&mut buf)
