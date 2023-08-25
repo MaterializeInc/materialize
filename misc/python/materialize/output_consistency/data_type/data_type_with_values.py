@@ -32,7 +32,7 @@ class DataTypeWithValues:
         self,
         value: str,
         column_name: str,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> DataValue:
         return DataValue(value, self.data_type, column_name, characteristics)
 
@@ -40,7 +40,7 @@ class DataTypeWithValues:
         self,
         value: str,
         column_name: str,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> None:
         self.raw_values.append(
             self._create_raw_value(value, column_name, characteristics)

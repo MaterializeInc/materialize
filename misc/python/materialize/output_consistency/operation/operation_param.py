@@ -25,9 +25,9 @@ class OperationParam:
         self,
         type_category: DataTypeCategory,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
         incompatibility_combinations: Optional[
-            list[Set[ExpressionCharacteristics]]
+            list[set[ExpressionCharacteristics]]
         ] = None,
     ):
         """

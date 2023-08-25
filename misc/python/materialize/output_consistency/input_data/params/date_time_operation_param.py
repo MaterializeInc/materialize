@@ -38,7 +38,7 @@ class DateTimeOperationParam(OperationParam):
         support_time: bool = True,
         support_timestamp: bool = True,
         support_timestamp_tz: bool = True,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             DataTypeCategory.DATE_TIME,
@@ -80,7 +80,7 @@ class TimeIntervalOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             DataTypeCategory.DATE_TIME,

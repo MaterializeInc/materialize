@@ -32,9 +32,9 @@ class NumericOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
         incompatibility_combinations: Optional[
-            list[Set[ExpressionCharacteristics]]
+            list[set[ExpressionCharacteristics]]
         ] = None,
         only_int_type: bool = False,
         no_int_type_larger_int4: bool = False,
@@ -98,7 +98,7 @@ class MaxSignedInt4OperationParam(NumericOperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             optional=optional,

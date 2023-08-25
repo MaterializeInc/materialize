@@ -99,8 +99,8 @@ class ExpressionWithArgs(Expression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
-        involved_characteristics: Set[ExpressionCharacteristics] = set()
+    ) -> set[ExpressionCharacteristics]:
+        involved_characteristics: set[ExpressionCharacteristics] = set()
         involved_characteristics = involved_characteristics.union(
             self.own_characteristics
         )

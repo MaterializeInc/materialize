@@ -129,11 +129,11 @@ so it is executed.""",
 class PipelineStep:
     def __init__(self, id: str):
         self.id = id
-        self.extra_inputs: Set[str] = set()
-        self.image_dependencies: Set[mzbuild.ResolvedImage] = set()
-        self.step_dependencies: Set[str] = set()
+        self.extra_inputs: set[str] = set()
+        self.image_dependencies: set[mzbuild.ResolvedImage] = set()
+        self.step_dependencies: set[str] = set()
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         inputs = set()
         inputs.update(self.extra_inputs)
         for image in self.image_dependencies:

@@ -158,7 +158,7 @@ def filter_to_roots(
 
 
 def add_deps(
-    deps: DepMap, new_deps: DefaultDict[str, Set[str]], roots: list[str]
+    deps: DepMap, new_deps: DefaultDict[str, set[str]], roots: list[str]
 ) -> None:
     for root in roots:
         for dep in deps[root]:

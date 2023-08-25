@@ -58,7 +58,7 @@ def rev_parse(rev: str, *, abbrev: bool = False) -> str:
 
 
 @lru_cache(maxsize=None)
-def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
+def expand_globs(root: Path, *specs: Union[Path, str]) -> set[str]:
     """Find unignored files within the specified paths."""
     # The goal here is to find all files in the working tree that are not
     # ignored by .gitignore. Naively using `git ls-files` doesn't work, because

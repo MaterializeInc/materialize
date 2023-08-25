@@ -29,7 +29,7 @@ class DataValue(LeafExpression):
         value: str,
         data_type: DataType,
         value_identifier: str,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ):
         column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
         super().__init__(
@@ -53,7 +53,7 @@ class DataValue(LeafExpression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
 
     def __str__(self) -> str:

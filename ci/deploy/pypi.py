@@ -47,7 +47,7 @@ def main() -> None:
             )
 
 
-def get_released_versions(name: str) -> Set[str]:
+def get_released_versions(name: str) -> set[str]:
     res = requests.get(f"https://pypi.org/pypi/{name}/json")
     res.raise_for_status()
     return set(res.json()["releases"])

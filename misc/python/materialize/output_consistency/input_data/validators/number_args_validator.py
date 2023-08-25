@@ -29,7 +29,7 @@ class NumericArgsValidator(OperationArgsValidator):
     ) -> int:
         def has_numeric_type_properties(
             arg: Expression,
-            _arg_characteristics: Set[ExpressionCharacteristics],
+            _arg_characteristics: set[ExpressionCharacteristics],
             _index: int,
         ) -> bool:
             data_type = arg.try_resolve_exact_data_type()

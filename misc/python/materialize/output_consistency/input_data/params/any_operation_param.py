@@ -22,9 +22,9 @@ class AnyOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
         incompatibility_combinations: Optional[
-            list[Set[ExpressionCharacteristics]]
+            list[set[ExpressionCharacteristics]]
         ] = None,
     ):
         super().__init__(
@@ -45,9 +45,9 @@ class AnyLikeOtherOperationParam(OperationParam):
         self,
         index_of_previous_param: int,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
         incompatibility_combinations: Optional[
-            list[Set[ExpressionCharacteristics]]
+            list[set[ExpressionCharacteristics]]
         ] = None,
     ):
         super().__init__(

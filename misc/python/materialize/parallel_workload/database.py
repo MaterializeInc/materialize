@@ -265,7 +265,7 @@ class Database:
     role_id: int
     clusters: list[Cluster]
     cluster_id: int
-    indexes: Set[str]
+    indexes: set[str]
     lock: threading.Lock
 
     def __init__(

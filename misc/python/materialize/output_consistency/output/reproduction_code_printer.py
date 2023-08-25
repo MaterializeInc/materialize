@@ -124,7 +124,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self,
         query_template: QueryTemplate,
         query_column_selection: QueryColumnByIndexSelection,
-    ) -> Set[str]:
+    ) -> set[str]:
         column_names = set()
 
         for index, expression in enumerate(query_template.select_expressions):
@@ -146,8 +146,8 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self,
         query_template: QueryTemplate,
         query_column_selection: QueryColumnByIndexSelection,
-    ) -> Set[ExpressionCharacteristics]:
-        all_involved_characteristics: Set[ExpressionCharacteristics] = set()
+    ) -> set[ExpressionCharacteristics]:
+        all_involved_characteristics: set[ExpressionCharacteristics] = set()
 
         for index, expression in enumerate(query_template.select_expressions):
             if not query_column_selection.is_included(index):

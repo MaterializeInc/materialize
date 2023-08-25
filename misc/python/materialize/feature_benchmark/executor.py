@@ -16,7 +16,7 @@ from materialize.mzcompose.services import Materialized
 
 
 class Executor:
-    _known_fragments: Set[str] = set()
+    _known_fragments: set[str] = set()
 
     def Lambda(self, _lambda: Callable[["Executor"], float]) -> float:
         return _lambda(self)

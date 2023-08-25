@@ -17,7 +17,7 @@ from materialize.output_consistency.operation.operation_param import OperationPa
 
 
 class EnumConstantOperationParam(OperationParam):
-    def __init__(self, values: Set[str], add_quotes: bool, optional: bool = False):
+    def __init__(self, values: set[str], add_quotes: bool, optional: bool = False):
         super().__init__(
             DataTypeCategory.ENUM,
             optional=optional,

@@ -123,7 +123,7 @@ class RepositoryDetails:
             return path
 
 
-def docker_images() -> Set[str]:
+def docker_images() -> set[str]:
     """List the Docker images available on the local machine."""
     return set(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
@@ -179,7 +179,7 @@ class PreImage:
         """Perform the action."""
         pass
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         """Return the files which are considered inputs to the action."""
         raise NotImplementedError
 
@@ -218,7 +218,7 @@ class Copy(PreImage):
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.rd.root / src, dst)
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
 
 
@@ -310,14 +310,14 @@ class S3UploadDebuginfo(PreImage):
                     env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
                 )
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         return {self.exe_path, self.dbg_path}
 
 
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         return {
             "ci/builder",
             "Cargo.toml",
@@ -491,7 +491,7 @@ class CargoBuild(CargoPreImage):
         super().run()
         self.build()
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         deps = set()
 
         for bin in self.bins:
@@ -721,7 +721,7 @@ class ResolvedImage:
             ]
         )
 
-    def list_dependencies(self, transitive: bool = False) -> Set[str]:
+    def list_dependencies(self, transitive: bool = False) -> set[str]:
         out = set()
         for dep in self.dependencies.values():
             out.add(dep.name)
@@ -729,7 +729,7 @@ class ResolvedImage:
                 out |= dep.list_dependencies(transitive)
         return out
 
-    def inputs(self, transitive: bool = False) -> Set[str]:
+    def inputs(self, transitive: bool = False) -> set[str]:
         """List the files tracked as inputs to the image.
 
         These files are used to compute the fingerprint for the image. See

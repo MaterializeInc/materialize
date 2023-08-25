@@ -52,7 +52,7 @@ class Capabilities:
             cap for cap in self._capabilities if not cap == capability
         ]
 
-    def _remove(self, capabilities: Set[Type[T]]) -> None:
+    def _remove(self, capabilities: set[Type[T]]) -> None:
         """Remove all existing capabilities of the specified types."""
 
         self._capabilities = [
@@ -101,11 +101,11 @@ class Action:
         pass
 
     @classmethod
-    def requires(cls) -> Union[Set[Type[Capability]], list[Set[Type[Capability]]]]:
+    def requires(cls) -> Union[set[Type[Capability]], list[set[Type[Capability]]]]:
         """Compute the capability classes that this action requires."""
         return set()
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[Type[Capability]]:
         """Compute the capability classes that this action will make unavailable."""
         return set()
 
@@ -133,7 +133,7 @@ class ActionFactory:
         assert False
 
     @classmethod
-    def requires(cls) -> Union[Set[Type[Capability]], list[Set[Type[Capability]]]]:
+    def requires(cls) -> Union[set[Type[Capability]], list[set[Type[Capability]]]]:
         """Compute the capability classes that this Action Factory requires."""
         return set()
 
@@ -235,7 +235,7 @@ class Test:
     def _can_run(self, action: ActionOrFactory) -> bool:
         requires = action.requires()
 
-        if isinstance(requires, Set):
+        if isinstance(requires, set):
             return all(self._capabilities.provides(req) for req in requires)
         else:
             for one_alternative in requires:

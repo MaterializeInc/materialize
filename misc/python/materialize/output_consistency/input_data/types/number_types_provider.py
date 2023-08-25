@@ -30,7 +30,7 @@ class NumberDataType(DataType):
         smallest_value: str,
         max_value: str,
         max_negative_value: Optional[str],
-        further_tiny_dec_values: Optional[Set[str]] = None,
+        further_tiny_dec_values: Optional[set[str]] = None,
         is_floating_point_type: bool = False,
     ):
         super().__init__(identifier, type_name, DataTypeCategory.NUMERIC)
@@ -45,7 +45,7 @@ class NumberDataType(DataType):
         self.is_floating_point_type = is_floating_point_type
 
     def resolve_return_type_spec(
-        self, characteristics: Set[ExpressionCharacteristics]
+        self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return NumericReturnTypeSpec(
             only_integer=not self.is_decimal

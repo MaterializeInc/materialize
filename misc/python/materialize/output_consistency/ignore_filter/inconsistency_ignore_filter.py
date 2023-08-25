@@ -143,7 +143,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         expression: ExpressionWithArgs,
         operation: DbOperationOrFunction,
-        _all_involved_characteristics: Set[ExpressionCharacteristics],
+        _all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         if operation.is_aggregation:
             for arg in expression.args:
@@ -164,7 +164,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         db_function: DbFunction,
         expression: ExpressionWithArgs,
-        all_involved_characteristics: Set[ExpressionCharacteristics],
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Note that function names are always provided in lower case.
         if db_function.function_name_in_lower_case in {
@@ -201,7 +201,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         db_operation: DbOperation,
         expression: ExpressionWithArgs,
-        all_involved_characteristics: Set[ExpressionCharacteristics],
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         return NoIgnore()
 

@@ -19,7 +19,7 @@ class PeekCancellation(Action):
     """Perfoms a peek cancellation."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[Type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:

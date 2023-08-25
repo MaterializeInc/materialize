@@ -53,7 +53,7 @@ class EnumConstant(Expression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         return set()
 
     def __str__(self) -> str:

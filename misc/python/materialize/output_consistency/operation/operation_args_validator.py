@@ -25,9 +25,9 @@ class OperationArgsValidator:
         self,
         args: list[Expression],
         match_argument_fn: Callable[
-            [Expression, Set[ExpressionCharacteristics], int], bool
+            [Expression, set[ExpressionCharacteristics], int], bool
         ],
-        skip_argument_indices: Optional[Set[int]] = None,
+        skip_argument_indices: Optional[set[int]] = None,
     ) -> int:
         if skip_argument_indices is None:
             skip_argument_indices = set()
@@ -44,12 +44,12 @@ class OperationArgsValidator:
     def index_of_characteristic_combination(
         self,
         args: list[Expression],
-        characteristic_combination: Set[ExpressionCharacteristics],
-        skip_argument_indices: Optional[Set[int]] = None,
+        characteristic_combination: set[ExpressionCharacteristics],
+        skip_argument_indices: Optional[set[int]] = None,
     ) -> int:
         def match_fn(
             _arg: Expression,
-            arg_characteristics: Set[ExpressionCharacteristics],
+            arg_characteristics: set[ExpressionCharacteristics],
             _index: int,
         ) -> bool:
             return len(characteristic_combination & arg_characteristics) == len(

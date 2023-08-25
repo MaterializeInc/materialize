@@ -27,7 +27,7 @@ class CreateTableParameterized(ActionFactory):
         self.max_rows_per_action = max_rows_per_action
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[Type[Capability]]:
         return {MzIsRunning}
 
     def new(self, capabilities: Capabilities) -> list[Action]:
@@ -84,7 +84,7 @@ class ValidateTable(Action):
     """Validates that a single table contains data that is consistent with the expected min/max watermark."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[Type[Capability]]:
         return {MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -106,7 +106,7 @@ class DML(Action):
     """Performs an INSERT, DELETE or UPDATE against a table."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[Type[Capability]]:
         return {MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

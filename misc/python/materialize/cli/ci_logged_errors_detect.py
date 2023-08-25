@@ -140,7 +140,7 @@ def annotate_logged_errors(log_files: list[str]) -> None:
     known_errors: list[str] = []
 
     # Keep track of known errors so we log each only once
-    already_reported_issue_numbers: Set[int] = set()
+    already_reported_issue_numbers: set[int] = set()
 
     for error in error_logs:
         for artifact in artifacts:

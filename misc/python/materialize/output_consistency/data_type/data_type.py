@@ -24,7 +24,7 @@ class DataType:
         self.category = category
 
     def resolve_return_type_spec(
-        self, characteristics: Set[ExpressionCharacteristics]
+        self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return ReturnTypeSpec(self.category)
 

@@ -39,7 +39,7 @@ class DbOperationOrFunction:
         min_param_count: int,
         max_param_count: int,
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: Optional[set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
@@ -55,7 +55,7 @@ class DbOperationOrFunction:
         self.min_param_count = min_param_count
         self.max_param_count = max_param_count
         self.return_type_spec = return_type_spec
-        self.args_validators: Set[OperationArgsValidator] = args_validators
+        self.args_validators: set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
         self.is_enabled = is_enabled
@@ -75,7 +75,7 @@ class DbOperationOrFunction:
 
     def derive_characteristics(
         self, args: list[Expression]
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         # a non-trivial implementation will be helpful for nested expressions
         return set()
 
@@ -113,7 +113,7 @@ class DbOperation(DbOperationOrFunction):
         pattern: str,
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: Optional[set[OperationArgsValidator]] = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
     ):
@@ -151,7 +151,7 @@ class DbFunction(DbOperationOrFunction):
         function_name: str,
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: Optional[set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
@@ -203,7 +203,7 @@ class DbFunctionWithCustomPattern(DbFunction):
         pattern_per_param_count: dict[int, str],
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: Optional[set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,

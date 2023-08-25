@@ -51,7 +51,7 @@ class RandomizedPicker:
 
     def random_row_indices(
         self, vertical_storage_row_count: int, max_number_of_rows_to_select: int
-    ) -> Set[int]:
+    ) -> set[int]:
         selected_rows = random.choices(
             range(0, vertical_storage_row_count), k=max_number_of_rows_to_select
         )

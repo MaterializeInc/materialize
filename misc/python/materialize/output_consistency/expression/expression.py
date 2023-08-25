@@ -27,7 +27,7 @@ class Expression:
 
     def __init__(
         self,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
         is_aggregate: bool,
         is_expect_error: bool,
@@ -52,7 +52,7 @@ class Expression:
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         """Get all involved characteristics through recursion"""
         raise NotImplementedError
 
@@ -63,7 +63,7 @@ class Expression:
         raise NotImplementedError
 
     def has_all_characteristics(
-        self, characteristics: Set[ExpressionCharacteristics]
+        self, characteristics: set[ExpressionCharacteristics]
     ) -> bool:
         """True if this expression itself exhibits all characteristics. Child expressions are not considered."""
         overlap = self.own_characteristics & characteristics
@@ -71,7 +71,7 @@ class Expression:
 
     def has_any_characteristic(
         self,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> bool:
         """True if this expression itself exhibits any of the characteristics. Child expressions are not considered."""
         overlap = self.own_characteristics & characteristics
@@ -99,7 +99,7 @@ class LeafExpression(Expression):
         self,
         column_name: str,
         data_type: DataType,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
         is_aggregate: bool,
         is_expect_error: bool,

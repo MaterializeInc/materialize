@@ -42,8 +42,8 @@ class DataColumn(LeafExpression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
-        involved_characteristics: Set[ExpressionCharacteristics] = set()
+    ) -> set[ExpressionCharacteristics]:
+        involved_characteristics: set[ExpressionCharacteristics] = set()
 
         selected_values = self.get_values_at_rows(row_selection)
         for value in selected_values:
