@@ -99,6 +99,10 @@ Explained Query (fast path):
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (*** full scan ***)
 
+Notices:
+  - Notice: Index mz_internal.mz_show_materialized_views_ind on mz_show_materialized_views(schema_id, cluster_id) is too wide to use for literal equalities `schema_id = "u3"`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (schema_id).
+
 EOF
 
 query T multiline
@@ -111,6 +115,10 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (*** full scan ***)
+
+Notices:
+  - Notice: Index mz_internal.mz_show_indexes_ind on mz_show_indexes(on_id, schema_id, cluster_id) is too wide to use for literal equalities `schema_id = "u3"`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (schema_id).
 
 EOF
 

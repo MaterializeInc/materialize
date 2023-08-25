@@ -26,6 +26,8 @@ use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
 use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 
+pub use crate::explain::text::display_singleton_row;
+
 mod json;
 mod text;
 
@@ -38,6 +40,10 @@ pub struct ExplainContext<'a> {
     pub used_indexes: UsedIndexes,
     pub finishing: Option<RowSetFinishing>,
     pub duration: Duration,
+    // This is a String so that we don't have to move `OptimizerNotice` to `mz-expr`. We can revisit
+    // this decision if we want to every make this print in the json output in a machine readable
+    // way.
+    pub optimizer_notices: Vec<String>,
 }
 
 /// A structure produced by the `explain_$format` methods in

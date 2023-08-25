@@ -47,6 +47,10 @@ Explained Query (fast path):
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
 
+Notices:
+  - Notice: Index materialize.public.idx_t1_a_b on t1(a, b) is too wide to use for literal equalities `a IN (1, 2)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (a).
+
 EOF
 
 query IT rowsort
@@ -1329,3 +1333,254 @@ LIMIT 3 OFFSET 1;
 2  l2
 1  a
 1  l1
+
+## IndexTooWideForLiteralConstraints
+
+statement ok
+CREATE TABLE t6(x int, y int, z int, w text);
+
+statement ok
+CREATE INDEX t6_idx_x_y ON t6(x,y);
+
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE x=5;
+----
+Explained Query (fast path):
+  Filter (#0 = 5)
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
+
+EOF
+
+statement ok
+CREATE INDEX t6_idx_x_y_z ON t6(x,y,z);
+
+# 2 notices
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE x=5;
+----
+Explained Query (fast path):
+  Filter (#0 = 5)
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `x = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
+
+EOF
+
+# If we manage to use an index, then don't notice that the other couldn't be used.
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE x=5 AND y=6;
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex materialize.public.t6_idx_x_y lookup_value=(5, 6)
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (lookup)
+
+EOF
+
+# No notice
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE x=5 AND y=6 AND z=7;
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex materialize.public.t6_idx_x_y_z lookup_value=(5, 6, 7)
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y_z (lookup)
+
+EOF
+
+statement ok
+CREATE INDEX t6_idx_x ON t6(x);
+
+# If we manage to use an index, then don't notice that the other couldn't be used.
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE x=5;
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex materialize.public.t6_idx_x lookup_value=(5)
+
+Used Indexes:
+  - materialize.public.t6_idx_x (lookup)
+
+EOF
+
+# 2 notices. (No notice for the index on x, because it's not a subset).
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE y=6;
+----
+Explained Query (fast path):
+  Filter (#1 = 6)
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 6`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 6`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+
+EOF
+
+# No notice, because we managed to do a lookup with x. (It's debatable whether we'd want a notice in this case.)
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE x=5 AND z=7;
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    Filter (#2 = 7)
+      ReadExistingIndex materialize.public.t6_idx_x lookup_value=(5)
+
+Used Indexes:
+  - materialize.public.t6_idx_x (lookup)
+
+EOF
+
+# Notice only the (x,y,z) index.
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE z=7;
+----
+Explained Query (fast path):
+  Filter (#2 = 7)
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 7`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z).
+
+EOF
+
+# Test that notices are shown in EXPLAIN MATERIALIZED VIEW.
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT *
+FROM t6
+WHERE y=5;
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW mv1;
+----
+materialize.public.mv1:
+  Filter (#1 = 5)
+    Get materialize.public.t6
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+
+EOF
+
+# Test IN printing.
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE y=4 OR y=8;
+----
+Explained Query (fast path):
+  Filter ((#1 = 4) OR (#1 = 8))
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (4, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y IN (4, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+
+EOF
+
+# Test IN printing with multiple fields.
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE (y=5 AND z=7) OR (y=2 AND z=3);
+----
+Explained Query (fast path):
+  Filter (((#1 = 2) AND (#2 = 3)) OR ((#1 = 5) AND (#2 = 7)))
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (2, 5)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `(y, z) IN ((2, 3), (5, 7))`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
+
+EOF
+
+# Recommended key has a field that is not present in any of the indexes.
+query T multiline
+EXPLAIN
+SELECT *
+FROM t6
+WHERE z=9 AND w='árvíztűrő tükörfúrógép';
+----
+Explained Query (fast path):
+  Filter (#2 = 9) AND (#3 = "árvíztűrő tükörfúrógép")
+    ReadExistingIndex materialize.public.t6_idx_x_y
+
+Used Indexes:
+  - materialize.public.t6_idx_x_y (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 9`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z, w).
+
+EOF

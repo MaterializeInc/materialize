@@ -19,7 +19,7 @@ use mz_expr::{
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Datum, Row};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Drive demand from the root through operators.
 ///
@@ -78,7 +78,7 @@ impl crate::Transform for Demand {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(
             relation,

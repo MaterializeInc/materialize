@@ -110,6 +110,10 @@ pub enum AdapterNotice {
     },
     PlanNotice(PlanNotice),
     UnknownSessionDatabase(String),
+    OptimizerNotice {
+        notice: String,
+        hint: Option<String>,
+    },
 }
 
 impl AdapterNotice {
@@ -146,6 +150,7 @@ impl AdapterNotice {
                  List available databases with SHOW DATABASES."
                     .into(),
             ),
+            AdapterNotice::OptimizerNotice { notice: _, hint } => hint.clone(),
             _ => None
         }
     }
@@ -187,6 +192,7 @@ impl AdapterNotice {
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
         }
     }
 }
@@ -328,6 +334,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(name) => {
                 write!(f, "session database {} does not exist", name.quoted())
             }
+            AdapterNotice::OptimizerNotice { notice, hint: _ } => notice.fmt(f),
         }
     }
 }

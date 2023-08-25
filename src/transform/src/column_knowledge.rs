@@ -22,7 +22,7 @@ use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
@@ -55,7 +55,7 @@ impl crate::Transform for ColumnKnowledge {
     fn transform(
         &self,
         expr: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let mut knowledge_stack = Vec::<DatumKnowledge>::new();
         let result = self

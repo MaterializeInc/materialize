@@ -36,7 +36,9 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, ExprHumanizer, UsedIndexes};
+use mz_repr::explain::{
+    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
+};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -71,6 +73,8 @@ use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ReadPolicy, StorageError,
 };
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
@@ -1013,7 +1017,7 @@ impl Coordinator {
                 };
 
                 let mut builder = txn.dataflow_builder(cluster_id);
-                let df = builder.build_materialized_view(
+                let (df, df_metainfo) = builder.build_materialized_view(
                     id,
                     internal_view_id,
                     debug_name,
@@ -1021,11 +1025,12 @@ impl Coordinator {
                     &mv.desc,
                 )?;
 
-                Ok(df)
+                Ok((df, df_metainfo))
             })
             .await
         {
-            Ok(mut df) => {
+            Ok((mut df, df_metainfo)) => {
+                self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
@@ -1048,6 +1053,7 @@ impl Coordinator {
                 .await;
 
                 self.catalog_mut().set_optimized_plan(id, df.clone());
+                self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
 
                 df.set_as_of(as_of);
                 let df = self.must_ship_dataflow(df, cluster_id).await;
@@ -1121,12 +1127,14 @@ impl Coordinator {
         match self
             .catalog_transact_with(Some(session.conn_id()), vec![op], |txn| {
                 let mut builder = txn.dataflow_builder(cluster_id);
-                let df = builder.build_index_dataflow(id)?;
-                Ok(df)
+                let (df, df_metainfo) = builder.build_index_dataflow(id)?;
+                Ok((df, df_metainfo))
             })
             .await
         {
-            Ok(df) => {
+            Ok((df, df_metainfo)) => {
+                self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
+                self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
                 self.must_ship_dataflow(df, cluster_id).await;
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
@@ -2191,7 +2199,7 @@ impl Coordinator {
         );
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, &builder, &*stats)?;
+        let dataflow_metainfo = mz_transform::optimize_dataflow(&mut dataflow, &builder, &*stats)?;
 
         Ok(PeekStageTimestamp {
             validity,
@@ -2209,6 +2217,7 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             key,
             typ,
+            dataflow_metainfo,
         })
     }
 
@@ -2232,6 +2241,7 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             key,
             typ,
+            dataflow_metainfo,
         }: PeekStageTimestamp,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
@@ -2255,6 +2265,7 @@ impl Coordinator {
                         in_immediate_multi_stmt_txn,
                         key,
                         typ,
+                        dataflow_metainfo,
                     },
                 );
                 task::spawn(|| "real_time_recency_peek", async move {
@@ -2289,6 +2300,7 @@ impl Coordinator {
                     real_time_recency_ts: None,
                     key,
                     typ,
+                    dataflow_metainfo,
                 },
             )),
         }
@@ -2314,6 +2326,7 @@ impl Coordinator {
             real_time_recency_ts,
             key,
             typ,
+            dataflow_metainfo,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
         let id_bundle = id_bundle.unwrap_or_else(|| {
@@ -2360,6 +2373,7 @@ impl Coordinator {
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
+        self.emit_optimizer_notices(ctx.session(), &dataflow_metainfo.optimizer_notices);
 
         match copy_to {
             None => Ok(resp),
@@ -2656,7 +2670,7 @@ impl Coordinator {
             })
         };
 
-        let mut dataflow = match from {
+        let (mut dataflow, dataflow_metainfo) = match from {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog().get_entry(&from_id);
                 let from_desc = from
@@ -2681,10 +2695,13 @@ impl Coordinator {
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
-                dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
-                dataflow
+                let dataflow_metainfo =
+                    dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
+                (dataflow, dataflow_metainfo)
             }
         };
+
+        self.emit_optimizer_notices(ctx.session(), &dataflow_metainfo.optimizer_notices);
 
         dataflow.set_as_of(Antichain::from_elem(as_of));
 
@@ -2799,6 +2816,7 @@ impl Coordinator {
             format: ExplainFormat,
             config: &ExplainConfig,
             humanizer: &dyn ExprHumanizer,
+            dataflow_metainfo: &DataflowMetainfo,
         ) -> Result<String, AdapterError>
         where
             for<'a> Explainable<'a, DataflowDescription<T>>:
@@ -2821,10 +2839,24 @@ impl Coordinator {
                 used_indexes,
                 finishing: None,
                 duration: Duration::default(),
+                optimizer_notices: OptimizerNotice::explain(
+                    &dataflow_metainfo.optimizer_notices,
+                    humanizer,
+                )
+                .map_err(|e| AdapterError::Explain(ExplainError::FormatError(e)))?,
             };
 
             Ok(Explainable::new(&mut plan).explain(&format, &context)?)
         }
+
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+            tracing::error!(
+                "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
+            );
+            coord_bail!(
+                "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
+            );
+        };
 
         let explain = match stage {
             ExplainStage::OptimizedPlan => {
@@ -2837,6 +2869,7 @@ impl Coordinator {
                     format,
                     &config,
                     &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
                 )?
             }
             ExplainStage::PhysicalPlan => {
@@ -2849,6 +2882,7 @@ impl Coordinator {
                     format,
                     &config,
                     &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
                 )?
             }
             _ => {
@@ -2910,16 +2944,19 @@ impl Coordinator {
             .await
         };
 
-        let (used_indexes, fast_path_plan) = match pipeline_result {
-            Ok((used_indexes, fast_path_plan)) => (used_indexes, fast_path_plan),
+        let (used_indexes, fast_path_plan, dataflow_metainfo) = match pipeline_result {
+            Ok((used_indexes, fast_path_plan, dataflow_metainfo)) => {
+                (used_indexes, fast_path_plan, dataflow_metainfo)
+            }
             Err(err) => {
                 if no_errors {
                     tracing::error!("error while handling EXPLAIN statement: {}", err);
 
                     let used_indexes = UsedIndexes::default();
                     let fast_path_plan: Option<FastPathPlan> = None;
+                    let dataflow_metainfo = DataflowMetainfo::default();
 
-                    (used_indexes, fast_path_plan)
+                    (used_indexes, fast_path_plan, dataflow_metainfo)
                 } else {
                     return Err(err);
                 }
@@ -2933,6 +2970,7 @@ impl Coordinator {
             row_set_finishing,
             used_indexes,
             fast_path_plan,
+            dataflow_metainfo,
         )?;
 
         let rows = match stage {
@@ -2982,7 +3020,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
-    ) -> Result<(UsedIndexes, Option<FastPathPlan>), AdapterError> {
+    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
         use mz_repr::explain::trace_plan;
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
@@ -3087,7 +3125,7 @@ impl Coordinator {
             .await?;
 
         // Execute the `optimize/global` stage.
-        catch_unwind(no_errors, "global", || {
+        let dataflow_metainfo = catch_unwind(no_errors, "global", || {
             mz_transform::optimize_dataflow(
                 &mut dataflow,
                 &self.index_oracle(cluster_id),
@@ -3145,7 +3183,7 @@ impl Coordinator {
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((used_indexes, fast_path_plan))
+        Ok((used_indexes, fast_path_plan, dataflow_metainfo))
     }
 
     pub fn sequence_explain_timestamp(
@@ -5045,5 +5083,20 @@ fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSink
         AlterOptionParameter::Set(size) => Some(SourceSinkClusterConfig::Linked { size }),
         AlterOptionParameter::Reset => Some(SourceSinkClusterConfig::Undefined),
         AlterOptionParameter::Unchanged => None,
+    }
+}
+
+impl Coordinator {
+    /// Forward notices that we got from the optimizer.
+    fn emit_optimizer_notices(
+        &mut self,
+        session: &Session,
+        optimizer_notices: &Vec<OptimizerNotice>,
+    ) {
+        let humanizer = self.catalog().for_session(session);
+        for optimizer_notice in optimizer_notices {
+            let (notice, hint) = optimizer_notice.to_string(&humanizer);
+            session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
+        }
     }
 }

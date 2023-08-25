@@ -25,7 +25,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # The simplest expression there could be
 
 > EXPLAIN SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL AND col_not_null = 5);
-"Explained Query (fast path):  Filter (#0) IS NULL AND (#1 = 5)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Filter (#0) IS NULL AND (#1 = 5)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_primary_idx on t1(col_null, col_not_null) is too wide to use for literal equalities `col_not_null = 5`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (col_not_null)."
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
 "Explained Query (fast path):  Project (#0, #1)    ReadExistingIndex t1_primary_idx lookup_value=(5, 1)Used Indexes:  - t1_primary_idx (lookup)"
@@ -59,7 +59,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # A more complex expression
 
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null + 1 / col_not_null) = 5 AND ((col_not_null + 1 / col_not_null) = 5 AND col_null = 6);
-"Explained Query (fast path):  Filter (#0 = 6) AND (5 = (#1 + (1 / #1)))    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Filter (#0 = 6) AND (5 = (#1 + (1 / #1)))    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_primary_idx on t1(col_null, col_not_null) is too wide to use for literal equalities `col_null = 6`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (col_null, (col_not_null + (1 / col_not_null)))."
 
 # More nesting
 
@@ -99,12 +99,12 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # IN list inside the expression
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (2, 3);
-"Explained Query (fast path):  Filter ((#1 = 2) OR (#1 = 3))    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Filter ((#1 = 2) OR (#1 = 3))    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_primary_idx on t1(col_null, col_not_null) is too wide to use for literal equalities `col_not_null IN (2, 3)`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (col_not_null)."
 
 # Partial matches
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (3, 4);
-"Explained Query (fast path):  Filter (#1 = 3)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Filter (#1 = 3)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_primary_idx on t1(col_null, col_not_null) is too wide to use for literal equalities `col_not_null = 3`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (col_not_null)."
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
 "Explained Query (fast path):  Constant <empty>"
@@ -114,7 +114,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Optimized in AND/conjunctions
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND TRUE IN (col_not_null = 1, col_not_null = 2);
-"Explained Query (fast path):  Filter (#1 = 1)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Filter (#1 = 1)    ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_primary_idx on t1(col_null, col_not_null) is too wide to use for literal equalities `col_not_null = 1`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (col_not_null)."
 
 # Not optimized in OR/disjunctions
 

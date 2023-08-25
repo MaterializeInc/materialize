@@ -111,7 +111,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             );
 
             let Some(resume_offset) = resume_upper.into_option() else {
-                return
+                return;
             };
 
             let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(

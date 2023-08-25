@@ -31,7 +31,7 @@ use crate::attribute::cardinality::{FactorizerVariable, SymExp};
 use crate::attribute::{Cardinality, RequiredAttributes};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
-use crate::{StatisticsOracle, TransformArgs, TransformError};
+use crate::{StatisticsOracle, TransformCtx, TransformError};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -65,9 +65,9 @@ impl crate::Transform for JoinImplementation {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes), args.stats);
+        let result = self.action_recursive(relation, &mut IndexMap::new(ctx.indexes), ctx.stats);
         mz_repr::explain::trace_plan(&*relation);
         result
     }

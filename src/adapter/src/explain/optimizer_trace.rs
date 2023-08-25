@@ -20,6 +20,8 @@ use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, UsedIndexes};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::ExplainStage;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::optimizer_notices::OptimizerNotice;
 use tracing::dispatcher::{self};
 use tracing_subscriber::prelude::*;
 
@@ -87,15 +89,22 @@ impl OptimizerTrace {
         row_set_finishing: Option<RowSetFinishing>,
         used_indexes: UsedIndexes,
         fast_path_plan: Option<FastPathPlan>,
+        dataflow_metainfo: DataflowMetainfo,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
 
+        // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., drain
+        // HIR plans.
         let mut context = ExplainContext {
             config: &config,
             humanizer: &catalog,
-            used_indexes: UsedIndexes::new(vec![]),
+            used_indexes: UsedIndexes::default(),
             finishing: row_set_finishing.clone(),
             duration: Duration::default(),
+            optimizer_notices: OptimizerNotice::explain(
+                &dataflow_metainfo.optimizer_notices,
+                &catalog,
+            )?,
         };
 
         // Drain trace entries of types produced by local optimizer stages.
@@ -111,6 +120,10 @@ impl OptimizerTrace {
             used_indexes,
             finishing: row_set_finishing,
             duration: Duration::default(),
+            optimizer_notices: OptimizerNotice::explain(
+                &dataflow_metainfo.optimizer_notices,
+                &catalog,
+            )?,
         };
         let fast_path_plan = match fast_path_plan {
             Some(mut plan) if !context.config.no_fast_path => {

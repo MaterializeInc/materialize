@@ -96,4 +96,14 @@ impl IndexOracle for DataflowBuilder<'_> {
                 .map(|(_idx_id, idx)| idx.keys.as_slice()),
         )
     }
+
+    fn indexes_with_id_on(
+        &self,
+        id: GlobalId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_> {
+        Box::new(
+            self.indexes_on(id)
+                .map(|(idx_id, idx)| (idx_id, idx.keys.as_slice())),
+        )
+    }
 }

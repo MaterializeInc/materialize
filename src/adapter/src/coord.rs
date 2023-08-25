@@ -114,6 +114,7 @@ use mz_storage_client::controller::{
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
@@ -325,6 +326,7 @@ pub enum RealTimeRecencyContext {
         in_immediate_multi_stmt_txn: bool,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
+        dataflow_metainfo: DataflowMetainfo,
     },
 }
 
@@ -395,6 +397,7 @@ pub struct PeekStageTimestamp {
     in_immediate_multi_stmt_txn: bool,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
+    dataflow_metainfo: DataflowMetainfo,
 }
 
 #[derive(Debug)]
@@ -414,6 +417,7 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
+    dataflow_metainfo: DataflowMetainfo,
 }
 
 /// An enum describing which cluster to run a statement on.
@@ -1328,9 +1332,11 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        let mut dataflow = self
+                        let (mut dataflow, dataflow_metainfo) = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), dataflow_metainfo);
                         let as_of = self.bootstrap_index_as_of(
                             &dataflow,
                             idx.cluster_id,
@@ -1379,7 +1385,7 @@ impl Coordinator {
                         .to_string();
 
                     let mut builder = self.dataflow_builder(mview.cluster_id);
-                    let mut df = builder.build_materialized_view(
+                    let (mut df, metainfo) = builder.build_materialized_view(
                         entry.id(),
                         internal_view_id,
                         debug_name,
@@ -1392,10 +1398,12 @@ impl Coordinator {
                     // parse_item).
                     //
                     // However, it's not clear how exactly to change
-                    // `load_catalog_items` to accomodate for the
+                    // `load_catalog_items` to accommodate for the
                     // `build_materialized_view` call above.
                     self.catalog_mut()
                         .set_optimized_plan(entry.id(), df.clone());
+                    self.catalog_mut()
+                        .set_dataflow_metainfo(entry.id(), metainfo);
 
                     // The 'as_of' field of the dataflow changes after restart
                     let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);

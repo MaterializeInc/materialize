@@ -1319,6 +1319,10 @@ Source materialize.public.item
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)
 
+Notices:
+  - Notice: Index materialize.public.fk_orderline_order on orderline(ol_w_id, ol_d_id, ol_o_id) is too wide to use for literal equalities `ol_w_id IN (1, 2, 3, 4, 5)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (ol_w_id).
+
 EOF
 
 

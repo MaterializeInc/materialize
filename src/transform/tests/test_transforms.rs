@@ -77,6 +77,7 @@
 
 use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
 use mz_repr::explain::ExplainConfig;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
 
 #[mz_ore::test]
@@ -216,9 +217,17 @@ fn apply_transform<T: mz_transform::Transform>(
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
 
+    let mut dataflow_metainfo = DataflowMetainfo::default();
+    let mut empty_args: mz_transform::TransformCtx = mz_transform::TransformCtx {
+        indexes: &mz_transform::EmptyIndexOracle,
+        stats: &mz_transform::EmptyStatisticsOracle,
+        global_id: None,
+        dataflow_metainfo: &mut dataflow_metainfo,
+    };
+
     // Apply the transformation, returning early on TransformError.
     transform
-        .transform(&mut relation, EMPTY_ARGS)
+        .transform(&mut relation, &mut empty_args)
         .map_err(|e| format!("{}\n", e.to_string().trim()))?;
 
     // Serialize and return the transformed relation.
@@ -232,14 +241,8 @@ impl mz_transform::Transform for Identity {
     fn transform(
         &self,
         _relation: &mut mz_expr::MirRelationExpr,
-        _args: mz_transform::TransformArgs,
+        _ctx: &mut mz_transform::TransformCtx,
     ) -> Result<(), mz_transform::TransformError> {
         Ok(())
     }
 }
-
-const EMPTY_ARGS: mz_transform::TransformArgs<'static> = mz_transform::TransformArgs {
-    indexes: &mz_transform::EmptyIndexOracle,
-    stats: &mz_transform::EmptyStatisticsOracle,
-    global_id: None,
-};

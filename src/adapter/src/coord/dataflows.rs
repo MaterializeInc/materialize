@@ -39,6 +39,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use mz_transform::dataflow::DataflowMetainfo;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
@@ -407,7 +408,10 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
-    pub fn build_index_dataflow(&mut self, id: GlobalId) -> Result<DataflowDesc, AdapterError> {
+    pub fn build_index_dataflow(
+        &mut self,
+        id: GlobalId,
+    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
         let index_entry = self.catalog.get_entry(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
@@ -442,9 +446,13 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_index(id, index_description, on_type);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
+        let dataflow_metainfo = mz_transform::optimize_dataflow(
+            &mut dataflow,
+            self,
+            &mz_transform::EmptyStatisticsOracle,
+        )?;
 
-        Ok(dataflow)
+        Ok((dataflow, dataflow_metainfo))
     }
 
     /// Builds a dataflow description for the sink with the specified name,
@@ -457,10 +465,11 @@ impl<'a> DataflowBuilder<'a> {
         name: String,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
-    ) -> Result<DataflowDesc, AdapterError> {
+    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
         let mut dataflow = DataflowDesc::new(name);
-        self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
-        Ok(dataflow)
+        let dataflow_metainfo =
+            self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
+        Ok((dataflow, dataflow_metainfo))
     }
 
     /// Like `build_sink_dataflow`, but builds the sink dataflow into the
@@ -470,7 +479,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<DataflowMetainfo, AdapterError> {
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
@@ -478,9 +487,10 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
+        let dataflow_metainfo =
+            mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
-        Ok(())
+        Ok(dataflow_metainfo)
     }
 
     /// Builds a dataflow description for a materialized view.
@@ -496,7 +506,7 @@ impl<'a> DataflowBuilder<'a> {
         debug_name: String,
         optimized_expr: &OptimizedMirRelationExpr,
         desc: &RelationDesc,
-    ) -> Result<DataflowDesc, AdapterError> {
+    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
         let mut dataflow = DataflowDesc::new(debug_name);
 
         self.import_view_into_dataflow(&internal_view_id, optimized_expr, &mut dataflow)?;
@@ -516,9 +526,10 @@ impl<'a> DataflowBuilder<'a> {
             up_to: Antichain::default(),
         };
 
-        self.build_sink_dataflow_into(&mut dataflow, exported_sink_id, sink_description)?;
+        let dataflow_metainfo =
+            self.build_sink_dataflow_into(&mut dataflow, exported_sink_id, sink_description)?;
 
-        Ok(dataflow)
+        Ok((dataflow, dataflow_metainfo))
     }
 
     /// Determine the given source's monotonicity.

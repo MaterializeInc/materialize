@@ -17,7 +17,7 @@ use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -33,7 +33,7 @@ impl crate::Transform for ReduceElision {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = relation.try_visit_mut_post(&mut |e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);

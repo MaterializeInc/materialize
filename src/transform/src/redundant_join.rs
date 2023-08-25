@@ -30,7 +30,7 @@ use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECU
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::{all, TransformArgs};
+use crate::{all, TransformCtx};
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
@@ -62,7 +62,7 @@ impl crate::Transform for RedundantJoin {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut ctx = ProvInfoCtx::default();
         ctx.extend_uses(relation);
