@@ -38,7 +38,7 @@ from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
 try:
     from semver.version import Version
 except ImportError:
-    from semver import VersionInfo as Version
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
