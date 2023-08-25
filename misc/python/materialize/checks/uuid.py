@@ -11,11 +11,12 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
 class UUID(Check):
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion(0, 46, 0)
 
     def initialize(self) -> Testdrive:
