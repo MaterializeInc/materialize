@@ -231,7 +231,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     return issues_json
 
 
-def get_known_issues_from_github() -> Tuple[list[KnownIssue], list[str]]:
+def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
     page = 1
     issues_json = get_known_issues_from_github_page(page)
     while issues_json["total_count"] > len(issues_json["items"]):

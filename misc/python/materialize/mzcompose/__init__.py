@@ -164,7 +164,7 @@ class Composition:
         self._write_compose()
 
     def _munge_services(
-        self, services: list[Tuple[str, dict]]
+        self, services: list[tuple[str, dict]]
     ) -> mzbuild.DependencySet:
         images = []
 
@@ -980,7 +980,7 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[str]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, list[str]]:
+    ) -> tuple[argparse.Namespace, list[str]]:
         if args is None:
             args = self.args
         return super().parse_known_args(args, namespace)

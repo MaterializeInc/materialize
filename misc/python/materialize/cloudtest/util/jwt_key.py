@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from materialize.cloudtest.util.common import eprint
 
 
-def _generate_jwt_keys() -> Tuple[rsa.RSAPrivateKey, bytes]:
+def _generate_jwt_keys() -> tuple[rsa.RSAPrivateKey, bytes]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_key = private_key.public_key()
     public_key_bytes = public_key.public_bytes(

@@ -256,7 +256,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: dict[FrozenSet[Tuple[str, Any]], list[dict[str, Any]]] = {}
+    new_errors: dict[FrozenSet[tuple[str, Any]], list[dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(

@@ -38,7 +38,7 @@ SERVICES = [Materialized(image="materialize/materialized:latest"), Postgres()]
 
 
 def execute_operation(
-    args: Tuple[Workload, int, Operation, Cursor, int, int]
+    args: tuple[Workload, int, Operation, Cursor, int, int]
 ) -> dict[str, Any]:
     workload, concurrency, operation, cursor, i1, i2 = args
 
@@ -61,7 +61,7 @@ def run_with_concurrency(
     workload: Workload,
     concurrency: int,
     count: int,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     endpoint.up()
 
     init_sqls = schema.init_sqls()

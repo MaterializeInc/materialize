@@ -134,7 +134,7 @@ def main(show: bool, diagram_file: Optional[str], roots: list[str]) -> None:
 
 def filter_to_roots(
     areas: DepBuilder, local_deps: DepMap, roots: list[str]
-) -> Tuple[DepMap, DepBuilder]:
+) -> tuple[DepMap, DepBuilder]:
     new_deps = defaultdict(set)
 
     try:

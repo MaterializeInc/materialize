@@ -191,7 +191,7 @@ def test_upgrade_from_version(
         )
 
 
-def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
+def ssl_services() -> tuple[Kafka, SchemaRegistry, Testdrive]:
     """sets"""
 
     kafka = Kafka(

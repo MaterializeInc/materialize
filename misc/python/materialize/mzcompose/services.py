@@ -445,7 +445,7 @@ class SchemaRegistry(Service):
         image: str = "confluentinc/cp-schema-registry",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 8081,
-        kafka_servers: list[Tuple[str, str]] = [("kafka", "9092")],
+        kafka_servers: list[tuple[str, str]] = [("kafka", "9092")],
         bootstrap_server_type: str = "PLAINTEXT",
         environment: list[str] = [
             # NOTE(guswynn): under docker, kafka *can* be really slow, which means

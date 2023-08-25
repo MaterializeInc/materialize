@@ -676,7 +676,7 @@ class ArgumentParser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[Text]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, list[str]]:
+    ) -> tuple[argparse.Namespace, list[str]]:
         namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(namespace, "unknown_args", unknown_args)
         assert namespace is not None
@@ -688,7 +688,7 @@ class ArgumentSubparser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[Text]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, list[str]]:
+    ) -> tuple[argparse.Namespace, list[str]]:
         new_namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(new_namespace, "unknown_subargs", unknown_args)
         assert new_namespace is not None

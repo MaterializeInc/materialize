@@ -29,7 +29,7 @@ class Endpoint:
         return f"{self.scheme}://{self.host}:{self.port}"
 
     @property
-    def host_port(self) -> Tuple[str, int]:
+    def host_port(self) -> tuple[str, int]:
         return (self.host, self.port)
 
     @classmethod
@@ -58,7 +58,7 @@ class ControllerDefinition:
 
 
 def wait_for_connectable(
-    address: Union[Tuple[Any, int], str],
+    address: Union[tuple[Any, int], str],
     max_attempts: int = 30,
 ) -> None:
     def f() -> None:
