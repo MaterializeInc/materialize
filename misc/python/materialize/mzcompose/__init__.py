@@ -94,7 +94,7 @@ class Composition:
         self.preserve_ports = preserve_ports
         self.project_name = project_name
         self.silent = silent
-        self.workflows: Dict[str, Callable[..., None]] = {}
+        self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
 
         if name in self.repo.compositions:
@@ -499,7 +499,7 @@ class Composition:
         *args: str,
         detach: bool = False,
         rm: bool = False,
-        env_extra: Dict[str, str] = {},
+        env_extra: dict[str, str] = {},
         capture: bool = False,
         capture_stderr: bool = False,
         stdin: Optional[str] = None,
@@ -912,10 +912,10 @@ class ServiceConfig(TypedDict, total=False):
 
     Each entry must be in the form `NAME=VALUE`.
 
-    TODO(benesch): this should accept a `Dict[str, str]` instead.
+    TODO(benesch): this should accept a `dict[str, str]` instead.
     """
 
-    depends_on: Union[list[str], Dict[str, ServiceDependency]]
+    depends_on: Union[list[str], dict[str, ServiceDependency]]
     """The list of other services that must be started before this one."""
 
     tmpfs: list[str]
@@ -924,19 +924,19 @@ class ServiceConfig(TypedDict, total=False):
     volumes: list[str]
     """Volumes to attach to the service."""
 
-    networks: Dict[str, Dict[str, list[str]]]
+    networks: dict[str, dict[str, list[str]]]
     """Additional networks to join.
 
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    deploy: dict[str, dict[str, dict[str, str]]]
     """Additional deployment configuration, like resource limits.
 
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    ulimits: Dict[str, Any]
+    ulimits: dict[str, Any]
     """Override the default ulimits for a container."""
 
     working_dir: str

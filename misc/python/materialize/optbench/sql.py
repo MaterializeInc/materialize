@@ -139,15 +139,15 @@ class Database:
             for statement in statements:
                 cursor.execute(statement)
 
-    def query_one(self, query: str) -> Dict[Any, Any]:
+    def query_one(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
             cursor.execute(query)
-            return cast(Dict[Any, Any], cursor.fetchone())
+            return cast(dict[Any, Any], cursor.fetchone())
 
-    def query_all(self, query: str) -> Dict[Any, Any]:
+    def query_all(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
             cursor.execute(query)
-            return cast(Dict[Any, Any], cursor.fetchall())
+            return cast(dict[Any, Any], cursor.fetchall())
 
 
 # Utility functions

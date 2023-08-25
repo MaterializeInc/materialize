@@ -144,7 +144,7 @@ class Workspace:
 
         workspace_config = config["workspace"]
 
-        self.crates: Dict[str, Crate] = {}
+        self.crates: dict[str, Crate] = {}
         for path in workspace_config["members"]:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate

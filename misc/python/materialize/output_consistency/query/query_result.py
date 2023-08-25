@@ -36,7 +36,7 @@ class QueryExecution:
         self.outcomes: list[QueryOutcome] = []
         self.durations: list[float] = []
 
-    def get_outcome_by_strategy_key(self) -> Dict[EvaluationStrategyKey, QueryOutcome]:
+    def get_outcome_by_strategy_key(self) -> dict[EvaluationStrategyKey, QueryOutcome]:
         return {outcome.strategy.identifier: outcome for outcome in self.outcomes}
 
     def __str__(self) -> str:

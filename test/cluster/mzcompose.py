@@ -2019,7 +2019,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
 
 
 class Metrics:
-    metrics: Dict[str, str]
+    metrics: dict[str, str]
 
     def __init__(self, raw: str) -> None:
         self.metrics = {}
@@ -2027,7 +2027,7 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
-    def with_name(self, metric_name: str) -> Dict[str, float]:
+    def with_name(self, metric_name: str) -> dict[str, float]:
         items = {}
         for key, value in self.metrics.items():
             if key.startswith(metric_name):

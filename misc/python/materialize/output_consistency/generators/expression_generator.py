@@ -75,10 +75,10 @@ class ExpressionGenerator:
         self.selectable_operations: list[DbOperationOrFunction] = []
         self.operation_weights: list[float] = []
         self.operation_weights_no_aggregates: list[float] = []
-        self.operations_by_return_type_category: Dict[
+        self.operations_by_return_type_category: dict[
             DataTypeCategory, list[DbOperationOrFunction]
         ] = dict()
-        self.types_with_values_by_category: Dict[
+        self.types_with_values_by_category: dict[
             DataTypeCategory, list[DataTypeWithValues]
         ] = dict()
         self._initialize_operations()

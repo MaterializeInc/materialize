@@ -19,7 +19,7 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
     NumberDataType,
 )
 
-VALUES_PER_NUMERIC_DATA_TYPE: Dict[NumberDataType, DataTypeWithValues] = dict()
+VALUES_PER_NUMERIC_DATA_TYPE: dict[NumberDataType, DataTypeWithValues] = dict()
 
 for num_data_type in NUMERIC_DATA_TYPES:
     values_of_type = DataTypeWithValues(num_data_type)

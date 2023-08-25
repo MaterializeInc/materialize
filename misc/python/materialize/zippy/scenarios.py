@@ -59,7 +59,7 @@ class KafkaSources(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             MzStart: 5,
             MzStop: 1,
@@ -82,7 +82,7 @@ class UserTables(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             MzStart: 1,
             MzStop: 15,
@@ -107,7 +107,7 @@ class DebeziumPostgres(Scenario):
             PostgresStart,
         ]
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreateDebeziumSource: 10,
@@ -126,7 +126,7 @@ class PostgresCdc(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return [*DEFAULT_BOOTSTRAP, PostgresStart]
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
@@ -151,7 +151,7 @@ class ClusterReplicas(Scenario):
         ]
 
     # Due to gh#13235 it is not possible to have MzStop/MzStart in this scenario
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
             StoragedRestart: 5,
@@ -175,7 +175,7 @@ class KafkaParallelInsert(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
             StoragedKill: 5,
@@ -194,7 +194,7 @@ class CrdbMinioRestart(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
@@ -218,7 +218,7 @@ class CrdbRestart(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
@@ -241,7 +241,7 @@ class KafkaSourcesLarge(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(max_topics=5): 10,
             CreateSourceParameterized(max_sources=25): 10,
@@ -261,7 +261,7 @@ class DataflowsLarge(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateReplica: 2,
             CreateTopicParameterized(
@@ -283,7 +283,7 @@ class UserTablesLarge(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return DEFAULT_BOOTSTRAP
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTableParameterized(max_tables=2): 10,
             CreateViewParameterized(
@@ -302,7 +302,7 @@ class PostgresCdcLarge(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return [*DEFAULT_BOOTSTRAP, PostgresStart]
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,

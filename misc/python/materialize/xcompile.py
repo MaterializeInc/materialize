@@ -101,7 +101,7 @@ def cargo(
             "-Clink-arg=-fuse-ld=lld",
             f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
         ]
-        extra_env: Dict[str, str] = {}
+        extra_env: dict[str, str] = {}
 
     env = {
         **extra_env,

@@ -31,7 +31,7 @@ from materialize.version_list import VersionsFromDocs
 version_list = VersionsFromDocs()
 all_versions = version_list.all_versions()
 
-mz_options: Dict[MzVersion, str] = {}
+mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),

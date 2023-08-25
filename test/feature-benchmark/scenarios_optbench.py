@@ -73,7 +73,9 @@ class OptbenchRun(MeasurementSource):
         return timestamps
 
 
-def name_with_query(cls: Type["OptbenchTPCH"], num: int, params_dict: Dict) -> str:
+def name_with_query(
+    cls: Type["OptbenchTPCH"], num: int, params_dict: dict[str, Any]
+) -> str:
     return f"OptbenchTPCHQ{params_dict['QUERY']:02d}"
 
 

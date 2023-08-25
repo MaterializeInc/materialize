@@ -101,11 +101,11 @@ class Materialized(Service):
         restart: Optional[str] = None,
         use_default_volumes: bool = True,
         ports: Optional[list[str]] = None,
-        system_parameter_defaults: Optional[Dict[str, str]] = None,
-        additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
+        system_parameter_defaults: Optional[dict[str, str]] = None,
+        additional_system_parameter_defaults: Optional[dict[str, str]] = None,
         soft_assertions: bool = True,
     ) -> None:
-        depends_graph: Dict[str, ServiceDependency] = {
+        depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
@@ -672,7 +672,7 @@ class Debezium(Service):
             "CONNECT_ERRORS_RETRY_DELAY_MAX_MS=1000",
         ],
     ) -> None:
-        depends_on: Dict[str, ServiceDependency] = {
+        depends_on: dict[str, ServiceDependency] = {
             "kafka": {"condition": "service_healthy"},
             "schema-registry": {"condition": "service_healthy"},
         }
@@ -804,7 +804,7 @@ class Testdrive(Service):
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
-        materialize_params: Dict[str, str] = {},
+        materialize_params: dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
         kafka_args: Optional[str] = None,

@@ -198,7 +198,7 @@ class Copy(PreImage):
     specified by the `matching` argument.
     """
 
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
 
         self.source = config.pop("source", None)
@@ -247,7 +247,7 @@ class S3UploadDebuginfo(PreImage):
 
     """
 
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
 
         bin = config.pop("bin", None)
@@ -343,7 +343,7 @@ class CargoPreImage(PreImage):
 class CargoBuild(CargoPreImage):
     """A pre-image action that builds individual binaries with Cargo."""
 
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
         bin = config.pop("bin", [])
         self.bins = bin if isinstance(bin, list) else [bin]
@@ -817,7 +817,7 @@ class DependencySet:
 
         The provided `dependencies` must be topologically sorted.
         """
-        self._dependencies: Dict[str, ResolvedImage] = {}
+        self._dependencies: dict[str, ResolvedImage] = {}
         known_images = docker_images()
         for d in dependencies:
             image = ResolvedImage(
@@ -915,8 +915,8 @@ class Repository:
         stable: bool = False,
     ):
         self.rd = RepositoryDetails(root, arch, release_mode, coverage, stable)
-        self.images: Dict[str, Image] = {}
-        self.compositions: Dict[str, Path] = {}
+        self.images: dict[str, Image] = {}
+        self.compositions: dict[str, Path] = {}
         for path, dirs, files in os.walk(self.root, topdown=True):
             if path == str(root / "misc"):
                 dirs.remove("python")

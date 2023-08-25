@@ -166,7 +166,7 @@ def is_known_error(e: str) -> bool:
     return False
 
 
-def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
+def run_sqlsmith(c: Composition, cmd: str, aggregate: dict[str, Any]) -> None:
     result = c.run(
         *cmd,
         capture=True,
@@ -234,7 +234,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     killer.start()
 
     threads: list[Thread] = []
-    aggregate: Dict[str, Any] = {"errors": [], "version": "", "queries": 0}
+    aggregate: dict[str, Any] = {"errors": [], "version": "", "queries": 0}
     for i in range(args.num_sqlsmith):
         cmd = [
             "sqlsmith",
@@ -256,7 +256,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: Dict[FrozenSet[Tuple[str, Any]], list[Dict[str, Any]]] = {}
+    new_errors: dict[FrozenSet[Tuple[str, Any]], list[dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(

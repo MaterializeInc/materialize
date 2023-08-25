@@ -74,7 +74,7 @@ class CreateTopicParameterized(ActionFactory):
     def __init__(
         self,
         max_topics: int = 10,
-        envelopes_with_weights: Dict[Envelope, int] = {
+        envelopes_with_weights: dict[Envelope, int] = {
             Envelope.NONE: 25,
             Envelope.UPSERT: 75,
         },

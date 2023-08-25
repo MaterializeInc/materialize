@@ -30,7 +30,7 @@ class Executor:
     num_transactions: int
     mz_conn: pg8000.Connection
 
-    def __init__(self, ports: Dict[str, int]) -> None:
+    def __init__(self, ports: dict[str, int]) -> None:
         self.num_transactions = 0
         self.mz_conn = pg8000.connect(
             host="localhost",
@@ -73,7 +73,7 @@ class KafkaExecutor(Executor):
     def __init__(
         self,
         num: int,
-        ports: Dict[str, int],
+        ports: dict[str, int],
         fields: list[Field],
     ):
         super().__init__(ports)
@@ -214,7 +214,7 @@ class PgExecutor(Executor):
     def __init__(
         self,
         num: int,
-        ports: Dict[str, int],
+        ports: dict[str, int],
         fields: list[Field],
     ):
         super().__init__(ports)

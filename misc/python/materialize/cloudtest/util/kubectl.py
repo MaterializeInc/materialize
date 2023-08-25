@@ -130,7 +130,7 @@ class Kubectl:
         namespace: Optional[str],
         resource_type: str,
         resource_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         command = [
             "kubectl",
             "--context",
@@ -146,7 +146,7 @@ class Kubectl:
         command.extend(["-o", "yaml"])
 
         try:
-            yaml_data: Dict[str, Any] = yaml.safe_load(
+            yaml_data: dict[str, Any] = yaml.safe_load(
                 subprocess.run(
                     command,
                     capture_output=True,
@@ -163,11 +163,11 @@ class Kubectl:
         resource_type: str,
         resource_name: str,
         max_attempts: int,
-    ) -> Dict[str, Any]:
-        def f() -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        def f() -> dict[str, Any]:
             return self.get(namespace, resource_type, resource_name)
 
-        yaml_data: Dict[str, Any] = retry(
+        yaml_data: dict[str, Any] = retry(
             f,
             max_attempts=max_attempts,
             exception_types=[KubectlError],
@@ -179,7 +179,7 @@ class Kubectl:
         namespace: Optional[str],
         resource_type: str,
         resource_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         try:
             return self.get(namespace, resource_type, resource_name)
         except KubectlError as e:
@@ -192,7 +192,7 @@ class Kubectl:
         filepath: str,
         tests_dir: str,
         substitutions: Optional[dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Load a Kubernetes YAML specification to assert against. If `substitutions`
         are given, find-and-replace in the YAML contents before parsing.
@@ -200,5 +200,5 @@ class Kubectl:
         contents = Path(tests_dir).joinpath(filepath).read_text()
         for old, new in (substitutions or {}).items():
             contents = contents.replace(old, new)
-        yaml_data: Dict[str, Any] = yaml.safe_load(contents)
+        yaml_data: dict[str, Any] = yaml.safe_load(contents)
         return yaml_data

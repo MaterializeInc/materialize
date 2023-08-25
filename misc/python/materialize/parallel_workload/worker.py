@@ -28,7 +28,7 @@ class Worker:
     autocommit: bool
     system: bool
     exe: Optional[Executor]
-    ignored_errors: DefaultDict[str, Counter[Type[Action]]]
+    ignored_errors: DefaultDict[str, Counter[type[Action]]]
 
     def __init__(
         self,

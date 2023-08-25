@@ -93,7 +93,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
-        self.env: Dict[str, str] = {}
+        self.env: dict[str, str] = {}
         self.minio_namespace = minio_namespace
         self.cockroach_namespace = cockroach_namespace
         super().__init__(namespace)

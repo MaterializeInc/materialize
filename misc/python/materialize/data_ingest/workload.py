@@ -145,7 +145,7 @@ def execute_workload(
     executor_classes: list[Any],
     workload: Workload,
     num: int,
-    ports: Dict[str, int],
+    ports: dict[str, int],
     runtime: int,
     verbose: bool,
 ) -> None:

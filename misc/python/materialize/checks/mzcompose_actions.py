@@ -30,7 +30,7 @@ class StartMz(MzcomposeAction):
         self,
         tag: Optional[MzVersion] = None,
         environment_extra: list[str] = [],
-        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        system_parameter_defaults: Optional[dict[str, str]] = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra

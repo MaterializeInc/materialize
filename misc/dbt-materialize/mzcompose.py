@@ -23,7 +23,7 @@ SERVICES = [
 @dataclass
 class TestCase:
     name: str
-    dbt_env: Dict[str, str]
+    dbt_env: dict[str, str]
     materialized_options: list[str]
     materialized_image: Optional[str] = None
 

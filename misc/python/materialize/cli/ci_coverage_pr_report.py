@@ -23,7 +23,7 @@ from materialize import MZ_ROOT, ci_util
 # - Positive values indicate that the line can be covered and how often is has
 #   been covered in end-to-end tests.
 # - Negative values indicate that the line has only been covered in unit tests.
-Coverage = Dict[str, OrderedDict[int, Optional[int]]]
+Coverage = dict[str, OrderedDict[int, Optional[int]]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )

@@ -142,7 +142,7 @@ class Scenario:
     def bootstrap(self) -> list[ActionOrFactory]:
         return []
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         assert False
 
 

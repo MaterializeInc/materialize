@@ -143,7 +143,7 @@ def workflow_default(c: Composition) -> None:
         ],
     )
 
-    def list_secrets() -> Dict[str, Dict[str, Any]]:
+    def list_secrets() -> dict[str, dict[str, Any]]:
         return {
             secret["Name"]: secret for secret in sm_client.list_secrets()["SecretList"]
         }

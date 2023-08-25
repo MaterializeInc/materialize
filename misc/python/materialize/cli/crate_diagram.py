@@ -32,7 +32,7 @@ import toml
 from materialize import MZ_ROOT, spawn
 
 DepBuilder = DefaultDict[str, list[str]]
-DepMap = Dict[str, list[str]]
+DepMap = dict[str, list[str]]
 
 
 def split_list(items: str) -> list[str]:
@@ -167,9 +167,9 @@ def add_deps(
 
 
 def write_dot_graph(
-    member_meta: Dict[str, Dict[str, str]],
+    member_meta: dict[str, dict[str, str]],
     local_deps: DepMap,
-    areas: Dict[str, list[str]],
+    areas: dict[str, list[str]],
     out: IO,
 ) -> None:
     def disp(val: str, out: IO = out, **kwargs: Any) -> None:

@@ -200,7 +200,7 @@ class DbFunctionWithCustomPattern(DbFunction):
     def __init__(
         self,
         function_name: str,
-        pattern_per_param_count: Dict[int, str],
+        pattern_per_param_count: dict[int, str],
         params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,

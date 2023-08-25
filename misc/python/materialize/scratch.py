@@ -43,29 +43,29 @@ SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 say = ui.speaker("scratch> ")
 
 
-def tags(i: Instance) -> Dict[str, str]:
+def tags(i: Instance) -> dict[str, str]:
     if not i.tags:
         return {}
     return {t["Key"]: t["Value"] for t in i.tags}
 
 
-def instance_typedef_tags(i: InstanceTypeDef) -> Dict[str, str]:
+def instance_typedef_tags(i: InstanceTypeDef) -> dict[str, str]:
     return {t["Key"]: t["Value"] for t in i.get("Tags", [])}
 
 
-def name(tags: Dict[str, str]) -> Optional[str]:
+def name(tags: dict[str, str]) -> Optional[str]:
     return tags.get("Name")
 
 
-def launched_by(tags: Dict[str, str]) -> Optional[str]:
+def launched_by(tags: dict[str, str]) -> Optional[str]:
     return tags.get("LaunchedBy")
 
 
-def ami_user(tags: Dict[str, str]) -> Optional[str]:
+def ami_user(tags: dict[str, str]) -> Optional[str]:
     return tags.get("ami-user", "ubuntu")
 
 
-def delete_after(tags: Dict[str, str]) -> Optional[datetime.datetime]:
+def delete_after(tags: dict[str, str]) -> Optional[datetime.datetime]:
     unix = tags.get("scratch-delete-after")
     if not unix:
         return None
@@ -120,7 +120,7 @@ def launch(
     instance_type: str,
     ami: str,
     ami_user: str,
-    tags: Dict[str, str],
+    tags: dict[str, str],
     display_name: Optional[str] = None,
     size_gb: int,
     security_group_name: str,
@@ -295,7 +295,7 @@ class MachineDesc(BaseModel):
     launch_script: Optional[str]
     instance_type: str
     ami: str
-    tags: Dict[str, str] = {}
+    tags: dict[str, str] = {}
     size_gb: int
     checkout: bool = True
     ami_user: str = "ubuntu"
@@ -308,10 +308,10 @@ def launch_cluster(
     key_name: Optional[str] = None,
     security_group_name: str = DEFAULT_SECURITY_GROUP_NAME,
     instance_profile: Optional[str] = DEFAULT_INSTANCE_PROFILE_NAME,
-    extra_tags: Dict[str, str] = {},
+    extra_tags: dict[str, str] = {},
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
-    extra_env: Dict[str, str] = {},
+    extra_env: dict[str, str] = {},
 ) -> list[Instance]:
     """Launch a cluster of instances with a given nonce"""
 

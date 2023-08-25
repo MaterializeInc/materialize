@@ -14,7 +14,7 @@ from typing import Any, Dict
 from materialize.cloudtest.util.jwt_key import JWK_PUBLIC_KEY
 
 
-def docker_env() -> Dict[Any, str]:
+def docker_env() -> dict[Any, str]:
     docker_env = os.environ.copy()
     docker_env.update(
         FRONTEGG_JWK=JWK_PUBLIC_KEY.decode("utf8"),
