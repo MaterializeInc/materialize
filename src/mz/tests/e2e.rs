@@ -310,16 +310,8 @@ mod tests {
     #[ignore]
     fn test_e2e() {
         init_config_file(false);
-        // Set the admin-endpoint and cloud-endpoint
-        cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("set")
-            .arg("admin-endpoint")
-            .arg(get_admin_endpoint())
-            .assert()
-            .success();
 
+        // Set the cloud-endpoint first, and later the admin-endpoint
         cmd()
             .arg("profile")
             .arg("config")
@@ -341,6 +333,17 @@ mod tests {
         let output = output_to_string(binding);
 
         assert!(output.trim() == "aws/us-east-1");
+
+
+        // Set the admin-endpoint
+        cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("set")
+            .arg("admin-endpoint")
+            .arg(get_admin_endpoint())
+            .assert()
+            .success();
 
         // Assert `mz profile config set region`
         cmd()
