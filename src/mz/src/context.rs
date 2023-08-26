@@ -98,7 +98,9 @@ impl Context {
             let mut admin_endpoint_url = cloud_endpoint;
 
             if let Some(host) = admin_endpoint_url.host_str().as_mut() {
-                admin_endpoint_url.set_host(Some(&host.replace("api.", "admin.")))?;
+                if let Some(host) = host.strip_prefix("api.") {
+                    admin_endpoint_url.set_host(format!("admin.{}", host));
+                }
                 return Ok(Some(admin_endpoint_url));
             }
         }
