@@ -37,6 +37,9 @@ pub enum Error {
     /// Error parsing (serializing/deserializing) a JSON.
     #[error("Error parsing JSON: {0}")]
     JsonParseError(#[from] serde_json::Error),
+    /// Error parsing (serializing/deserializing) a JSON using reqwest.
+    #[error("Error parsing request JSON: {0}")]
+    ReqwestJsonParseError(#[from] reqwest::Error),
     /// Error parsing an App Password.
     #[error("Error: {0}. \n\nTo resolve this issue, please verify the correctness of the app-password in the configuration file.")]
     AppPasswordParseError(#[from] mz_frontegg_auth::AppPasswordParseError),
@@ -99,4 +102,10 @@ pub enum Error {
     /// but `pg_isready` fails
     #[error("The region is not ready to accept SQL statements. `pg_isready` failed.")]
     NotPgReadyError,
+    /// Error that raises when parsing semver.
+    #[error("Error parsing semver.")]
+    SemVerParseError,
+    /// Error that raises when fetching from the GitHub API.
+    #[error("Error fetching from the GitHub API. Description: {0}")]
+    GitHubFetchError(reqwest::Error),
 }

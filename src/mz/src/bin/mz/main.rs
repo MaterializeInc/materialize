@@ -183,8 +183,6 @@ async fn main() -> Result<(), Error> {
         enable_version_flag: true,
     });
 
-    // TODO: Check for an updated version of `mz` and print a warning if one
-    // is discovered. Can we use the GitHub tags API for this?
     let cx = Context::load(ContextLoadArgs {
         config_file_path: args.config,
         output_format: args.format.into(),
