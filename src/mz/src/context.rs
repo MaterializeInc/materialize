@@ -99,7 +99,7 @@ impl Context {
 
             if let Some(host) = admin_endpoint_url.host_str().as_mut() {
                 if let Some(host) = host.strip_prefix("api.") {
-                    admin_endpoint_url.set_host(format!("admin.{}", host));
+                    admin_endpoint_url.set_host(Some(&format!("admin.{}", host)))?;
                 }
                 return Ok(Some(admin_endpoint_url));
             }
