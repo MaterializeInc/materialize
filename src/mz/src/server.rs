@@ -29,6 +29,9 @@ struct BrowserAPIToken {
     secret: String,
 }
 
+// Please update this link if the logo location changes in the future.
+const LOGO_URL: &str = "https://materialize.com/svgs/brand-guide/materialize-purple-mark.svg";
+
 /// Produces an HTML string formatted
 /// with a message centered in the middle of the page
 /// and Materialize logo on top
@@ -36,11 +39,11 @@ fn format_as_html_message(msg: &str) -> Html<String> {
     return Html(String::from(&format!(" \
         <body style=\"margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f0f0;\">
             <div style=\"text-align: center; padding: 100px; background-color: #ffffff; border-radius: 10px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);\"> \
-                <img src=\"https://materialize.com/svgs/brand-guide/materialize-purple-mark.svg\"> \
+                <img src=\"{}\"> \
                 <h2 style=\"padding-top: 20px; font-family: Inter, Arial, sans-serif;\">{}</h2> \
             </div>
         </body>
-    ", msg)));
+    ", LOGO_URL, msg)));
 }
 
 /// Request handler for the server waiting the browser API token creation
