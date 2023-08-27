@@ -36,6 +36,8 @@ pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Resu
     let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
+    println!("authenticated using profile '{}'", cx.config_file().profile() );
+    // println!("connected to cluster '{}'", cluster);
     let _error = sql_client.shell(&region_info, email).args(psql_args).exec();
 
     Ok(())
