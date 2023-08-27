@@ -1671,7 +1671,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#2ebd82d88393b521bd2dcaeb082f4f1d51734ef6"
+source = "git+https://github.com/teskje/differential-dataflow.git?branch=efficient-merge-empty-batch#b070c72e4f5cab5fdb2c65f44a4c62b482c2a344"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1728,7 +1728,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#2ebd82d88393b521bd2dcaeb082f4f1d51734ef6"
+source = "git+https://github.com/teskje/differential-dataflow.git?branch=efficient-merge-empty-batch#b070c72e4f5cab5fdb2c65f44a4c62b482c2a344"
 dependencies = [
  "abomonation",
  "abomonation_derive",

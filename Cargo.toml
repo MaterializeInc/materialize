@@ -127,8 +127,8 @@ timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+differential-dataflow = { git = "https://github.com/teskje/differential-dataflow.git", branch = "efficient-merge-empty-batch" }
+dogsdogsdogs = { git = "https://github.com/teskje/differential-dataflow.git", branch = "efficient-merge-empty-batch" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -178,3 +178,6 @@ mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
