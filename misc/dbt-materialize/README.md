@@ -71,10 +71,6 @@ Component                            | Value     | Description
 `cluster`                            | `string`  | The cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
 `default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
 
-### Additional macros
-
-We provide a `materialize-dbt-utils` package with Materialize-specific implementations of dispatched macros from `dbt-utils`. To use this package in your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
-
 ### Seeds
 
 [`dbt seed`](https://docs.getdbt.com/reference/commands/seed/) will create a
