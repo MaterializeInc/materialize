@@ -178,6 +178,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--target",
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
         action="append",
+        default=[],
     )
 
     parser.add_argument(
@@ -211,6 +212,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         default=512,
         help="Number of individual operations to benchmark at concurrency 1 (and COUNT * SQRT(concurrency) for higher concurrencies)",
+    )
+
+    parser.add_argument(
+        "--object-count",
+        metavar="COUNT",
+        type=int,
+        default=1,
+        help="Number of database objects",
     )
 
     parser.add_argument(
@@ -276,6 +285,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         create_index=args.create_index,
         transaction_isolation=args.transaction_isolation,
         cluster_name=args.cluster_name,
+        object_count=args.object_count,
     )
 
     workload_names = [workload.__name__ for workload in workloads]
