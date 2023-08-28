@@ -1098,10 +1098,7 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    ok_streams
-        .into_iter()
-        .zip_eq(err_streams.into_iter())
-        .collect()
+    ok_streams.into_iter().zip_eq(err_streams).collect()
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the

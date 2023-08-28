@@ -846,7 +846,10 @@ fn construct_source_message(
     };
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
-        panic!("got negative offset ({}) from otherwise non-error'd kafka message", msg.offset());
+        panic!(
+            "got negative offset ({}) from otherwise non-error'd kafka message",
+            msg.offset()
+        );
     };
     let msg = SourceMessage {
         upstream_time_millis: msg.timestamp().to_millis(),

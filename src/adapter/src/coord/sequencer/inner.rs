@@ -2883,7 +2883,11 @@ impl Coordinator {
             explainee,
         } = plan;
 
-        let Explainee::Query { raw_plan, row_set_finishing } = explainee else {
+        let Explainee::Query {
+            raw_plan,
+            row_set_finishing,
+        } = explainee
+        else {
             // This is currently asserted in the `sequence_explain` code that
             // calls this method.
             unreachable!()

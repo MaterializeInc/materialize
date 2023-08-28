@@ -1695,7 +1695,7 @@ impl SessionVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .chain([self.build_info as &dyn Var, &self.user].into_iter())
+            .chain([self.build_info as &dyn Var, &self.user])
     }
 
     /// Returns an iterator over configuration parameters (and their current

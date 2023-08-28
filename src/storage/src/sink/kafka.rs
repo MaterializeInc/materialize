@@ -400,6 +400,7 @@ struct KafkaSinkState {
 }
 
 impl KafkaSinkState {
+    // Until `try` blocks, we need this for using `fail_point!` correctly.
     async fn new(
         connection: KafkaSinkConnection,
         sink_name: String,
@@ -432,6 +433,7 @@ impl KafkaSinkState {
             &healthchecker,
             *sink_id,
             &internal_cmd_tx,
+            #[allow(clippy::redundant_closure_call)]
             (|| async {
                 fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
                     "synthetic error"

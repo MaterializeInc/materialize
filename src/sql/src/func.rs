@@ -619,7 +619,7 @@ impl ParamList {
             ParamList::Exact(p) => p.iter().map(|p| p.name()).collect::<Vec<_>>(),
             ParamList::Variadic { leading, trailing } => leading
                 .iter()
-                .chain([trailing].into_iter())
+                .chain([trailing])
                 .map(|p| p.name())
                 .collect::<Vec<_>>(),
         }

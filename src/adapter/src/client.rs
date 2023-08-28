@@ -357,7 +357,8 @@ impl SessionClient {
         let Some(statement_kind) = parse_error.statement else {
             return;
         };
-        let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind) else {
+        let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind)
+        else {
             return;
         };
         let event_type = StatementFailureType::ParseFailure;

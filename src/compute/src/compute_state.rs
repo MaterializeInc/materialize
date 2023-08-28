@@ -943,7 +943,9 @@ impl CollectionState {
     /// reflect this.
     fn observe_snapshot_produced(&mut self) {
         let Some(metrics) = &self.metrics else { return };
-        let ReportedFrontier::Reported(frontier) = &self.reported_frontier else { return };
+        let ReportedFrontier::Reported(frontier) = &self.reported_frontier else {
+            return;
+        };
 
         // If the metric value is greater than 0, that means we have already observed the snapshot
         // and have nothing else to do.

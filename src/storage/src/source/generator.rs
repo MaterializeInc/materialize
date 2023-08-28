@@ -115,7 +115,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             );
 
             let Some(mut offset) = resume_upper.into_option() else {
-                return
+                return;
             };
             cap.downgrade(&offset);
 

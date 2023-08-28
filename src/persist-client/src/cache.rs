@@ -218,6 +218,7 @@ impl PersistClientCache {
 /// rtt latency task, there's the possibility for it being confusing at some
 /// point. Err on the side of more data (including the latency measurements) to
 /// start.
+#[allow(clippy::unused_async)]
 async fn blob_rtt_latency_task(
     blob: Arc<MetricsBlob>,
     metrics: Arc<Metrics>,
@@ -258,6 +259,7 @@ async fn blob_rtt_latency_task(
 /// rtt latency task, there's the possibility for it being confusing at some
 /// point. Err on the side of more data (including the latency measurements) to
 /// start.
+#[allow(clippy::unused_async)]
 async fn consensus_rtt_latency_task(
     consensus: Arc<MetricsConsensus>,
     metrics: Arc<Metrics>,
