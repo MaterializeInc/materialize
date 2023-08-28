@@ -4044,7 +4044,6 @@ dependencies = [
  "derivative",
  "jsonwebtoken",
  "mz-ore",
- "mz-sql",
  "reqwest",
  "reqwest-middleware",
  "reqwest-retry",

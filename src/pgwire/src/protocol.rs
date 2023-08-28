@@ -198,7 +198,10 @@ where
                     conn.conn_id().clone(),
                     User {
                         name: response.claims.email.clone(),
-                        external_metadata: Some(ExternalUserMetadata::from(&response.claims)),
+                        external_metadata: Some(ExternalUserMetadata {
+                            user_id: response.claims.user_id,
+                            admin: response.claims.is_admin,
+                        }),
                     },
                 );
 
@@ -208,7 +211,10 @@ where
                 let is_expired =
                     frontegg.continuously_revalidate_api_token_response(response, move |claims| {
                         // Ignore error if client has hung up.
-                        let _ = external_metadata_tx.send(ExternalUserMetadata::from(claims));
+                        let _ = external_metadata_tx.send(ExternalUserMetadata {
+                            user_id: claims.user_id,
+                            admin: claims.is_admin,
+                        });
                     });
 
                 Ok((session, is_expired))
