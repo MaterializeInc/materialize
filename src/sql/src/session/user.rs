@@ -22,13 +22,8 @@ pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
     external_metadata: None,
 });
 
-pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_introspection".into(),
-    external_metadata: None,
-});
-
 pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &SUPPORT_USER, &INTROSPECTION_USER]
+    [&SYSTEM_USER, &SUPPORT_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()

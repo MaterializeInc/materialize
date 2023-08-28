@@ -85,7 +85,7 @@ pub enum UnauthorizedError {
     /// The action can only be performed by the mz_system role.
     #[error("permission denied to {action}")]
     MzSystem { action: String },
-    /// The action cannot be performed by the mz_introspection role.
+    /// The action cannot be performed by the mz_support role.
     #[error("permission denied to {action}")]
     MzSupport { action: String },
 }
