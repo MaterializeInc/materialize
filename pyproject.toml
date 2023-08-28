@@ -23,6 +23,7 @@ extraPaths = ["misc/python"]
 venvPath = "./misc/python"
 venv = "venv"
 exclude = ["./misc/python/venv"]
+stubPath = "./misc/python/stubs"
 
 reportMissingImports = "warning"
 reportMissingModuleSource = "warning"
