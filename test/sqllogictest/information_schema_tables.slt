@@ -53,6 +53,14 @@ enabled_roles
 VIEW
 materialize
 information_schema
+key_column_usage
+VIEW
+materialize
+information_schema
+referential_constraints
+VIEW
+materialize
+information_schema
 role_table_grants
 VIEW
 materialize
@@ -62,6 +70,10 @@ VIEW
 materialize
 information_schema
 schemata
+VIEW
+materialize
+information_schema
+table_constraints
 VIEW
 materialize
 information_schema
