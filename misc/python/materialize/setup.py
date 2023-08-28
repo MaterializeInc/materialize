@@ -26,6 +26,7 @@ if __name__ == "__main__":
             "materialize",
             "materialize.cloudtest",
             "materialize.cloudtest.app",
+            "materialize.cloudtest.config",
             "materialize.cloudtest.k8s",
             "materialize.cloudtest.k8s.api",
             "materialize.cloudtest.util",
