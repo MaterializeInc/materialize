@@ -59,6 +59,7 @@ libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
+mime_guess = { version = "2.0.3" }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -83,7 +84,7 @@ rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
 regex-syntax = { version = "0.6.28" }
-reqwest = { version = "0.11.13", features = ["blocking", "json", "native-tls-vendored"] }
+reqwest = { version = "0.11.13", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 ring = { version = "0.16.20", features = ["std"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
@@ -161,6 +162,7 @@ libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
+mime_guess = { version = "2.0.3" }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -185,7 +187,7 @@ rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
 regex-syntax = { version = "0.6.28" }
-reqwest = { version = "0.11.13", features = ["blocking", "json", "native-tls-vendored"] }
+reqwest = { version = "0.11.13", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 ring = { version = "0.16.20", features = ["std"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
