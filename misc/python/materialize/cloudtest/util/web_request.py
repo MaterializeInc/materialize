@@ -32,9 +32,15 @@ def verbose_http_errors() -> Generator[None, None, None]:
 
 
 class WebRequests:
-    def __init__(self, auth: Optional[AuthConfig], base_url: str):
+    def __init__(
+        self,
+        auth: Optional[AuthConfig],
+        base_url: str,
+        client_cert: Optional[tuple[str, str]] = None,
+    ):
         self.auth = auth
         self.base_url = base_url
+        self.client_cert = client_cert
 
     def get(
         self,
@@ -50,7 +56,7 @@ class WebRequests:
                     f"{self.base_url}{path}",
                     headers=headers,
                     timeout=timeout,
-                    cert=self._get_cert(self.auth),
+                    cert=self.client_cert,
                 )
                 response.raise_for_status()
                 return response
@@ -82,7 +88,7 @@ class WebRequests:
                     headers=headers,
                     json=json,
                     timeout=timeout,
-                    cert=self._get_cert(self.auth),
+                    cert=self.client_cert,
                 )
                 response.raise_for_status()
                 return response
@@ -114,7 +120,7 @@ class WebRequests:
                     headers=headers,
                     json=json,
                     timeout=timeout,
-                    cert=self._get_cert(self.auth),
+                    cert=self.client_cert,
                 )
                 response.raise_for_status()
                 return response
@@ -145,7 +151,7 @@ class WebRequests:
                     f"{self.base_url}{path}",
                     headers=headers,
                     timeout=timeout,
-                    cert=self._get_cert(self.auth),
+                    cert=self.client_cert,
                     **(
                         {
                             "params": params,
@@ -174,6 +180,3 @@ class WebRequests:
             headers["Authorization"] = f"Bearer {auth.token}"
 
         return headers
-
-    def _get_cert(self, auth: Optional[AuthConfig]) -> Optional[tuple[str, str]]:
-        return auth.client_cert if auth is not None else None

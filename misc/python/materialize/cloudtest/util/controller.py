@@ -57,8 +57,10 @@ class ControllerDefinition:
 
         return self.endpoint.base_url
 
-    def requests(self, auth: Optional[AuthConfig]) -> WebRequests:
-        return WebRequests(auth, self.configured_base_url())
+    def requests(
+        self, auth: Optional[AuthConfig], client_cert: Optional[tuple[str, str]] = None
+    ) -> WebRequests:
+        return WebRequests(auth, self.configured_base_url(), client_cert)
 
 
 def wait_for_connectable(
