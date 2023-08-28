@@ -734,7 +734,7 @@ impl StateVersions {
         }
         assert_eq!(verify_seqno, state.seqno);
 
-        let rollup = Rollup::from(UntypedState::<T>::from(state), diffs);
+        let rollup = Rollup::from(state.into(), diffs);
         let desc = rollup
             .diffs
             .as_ref()

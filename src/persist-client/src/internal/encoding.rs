@@ -698,10 +698,10 @@ where
 
 /// A struct that maps 1:1 with ProtoRollup.
 ///
-/// Contains State, and optionally the diffs between (state.latest_rollup.seqno, state.seqno].
+/// Contains State, and optionally the diffs between (state.latest_rollup.seqno, state.seqno]
 ///
-/// `diffs` is expected to be `None` for the initial state, and may be `None` when deserializing
-/// persisted rollups that were written before we started inlining diffs.
+/// `diffs` is always expected to be `Some` when writing new rollups, but may be `None`
+/// when deserializing rollups that were persisted before we started inlining diffs.
 #[derive(Debug)]
 pub struct Rollup<T> {
     pub(crate) state: UntypedState<T>,
