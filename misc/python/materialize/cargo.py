@@ -18,7 +18,10 @@ necessary to support this repository are implemented.
 from pathlib import Path
 from typing import Optional
 
-import semver
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version  # type: ignore
 import toml
 
 from materialize import git
@@ -54,7 +57,7 @@ class Crate:
         with open(path / "Cargo.toml") as f:
             config = toml.load(f)
         self.name = config["package"]["name"]
-        self.version = semver.VersionInfo.parse(config["package"]["version"])
+        self.version = Version.parse(config["package"]["version"])
         self.features = config.get("features", {})
         self.path = path
         self.path_build_dependencies: set[str] = set()

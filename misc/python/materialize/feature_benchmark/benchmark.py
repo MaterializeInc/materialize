@@ -85,8 +85,9 @@ class Benchmark:
         for i in range(sys.maxsize):
             # Run the before() section once for each measurement
             before = scenario.before()
-            for before_item in before if isinstance(before, list) else [before]:
-                before_item.run(executor=self._executor)
+            if before is not None:
+                for before_item in before if isinstance(before, list) else [before]:
+                    before_item.run(executor=self._executor)
 
             # Collect timestamps from any part of the workload being benchmarked
             timestamps = []

@@ -96,8 +96,8 @@ def run(
 
     workers = []
     threads = []
+    worker_rng = random.Random(rng.randrange(SEED_RANGE))
     for i in range(num_threads):
-        worker_rng = random.Random(rng.randrange(SEED_RANGE))
         weights: list[float]
         if complexity == Complexity.DDL:
             weights = [60, 30, 30, 30, 10]

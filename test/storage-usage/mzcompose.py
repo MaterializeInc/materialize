@@ -247,7 +247,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.testdrive(
             dedent(
                 f"""
-                $ set-regex match=\d+ replacement=<SIZE>
+                $ set-regex match=\\d+ replacement=<SIZE>
 
                 # Select the raw size as well, so if this errors in testdrive, its easier to debug.
                 > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size//3} AND {database_object.expected_size*3}

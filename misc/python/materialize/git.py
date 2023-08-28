@@ -18,7 +18,7 @@ from typing import Optional, Union
 try:
     from semver.version import Version
 except ImportError:
-    from semver import VersionInfo as Version
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize import spawn
 

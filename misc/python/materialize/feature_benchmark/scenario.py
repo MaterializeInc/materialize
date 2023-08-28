@@ -31,7 +31,7 @@ class RootScenario:
     def init(self) -> Optional[Union[Action, list[Action]]]:
         return None
 
-    def before(self) -> Action:
+    def before(self) -> Optional[Union[Action, list[Action]]]:
         return DummyAction()
 
     def benchmark(self) -> BenchmarkingSequence:
@@ -48,7 +48,7 @@ class RootScenario:
 
     @staticmethod
     def name_with_scale(cls: type["Scenario"], num: int, params_dict: dict) -> str:
-        """Return the name of the Senario including the scale.
+        """Return the name of the Scenario including the scale.
         Used for running multiple instances of the same scenario via the
         parameterized python module.
         """

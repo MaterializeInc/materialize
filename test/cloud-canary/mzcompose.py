@@ -157,7 +157,9 @@ def version_check(c: Composition) -> None:
         ssl_context=ssl.SSLContext(),
     ).cursor()
     cloud_cursor.execute("SELECT mz_version()")
-    cloud_version = cloud_cursor.fetchone()[0]
+    result = cloud_cursor.fetchone()
+    assert result is not None
+    cloud_version = result[0]
     assert (
         local_version == cloud_version
     ), f"local version: {local_version} is not identical to cloud version: {cloud_version}"

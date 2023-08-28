@@ -214,4 +214,4 @@ def execute_workload(
             time.sleep(sleep_time)
             sleep_time *= 2
         else:
-            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")
+            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")  # type: ignore
