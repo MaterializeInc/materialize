@@ -564,6 +564,7 @@ mz_sessions
 mz_statement_execution_history
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys
 mz_object_dependencies
@@ -653,7 +654,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-50
+51
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

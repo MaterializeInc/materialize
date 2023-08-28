@@ -677,6 +677,10 @@ mz_subscriptions
 BASE TABLE
 materialize
 mz_internal
+mz_type_pg_metadata
+BASE TABLE
+materialize
+mz_internal
 mz_view_foreign_keys
 BASE TABLE
 materialize

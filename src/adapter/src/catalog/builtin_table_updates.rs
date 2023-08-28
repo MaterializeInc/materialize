@@ -47,7 +47,7 @@ use crate::catalog::builtin::{
     MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS,
     MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
     MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_TYPE_PG_METADATA, MZ_VIEWS,
 };
 use crate::catalog::builtin::{
     MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
@@ -882,7 +882,9 @@ impl CatalogState {
         typ: &Type,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let generic_update = BuiltinTableUpdate {
+        let mut out = vec![];
+
+        out.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_TYPES),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -894,7 +896,7 @@ impl CatalogState {
                 privileges,
             ]),
             diff,
-        };
+        });
 
         let (index_id, update) = match typ.details.typ {
             CatalogType::Array {
@@ -925,13 +927,24 @@ impl CatalogState {
                 vec![id.to_string()],
             ),
         };
-        let specific_update = BuiltinTableUpdate {
+        out.push(BuiltinTableUpdate {
             id: index_id,
             row: Row::pack_slice(&update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()[..]),
             diff,
-        };
+        });
 
-        vec![generic_update, specific_update]
+        if let Some(typreceive_oid) = typ.details.typreceive_oid {
+            out.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_TYPE_PG_METADATA),
+                row: Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::UInt32(typreceive_oid),
+                ]),
+                diff,
+            });
+        }
+
+        out
     }
 
     fn pack_func_update(

@@ -1087,5 +1087,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_foreign_keys -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_keys -->

@@ -726,6 +726,8 @@ pub struct CatalogTypeDetails<T: TypeReference> {
     pub array_id: Option<GlobalId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
+    /// The OID of the `typreceive` function in PostgreSQL, if available.
+    pub typreceive_oid: Option<u32>,
 }
 
 /// Represents a reference to type in the catalog
