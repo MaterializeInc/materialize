@@ -55,6 +55,8 @@ pub const SCHEMAS_COLLECTION: TypedCollection<proto::SchemaKey, proto::SchemaVal
     TypedCollection::new("schema");
 pub const ITEM_COLLECTION: TypedCollection<proto::ItemKey, proto::ItemValue> =
     TypedCollection::new("item");
+pub const COMMENTS_COLLECTION: TypedCollection<proto::CommentKey, proto::CommentValue> =
+    TypedCollection::new("comments");
 pub const TIMESTAMP_COLLECTION: TypedCollection<proto::TimestampKey, proto::TimestampValue> =
     TypedCollection::new("timestamp");
 pub const SYSTEM_CONFIGURATION_COLLECTION: TypedCollection<
@@ -814,6 +816,7 @@ pub async fn initialize(
         .initialize(tx, vec![])
         .await?;
     STORAGE_USAGE_COLLECTION.initialize(tx, vec![]).await?;
+    COMMENTS_COLLECTION.initialize(tx, vec![]).await?;
 
     // Set our initial version.
     CONFIG_COLLECTION
