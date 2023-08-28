@@ -641,7 +641,7 @@ pub struct BatchPartReadMetrics {
     pub(crate) compaction: ReadMetrics,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadMetrics {
     pub(crate) part_bytes: IntCounter,
     pub(crate) part_goodbytes: IntCounter,
