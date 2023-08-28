@@ -757,6 +757,14 @@ pub(crate) struct InlinedDiffs {
 }
 
 impl InlinedDiffs {
+    pub(crate) fn lower(&self) -> SeqNo {
+        *self.description.lower().first().expect("seqno")
+    }
+
+    pub(crate) fn upper(&self) -> SeqNo {
+        *self.description.upper().first().expect("seqno")
+    }
+
     fn from(lower: SeqNo, upper: SeqNo, diffs: Vec<VersionedData>) -> Self {
         for diff in &diffs {
             assert!(diff.seqno >= lower);
@@ -919,10 +927,8 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
 
         let diffs: Option<InlinedDiffs> = x.diffs.into_rust_if_some("diffs").ok();
         if let Some(diffs) = &diffs {
-            assert_eq!(
-                state.latest_rollup().0.next(),
-                *diffs.description.lower().first().expect("seqno")
-            );
+            assert_eq!(diffs.lower(), state.latest_rollup().0.next());
+            assert_eq!(diffs.upper(), state.seqno.next());
         }
 
         Ok(Rollup {
