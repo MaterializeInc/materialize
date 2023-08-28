@@ -3775,6 +3775,7 @@ SELECT
     o.name AS table_name,
     c.name AS column_name,
     c.position::int8 AS ordinal_position,
+    CASE WHEN c.nullable THEN 'YES' ELSE 'NO' END AS is_nullable,
     c.type AS data_type,
     NULL::pg_catalog.int4 AS character_maximum_length,
     NULL::pg_catalog.int4 AS numeric_precision,
@@ -3804,6 +3805,38 @@ FROM information_schema.table_privileges
 WHERE
     grantor IN (SELECT role_name FROM information_schema.enabled_roles)
     OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
+};
+
+pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
+    name: "key_column_usage",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.key_column_usage AS SELECT
+    NULL::text AS constraint_catalog,
+    NULL::text AS constraint_schema,
+    NULL::text AS constraint_name,
+    NULL::text AS table_catalog,
+    NULL::text AS table_schema,
+    NULL::text AS table_name,
+    NULL::text AS column_name,
+    NULL::integer AS ordinal_position,
+    NULL::integer AS position_in_unique_constraint
+WHERE false",
+};
+
+pub const INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: BuiltinView = BuiltinView {
+    name: "referential_constraints",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.referential_constraints AS SELECT
+    NULL::text AS constraint_catalog,
+    NULL::text AS constraint_schema,
+    NULL::text AS constraint_name,
+    NULL::text AS unique_constraint_catalog,
+    NULL::text AS unique_constraint_schema,
+    NULL::text AS unique_constraint_name,
+    NULL::text AS match_option,
+    NULL::text AS update_rule,
+    NULL::text AS delete_rule
+WHERE false",
 };
 
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
@@ -3849,6 +3882,24 @@ FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_TABLE_CONSTRAINTS: BuiltinView = BuiltinView {
+    name: "table_constraints",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.table_constraints AS SELECT
+    NULL::text AS constraint_catalog,
+    NULL::text AS constraint_schema,
+    NULL::text AS constraint_name,
+    NULL::text AS table_catalog,
+    NULL::text AS table_schema,
+    NULL::text AS table_name,
+    NULL::text AS constraint_type,
+    NULL::text AS is_deferrable,
+    NULL::text AS initially_deferred,
+    NULL::text AS enforced,
+    NULL::text AS nulls_distinct
+WHERE false",
 };
 
 pub const INFORMATION_SCHEMA_TABLE_PRIVILEGES: BuiltinView = BuiltinView {
@@ -5123,9 +5174,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_APPLICABLE_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_ENABLED_ROLES),
+        Builtin::View(&INFORMATION_SCHEMA_KEY_COLUMN_USAGE),
+        Builtin::View(&INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS),
         Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
         Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::View(&INFORMATION_SCHEMA_TABLE_CONSTRAINTS),
         Builtin::View(&INFORMATION_SCHEMA_TABLE_PRIVILEGES),
         Builtin::View(&INFORMATION_SCHEMA_ROLE_TABLE_GRANTS),
         Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
