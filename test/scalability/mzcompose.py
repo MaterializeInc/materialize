@@ -272,7 +272,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         endpoint: Optional[Endpoint] = None
         if target == "local":
             endpoint = MaterializeLocal()
-        if target == "remote":
+        elif target == "remote":
             endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
         elif target == "postgres":
             endpoint = PostgresContainer(composition=c)
