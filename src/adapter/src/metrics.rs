@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
