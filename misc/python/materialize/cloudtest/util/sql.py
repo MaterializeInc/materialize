@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 import psycopg
+from psycopg.abc import Params, Query
 from psycopg.connection import Connection
-from typing_extensions import LiteralString
 
 from materialize.cloudtest.config.environment_config import EnvironmentConfig
 from materialize.cloudtest.util.common import eprint
@@ -21,27 +21,27 @@ from materialize.cloudtest.util.web_request import post
 
 def sql_query(
     conn: Connection[Any],
-    query: str,
-    vars: Optional[Sequence[Any]] = None,
+    query: Query,
+    vars: Optional[Params] = None,
 ) -> list[list[Any]]:
     cur = conn.cursor()
-    cur.execute(query.encode("utf8"), vars)
+    cur.execute(query, vars)
     return [list(row) for row in cur]
 
 
 def sql_execute(
     conn: Connection[Any],
-    query: str,
-    vars: Optional[Sequence[Any]] = None,
+    query: Query,
+    vars: Optional[Params] = None,
 ) -> None:
     cur = conn.cursor()
-    cur.execute(query.encode("utf8"), vars)
+    cur.execute(query, vars)
 
 
 def sql_execute_ddl(
     conn: Connection[Any],
-    query: LiteralString,
-    vars: Optional[Sequence[Any]] = None,
+    query: Query,
+    vars: Optional[Params] = None,
 ) -> None:
     cur = psycopg.ClientCursor(conn)
     cur.execute(query, vars)
@@ -65,8 +65,8 @@ def pgwire_sql_conn(config: EnvironmentConfig) -> Connection[Any]:
 
 def sql_query_pgwire(
     config: EnvironmentConfig,
-    query: str,
-    vars: Optional[Sequence[Any]] = None,
+    query: Query,
+    vars: Optional[Params] = None,
 ) -> list[list[Any]]:
     with pgwire_sql_conn(config) as conn:
         eprint(f"QUERY: {query}")
@@ -75,8 +75,8 @@ def sql_query_pgwire(
 
 def sql_execute_pgwire(
     config: EnvironmentConfig,
-    query: str,
-    vars: Optional[Sequence[Any]] = None,
+    query: Query,
+    vars: Optional[Params] = None,
 ) -> None:
     with pgwire_sql_conn(config) as conn:
         eprint(f"QUERY: {query}")
