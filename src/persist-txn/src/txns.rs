@@ -16,8 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Diagnostics, PersistClient, ShardId, ShardIdSchema};
-use mz_persist_types::codec_impls::VecU8Schema;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -25,7 +24,7 @@ use tracing::debug;
 
 use crate::txn_read::TxnsCache;
 use crate::txn_write::Txn;
-use crate::StepForward;
+use crate::{StepForward, TxnsCodec, TxnsCodecDefault};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -93,24 +92,26 @@ use crate::StepForward;
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K, V, T, D>
+pub struct TxnsHandle<K, V, T, D, C = TxnsCodecDefault>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    C: TxnsCodec,
 {
-    pub(crate) txns_cache: TxnsCache<T>,
-    pub(crate) txns_write: WriteHandle<ShardId, Vec<u8>, T, i64>,
+    pub(crate) txns_cache: TxnsCache<T, C>,
+    pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
-impl<K, V, T, D> TxnsHandle<K, V, T, D>
+impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    C: TxnsCodec,
 {
     /// Returns a [TxnsHandle] committing to the given txn shard.
     ///
@@ -130,11 +131,12 @@ where
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
     ) -> Self {
+        let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
             .open(
                 txns_id,
-                Arc::new(ShardIdSchema),
-                Arc::new(VecU8Schema),
+                Arc::new(txns_key_schema),
+                Arc::new(txns_val_schema),
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
@@ -205,8 +207,8 @@ where
                 return Err(txns_upper);
             }
 
-            const TABLE_INIT: &Vec<u8> = &Vec::new();
-            let updates = vec![((&data_id, TABLE_INIT), &register_ts, 1)];
+            let (key, val) = C::encode(crate::TxnsEntry::Register(data_id));
+            let updates = vec![((&key, &val), &register_ts, 1)];
             let res = crate::small_caa(
                 || format!("txns register {:.9}", data_id.to_string()),
                 &mut self.txns_write,
@@ -306,7 +308,7 @@ where
     }
 
     /// Returns the [TxnsCache] used by this handle.
-    pub fn read_cache(&self) -> &TxnsCache<T> {
+    pub fn read_cache(&self) -> &TxnsCache<T, C> {
         &self.txns_cache
     }
 }
@@ -371,9 +373,12 @@ where
     }
 }
 
-pub(crate) async fn recent_upper<T: Timestamp + Lattice + TotalOrder + Codec64>(
-    txns_or_data_write: &mut WriteHandle<ShardId, Vec<u8>, T, i64>,
-) -> T {
+pub(crate) async fn recent_upper<K, V, T>(txns_or_data_write: &mut WriteHandle<K, V, T, i64>) -> T
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
+{
     // TODO(txn): Replace this fetch_recent_upper call with pubsub in
     // maelstrom.
     txns_or_data_write

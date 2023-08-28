@@ -23,7 +23,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::txns::{Tidy, TxnsHandle};
-use crate::StepForward;
+use crate::{StepForward, TxnsCodec, TxnsEntry};
 
 /// An in-progress transaction.
 #[derive(Debug)]
@@ -72,13 +72,14 @@ where
     /// correctness nor liveness require this followup be done.
     ///
     /// Panics if any involved data shards were not registered before commit ts.
-    pub async fn commit_at<T>(
+    pub async fn commit_at<T, C>(
         &self,
-        handle: &mut TxnsHandle<K, V, T, D>,
+        handle: &mut TxnsHandle<K, V, T, D, C>,
         commit_ts: T,
     ) -> Result<TxnApply<T>, T>
     where
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        C: TxnsCodec,
     {
         // TODO(txn): Use ownership to disallow a double commit.
         let mut txns_upper = handle
@@ -146,12 +147,12 @@ where
                     batch_raw.hashed(),
                     updates.len()
                 );
-                txns_updates.push((*data_id, batch_raw));
+                txns_updates.push(C::encode(TxnsEntry::Append(*data_id, batch_raw)));
             }
 
             let mut txns_updates = txns_updates
                 .iter()
-                .map(|(k, v)| ((k, v), &commit_ts, 1))
+                .map(|(key, val)| ((key, val), &commit_ts, 1))
                 .collect::<Vec<_>>();
             let apply_is_empty = txns_updates.is_empty();
 
@@ -162,10 +163,16 @@ where
             // but we know is applied indeed still needs to be retracted.
             let filtered_retractions = handle
                 .read_cache()
-                .filter_retractions(&txns_upper, self.tidy.retractions.iter());
-            for (batch_raw, data_id) in filtered_retractions {
-                txns_updates.push(((data_id, batch_raw), &commit_ts, -1));
-            }
+                .filter_retractions(&txns_upper, self.tidy.retractions.iter())
+                .map(|(batch_raw, data_id)| {
+                    C::encode(TxnsEntry::Append(*data_id, batch_raw.clone()))
+                })
+                .collect::<Vec<_>>();
+            txns_updates.extend(
+                filtered_retractions
+                    .iter()
+                    .map(|(key, val)| ((key, val), &commit_ts, -1)),
+            );
 
             let res = crate::small_caa(
                 || "txns commit",
@@ -235,12 +242,13 @@ pub struct TxnApply<T> {
 
 impl<T> TxnApply<T> {
     /// Applies the txn, unblocking reads at timestamp it was committed at.
-    pub async fn apply<K, V, D>(self, handle: &mut TxnsHandle<K, V, T, D>) -> Tidy
+    pub async fn apply<K, V, D, C>(self, handle: &mut TxnsHandle<K, V, T, D, C>) -> Tidy
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
+        C: TxnsCodec,
     {
         debug!("txn apply {:?}", self.commit_ts);
         handle.apply_le(&self.commit_ts).await
@@ -263,6 +271,7 @@ mod tests {
     use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
 
     use crate::tests::writer;
+    use crate::TxnsCodecDefault;
 
     use super::*;
 
@@ -273,7 +282,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn commit_unregistered_table() {
         let client = PersistClient::new_for_tests().await;
-        let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64>::open(
+        let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64, TxnsCodecDefault>::open(
             0,
             client.clone(),
             ShardId::new(),

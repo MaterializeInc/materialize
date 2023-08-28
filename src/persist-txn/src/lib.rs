@@ -273,6 +273,8 @@ use differential_dataflow::Hashable;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{ShardId, ShardIdSchema};
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
 use prost::Message;
 use timely::order::TotalOrder;
@@ -290,7 +292,6 @@ pub mod txns;
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?
 // - Unit tests.
-// - Use Row to store the remap shard contents so we can debug it with SQL.
 // - Figure out the compaction story for both txn and data shard.
 
 /// Advance a timestamp by the least amount possible such that
@@ -301,6 +302,63 @@ pub trait StepForward {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
     fn step_forward(&self) -> Self;
+}
+
+/// The in-mem representation of an update in the txns shard.
+#[derive(Debug)]
+pub enum TxnsEntry {
+    /// A data shard register operation.
+    Register(ShardId),
+    /// A batch written to a data shard in a txn.
+    Append(ShardId, Vec<u8>),
+}
+
+/// An abstraction over the encoding format of [TxnsEntry].
+///
+/// This enables users of this crate to control how data is written to the txns
+/// shard (which will allow mz to present it as a normal introspection source).
+pub trait TxnsCodec: Debug {
+    /// The `K` type used in the txns shard.
+    type Key: Debug + Codec;
+    /// The `V` type used in the txns shard.
+    type Val: Debug + Codec;
+
+    /// Returns the Schemas to use with [Self::Key] and [Self::Val].
+    fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema);
+    /// Encodes a [TxnsEntry] in the format persisted in the txns shard.
+    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val);
+    /// Decodes a [TxnsEntry] from the format persisted in the txns shard.
+    ///
+    /// Implementations should panic if the values are invalid.
+    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
+}
+
+/// A reasonable default implementation of [TxnsCodec].
+///
+/// This uses the "native" Codecs for `ShardId` and `Vec<u8>`, with the latter
+/// empty for [TxnsEntry::Register] and non-empty for [TxnsEntry::Append].
+#[derive(Debug)]
+pub struct TxnsCodecDefault;
+
+impl TxnsCodec for TxnsCodecDefault {
+    type Key = ShardId;
+    type Val = Vec<u8>;
+    fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
+        (ShardIdSchema, VecU8Schema)
+    }
+    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
+        match e {
+            TxnsEntry::Register(data_id) => (data_id, Vec::new()),
+            TxnsEntry::Append(data_id, batch) => (data_id, batch),
+        }
+    }
+    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+        if val.is_empty() {
+            TxnsEntry::Register(key)
+        } else {
+            TxnsEntry::Append(key, val)
+        }
+    }
 }
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.

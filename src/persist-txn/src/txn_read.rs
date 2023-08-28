@@ -24,7 +24,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::error::NotRegistered;
-use crate::StepForward;
+use crate::{StepForward, TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -63,9 +63,9 @@ use crate::StepForward;
 /// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. TODO(txn): Link to operator once it's added.
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
+pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
     pub(crate) progress_exclusive: T,
-    txns_subscribe: Subscribe<ShardId, Vec<u8>, T, i64>,
+    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
     next_batch_id: usize,
     /// The batches needing application as of the current progress.
@@ -83,17 +83,17 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
     pub(crate) datas: BTreeMap<ShardId, Vec<T>>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
     pub(crate) async fn init(
         init_ts: T,
-        txns_read: ReadHandle<ShardId, Vec<u8>, T, i64>,
-        txns_write: &mut WriteHandle<ShardId, Vec<u8>, T, i64>,
+        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
+        txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         Self::open(init_ts, txns_read).await
     }
 
-    async fn open(init_ts: T, txns_read: ReadHandle<ShardId, Vec<u8>, T, i64>) -> Self {
+    pub(crate) async fn open(init_ts: T, txns_read: ReadHandle<C::Key, C::Val, T, i64>) -> Self {
         // TODO(txn): Figure out the compaction story. This might require
         // sorting inserts before retractions within each timestamp.
         let subscribe = txns_read
@@ -216,12 +216,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
                     ListenEvent::Updates(updates) => updates,
                 };
                 // Persist emits the times sorted by little endian encoding,
-                // which is not what we want
-                updates.sort_by(|(akv, at, _), (bkv, bt, _)| (at, akv).cmp(&(bt, bkv)));
+                // which is not what we want. If we ever expose an interface for
+                // registering and committing to a data shard at the same
+                // timestamp, this will also have to sort registrations first.
+                updates.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
                 for ((k, v), t, d) in updates {
-                    let data_id = k.expect("valid data_id");
-                    let batch = v.expect("valid batch");
-                    self.push(data_id, batch, t, d);
+                    let k = k.expect("valid key");
+                    let v = v.expect("valid val");
+                    self.push(C::decode(k, v), t, d);
                 }
             }
         }
@@ -235,21 +237,24 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
         );
     }
 
-    fn push(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
-        if batch.is_empty() {
-            assert_eq!(diff, 1);
-            // This is just a data registration.
-            debug!(
-                "cache learned {:.9} registered t={:?}",
-                data_id.to_string(),
-                ts
-            );
-            let prev = self.datas.insert(data_id, vec![ts.clone()]);
-            if let Some(prev) = prev {
-                panic!("{} registered at both {:?} and {:?}", data_id, prev, ts);
+    fn push(&mut self, entry: TxnsEntry, ts: T, diff: i64) {
+        let (data_id, batch) = match entry {
+            TxnsEntry::Append(data_id, batch) => (data_id, batch),
+            TxnsEntry::Register(data_id) => {
+                assert_eq!(diff, 1);
+                // This is just a data registration.
+                debug!(
+                    "cache learned {:.9} registered t={:?}",
+                    data_id.to_string(),
+                    ts
+                );
+                let prev = self.datas.insert(data_id, vec![ts.clone()]);
+                if let Some(prev) = prev {
+                    panic!("{} registered at both {:?} and {:?}", data_id, prev, ts);
+                }
+                return;
             }
-            return;
-        }
+        };
         debug!(
             "cache learned {:.9} b={} t={:?} d={}",
             data_id.to_string(),
