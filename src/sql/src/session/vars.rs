@@ -1225,6 +1225,13 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const ENABLE_COMMENT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_comment"),
+    value: &false,
+    description: "Enables the COMMENT ON feature for objects in the database (Materialize).",
+    internal: false,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2183,6 +2190,7 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+            .with_var(&ENABLE_COMMENT)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
@@ -2773,6 +2781,11 @@ impl SystemVars {
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+    }
+
+    /// Returns the `enable_comment` configuration parameter.
+    pub fn enable_comment(&self) -> bool {
+        *self.expect_value(&ENABLE_COMMENT)
     }
 
     pub fn logging_filter(&self) -> CloneableEnvFilter {

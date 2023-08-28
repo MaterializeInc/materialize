@@ -5052,6 +5052,13 @@ pub fn describe_comment(
 pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Result<Plan, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
+    if !scx.catalog.system_vars().enable_comment() {
+        return Err(PlanError::Unsupported {
+            feature: "COMMENT ON".to_string(),
+            issue_no: Some(20218),
+        });
+    }
+
     let CommentStatement { object, comment } = stmt;
 
     // TODO(parkmycar): Make max comment length configurable.
