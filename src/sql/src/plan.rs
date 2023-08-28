@@ -105,6 +105,7 @@ pub enum Plan {
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
     CreateCluster(CreateClusterPlan),
+    CreateClusterProfile(CreateClusterProfilePlan),
     CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlans>),
@@ -138,6 +139,7 @@ pub enum Plan {
     ExplainTimestamp(ExplainTimestampPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
+    AlterClusterProfile(AlterClusterProfilePlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -186,6 +188,9 @@ impl Plan {
             StatementKind::AlterCluster => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
             }
+            StatementKind::AlterClusterProfile => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterClusterProfile]
+            }
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
             StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
@@ -220,6 +225,7 @@ impl Plan {
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
+            StatementKind::CreateClusterProfile => vec![PlanKind::CreateClusterProfile],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
             StatementKind::CreateDatabase => vec![PlanKind::CreateDatabase],
@@ -283,6 +289,7 @@ impl Plan {
             Plan::CreateSchema(_) => "create schema",
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
+            Plan::CreateClusterProfile(_) => "create cluster profile",
             Plan::CreateClusterReplica(_) => "create cluster replica",
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
@@ -305,6 +312,7 @@ impl Plan {
                 ObjectType::Type => "drop type",
                 ObjectType::Role => "drop roles",
                 ObjectType::Cluster => "drop clusters",
+                ObjectType::ClusterProfile => "drop cluster profiles",
                 ObjectType::ClusterReplica => "drop cluster replicas",
                 ObjectType::Secret => "drop secret",
                 ObjectType::Connection => "drop connection",
@@ -341,6 +349,7 @@ impl Plan {
                 ObjectType::Type => "alter type",
                 ObjectType::Role => "alter role",
                 ObjectType::Cluster => "alter cluster",
+                ObjectType::ClusterProfile => "alter cluster profile",
                 ObjectType::ClusterReplica => "alter cluster replica",
                 ObjectType::Secret => "alter secret",
                 ObjectType::Connection => "alter connection",
@@ -349,6 +358,7 @@ impl Plan {
                 ObjectType::Func => "alter function",
             },
             Plan::AlterCluster(_) => "alter cluster",
+            Plan::AlterClusterProfile(_) => "alter cluster profile",
             Plan::AlterClusterRename(_) => "alter cluster rename",
             Plan::AlterClusterItemRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
@@ -372,6 +382,7 @@ impl Plan {
                 ObjectType::Type => "alter type owner",
                 ObjectType::Role => "alter role owner",
                 ObjectType::Cluster => "alter cluster owner",
+                ObjectType::ClusterProfile => "alter cluster profile owner",
                 ObjectType::ClusterReplica => "alter cluster replica owner",
                 ObjectType::Secret => "alter secret owner",
                 ObjectType::Connection => "alter connection owner",
@@ -482,10 +493,18 @@ pub struct CreateClusterManagedPlan {
 }
 
 #[derive(Debug)]
+pub struct CreateClusterProfilePlan {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub variant: CreateClusterVariant,
+}
+
+#[derive(Debug)]
 pub struct CreateClusterReplicaPlan {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
+    pub profile_id: Option<ReplicaId>,
 }
 
 /// Configuration of introspection for a cluster replica.
@@ -908,6 +927,14 @@ pub struct AlterSourcePlan {
 #[derive(Debug)]
 pub struct AlterClusterPlan {
     pub id: ClusterId,
+    pub name: String,
+    pub options: PlanClusterOption,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterProfilePlan {
+    pub id: ClusterId,
+    pub profile_id: ReplicaId,
     pub name: String,
     pub options: PlanClusterOption,
 }

@@ -116,6 +116,9 @@ pub fn describe(
     let desc = match stmt {
         // DDL statements.
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
+        Statement::AlterClusterProfile(stmt) => {
+            ddl::describe_alter_cluster_profile_set_options(&scx, stmt)?
+        }
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
@@ -128,6 +131,7 @@ pub fn describe(
         Statement::AlterSystemReset(stmt) => ddl::describe_alter_system_reset(&scx, stmt)?,
         Statement::AlterSystemResetAll(stmt) => ddl::describe_alter_system_reset_all(&scx, stmt)?,
         Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
+        Statement::CreateClusterProfile(stmt) => ddl::describe_create_cluster_profile(&scx, stmt)?,
         Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
         Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
         Statement::CreateDatabase(stmt) => ddl::describe_create_database(&scx, stmt)?,
@@ -289,6 +293,7 @@ pub fn plan(
     let plan = match stmt {
         // DDL statements.
         Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
+        Statement::AlterClusterProfile(stmt) => ddl::plan_alter_cluster_profile(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
@@ -301,6 +306,7 @@ pub fn plan(
         Statement::AlterSystemReset(stmt) => ddl::plan_alter_system_reset(scx, stmt),
         Statement::AlterSystemResetAll(stmt) => ddl::plan_alter_system_reset_all(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
+        Statement::CreateClusterProfile(stmt) => ddl::plan_create_cluster_profile(scx, stmt),
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
         Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),

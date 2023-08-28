@@ -87,6 +87,7 @@ message ClusterItemValue {
 
     oneof item {
         ClusterReplicaConfig replica = 3;
+        ClusterProfileConfig profile  = 5;
     }
 }
 
@@ -303,6 +304,7 @@ message ClusterProfileConfig {
 }
 
 message ClusterReplicaConfig {
+    optional ClusterItemId profile_id = 1;
     ReplicaConfig replica_config = 2;
 }
 
@@ -365,6 +367,7 @@ message TimestampAntichain {
     repeated Timestamp elements = 1;
 }
 
+// next-id: 17
 enum ObjectType {
     OBJECT_TYPE_UNKNOWN = 0;
     OBJECT_TYPE_TABLE = 1;
@@ -376,6 +379,7 @@ enum ObjectType {
     OBJECT_TYPE_TYPE = 7;
     OBJECT_TYPE_ROLE = 8;
     OBJECT_TYPE_CLUSTER = 9;
+    OBJECT_TYPE_CLUSTER_PROFILE = 16;
     OBJECT_TYPE_CLUSTER_REPLICA = 10;
     OBJECT_TYPE_SECRET = 11;
     OBJECT_TYPE_CONNECTION = 12;
@@ -415,9 +419,11 @@ message AuditLogEventV1 {
         EVENT_TYPE_REVOKE = 5;
     }
 
+    // next-id: 18
     enum ObjectType {
         OBJECT_TYPE_UNKNOWN = 0;
         OBJECT_TYPE_CLUSTER = 1;
+        OBJECT_TYPE_CLUSTER_PROFILE = 17;
         OBJECT_TYPE_CLUSTER_REPLICA = 2;
         OBJECT_TYPE_CONNECTION = 3;
         OBJECT_TYPE_DATABASE = 4;

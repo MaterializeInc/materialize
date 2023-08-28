@@ -115,6 +115,8 @@ impl Coordinator {
                 },
             },
             owner_id,
+            // We do not support profiles for linked clusters.
+            profile_id: None,
         });
         Ok(())
     }

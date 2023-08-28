@@ -317,6 +317,10 @@ pub fn show_objects<'a>(
             assert!(from.is_none(), "parser should reject from");
             show_clusters(scx, filter)
         }
+        ShowObjectType::ClusterProfile => {
+            assert!(from.is_none(), "parser should reject from");
+            show_cluster_profiles(scx, filter)
+        }
         ShowObjectType::ClusterReplica => {
             assert!(from.is_none(), "parser should reject from");
             show_cluster_replicas(scx, filter)
@@ -631,6 +635,16 @@ FROM
 GROUP BY mc.name"
         .to_string();
     ShowSelect::new(scx, query, filter, None, Some(&["name", "replicas"]))
+}
+
+pub fn show_cluster_profiles<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let query =
+        "SELECT cluster, profile AS name FROM mz_internal.mz_show_cluster_profiles".to_string();
+
+    ShowSelect::new(scx, query, filter, None, Some(&["cluster", "name"]))
 }
 
 pub fn show_cluster_replicas<'a>(

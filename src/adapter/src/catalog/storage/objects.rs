@@ -12,8 +12,8 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
 use crate::catalog::storage::{
-    ClusterItemVariant, ClusterReplica, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    SystemPrivilegesKey, SystemPrivilegesValue,
+    ClusterItemVariant, ClusterProfile, ClusterReplica, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, SystemPrivilegesKey, SystemPrivilegesValue,
 };
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
@@ -252,6 +252,9 @@ impl RustType<proto::ClusterItemValue> for ClusterItemValue {
 impl RustType<proto::cluster_item_value::Item> for ClusterItemVariant {
     fn into_proto(&self) -> proto::cluster_item_value::Item {
         match self {
+            ClusterItemVariant::Profile(profile) => {
+                proto::cluster_item_value::Item::Profile(profile.into_proto())
+            }
             ClusterItemVariant::Replica(replica) => {
                 proto::cluster_item_value::Item::Replica(replica.into_proto())
             }
@@ -260,6 +263,9 @@ impl RustType<proto::cluster_item_value::Item> for ClusterItemVariant {
 
     fn from_proto(proto: proto::cluster_item_value::Item) -> Result<Self, TryFromProtoError> {
         Ok(match proto {
+            proto::cluster_item_value::Item::Profile(profile) => {
+                Self::Profile(profile.into_rust()?)
+            }
             proto::cluster_item_value::Item::Replica(replica) => {
                 Self::Replica(replica.into_rust()?)
             }
@@ -267,15 +273,36 @@ impl RustType<proto::cluster_item_value::Item> for ClusterItemVariant {
     }
 }
 
+impl RustType<proto::ClusterProfileConfig> for ClusterProfile {
+    fn into_proto(&self) -> proto::ClusterProfileConfig {
+        proto::ClusterProfileConfig {
+            replica_config: Some(self.replica_config.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterProfileConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            replica_config: proto
+                .replica_config
+                .into_rust_if_some("ClusterProfileConfig::replica_config")?,
+        })
+    }
+}
+
 impl RustType<proto::ClusterReplicaConfig> for ClusterReplica {
     fn into_proto(&self) -> proto::ClusterReplicaConfig {
         proto::ClusterReplicaConfig {
+            profile_id: self.profile_id.into_proto(),
             replica_config: Some(self.replica_config.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::ClusterReplicaConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
+            profile_id: proto
+                .profile_id
+                .map(|profile_id| profile_id.into_rust())
+                .transpose()?,
             replica_config: proto
                 .replica_config
                 .into_rust_if_some("ClusterProfileConfig::replica_config")?,

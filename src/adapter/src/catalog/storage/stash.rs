@@ -605,6 +605,7 @@ pub async fn initialize(
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     item: Some(proto::cluster_item_value::Item::Replica(
                         proto::ClusterReplicaConfig {
+                            profile_id: None,
                             replica_config: Some(default_replica_config(options)),
                         },
                     )),

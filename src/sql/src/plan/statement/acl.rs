@@ -67,7 +67,10 @@ pub fn plan_alter_owner(
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterItem(_)) => {
+        (
+            ObjectType::ClusterProfile | ObjectType::ClusterReplica,
+            UnresolvedObjectName::ClusterItem(_),
+        ) => {
             bail_never_supported!("altering the owner of a cluster item");
         }
         (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
@@ -612,7 +615,11 @@ pub fn plan_alter_default_privileges(
         ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
         ),
-        ObjectType::Sink | ObjectType::ClusterReplica | ObjectType::Role | ObjectType::Func => {
+        ObjectType::Sink
+        | ObjectType::ClusterProfile
+        | ObjectType::ClusterReplica
+        | ObjectType::Role
+        | ObjectType::Func => {
             sql_bail!("{object_type}S do not have privileges")
         }
         ObjectType::Cluster | ObjectType::Database

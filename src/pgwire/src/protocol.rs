@@ -1692,6 +1692,7 @@ where
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::CreatedCluster { .. }
+            | ExecuteResponse::CreatedClusterProfile { .. }
             | ExecuteResponse::CreatedClusterReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }

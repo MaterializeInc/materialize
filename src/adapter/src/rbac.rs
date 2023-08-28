@@ -256,6 +256,7 @@ pub fn generate_required_role_membership(
         | Plan::CreateSchema(_)
         | Plan::CreateRole(_)
         | Plan::CreateCluster(_)
+        | Plan::CreateClusterProfile(_)
         | Plan::CreateClusterReplica(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
@@ -290,6 +291,7 @@ pub fn generate_required_role_membership(
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterItemRename(_)
         | Plan::AlterCluster(_)
+        | Plan::AlterClusterProfile(_)
         | Plan::AlterNoop(_)
         | Plan::AlterSetCluster(_)
         | Plan::AlterIndexSetOptions(_)
@@ -374,6 +376,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => Vec::new(),
+        Plan::CreateClusterProfile(plan) => vec![ObjectId::Cluster(plan.cluster_id)],
         Plan::CreateClusterReplica(plan) => vec![ObjectId::Cluster(plan.cluster_id)],
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(plan::CreateViewPlan { replace, .. })
@@ -385,6 +388,12 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan { id, .. })
         | Plan::AlterCluster(plan::AlterClusterPlan { id, .. }) => {
             vec![ObjectId::Cluster(*id)]
+        }
+        Plan::AlterClusterProfile(plan::AlterClusterProfilePlan { id, profile_id, .. }) => {
+            vec![
+                ObjectId::Cluster(*id),
+                ObjectId::ClusterItem((*id, *profile_id)),
+            ]
         }
         Plan::AlterClusterItemRename(plan) => {
             vec![ObjectId::ClusterItem((plan.cluster_id, plan.item_id))]
@@ -1062,10 +1071,22 @@ fn generate_required_privileges(
             name: _,
             options: _,
         })
+        | Plan::AlterClusterProfile(plan::AlterClusterProfilePlan {
+            id: _,
+            profile_id: _,
+            name: _,
+            options: _,
+        })
+        | Plan::CreateClusterProfile(plan::CreateClusterProfilePlan {
+            cluster_id: _,
+            name: _,
+            variant: _,
+        })
         | Plan::CreateClusterReplica(plan::CreateClusterReplicaPlan {
             cluster_id: _,
             name: _,
             config: _,
+            profile_id: _,
         })
         | Plan::DiscardTemp
         | Plan::DiscardAll
@@ -1357,6 +1378,7 @@ pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclM
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
+        SystemObjectType::Object(ObjectType::ClusterProfile) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Connection) => AclMode::USAGE,
@@ -1386,6 +1408,7 @@ pub(crate) const fn default_builtin_object_privilege(object_type: ObjectType) ->
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
+        | ObjectType::ClusterProfile
         | ObjectType::ClusterReplica
         | ObjectType::Secret
         | ObjectType::Connection

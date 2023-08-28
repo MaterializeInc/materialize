@@ -55,7 +55,7 @@ contains:`WITH (DISK)` for cluster replicas is not supported
 
 # Cannot set DISK on unmanaged clusters (the option is per replica)
 ! CREATE CLUSTER c REPLICAS (dff_3 (size '1')), DISK;
-contains:DISK not supported for unmanaged clusters
+contains:DISK not supported for an unmanaged CLUSTER
 
 # The following test that we don't crash envd with bad parameters, and instead just fallback
 # to safe parameters.

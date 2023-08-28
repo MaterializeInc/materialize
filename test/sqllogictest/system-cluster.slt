@@ -235,10 +235,10 @@ Explained Query:
         ArrangeBy keys=[[#0]]
           Get mz_catalog.mz_clusters
         ArrangeBy keys=[[#0]]
-          Project (#0, #19)
+          Project (#0, #20)
             Filter (#3) IS NOT NULL
-              Map (((uint8_to_double(#17) / uint8_to_double(#11)) * 100))
-                Join on=(#0 = #14 AND #3 = #7) type=differential
+              Map (((uint8_to_double(#18) / uint8_to_double(#12)) * 100))
+                Join on=(#0 = #15 AND #3 = #8) type=differential
                   ArrangeBy keys=[[#0]]
                     Get mz_catalog.mz_cluster_replicas
                   ArrangeBy keys=[[#0]]

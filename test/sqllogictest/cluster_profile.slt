@@ -1,0 +1,399 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Basic tests of the `CREATE CLUSTER` and `DROP CLUSTER` DDL statements.
+
+mode cockroach
+
+# Start from a pristine state
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
+----
+COMPLETE 0
+
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found EOF
+CREATE CLUSTER foo
+
+statement ok
+CREATE CLUSTER cl REPLICAS ()
+
+statement error db error: ERROR: cluster profiles is not supported
+CREATE CLUSTER PROFILE cl.foo REPLICAS ()
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_profiles = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER PROFILE cl.foo REPLICAS ()
+
+statement error db error: ERROR: unknown cluster item 'bar'
+ALTER CLUSTER PROFILE cl.bar RENAME TO bar
+
+statement ok
+ALTER CLUSTER PROFILE cl.foo RENAME TO bar
+
+statement error db error: ERROR: unknown cluster item 'foo'
+ALTER CLUSTER PROFILE cl.foo RENAME TO bar
+
+statement ok
+ALTER CLUSTER PROFILE IF EXISTS cl.bar RENAME TO foo
+
+statement ok
+ALTER CLUSTER PROFILE IF EXISTS cl.bar RENAME TO foo
+
+statement ok
+CREATE CLUSTER PROFILE cl.bar REPLICAS ()
+
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+ALTER CLUSTER cl.foo RENAME TO bar
+
+statement ok
+DROP CLUSTER PROFILE cl.foo
+
+statement ok
+DROP CLUSTER PROFILE cl.bar
+
+statement error REPLICAS specified more than once
+CREATE CLUSTER PROFILE cl.foo REPLICAS (), REPLICAS()
+
+# Creating cluster w/ remote replica works.
+statement ok
+CREATE CLUSTER PROFILE cl.foo REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1235'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['ct:1235']))
+
+statement error db error: ERROR: cannot create multiple replicas named 'foo' on cluster 'cl'
+CREATE CLUSTER PROFILE cl.foo REPLICAS (r1 (SIZE '1'))
+
+statement error db error: ERROR: cannot create multiple replicas named 'r1' on cluster 'cl'
+CREATE CLUSTER PROFILE cl.bar REPLICAS (r1 (SIZE '1'), r1 (SIZE '1'))
+
+statement error COMPUTE ADDRESSES specified more than once
+CREATE CLUSTER PROFILE cl.bar REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1235'], COMPUTE ADDRESSES ['localhost:1234']))
+
+statement error db error: ERROR: cannot create multiple replicas named 'r1' on cluster 'cl'
+CREATE CLUSTER PROFILE cl.bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+
+statement ok
+CREATE CLUSTER PROFILE cl.bar REPLICAS (bar_r1 (SIZE '1'), bar_r2 (SIZE '1'))
+
+query TT rowsort
+SELECT id, name FROM mz_clusters
+----
+s1  mz_system
+s2  mz_introspection
+u1  default
+u2  cl
+
+query T rowsort
+SELECT name FROM (SHOW CLUSTERS LIKE 'd%')
+----
+default
+
+query TT rowsort
+SELECT id, name FROM mz_cluster_profiles
+----
+u14  bar
+u4  foo
+
+query TT rowsort
+SELECT cluster, name FROM (SHOW CLUSTER PROFILES LIKE 'foo%')
+----
+cl  foo
+
+# Test invalid option combinations.
+
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1234'], SIZE 'small'))
+
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (SIZE '2', WORKERS 1))
+
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (SIZE '2', COMPUTE ADDRESSES ['localhost:1234']))
+
+statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTE ADDRESSES [], WORKERS 1))
+
+statement error STORAGECTL ADDRESSES and STORAGE ADDRESSES must have the same length
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTECTL ADDRESSES ['localhost:1234'], COMPUTE ADDRESSES ['localhost:1234'], WORKERS 1))
+
+statement error COMPUTECTL ADDRESSES and STORAGECTL ADDRESSES must have the same length
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES [], WORKERS 1))
+
+statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES ['localhost:1234', 'localhost:4567'], WORKERS 1))
+
+statement error WORKERS must be greater than 0
+CREATE CLUSTER PROFILE cl.baz REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1234'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235'], WORKERS 0))
+
+# Test valid DROPs
+
+statement ok
+DROP CLUSTER PROFILE cl.bar
+
+statement error db error: ERROR: Expected end of statement, found CASCADE
+DROP CLUSTER PROFILE cl.foo CASCADE
+
+statement ok
+DROP CLUSTER PROFILE cl.foo
+
+statement ok
+DROP CLUSTER cl
+
+statement ok
+CREATE CLUSTER cl REPLICAS ()
+
+# Test that bad cluster profile sizes don't cause a crash
+
+statement error unknown cluster replica size
+CREATE CLUSTER PROFILE cl.foo REPLICAS (a (SIZE 'lol'))
+
+statement ok
+CREATE CLUSTER PROFILE cl.foo REPLICAS (a (SIZE '1'))
+
+statement ok
+CREATE CLUSTER PROFILE cl.foo2 REPLICAS (b (SIZE '32'))
+
+statement ok
+CREATE CLUSTER PROFILE cl.foo3 REPLICAS (c (SIZE '2-2'))
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+cl  a  1
+cl  b  32
+cl  c  2-2
+default  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+# Ensure that identifiers are correctly handled in value position, even when
+# they can't be printed bare. We previously had a bug where `"1"` was
+# incorrectly parsed as size `"1"` (quotes included), but `"small"` was parsed
+# as size `small` (quotes excluded).
+statement ok
+CREATE CLUSTER PROFILE cl.foo4 REPLICAS (d (SIZE "1"))
+
+statement ok
+DROP CLUSTER PROFILE cl.foo, cl.foo2, cl.foo3, cl.foo4
+
+statement ok
+CREATE CLUSTER PROFILE cl.bar REPLICAS ()
+
+statement error invalid SIZE: must provide a string value
+CREATE CLUSTER REPLICA cl.size_1 IN PROFILE bar SIZE;
+
+statement ok
+CREATE CLUSTER REPLICA cl.size_1 IN PROFILE bar SIZE '1';
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+cl  size_1  1
+default  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+statement ok
+CREATE CLUSTER PROFILE cl.foo REPLICAS (foo_size_1 (SIZE '1'), foo_size_2 (SIZE '2'))
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+cl  foo_size_1  1
+cl  foo_size_2  2
+cl  size_1  1
+default  r1  1
+mz_introspection  r1  1
+mz_system  r1  1
+
+statement error db error: ERROR: CLUSTER REPLICA "cl"\."bar" is not a CLUSTER PROFILE
+DROP CLUSTER REPLICA IF EXISTS cl.bar
+
+statement error db error: ERROR: CLUSTER REPLICA "cl"\."foo" is not a CLUSTER PROFILE
+DROP CLUSTER REPLICA IF EXISTS cl.foo
+
+statement ok
+DROP CLUSTER REPLICA IF EXISTS default.foo
+
+query error db error: ERROR: CLUSTER REPLICA "cl"\."foo" is not a CLUSTER PROFILE
+DROP CLUSTER REPLICA cl.size_1, cl.foo
+
+statement ok
+DROP CLUSTER REPLICA cl.foo_size_1
+
+statement ok
+DROP CLUSTER REPLICA cl.size_1, cl.foo_size_2
+
+query TTT
+SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
+----
+default r1 1
+mz_introspection r1 1
+mz_system r1 1
+
+statement ok
+CREATE CLUSTER REPLICA cl.foo_bar SIZE '1'
+
+statement error db error: ERROR: "foo_bar" is a replica not a profile
+ALTER CLUSTER PROFILE cl.foo_bar SET (SIZE '1')
+
+statement error db error: ERROR: Expected dot, found RENAME
+ALTER CLUSTER PROFILE cl RENAME TO bar_foo
+
+statement ok
+ALTER CLUSTER PROFILE cl.foo_bar RENAME TO bar_foo
+
+statement error db error: ERROR: unknown cluster item 'foo_bar'
+ALTER CLUSTER PROFILE cl.foo_bar RENAME TO bar_foo
+
+statement ok
+ALTER CLUSTER PROFILE IF EXISTS cl.bar_foo RENAME TO foo_bar
+
+statement ok
+ALTER CLUSTER PROFILE IF EXISTS cl.bar_foo RENAME TO foo_bar
+
+statement ok
+CREATE CLUSTER REPLICA cl.bar_foo IN PROFILE foo SIZE '1'
+
+statement error stash error: uniqueness violation
+ALTER CLUSTER REPLICA cl.bar_foo RENAME TO foo_bar
+
+statement error stash error: uniqueness violation
+ALTER CLUSTER REPLICA cl.bar_foo RENAME TO foo
+
+statement ok
+DROP CLUSTER REPLICA cl.foo_bar
+
+statement ok
+DROP CLUSTER REPLICA cl.bar_foo
+
+statement ok
+CREATE CLUSTER REPLICA cl."foo-bar" SIZE '1'
+
+statement ok
+DROP CLUSTER REPLICA cl."foo-bar"
+
+statement ok
+CREATE CLUSTER PROFILE cl."foo-bar" REPLICAS ()
+
+statement ok
+DROP CLUSTER PROFILE cl."foo-bar"
+
+statement ok
+CREATE CLUSTER PROFILE "cl"."foo-bar" SIZE '1'
+
+statement ok
+DROP CLUSTER PROFILE "cl"."foo-bar"
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER default OWNER TO materialize
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER PROFILE default."好-好" SIZE '1'
+
+statement ok
+DROP CLUSTER PROFILE default."好-好"
+
+statement ok
+CREATE CLUSTER PROFILE default."好_好" SIZE '1'
+
+statement ok
+DROP CLUSTER PROFILE default."好_好"
+
+# clusters wo replicas cannot service selects
+
+statement ok
+CREATE CLUSTER empty REPLICAS ()
+
+statement ok
+CREATE CLUSTER PROFILE empty.empty REPLICAS ()
+
+statement ok
+SET cluster = empty
+
+query error CLUSTER "empty" has no replicas available to service request
+SELECT generate_series(1, 1);
+
+# Phillip's tests
+
+statement error zero-length delimited identifier
+CREATE CLUSTER PROFILE default."" SIZE '1';
+
+statement error unknown cluster
+CREATE CLUSTER PROFILE no_such_cluster.size_1 SIZE '1';
+
+statement error invalid SIZE
+CREATE CLUSTER PROFILE default.bad REPLICAS (size_2 (SIZE NULL));
+
+statement error unknown cluster replica size
+CREATE CLUSTER PROFILE default.bad REPLICAS (size_2 (SIZE ''));
+
+statement error unknown cluster replica size
+CREATE CLUSTER PROFILE default.bad REPLICAS (size_2 (SIZE 'no_such_size'));
+
+statement error invalid SIZE
+CREATE CLUSTER PROFILE default.bad REPLICAS (size_2 (SIZE 1));
+
+statement error unknown cluster replica size a
+CREATE CLUSTER PROFILE default.bad REPLICAS (size_2 (SIZE a));
+
+statement error unknown cluster
+DROP CLUSTER PROFILE no_such_cluster.bar
+
+statement ok
+RESET cluster
+
+# Availability zones
+# Note that we don't support availability zones configured with slt, so they
+# can't be meaningfully specified
+
+statement error db error: ERROR: Expected ZONES, found ZONE
+CREATE CLUSTER PROFILE default.replica SIZE '1', AVAILABILITY ZONE 'a'
+
+statement error db error: ERROR: Expected ZONES, found ZONE
+CREATE CLUSTER PROFILE default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found STORAGECTL
+CREATE CLUSTER PROFILE default.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
+
+statement error db error: ERROR: Expected one of AVAILABILITY or DISK or IDLE or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE, found STORAGECTL
+CREATE CLUSTER PROFILE default.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
+
+statement error db error: ERROR: Expected ZONES, found ZONE
+CREATE CLUSTER PROFILE default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESSES ['host']
+
+# Test that the contents of mz_cluster_replicas look sensible
+
+statement ok
+CREATE CLUSTER foo REPLICAS ()
+
+statement ok
+CREATE CLUSTER PROFILE foo.bar REPLICAS (bar_size_1 (SIZE '1'), bar_size_32 (SIZE '32'), bar_size_2_2 (SIZE '2-2'))
+
+query TTTTTTT
+SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
+----
+bar_size_1  1  1  18446744073709000000  18446744073709551615  1  1
+bar_size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
+bar_size_32  32  1  18446744073709000000  18446744073709551615  32  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  1  1  18446744073709000000  18446744073709551615  1  1
+
+statement ok
+DROP CLUSTER foo CASCADE
+
+# Restore pristine server state
+reset-server

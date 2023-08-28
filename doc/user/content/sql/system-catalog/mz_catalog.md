@@ -62,20 +62,33 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | The ID of the type.
 
+### `mz_cluster_profiles`
+
+The `mz_cluster_profiles` table contains a row for each cluster profile in the system.
+
+<!-- RELATION_SPEC mz_catalog.mz_cluster_profiles -->
+Field               | Type      | Meaning
+--------------------|-----------|--------
+`id`                | [`text`]  | Materialize's unique ID for the cluster profile.
+`name`              | [`text`]  | The name of the cluster profile.
+`cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+
 ### `mz_cluster_replicas`
 
 The `mz_cluster_replicas` table contains a row for each cluster replica in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_cluster_replicas -->
-Field               | Type      | Meaning
---------------------|-----------|--------
-`id`                | [`text`]  | Materialize's unique ID for the cluster replica.
-`name`              | [`text`]  | The name of the cluster replica.
-`cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
-`size`              | [`text`]  | The cluster replica's size, selected during creation.
-`availability_zone` | [`text`]  | The availability zone in which the cluster is running.
-`owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field               | Type        | Meaning
+--------------------|-------------|--------
+`id`                | [`text`]    | Materialize's unique ID for the cluster replica.
+`name`              | [`text`]    | The name of the cluster replica.
+`cluster_id`        | [`text`]    | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`size`              | [`text`]    | The cluster replica's size, selected during creation.
+`availability_zone` | [`text`]    | The availability zone in which the cluster is running.
+`owner_id`          | [`text`]    | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `disk`              | [`boolean`] | If the replica has a local disk.
+`profile_id`        | [`text`]    | The profile ID this replica belongs to, or `NULL`.
 
 ### `mz_clusters`
 

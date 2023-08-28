@@ -211,6 +211,7 @@ serde_plain::derive_display_from_serialize!(EventType);
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
+    ClusterProfile,
     ClusterReplica,
     Connection,
     Database,
@@ -232,6 +233,7 @@ impl ObjectType {
     pub fn as_title_case(&self) -> &'static str {
         match self {
             ObjectType::Cluster => "Cluster",
+            ObjectType::ClusterProfile => "Cluster Profile",
             ObjectType::ClusterReplica => "Cluster Replica",
             ObjectType::Connection => "Connection",
             ObjectType::Database => "Database",
@@ -255,6 +257,7 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for ObjectType {
     fn into_proto(&self) -> proto::audit_log_event_v1::ObjectType {
         match self {
             ObjectType::Cluster => proto::audit_log_event_v1::ObjectType::Cluster,
+            ObjectType::ClusterProfile => proto::audit_log_event_v1::ObjectType::ClusterProfile,
             ObjectType::ClusterReplica => proto::audit_log_event_v1::ObjectType::ClusterReplica,
             ObjectType::Connection => proto::audit_log_event_v1::ObjectType::Connection,
             ObjectType::Database => proto::audit_log_event_v1::ObjectType::Database,
@@ -276,6 +279,7 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for ObjectType {
     fn from_proto(proto: proto::audit_log_event_v1::ObjectType) -> Result<Self, TryFromProtoError> {
         match proto {
             proto::audit_log_event_v1::ObjectType::Cluster => Ok(ObjectType::Cluster),
+            proto::audit_log_event_v1::ObjectType::ClusterProfile => Ok(ObjectType::ClusterProfile),
             proto::audit_log_event_v1::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
             proto::audit_log_event_v1::ObjectType::Connection => Ok(ObjectType::Connection),
             proto::audit_log_event_v1::ObjectType::Database => Ok(ObjectType::Database),

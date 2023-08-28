@@ -1935,7 +1935,20 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         // hasn't specified them.
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
-        .with_column("disk", ScalarType::Bool.nullable(true)),
+        .with_column("disk", ScalarType::Bool.nullable(true))
+        // `NULL` for replicas that aren't part of a profile.
+        .with_column("profile_id", ScalarType::String.nullable(true)),
+    is_retained_metrics_object: true,
+});
+
+pub static MZ_CLUSTER_PROFILES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_profiles",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: true,
 });
 
@@ -4259,6 +4272,20 @@ FROM
     ON idxs.id = keys.id",
 };
 
+pub const MZ_SHOW_CLUSTER_PROFILES: BuiltinView = BuiltinView {
+    name: "mz_show_cluster_profiles",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_profiles
+AS SELECT
+    mz_catalog.mz_clusters.name AS cluster,
+    mz_catalog.mz_cluster_profiles.name AS profile
+FROM
+    mz_catalog.mz_cluster_profiles
+        JOIN mz_catalog.mz_clusters
+            ON mz_catalog.mz_cluster_profiles.cluster_id = mz_catalog.mz_clusters.id
+ORDER BY 1, 2"#,
+};
+
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5069,6 +5096,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
+        Builtin::Table(&MZ_CLUSTER_PROFILES),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
@@ -5134,6 +5162,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
+        Builtin::View(&MZ_SHOW_CLUSTER_PROFILES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),

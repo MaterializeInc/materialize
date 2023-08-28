@@ -519,6 +519,7 @@ impl Coordinator {
 
                     // Statements below must by run singly (in Started).
                     Statement::AlterCluster(_)
+                    | Statement::AlterClusterProfile(_)
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
@@ -533,6 +534,7 @@ impl Coordinator {
                     | Statement::AlterSystemResetAll(_)
                     | Statement::AlterSystemSet(_)
                     | Statement::CreateCluster(_)
+                    | Statement::CreateClusterProfile(_)
                     | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)

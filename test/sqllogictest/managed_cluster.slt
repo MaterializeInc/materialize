@@ -67,37 +67,37 @@ default
 
 # Test invalid option combinations.
 
-statement error db error: ERROR: REPLICAS not supported for managed clusters
+statement error db error: ERROR: REPLICAS not supported for managed CLUSTER
 CREATE CLUSTER baz REPLICAS (), MANAGED
 
 statement ok
 CREATE CLUSTER baz REPLICAS (), MANAGED = false
 
-statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+statement error db error: ERROR: REPLICATION FACTOR not supported for an unmanaged CLUSTER
 ALTER CLUSTER baz SET (REPLICATION FACTOR 2)
 
-statement error db error: ERROR: SIZE not supported for unmanaged clusters
+statement error db error: ERROR: SIZE not supported for an unmanaged CLUSTER
 ALTER CLUSTER baz SET (SIZE '2')
 
 statement ok
 ALTER CLUSTER baz RESET (REPLICAS)
 
-statement error db error: ERROR: Cannot change REPLICATION FACTOR of unmanaged clusters
+statement error db error: ERROR: Cannot change REPLICATION FACTOR of an unmanaged CLUSTER
 ALTER CLUSTER baz RESET (REPLICATION FACTOR)
 
-statement error db error: ERROR: Cannot change SIZE of unmanaged clusters
+statement error db error: ERROR: Cannot change SIZE of an unmanaged CLUSTER
 ALTER CLUSTER baz RESET (SIZE)
 
-statement error db error: ERROR: Cannot change AVAILABILITY ZONES of unmanaged clusters
+statement error db error: ERROR: Cannot change AVAILABILITY ZONES of an unmanaged CLUSTER
 ALTER CLUSTER baz RESET (AVAILABILITY ZONES)
 
-statement error db error: ERROR: Cannot change INTROSPECTION DEGUBBING of unmanaged clusters
+statement error db error: ERROR: Cannot change INTROSPECTION DEBUGGING of an unmanaged CLUSTER
 ALTER CLUSTER baz RESET (INTROSPECTION DEBUGGING)
 
-statement error db error: ERROR: Cannot change INTROSPECTION INTERVAL of unmanaged clusters
+statement error db error: ERROR: Cannot change INTROSPECTION INTERVAL of an unmanaged CLUSTER
 ALTER CLUSTER baz RESET (INTROSPECTION INTERVAL)
 
-statement error db error: ERROR: Cannot change IDLE ARRANGEMENT MERGE EFFORT of unmanaged clusters
+statement error db error: ERROR: Cannot change IDLE ARRANGEMENT MERGE EFFORT of an unmanaged CLUSTER
 ALTER CLUSTER baz RESET (IDLE ARRANGEMENT MERGE EFFORT)
 
 statement error db error: ERROR: Missing SIZE for empty cluster
@@ -109,16 +109,16 @@ ALTER CLUSTER baz SET (MANAGED, SIZE '1')
 statement ok
 DROP CLUSTER baz
 
-statement error db error: ERROR: SIZE not supported for unmanaged clusters
+statement error db error: ERROR: SIZE not supported for an unmanaged CLUSTER
 CREATE CLUSTER baz REPLICAS (), SIZE '1'
 
-statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+statement error db error: ERROR: REPLICATION FACTOR not supported for an unmanaged CLUSTER
 CREATE CLUSTER baz REPLICAS (), REPLICATION FACTOR 0
 
-statement error db error: ERROR: INTROSPECTION DEBUGGING not supported for unmanaged clusters
+statement error db error: ERROR: INTROSPECTION DEBUGGING not supported for an unmanaged CLUSTER
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION DEBUGGING = true
 
-statement error db error: ERROR: INTROSPECTION INTERVAL not supported for unmanaged clusters
+statement error db error: ERROR: INTROSPECTION INTERVAL not supported for an unmanaged CLUSTER
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 
 query TTT
@@ -312,7 +312,7 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.foo
 
-statement error db error: ERROR: CLUSTER foo has no CLUSTER REPLICA named "r1"
+statement error db error: ERROR: unknown cluster item 'r1'
 DROP CLUSTER REPLICA foo.r1
 
 
@@ -387,7 +387,7 @@ CREATE CLUSTER foo SIZE '1', replication factor 1
 statement ok
 CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
 
-statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
+statement error db error: ERROR: cannot create more than one replica of a CLUSTER containing sources or sinks
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 statement ok

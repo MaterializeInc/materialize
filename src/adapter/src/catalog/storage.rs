@@ -150,6 +150,7 @@ fn add_new_builtin_cluster_replicas_migration(
                 builtin_replica.name,
                 MZ_SYSTEM_ROLE_ID,
                 config,
+                None,
             )?;
         }
     }
@@ -734,6 +735,21 @@ impl Connection {
         Ok(())
     }
 
+    /// Set the configuration of a profile.
+    /// This accepts only one item, as we currently use this only for the default cluster
+    pub async fn set_cluster_profile_config(
+        &mut self,
+        replica_id: ReplicaId,
+        cluster_id: ClusterId,
+        name: String,
+        owner_id: RoleId,
+        replica_config: ClusterConfig,
+    ) -> Result<(), Error> {
+        let item = ClusterItemVariant::Profile(ClusterProfile { replica_config });
+        self.set_cluster_item_config(replica_id, cluster_id, name, owner_id, item)
+            .await
+    }
+
     /// Set the configuration of a replica.
     /// This accepts only one item, as we currently use this only for the default cluster
     pub async fn set_replica_config(
@@ -743,8 +759,10 @@ impl Connection {
         name: String,
         config: &ReplicaConfig,
         owner_id: RoleId,
+        profile_id: Option<ReplicaId>,
     ) -> Result<(), Error> {
         let item = ClusterItemVariant::Replica(ClusterReplica {
+            profile_id,
             replica_config: config.clone().into(),
         });
         self.set_cluster_item_config(replica_id, cluster_id, name, owner_id, item)
@@ -1336,6 +1354,24 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Insert a cluster profile. Returns an error if the item already exists.
+    pub(crate) fn insert_cluster_profile(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        name: &str,
+        owner_id: RoleId,
+        replica_config: ClusterConfig,
+    ) -> Result<(), Error> {
+        self.insert_cluster_item(
+            cluster_id,
+            replica_id,
+            name,
+            owner_id,
+            ClusterItemVariant::Profile(ClusterProfile { replica_config }),
+        )
+    }
+
     /// Insert a cluster replica. Returns an error if the item already exists.
     pub(crate) fn insert_cluster_replica(
         &mut self,
@@ -1344,13 +1380,17 @@ impl<'a> Transaction<'a> {
         replica_name: &str,
         owner_id: RoleId,
         replica_config: SerializedReplicaConfig,
+        profile_id: Option<ReplicaId>,
     ) -> Result<(), Error> {
         self.insert_cluster_item(
             cluster_id,
             replica_id,
             replica_name,
             owner_id,
-            ClusterItemVariant::Replica(ClusterReplica { replica_config }),
+            ClusterItemVariant::Replica(ClusterReplica {
+                profile_id,
+                replica_config,
+            }),
         )
     }
 
@@ -1704,8 +1744,14 @@ impl<'a> Transaction<'a> {
                     name: entry.name.clone(),
                     owner_id: entry.owner_id,
                     item: match &entry.item {
+                        catalog::ClusterItem::Profile(profile) => {
+                            ClusterItemVariant::Profile(ClusterProfile {
+                                replica_config: profile.replica_config.clone(),
+                            })
+                        }
                         catalog::ClusterItem::Replica(replica) => {
                             ClusterItemVariant::Replica(ClusterReplica {
+                                profile_id: replica.profile_id,
                                 replica_config: replica.config.clone().into(),
                             })
                         }
@@ -2118,11 +2164,18 @@ pub struct ClusterItem {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub enum ClusterItemVariant {
+    Profile(ClusterProfile),
     Replica(ClusterReplica),
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterProfile {
+    pub replica_config: ClusterConfig,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplica {
+    pub profile_id: Option<ReplicaId>,
     pub replica_config: SerializedReplicaConfig,
 }
 

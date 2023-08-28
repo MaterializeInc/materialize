@@ -471,6 +471,7 @@ mz_audit_events
 mz_aws_privatelink_connections
 mz_base_types
 mz_clusters
+mz_cluster_profiles
 mz_cluster_replicas
 mz_columns
 mz_connections
@@ -625,6 +626,7 @@ mz_show_database_privileges
 mz_show_default_privileges
 mz_show_all_my_privileges
 mz_show_my_cluster_privileges
+mz_show_cluster_profiles
 mz_show_cluster_replicas
 mz_show_my_database_privileges
 mz_show_my_default_privileges
@@ -654,7 +656,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-51
+52
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

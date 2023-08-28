@@ -187,6 +187,10 @@ pub enum PlanError {
     ManagedCluster {
         cluster_name: String,
     },
+    ManagedProfile {
+        cluster_name: String,
+        profile_name: String,
+    },
     EmptyPublication(String),
     SubsourceNameConflict {
         name: UnresolvedItemName,
@@ -529,6 +533,7 @@ impl fmt::Display for PlanError {
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
+            Self::ManagedProfile {cluster_name, profile_name} => write!(f, "cannot modify managed profile {profile_name} in cluster {cluster_name}"),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
             Self::SubsourceNameConflict { name, upstream_references } => {

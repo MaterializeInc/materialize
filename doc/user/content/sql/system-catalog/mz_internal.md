@@ -1081,6 +1081,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_profiles -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
