@@ -367,6 +367,21 @@ impl MirRelationExpr {
         RelationType::new(column_types).with_keys(unique_keys)
     }
 
+    /// Reports the column types of the relation given the column types of the
+    /// input relations.
+    ///
+    /// This method delegates to `try_col_with_input_cols`, panicing if an `Err`
+    /// variant is returned.
+    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ColumnType>
+    where
+        I: Iterator<Item = &'a Vec<ColumnType>>,
+    {
+        match self.try_col_with_input_cols(input_types) {
+            Ok(col_types) => col_types,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
     /// Reports the column types of the relation given the column types of the input relations.
     ///
     /// `input_types` is required to contain the column types for the input relations of
@@ -378,13 +393,16 @@ impl MirRelationExpr {
     ///
     /// It is meant to be used during post-order traversals to compute column types
     /// incrementally.
-    pub fn col_with_input_cols<'a, I>(&self, mut input_types: I) -> Vec<ColumnType>
+    pub fn try_col_with_input_cols<'a, I>(
+        &self,
+        mut input_types: I,
+    ) -> Result<Vec<ColumnType>, String>
     where
         I: Iterator<Item = &'a Vec<ColumnType>>,
     {
         use MirRelationExpr::*;
 
-        match self {
+        let col_types = match self {
             Constant { rows, typ } => {
                 let mut col_types = typ.column_types.clone();
                 let mut seen_null = vec![false; typ.arity()];
@@ -482,13 +500,14 @@ impl MirRelationExpr {
                     for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
                         *base_col = base_col
                             .union(col)
-                            .map_err(|e| format!("{}\nIn {:#?}", e, self))
-                            .unwrap();
+                            .map_err(|e| format!("{}\nin plan:\n{}", e, self.pretty()))?;
                     }
                 }
                 result
             }
-        }
+        };
+
+        Ok(col_types)
     }
 
     /// Reports the unique keys of the relation given the arities and the unique
