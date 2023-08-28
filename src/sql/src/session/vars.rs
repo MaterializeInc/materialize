@@ -744,7 +744,7 @@ mod upsert_rocksdb {
     /// Defaults to true, i.e. autospill will always be on when using `DISK`.
     pub const UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_auto_spill_to_disk"),
-        value: &true,
+        value: &false,
         description:
             "Controls whether automatic spill to disk should be turned on when using `DISK`",
         internal: true,
