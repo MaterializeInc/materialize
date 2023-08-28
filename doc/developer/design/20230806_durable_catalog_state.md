@@ -272,10 +272,7 @@ NB: The storage events are read once at start-time and never read again.
 
 #### Reads
 
-All reads (except for the deploy generation) will perform the follow steps:
-
-1. Confirm leadership.
-2. Return an object from the in memory cache.
+All reads (except for the deploy generation) will return an object from the in memory cache.
 
 Reading the deploy generation will perform the following steps:
 
