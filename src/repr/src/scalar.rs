@@ -2818,18 +2818,25 @@ impl<'a> ScalarType {
             ])
         });
         static NUMERIC: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[
-                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
-            ])
+            cfg_if::cfg_if! {
+                // Numerics can't currently be instantiated under Miri
+                if #[cfg(miri)] {
+                    Row::pack_slice(&[])
+                } else {
+                    Row::pack_slice(&[
+                        Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
+                    ])
+                }
+            }
         });
         static DATE: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
