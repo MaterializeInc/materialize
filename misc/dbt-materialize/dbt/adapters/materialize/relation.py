@@ -15,13 +15,14 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Type
 
 from dbt.adapters.postgres import PostgresRelation
 from dbt.dataclass_schema import StrEnum
 from dbt.utils import classproperty
 
 
+# types in ./misc/dbt-materialize need to import generic types from typing
 class MaterializeRelationType(StrEnum):
     # Built-in materialization types.
     Table = "table"
@@ -47,5 +48,5 @@ class MaterializeRelation(PostgresRelation):
         return 255
 
     @classproperty
-    def get_relation_type(cls) -> type[MaterializeRelationType]:
+    def get_relation_type(cls) -> Type[MaterializeRelationType]:
         return MaterializeRelationType

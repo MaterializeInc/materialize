@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
@@ -27,9 +27,10 @@ from dbt.contracts.graph.nodes import ConstraintType
 from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 
+# types in ./misc/dbt-materialize need to import generic types from typing
 @dataclass
 class MaterializeIndexConfig(dbtClassMixin):
-    columns: Optional[list[str]] = None
+    columns: Optional[List[str]] = None
     default: Optional[bool] = False
     name: Optional[str] = None
     cluster: Optional[str] = None
@@ -95,7 +96,7 @@ class MaterializeAdapter(PostgresAdapter):
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
-    ) -> list[MaterializeRelation]:
+    ) -> List[MaterializeRelation]:
         kwargs = {"schema_relation": schema_relation}
         results = self.execute_macro(LIST_RELATIONS_MACRO_NAME, kwargs=kwargs)
 
