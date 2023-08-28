@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import sys
-from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -55,7 +54,7 @@ class OutputPrinter(BaseOutputPrinter):
         )
         self.print_empty_line()
 
-    def print_reproduction_code(self, errors: List[ValidationError]) -> None:
+    def print_reproduction_code(self, errors: list[ValidationError]) -> None:
         self.reproduction_code_printer.print_reproduction_code(errors)
 
     def flush(self) -> None:

@@ -9,7 +9,7 @@
 
 from importlib import resources
 from pathlib import Path
-from typing import List, cast
+from typing import cast
 
 
 def resource_path(name: str) -> Path:
@@ -18,7 +18,7 @@ def resource_path(name: str) -> Path:
     return cast(Path, resources.files(__package__)) / name
 
 
-def scenarios() -> List[str]:
+def scenarios() -> list[str]:
     """
     Determines a list of avilable scenarios based on the intersection
     of files located in both the `schema` and `workload` resource paths.

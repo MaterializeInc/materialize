@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Callable, List, Set
+from typing import Callable
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -24,12 +24,12 @@ from materialize.output_consistency.operation.operation_args_validator import (
 class NumericArgsValidator(OperationArgsValidator):
     def index_of_type_with_properties(
         self,
-        args: List[Expression],
+        args: list[Expression],
         match_type_properties: Callable[[NumberDataType], bool],
     ) -> int:
         def has_numeric_type_properties(
             arg: Expression,
-            _arg_characteristics: Set[ExpressionCharacteristics],
+            _arg_characteristics: set[ExpressionCharacteristics],
             _index: int,
         ) -> bool:
             data_type = arg.try_resolve_exact_data_type()
@@ -44,7 +44,7 @@ class NumericArgsValidator(OperationArgsValidator):
 class Uint8MixedWithTypedArgsValidator(NumericArgsValidator):
     """To identify expressions that contain a value of UINT8 type and a value of an unsigned numeric type (heuristic to identify no matching operators)"""
 
-    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         if len(args) < 2:
             return False
 
@@ -61,7 +61,7 @@ class Uint8MixedWithTypedArgsValidator(NumericArgsValidator):
 class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
     """To identify single-value expressions holding a large value (basic heuristic to predict numeric overflows)"""
 
-    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         return args[0].has_any_characteristic(
             {
                 ExpressionCharacteristics.LARGE_VALUE,
@@ -73,7 +73,7 @@ class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
 class MultiParamValueGrowsArgsValidator(OperationArgsValidator):
     """To identify expressions that contain a MAX_VALUE and another non-empty value (basic heuristic to predict numeric overflows)"""
 
-    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         index_of_max_value = self.index_of_characteristic_combination(
             args, {ExpressionCharacteristics.MAX_VALUE}
         )
@@ -93,7 +93,7 @@ class MultiParamValueGrowsArgsValidator(OperationArgsValidator):
 class MaxMinusNegMaxArgsValidator(OperationArgsValidator):
     """To identify expressions that contain a MAX_VALUE and a negative MAX_VALUE (basic heuristic to predict numeric overflows)"""
 
-    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         if len(args) != 2:
             return False
 

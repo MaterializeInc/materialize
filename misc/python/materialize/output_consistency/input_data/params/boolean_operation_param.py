@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional, Set
+from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -25,7 +25,7 @@ class BooleanOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             DataTypeCategory.BOOLEAN,
@@ -35,6 +35,6 @@ class BooleanOperationParam(OperationParam):
         )
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return data_type.identifier == BOOLEAN_TYPE_IDENTIFIER

@@ -12,7 +12,7 @@ import socket
 import subprocess
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from materialize.cloudtest.util.common import eprint, retry
 from materialize.cloudtest.util.docker_env import docker_env
@@ -29,7 +29,7 @@ class Endpoint:
         return f"{self.scheme}://{self.host}:{self.port}"
 
     @property
-    def host_port(self) -> Tuple[str, int]:
+    def host_port(self) -> tuple[str, int]:
         return (self.host, self.port)
 
     @classmethod
@@ -58,7 +58,7 @@ class ControllerDefinition:
 
 
 def wait_for_connectable(
-    address: Union[Tuple[Any, int], str],
+    address: Union[tuple[Any, int], str],
     max_attempts: int = 30,
 ) -> None:
     def f() -> None:
@@ -102,7 +102,7 @@ def parse_url(s: str) -> urllib.parse.ParseResult:
     return parsed
 
 
-def launch_controllers(controller_names: List[str]) -> None:
+def launch_controllers(controller_names: list[str]) -> None:
     try:
         subprocess.run(
             [

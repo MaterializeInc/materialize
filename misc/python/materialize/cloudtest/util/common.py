@@ -10,7 +10,7 @@
 import sys
 from functools import partial
 from time import sleep
-from typing import Any, Callable, Optional, Type, cast
+from typing import Any, Callable, Optional, cast
 
 eprint = partial(print, file=sys.stderr)
 
@@ -18,7 +18,7 @@ eprint = partial(print, file=sys.stderr)
 def retry(
     f: Callable[[], Any],
     max_attempts: int,
-    exception_types: list[Type[Exception]],
+    exception_types: list[type[Exception]],
     sleep_secs: int = 1,
     message: Optional[str] = None,
 ) -> Any:

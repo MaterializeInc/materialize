@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import requests
 from requests import Response
@@ -22,7 +22,7 @@ from materialize.cloudtest.util.web_request import delete, get, patch
 def create_environment_assignment(
     config: EnvironmentConfig,
     image: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     environment_assignment = f"{config.auth.organization_id}-0"
     environment = f"environment-{environment_assignment}"
 
@@ -53,7 +53,7 @@ def create_environment_assignment(
 
 def wait_for_environmentd(
     config: EnvironmentConfig, max_attempts: int = 300
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     def get_environment() -> Response:
         response = get(
             config,
@@ -66,7 +66,7 @@ def wait_for_environmentd(
         assert region_info.get("sqlAddress")
         return response
 
-    environment_json: Dict[str, Any] = retry(
+    environment_json: dict[str, Any] = retry(
         get_environment, 600, [AssertionError]
     ).json()
     pgwire_url = environment_json["regionInfo"]["sqlAddress"]

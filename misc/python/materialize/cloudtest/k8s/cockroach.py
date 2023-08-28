@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from pathlib import Path
-from typing import List
 
 from kubernetes.client import (
     V1ConfigMap,
@@ -125,7 +124,7 @@ def cockroach_resources(
     / "misc"
     / "cockroach"
     / "setup_materialize.sql",
-) -> List[K8sResource]:
+) -> list[K8sResource]:
     return [
         CockroachConfigMap(namespace, path_to_setup_script),
         CockroachService(namespace),

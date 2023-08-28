@@ -13,7 +13,7 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Optional
 
 from materialize import MZ_ROOT, spawn
 
@@ -55,8 +55,8 @@ def target(arch: Arch) -> str:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: List[str], channel: Optional[str] = None
-) -> List[str]:
+    arch: Arch, subcommand: str, rustflags: list[str], channel: Optional[str] = None
+) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
     Args:
@@ -101,7 +101,7 @@ def cargo(
             "-Clink-arg=-fuse-ld=lld",
             f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
         ]
-        extra_env: Dict[str, str] = {}
+        extra_env: dict[str, str] = {}
 
     env = {
         **extra_env,
@@ -121,7 +121,7 @@ def cargo(
 
 def tool(
     arch: Arch, name: str, channel: Optional[str] = None, prefix_name: bool = True
-) -> List[str]:
+) -> list[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
@@ -143,7 +143,7 @@ def tool(
     ]
 
 
-def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
+def _enter_builder(arch: Arch, channel: Optional[str] = None) -> list[str]:
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
@@ -29,8 +29,8 @@ class StartMz(MzcomposeAction):
     def __init__(
         self,
         tag: Optional[MzVersion] = None,
-        environment_extra: List[str] = [],
-        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        environment_extra: list[str] = [],
+        system_parameter_defaults: Optional[dict[str, str]] = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra

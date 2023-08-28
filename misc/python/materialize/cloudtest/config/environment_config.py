@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 import pytest
 
@@ -32,7 +32,7 @@ class ControllerDefinitions:
     internal_api_server = ControllerDefinition("internal-api-server", "8032")
     region_api_server = ControllerDefinition("region-api-server", "8033")
 
-    def all(self) -> List[ControllerDefinition]:
+    def all(self) -> list[ControllerDefinition]:
         return [
             self.region,
             self.environment,

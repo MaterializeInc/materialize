@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, List, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import psycopg
 from psycopg.connection import Connection
@@ -23,7 +23,7 @@ def sql_query(
     conn: Connection[Any],
     query: str,
     vars: Optional[Sequence[Any]] = None,
-) -> List[List[Any]]:
+) -> list[list[Any]]:
     cur = conn.cursor()
     cur.execute(query.encode("utf8"), vars)
     return [list(row) for row in cur]
@@ -67,7 +67,7 @@ def sql_query_pgwire(
     config: EnvironmentConfig,
     query: str,
     vars: Optional[Sequence[Any]] = None,
-) -> List[List[Any]]:
+) -> list[list[Any]]:
     with pgwire_sql_conn(config) as conn:
         eprint(f"QUERY: {query}")
         return sql_query(conn, query, vars)
@@ -83,7 +83,7 @@ def sql_execute_pgwire(
         return sql_execute(conn, query, vars)
 
 
-def sql_query_http(config: EnvironmentConfig, query: str) -> List[List[Any]]:
+def sql_query_http(config: EnvironmentConfig, query: str) -> list[list[Any]]:
     environment = wait_for_environmentd(config)
     environmentd_url: str = environment["regionInfo"]["httpAddress"]
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
@@ -93,5 +93,5 @@ def sql_query_http(config: EnvironmentConfig, query: str) -> List[List[Any]]:
         "/api/sql",
         {"query": query},
     )
-    rows: List[List[Any]] = response.json()["results"][0]["rows"]
+    rows: list[list[Any]] = response.json()["results"][0]["rows"]
     return rows

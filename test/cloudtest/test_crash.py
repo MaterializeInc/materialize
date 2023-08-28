@@ -10,7 +10,6 @@
 
 import subprocess
 from textwrap import dedent
-from typing import Tuple
 
 from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
@@ -111,7 +110,7 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
         assert p.status.container_statuses is not None
         return p.status.container_statuses[0].restart_count
 
-    def get_replica() -> Tuple[V1Pod, V1StatefulSet]:
+    def get_replica() -> tuple[V1Pod, V1StatefulSet]:
         """Find the stateful set for the replica of the default cluster"""
         compute_pod_name = "cluster-u1-replica-u1-0"
         ss_name = "cluster-u1-replica-u1"

@@ -9,7 +9,7 @@
 
 import operator
 import urllib.parse
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 from kubernetes.client import (
     V1Container,
@@ -93,7 +93,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
-        self.env: Dict[str, str] = {}
+        self.env: dict[str, str] = {}
         self.minio_namespace = minio_namespace
         self.cockroach_namespace = cockroach_namespace
         super().__init__(namespace)
@@ -139,7 +139,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ),
         )
 
-    def claim_templates(self) -> List[V1PersistentVolumeClaim]:
+    def claim_templates(self) -> list[V1PersistentVolumeClaim]:
         claim_templates = [
             V1PersistentVolumeClaim(
                 metadata=V1ObjectMeta(name="data"),
@@ -163,7 +163,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         return claim_templates
 
-    def args(self) -> List[str]:
+    def args(self) -> list[str]:
         s3_endpoint = urllib.parse.quote(
             f"http://minio-service.{self.minio_namespace}:9000"
         )
@@ -238,7 +238,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         return args
 
-    def env_vars(self) -> List[V1EnvVar]:
+    def env_vars(self) -> list[V1EnvVar]:
         value_from = V1EnvVarSource(
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )

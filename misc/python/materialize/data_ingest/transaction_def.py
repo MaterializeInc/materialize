@@ -10,7 +10,7 @@
 import random
 import time
 from enum import Enum
-from typing import Iterator, List, Optional
+from typing import Iterator, Optional
 
 from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field
@@ -25,19 +25,19 @@ class TransactionSize(Enum):
 
 
 class TransactionDef:
-    operations: List[Definition]
+    operations: list[Definition]
     size: TransactionSize
 
     def __init__(
         self,
-        operations: List[Definition],
+        operations: list[Definition],
         size: TransactionSize = TransactionSize.SINGLE_OPERATION,
     ):
         self.operations = operations
         self.size = size
 
-    def generate(self, fields: List[Field]) -> Iterator[Optional[Transaction]]:
-        full_rowlist: List[RowList] = []
+    def generate(self, fields: list[Field]) -> Iterator[Optional[Transaction]]:
+        full_rowlist: list[RowList] = []
         for definition in self.operations:
             for i, rowlist in enumerate(definition.generate(fields)):
                 full_rowlist.append(rowlist)
@@ -56,7 +56,7 @@ class RestartMz(TransactionDef):
         self.composition = composition
         self.probability = probability
 
-    def generate(self, fields: List[Field]) -> Iterator[Optional[Transaction]]:
+    def generate(self, fields: list[Field]) -> Iterator[Optional[Transaction]]:
         if random.random() < self.probability:
             self.composition.kill("materialized")
             time.sleep(1)

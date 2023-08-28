@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Capability
@@ -16,7 +16,7 @@ from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.watermarks import Watermarks
 
-WatermarkedObjects = List[
+WatermarkedObjects = list[
     Union[
         TableExists,
         SourceExists,

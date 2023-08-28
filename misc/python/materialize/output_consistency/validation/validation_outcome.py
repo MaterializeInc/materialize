@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from enum import Enum
-from typing import List, Optional, Sequence
+from typing import Optional, Sequence
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     InconsistencyIgnoreFilter,
@@ -48,9 +48,9 @@ class ValidationOutcome:
     def __init__(self) -> None:
         self.success_reason: Optional[str] = None
         self.count_ignored_errors = 0
-        self.errors: List[ValidationError] = []
-        self.warnings: List[ValidationWarning] = []
-        self.remarks: List[ValidationRemark] = []
+        self.errors: list[ValidationError] = []
+        self.warnings: list[ValidationWarning] = []
+        self.remarks: list[ValidationRemark] = []
 
     def add_error(
         self, ignore_filter: InconsistencyIgnoreFilter, error: ValidationError
