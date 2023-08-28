@@ -35,7 +35,7 @@ use crate::cache::StateCache;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::{Cursor, EncodedPart};
-use crate::internal::encoding::UntypedState;
+use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
@@ -225,13 +225,10 @@ pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serializ
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
-    // let state = state_versions
-    //     .fetch_current_state::<u64>(&shard_id, versions.0.clone())
-    //     .await
-    //     .into_proto();
-    // WIP
-    let state = "abc";
-    Ok(state)
+    let state = state_versions
+        .fetch_current_state::<u64>(&shard_id, versions.0.clone())
+        .await;
+    Ok(Rollup::from_untyped_state_without_diffs(state).into_proto())
 }
 
 /// Fetches a state rollup of a given shard. If the seqno is not provided, choose the latest;
@@ -303,15 +300,14 @@ pub async fn fetch_state_diffs(
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
 
-    // WIP
-    let mut live_states: Vec<&str> = vec![];
+    let mut live_states = vec![];
     let mut state_iter = state_versions
         .fetch_all_live_states::<u64>(shard_id)
         .await
         .expect("requested shard should exist")
         .check_ts_codec()?;
     while let Some(_) = state_iter.next(|_| {}) {
-        // live_states.push(state_iter.into_proto());
+        live_states.push(state_iter.into_rollup_proto_without_diffs());
     }
 
     Ok(live_states)

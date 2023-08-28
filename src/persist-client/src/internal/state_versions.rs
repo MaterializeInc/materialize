@@ -32,13 +32,15 @@ use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
-use crate::internal::encoding::{InlinedDiffs, Rollup, UntypedState};
+use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
+use crate::internal::state::{
+    HollowBlobRef, HollowRollup, NoOpStateTransition, ProtoRollup, State, TypedState,
+};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -1005,6 +1007,17 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
 
     pub fn state(&self) -> &State<T> {
         &self.state
+    }
+
+    pub fn into_rollup_proto_without_diffs(&self) -> ProtoRollup {
+        Rollup::from_state_without_diffs(
+            self.state.clone(),
+            self.key_codec.clone(),
+            self.val_codec.clone(),
+            T::codec_name(),
+            self.diff_codec.clone(),
+        )
+        .into_proto()
     }
 }
 

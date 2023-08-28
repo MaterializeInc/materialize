@@ -28,7 +28,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -703,7 +703,7 @@ where
 /// `diffs` is expected to be `None` for the initial state, and may be `None` when deserializing
 /// persisted rollups that were written before we started inlining diffs.
 #[derive(Debug)]
-pub(crate) struct Rollup<T> {
+pub struct Rollup<T> {
     pub(crate) state: UntypedState<T>,
     pub(crate) diffs: Option<InlinedDiffs>,
 }
@@ -729,8 +729,24 @@ impl<T: Timestamp + Lattice + Codec64> Rollup<T> {
         Self { state, diffs }
     }
 
-    pub(crate) fn from_state_without_diffs(state: UntypedState<T>) -> Self {
+    pub(crate) fn from_untyped_state_without_diffs(state: UntypedState<T>) -> Self {
         Self { state, diffs: None }
+    }
+
+    pub(crate) fn from_state_without_diffs(
+        state: State<T>,
+        key_codec: String,
+        val_codec: String,
+        ts_codec: String,
+        diff_codec: String,
+    ) -> Self {
+        Self::from_untyped_state_without_diffs(UntypedState {
+            key_codec,
+            val_codec,
+            ts_codec,
+            diff_codec,
+            state,
+        })
     }
 }
 
@@ -741,14 +757,6 @@ pub(crate) struct InlinedDiffs {
 }
 
 impl InlinedDiffs {
-    pub(crate) fn lower(&self) -> SeqNo {
-        *self.description.lower().first().expect("seqno")
-    }
-
-    pub(crate) fn upper(&self) -> SeqNo {
-        *self.description.upper().first().expect("seqno")
-    }
-
     fn from(lower: SeqNo, upper: SeqNo, diffs: Vec<VersionedData>) -> Self {
         for diff in &diffs {
             assert!(diff.seqno >= lower);
@@ -1290,9 +1298,10 @@ mod tests {
         // Code version v2 evaluates and writes out some State.
         let shard_id = ShardId::new();
         let state = TypedState::<(), (), u64, i64>::new(v2.clone(), shard_id, "".to_owned(), 0);
-        let rollup = Rollup::from_state_without_diffs(state.clone_for_rollup().into()).into_proto();
+        let rollup =
+            Rollup::from_untyped_state_without_diffs(state.clone_for_rollup().into()).into_proto();
         let mut buf = Vec::new();
-        rollup.encode(&mut buf);
+        rollup.encode(&mut buf).expect("serializable");
         let bytes = Bytes::from(buf);
 
         // We can read it back using persist code v2 and v3.
@@ -1450,7 +1459,7 @@ mod tests {
             0,
         );
         state.state.collections.rollups.insert(SeqNo(2), r2.clone());
-        let mut proto = Rollup::from_state_without_diffs(state.into()).into_proto();
+        let mut proto = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
 
         // Manually add the old rollup encoding.
         proto.deprecated_rollups.insert(1, r1.key.0.clone());
@@ -1540,7 +1549,7 @@ mod tests {
             0,
         );
         state.state.seqno = SeqNo(4);
-        let mut rollup = Rollup::from_state_without_diffs(state.into()).into_proto();
+        let mut rollup = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
         rollup
             .deprecated_rollups
             .insert(3, r3_rollup.key.into_proto());
@@ -1575,7 +1584,7 @@ mod tests {
                 diff_codec: <i64 as Codec64>::codec_name(),
                 state,
             };
-            let proto = Rollup::from_state_without_diffs(before.clone()).into_proto();
+            let proto = Rollup::from_untyped_state_without_diffs(before.clone()).into_proto();
             let after: Rollup<T> = proto.into_rust().unwrap();
             let after = after.state;
             assert_eq!(before, after);

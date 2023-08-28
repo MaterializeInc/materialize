@@ -32,10 +32,9 @@ use timely::PartialOrder;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::cli::inspect::V;
 use crate::critical::CriticalReaderId;
 use crate::error::{Determinacy, InvalidUsage};
-use crate::internal::encoding::{parse_id, LazyPartStats, UntypedState};
+use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace};

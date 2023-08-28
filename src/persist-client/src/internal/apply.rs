@@ -27,12 +27,12 @@ use crate::error::CodecMismatch;
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
-use crate::internal::state_versions::{EncodedRollup, StateVersions};
+use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::PubSubSender;
