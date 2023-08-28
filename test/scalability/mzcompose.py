@@ -19,6 +19,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 from psycopg import OperationalError
+import itertools
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized, Postgres  # noqa: F401
@@ -39,20 +40,24 @@ SERVICES = [Materialized(image="materialize/materialized:latest"), Postgres()]
 
 
 def execute_operation(
-    args: tuple[Workload, int, Operation, Cursor, int, int]
+    args: tuple[Workload, int, list[Operation], Cursor, int, int]
 ) -> dict[str, Any]:
-    workload, concurrency, operation, cursor, i1, i2 = args
+    workload, concurrency, operations, cursor, i1, i2 = args
 
-    start = time.time()
-    operation.execute(cursor)
-    wallclock = time.time() - start
+    results = list()
+    for operation in operations:
+        start = time.time()
+        operation.execute(cursor)
+        wallclock = time.time() - start
 
-    return {
-        "concurrency": concurrency,
-        "wallclock": wallclock,
-        "operation": type(operation).__name__,
-        "workload": type(workload).__name__,
-    }
+        results.append({
+            "concurrency": concurrency,
+            "wallclock": wallclock,
+            "operation": type(operation).__name__,
+            "workload": type(workload).__name__,
+        })
+
+    return results
 
 def open_cursor(endpoint: Endpoint, connect_sqls: list[str]):
     conn = None
@@ -100,6 +105,7 @@ def run_with_concurrency(
 
     print(f"Benchmarking workload {type(workload)} at concurrency {concurrency} ...")
     operations = workload.operations()
+    concurrent_operations = [operations[i % len(operations)] for i in range(count)]
 
     start = time.time()
     with futures.ThreadPoolExecutor(concurrency) as executor:
@@ -109,19 +115,22 @@ def run_with_concurrency(
                 (
                     workload,
                     concurrency,
-                    operations[i % len(operations)],
-                    cursor_pool[i % concurrency],
+                    concurrent_operations[0:len(concurrent_operations):concurrency],
+                    cursor_pool[i],
                     i,
                     i % concurrency,
                 )
-                for i in range(count)
+                for i in range(concurrency)
             ],
         )
+        measurements = itertools.chain.from_iterable(measurements)
     wallclock_total = time.time() - start
 
     df_detail = pd.DataFrame()
     for measurement in measurements:
         df_detail = pd.concat([df_detail, pd.DataFrame([measurement])])
+
+    assert len(df_detail) == count
     print("Best and worst individual measurements:")
     print(df_detail.sort_values(by=["wallclock"]))
 
