@@ -4851,7 +4851,14 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
-            system_parameter_defaults: Default::default(),
+            system_parameter_defaults: [(
+                // the serialization of items needs to be consistent across envd and testdrive, or testdrive
+                // fails.
+                "variable_length_row_encoding".to_string(),
+                "true".to_string(),
+            )]
+            .into_iter()
+            .collect(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
