@@ -1025,6 +1025,12 @@ fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
 }
 
 #[inline(always)]
+// This function is extremely hot, so
+// we just use `as` to avoid the overhead of
+// `try_into` followed by `unwrap`.
+// `leading_ones` and `leading_zeros`
+// can never return values greater than 64, so the conversion is safe.
+#[allow(clippy::as_conversions)]
 fn min_bytes_signed<T>(i: T) -> u8
 where
     T: Into<i64>,
@@ -1060,7 +1066,7 @@ where
                     Tag::NonNegativeInt16_0
                 }) + mbs;
 
-                data.push(tag.into());
+                data.push(tag);
                 data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
             } else {
                 data.push(Tag::Int16.into());
@@ -1076,7 +1082,7 @@ where
                     Tag::NonNegativeInt32_0
                 }) + mbs;
 
-                data.push(tag.into());
+                data.push(tag);
                 data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
             } else {
                 data.push(Tag::Int32.into());
@@ -1092,7 +1098,7 @@ where
                     Tag::NonNegativeInt64_0
                 }) + mbs;
 
-                data.push(tag.into());
+                data.push(tag);
                 data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
             } else {
                 data.push(Tag::Int64.into());
