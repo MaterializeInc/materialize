@@ -22,63 +22,62 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
-use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_repr::role_id::RoleId;
+use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, WebhookValidation, WebhookValidationSecret};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
+use uuid::Uuid;
 
+use crate::catalog::Catalog;
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::Transmittable;
+use crate::AdapterNotice;
+
+#[derive(Debug)]
+pub struct CatalogSnapshot {
+    pub catalog: Arc<Catalog>,
+}
 
 #[derive(Debug)]
 pub enum Command {
+    CatalogSnapshot {
+        tx: oneshot::Sender<CatalogSnapshot>,
+    },
+
     Startup {
-        session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
-        tx: oneshot::Sender<Response<StartupResponse>>,
-    },
-
-    Declare {
-        name: String,
-        stmt: Statement<Raw>,
-        inner_sql: String,
-        param_types: Vec<Option<ScalarType>>,
-        session: Session,
-        tx: oneshot::Sender<Response<ExecuteResponse>>,
-    },
-
-    Prepare {
-        name: String,
-        stmt: Option<Statement<Raw>>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
-    },
-
-    VerifyPreparedStatement {
-        name: String,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
+        /// keys of settings that were set on statup, and thus should not be
+        /// overridden by defaults.
+        set_setting_keys: Vec<String>,
+        user: User,
+        conn_id: ConnectionId,
+        secret_key: u32,
+        uuid: Uuid,
+        application_name: String,
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     },
 
     Execute {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        outer_ctx_extra: Option<ExecuteContextExtra>,
         span: tracing::Span,
     },
 
@@ -101,20 +100,6 @@ pub enum Command {
         conn_id: ConnectionId,
     },
 
-    DumpCatalog {
-        session: Session,
-        tx: oneshot::Sender<Response<CatalogDump>>,
-    },
-
-    CopyRows {
-        id: GlobalId,
-        columns: Vec<usize>,
-        rows: Vec<Row>,
-        session: Session,
-        tx: oneshot::Sender<Response<ExecuteResponse>>,
-        ctx_extra: ExecuteContextExtra,
-    },
-
     AppendWebhook {
         database: String,
         schema: String,
@@ -124,58 +109,61 @@ pub enum Command {
     },
 
     GetSystemVars {
-        session: Session,
-        tx: oneshot::Sender<Response<GetVariablesResponse>>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<GetVariablesResponse, AdapterError>>,
     },
 
     SetSystemVars {
         vars: BTreeMap<String, String>,
-        session: Session,
-        tx: oneshot::Sender<Response<()>>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
     Terminate {
-        session: Session,
-        tx: Option<oneshot::Sender<Response<()>>>,
+        conn_id: ConnectionId,
+        tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
+    },
+
+    /// Performs any cleanup and logging actions necessary for
+    /// finalizing a statement execution.
+    ///
+    /// Only used for cases that terminate in the protocol layer and
+    /// otherwise have no reason to hand control back to the coordinator.
+    /// In other cases, we piggy-back on another command.
+    RetireExecute {
+        data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
     },
 }
 
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Startup { session, .. }
-            | Command::Declare { session, .. }
-            | Command::Prepare { session, .. }
-            | Command::VerifyPreparedStatement { session, .. }
-            | Command::Execute { session, .. }
-            | Command::Commit { session, .. }
-            | Command::DumpCatalog { session, .. }
-            | Command::CopyRows { session, .. }
-            | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. }
-            | Command::Terminate { session, .. } => Some(session),
+            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::Startup { .. }
+            | Command::CatalogSnapshot { .. }
+            | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
-            | Command::PrivilegedCancelRequest { .. } => None,
+            | Command::Terminate { .. }
+            | Command::GetSystemVars { .. }
+            | Command::SetSystemVars { .. }
+            | Command::RetireExecute { .. } => None,
         }
     }
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Startup { session, .. }
-            | Command::Declare { session, .. }
-            | Command::Prepare { session, .. }
-            | Command::VerifyPreparedStatement { session, .. }
-            | Command::Execute { session, .. }
-            | Command::Commit { session, .. }
-            | Command::DumpCatalog { session, .. }
-            | Command::CopyRows { session, .. }
-            | Command::GetSystemVars { session, .. }
-            | Command::SetSystemVars { session, .. }
-            | Command::Terminate { session, .. } => Some(session),
+            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
             Command::CancelRequest { .. }
+            | Command::Startup { .. }
+            | Command::CatalogSnapshot { .. }
+            | Command::PrivilegedCancelRequest { .. }
             | Command::AppendWebhook { .. }
-            | Command::PrivilegedCancelRequest { .. } => None,
+            | Command::Terminate { .. }
+            | Command::GetSystemVars { .. }
+            | Command::SetSystemVars { .. }
+            | Command::RetireExecute { .. } => None,
         }
     }
 }
@@ -191,8 +179,11 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
-    /// Notifications associated with session startup.
-    pub messages: Vec<StartupMessage>,
+    /// RoleId for the user.
+    pub role_id: RoleId,
+    /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
+    pub set_vars: Vec<(String, String)>,
+    pub catalog: Arc<Catalog>,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`
@@ -201,42 +192,6 @@ impl Transmittable for StartupResponse {
     type Allowed = bool;
     fn to_allowed(&self) -> Self::Allowed {
         true
-    }
-}
-
-/// Messages in a [`StartupResponse`].
-#[derive(Debug)]
-pub enum StartupMessage {
-    /// The database specified in the initial session does not exist.
-    UnknownSessionDatabase(String),
-}
-
-impl StartupMessage {
-    /// Reports additional details about the error, if any are available.
-    pub fn detail(&self) -> Option<String> {
-        None
-    }
-
-    /// Reports a hint for the user about how the error could be fixed.
-    pub fn hint(&self) -> Option<String> {
-        match self {
-            StartupMessage::UnknownSessionDatabase(_) => Some(
-                "Create the database with CREATE DATABASE \
-                 or pick an extant database with SET DATABASE = name. \
-                 List available databases with SHOW DATABASES."
-                    .into(),
-            ),
-        }
-    }
-}
-
-impl fmt::Display for StartupMessage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            StartupMessage::UnknownSessionDatabase(name) => {
-                write!(f, "session database {} does not exist", name.quoted())
-            }
-        }
     }
 }
 
@@ -568,6 +523,7 @@ pub enum ExecuteResponse {
         count: Option<FetchDirection>,
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
+        ctx_extra: ExecuteContextExtra,
     },
     /// The requested privilege was granted.
     GrantedPrivilege,
@@ -592,6 +548,13 @@ pub enum ExecuteResponse {
         #[derivative(Debug = "ignore")]
         span: tracing::Span,
     },
+    /// Like `SendingRows`, but the rows are known to be available
+    /// immediately, and thus the execution is considered ended in the coordinator.
+    SendingRowsImmediate {
+        rows: Vec<Row>,
+        #[derivative(Debug = "ignore")]
+        span: tracing::Span,
+    },
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,
@@ -602,7 +565,10 @@ pub enum ExecuteResponse {
     StartedTransaction,
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
-    Subscribing { rx: RowBatchStream },
+    Subscribing {
+        rx: RowBatchStream,
+        ctx_extra: ExecuteContextExtra,
+    },
     /// The active transaction committed.
     TransactionCommitted {
         /// Session parameters that changed because the transaction ended.
@@ -726,6 +692,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::TransactionRolledBack => Err(()),
             ExecuteResponseKind::Updated => Err(()),
             ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
+            ExecuteResponseKind::SendingRowsImmediate => Err(()),
         }
     }
 }
@@ -785,7 +752,7 @@ impl ExecuteResponse {
             ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
-            SendingRows { .. } => None,
+            SendingRows { .. } | SendingRowsImmediate { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
@@ -852,15 +819,21 @@ impl ExecuteResponse {
             DropObjects => vec![DroppedObject],
             DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Select | ShowAllVariables | ShowCreate | ShowVariable | InspectShard => {
-                vec![CopyTo, SendingRows]
+            ExplainPlan | ExplainTimestamp | Select | ShowAllVariables | ShowCreate
+            | ShowColumns | ShowVariable | InspectShard => {
+                vec![CopyTo, SendingRows, SendingRowsImmediate]
             }
-            Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
+            Execute | ReadThenWrite => vec![
+                Deleted,
+                Inserted,
+                SendingRows,
+                SendingRowsImmediate,
+                Updated,
+            ],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             GrantPrivileges => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
-            CopyRows => vec![Inserted],
-            Insert => vec![Inserted, SendingRows],
+            Insert => vec![Inserted, SendingRowsImmediate],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
             PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
@@ -871,7 +844,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
-            SideEffectingFunc => vec![SendingRows],
+            SideEffectingFunc => vec![SendingRowsImmediate],
             ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }

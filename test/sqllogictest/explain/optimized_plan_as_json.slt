@@ -861,12 +861,12 @@ EOF
 # Test TopK.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
-VIEW ov
+SELECT * FROM ov
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.ov",
+      "id": "Explained Query",
       "plan": {
         "TopK": {
           "input": {

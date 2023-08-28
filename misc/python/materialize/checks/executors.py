@@ -10,7 +10,7 @@
 import random
 import threading
 from inspect import Traceback
-from typing import Any, Optional, Set
+from typing import Any, Optional
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mzcompose import Composition
@@ -27,7 +27,7 @@ class Executor:
     # All the system settings we have already set in previous Mz versions. No
     # need to set them again in a future version since they should be
     # persisted.
-    system_settings: Set[str] = set()
+    system_settings: set[str] = set()
 
     def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
         assert False

@@ -101,9 +101,8 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use either::Either;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -250,7 +249,7 @@ where
                 HollowBatchAndMetadata {
                     lower,
                     upper,
-                    batch: Either::Left(batch.into_writer_hollow_batch()),
+                    batch: Either::Left(batch.into_transmittable_batch()),
                     metrics: self.metrics,
                 }
             }
@@ -267,7 +266,7 @@ where
 struct HollowBatchAndMetadata<K, V, T, D> {
     lower: Antichain<T>,
     upper: Antichain<T>,
-    batch: Either<WriterEnrichedHollowBatch<T>, Vec<(K, V, T, D)>>,
+    batch: Either<ProtoBatch, Vec<(K, V, T, D)>>,
     metrics: BatchMetrics,
 }
 
@@ -1084,7 +1083,7 @@ where
                             for batch in data.drain(..) {
                                 match batch.batch {
                                     Either::Left(hollow_batch) => {
-                                        let finished_batch = write.batch_from_hollow_batch(hollow_batch);
+                                        let finished_batch = write.batch_from_transmittable_batch(hollow_batch);
                                         let batch_description = (batch.lower.clone(), batch.upper.clone());
 
                                         let batches = in_flight_batches

@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import ROOT, cargo
+from materialize import MZ_ROOT, cargo
 
 
 def rust_version() -> str:
-    rust_version = cargo.Workspace(ROOT).rust_version
+    rust_version = cargo.Workspace(MZ_ROOT).rust_version
     assert rust_version is not None, "workspace missing rust version configuration"
     return rust_version

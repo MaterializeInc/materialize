@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
 
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyLikeOtherOperationParam,
@@ -27,7 +26,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
 )
 
-GENERIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
+GENERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 GENERIC_OPERATION_TYPES.append(
     DbFunction(

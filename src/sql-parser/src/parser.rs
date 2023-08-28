@@ -360,7 +360,10 @@ impl<'a> Parser<'a> {
     fn parse_statement_inner(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.next_token() {
             Some(t) => match t {
-                Token::Keyword(SELECT) | Token::Keyword(WITH) | Token::Keyword(VALUES) => {
+                Token::Keyword(SELECT)
+                | Token::Keyword(WITH)
+                | Token::Keyword(VALUES)
+                | Token::Keyword(TABLE) => {
                     self.prev_token();
                     Ok(Statement::Select(SelectStatement {
                         query: self.parse_query().map_parser_err(StatementKind::Select)?,
@@ -413,9 +416,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(SUBSCRIBE) => Ok(self
                     .parse_subscribe()
                     .map_parser_err(StatementKind::Subscribe)?),
-                Token::Keyword(EXPLAIN) => Ok(self
-                    .parse_explain()
-                    .map_parser_err(StatementKind::Explain)?),
+                Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => {
                     Ok(self.parse_fetch().map_parser_err(StatementKind::Fetch)?)
@@ -3036,13 +3037,14 @@ impl<'a> Parser<'a> {
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
                 let generator = match self
-                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS])?
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, CLOCK])?
                 {
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
                     TPCH => LoadGenerator::Tpch,
                     DATUMS => LoadGenerator::Datums,
                     MARKETING => LoadGenerator::Marketing,
+                    CLOCK => LoadGenerator::Clock,
                     _ => unreachable!(),
                 };
                 let options = if self.consume_token(&Token::LParen) {
@@ -5703,6 +5705,8 @@ impl<'a> Parser<'a> {
             SetExpr::Values(self.parse_values()?)
         } else if self.parse_keyword(SHOW) {
             SetExpr::Show(self.parse_show()?)
+        } else if self.parse_keyword(TABLE) {
+            SetExpr::Table(self.parse_raw_name()?)
         } else {
             return self.expected(
                 self.peek_pos(),
@@ -6690,17 +6694,32 @@ impl<'a> Parser<'a> {
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
-    fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        if self.parse_keyword(TIMESTAMP) {
+            self.parse_explain_timestamp()
+                .map_parser_err(StatementKind::ExplainTimestamp)
+        } else {
+            self.parse_explain_plan()
+                .map_parser_err(StatementKind::ExplainPlan)
+        }
+    }
+
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed.
+    fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
         let stage = match self.parse_one_of_keywords(&[
+            PLAN,
             RAW,
             DECORRELATED,
             OPTIMIZED,
             PHYSICAL,
-            PLAN,
             OPTIMIZER,
             QUERY,
-            TIMESTAMP,
         ]) {
+            Some(PLAN) => {
+                // EXPLAIN PLAN = EXPLAIN OPTIMIZED PLAN
+                Some(ExplainStage::OptimizedPlan)
+            }
             Some(RAW) => {
                 self.expect_keyword(PLAN)?;
                 Some(ExplainStage::RawPlan)
@@ -6713,7 +6732,6 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(PLAN)?;
                 Some(ExplainStage::OptimizedPlan)
             }
-            Some(PLAN) => Some(ExplainStage::OptimizedPlan), // EXPLAIN PLAN ~= EXPLAIN OPTIMIZED PLAN
             Some(PHYSICAL) => {
                 self.expect_keyword(PLAN)?;
                 Some(ExplainStage::PhysicalPlan)
@@ -6722,7 +6740,6 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TRACE)?;
                 Some(ExplainStage::Trace)
             }
-            Some(TIMESTAMP) => Some(ExplainStage::Timestamp),
             None => None,
             _ => unreachable!(),
         };
@@ -6767,12 +6784,36 @@ impl<'a> Parser<'a> {
             Explainee::Query(self.parse_query()?)
         };
 
-        Ok(Statement::Explain(ExplainStatement {
+        Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
             no_errors,
             explainee,
+        }))
+    }
+
+    /// Parse an `EXPLAIN TIMESTAMP` statement, assuming that the `EXPLAIN
+    /// TIMESTAMP` tokens have already been consumed.
+    fn parse_explain_timestamp(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let format = if self.parse_keyword(AS) {
+            match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
+                Some(TEXT) => ExplainFormat::Text,
+                Some(JSON) => ExplainFormat::Json,
+                None => return Err(ParserError::new(self.index, "expected a format")),
+                _ => unreachable!(),
+            }
+        } else {
+            ExplainFormat::Text
+        };
+
+        self.expect_keyword(FOR)?;
+
+        let query = self.parse_query()?;
+
+        Ok(Statement::ExplainTimestamp(ExplainTimestampStatement {
+            format,
+            query,
         }))
     }
 

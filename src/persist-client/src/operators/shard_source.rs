@@ -799,10 +799,7 @@ mod tests {
         let persist_clients = PersistClientCache::new_no_metrics();
 
         let persist_clients = Arc::new(persist_clients);
-        let location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
-        };
+        let location = PersistLocation::new_in_mem();
 
         (persist_clients, location)
     }

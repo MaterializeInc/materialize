@@ -12,97 +12,76 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::ScalarType;
+use mz_repr::role_id::RoleId;
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
-use mz_sql::catalog::{RoleAttributes, SessionCatalog};
+use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
-    TransactionType,
+    AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
-use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
+use mz_sql::session::user::User;
+use mz_sql::session::vars::{
+    EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
+};
 use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    AppendWebhookResponse, AppendWebhookValidator, Canceled, Command, ExecuteResponse,
-    GetVariablesResponse, Response, StartupMessage, StartupResponse,
+    AppendWebhookResponse, AppendWebhookValidator, Canceled, CatalogSnapshot, Command,
+    ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::session::{RoleMetadata, Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac, ExecuteContext};
 
 use super::ExecuteContextExtra;
 
 impl Coordinator {
-    pub(crate) fn retire_execute(&mut self, _data: ExecuteContextExtra) {
-        // Do nothing, for now.
-        // In the future this is where we will log that statement execution finished.
-    }
-    fn send_error(&mut self, cmd: Command, e: AdapterError) {
-        fn send<T>(tx: oneshot::Sender<Response<T>>, session: Session, e: AdapterError) {
-            let _ = tx.send(Response::<T> {
-                result: Err(e),
-                session,
-            });
-        }
-        match cmd {
-            Command::Startup { tx, session, .. } => send(tx, session, e),
-            Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Prepare { tx, session, .. } => send(tx, session, e),
-            Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
-            Command::Execute { tx, session, .. } => send(tx, session, e),
-            Command::Commit { tx, session, .. } => send(tx, session, e),
-            Command::CancelRequest { .. } | Command::PrivilegedCancelRequest { .. } => {}
-            Command::DumpCatalog { tx, session, .. } => send(tx, session, e),
-            Command::CopyRows { tx, session, .. } => send(tx, session, e),
-            Command::GetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::SetSystemVars { tx, session, .. } => send(tx, session, e),
-            Command::AppendWebhook { tx, .. } => {
-                // We don't care if our listener went away.
-                let _ = tx.send(Err(e));
-            }
-            Command::Terminate { tx, session, .. } => {
-                if let Some(tx) = tx {
-                    send(tx, session, e)
-                }
-            }
-        }
-    }
-
     pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
         if let Some(session) = cmd.session_mut() {
             session.apply_external_metadata_updates();
         }
-        if let Err(e) = rbac::check_command(self.catalog(), &cmd) {
-            self.send_error(cmd, e.into());
-            return;
-        }
         match cmd {
             Command::Startup {
-                session,
                 cancel_tx,
                 tx,
+                set_setting_keys,
+                user,
+                conn_id,
+                secret_key,
+                uuid,
+                application_name,
+                notice_tx,
             } => {
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
-                self.handle_startup(session, cancel_tx, tx).await;
+                self.handle_startup(
+                    cancel_tx,
+                    tx,
+                    set_setting_keys,
+                    user,
+                    conn_id,
+                    secret_key,
+                    uuid,
+                    application_name,
+                    notice_tx,
+                )
+                .await;
             }
 
             Command::Execute {
@@ -110,49 +89,18 @@ impl Coordinator {
                 session,
                 tx,
                 span,
+                outer_ctx_extra,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let ctx = ExecuteContext::from_parts(
-                    tx,
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    ExecuteContextExtra,
-                );
-
                 let span = span
                     .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
-                self.handle_execute(portal_name, ctx).instrument(span).await;
+
+                self.handle_execute(portal_name, session, tx, outer_ctx_extra)
+                    .instrument(span)
+                    .await;
             }
 
-            Command::Declare {
-                name,
-                stmt,
-                inner_sql: sql,
-                param_types,
-                session,
-                tx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let ctx = ExecuteContext::from_parts(
-                    tx,
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    Default::default(),
-                );
-                self.declare(ctx, name, stmt, sql, param_types);
-            }
-
-            Command::Prepare {
-                name,
-                stmt,
-                sql,
-                param_types,
-                session,
-                tx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.handle_prepare(tx, session, name, stmt, sql, param_types);
-            }
+            Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
 
             Command::CancelRequest {
                 conn_id,
@@ -165,33 +113,6 @@ impl Coordinator {
                 self.handle_privileged_cancel(conn_id);
             }
 
-            Command::DumpCatalog { session, tx } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(self.catalog().dump().map_err(AdapterError::from), session);
-            }
-
-            Command::CopyRows {
-                id,
-                columns,
-                rows,
-                session,
-                tx,
-                ctx_extra,
-            } => {
-                let ctx = ExecuteContext::from_parts(
-                    ClientTransmitter::new(tx, self.internal_cmd_tx.clone()),
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    ctx_extra,
-                );
-                self.sequence_plan(
-                    ctx,
-                    Plan::CopyRows(CopyRowsPlan { id, columns, rows }),
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
-            }
-
             Command::AppendWebhook {
                 database,
                 schema,
@@ -202,25 +123,26 @@ impl Coordinator {
                 self.handle_append_webhook(database, schema, name, conn_id, tx);
             }
 
-            Command::GetSystemVars { session, tx } => {
+            Command::GetSystemVars { conn_id, tx } => {
+                let conn = &self.active_conns[&conn_id];
                 let vars =
                     GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
-                        var.visible(session.user(), Some(self.catalog.system_config()))
+                        var.visible(conn.user(), Some(self.catalog.system_config()))
                             .is_ok()
                     }));
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                tx.send(Ok(vars), session);
+                let _ = tx.send(Ok(vars));
             }
 
-            Command::SetSystemVars { vars, session, tx } => {
+            Command::SetSystemVars { vars, conn_id, tx } => {
                 let mut ops = Vec::with_capacity(vars.len());
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                let conn = &self.active_conns[&conn_id];
 
                 for (name, value) in vars {
                     if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                        var.visible(session.user(), Some(self.catalog.system_config()))
+                        var.visible(conn.user(), Some(self.catalog.system_config()))
                     }) {
-                        return tx.send(Err(e.into()), session);
+                        let _ = tx.send(Err(e.into()));
+                        return;
                     }
 
                     ops.push(catalog::Op::UpdateSystemConfiguration {
@@ -229,19 +151,16 @@ impl Coordinator {
                     });
                 }
 
-                let result = self.catalog_transact(Some(&session), ops).await;
-                tx.send(result, session);
+                let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                let _ = tx.send(result);
             }
 
-            Command::Terminate { mut session, tx } => {
-                self.handle_terminate(&mut session).await;
+            Command::Terminate { conn_id, tx } => {
+                self.handle_terminate(conn_id).await;
                 // Note: We purposefully do not use a ClientTransmitter here because we're already
                 // terminating the provided session.
                 if let Some(tx) = tx {
-                    let _ = tx.send(Response {
-                        result: Ok(()),
-                        session,
-                    });
+                    let _ = tx.send(Ok(()));
                 }
             }
 
@@ -285,16 +204,9 @@ impl Coordinator {
                     .await;
             }
 
-            Command::VerifyPreparedStatement {
-                name,
-                mut session,
-                tx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let catalog = self.owned_catalog();
-                mz_ore::task::spawn(|| "coord::VerifyPreparedStatement", async move {
-                    let result = Self::verify_prepared_statement(&catalog, &mut session, &name);
-                    tx.send(result, session);
+            Command::CatalogSnapshot { tx } => {
+                let _ = tx.send(CatalogSnapshot {
+                    catalog: self.owned_catalog(),
                 });
             }
         }
@@ -302,121 +214,188 @@ impl Coordinator {
 
     async fn handle_startup(
         &mut self,
-        mut session: Session,
         cancel_tx: Arc<watch::Sender<Canceled>>,
-        tx: oneshot::Sender<Response<StartupResponse>>,
+        tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
+        set_setting_keys: Vec<String>,
+        user: User,
+        conn_id: ConnectionId,
+        secret_key: u32,
+        uuid: uuid::Uuid,
+        application_name: String,
+        notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
-        if self
-            .catalog()
-            .try_get_role_by_name(&session.user().name)
-            .is_none()
-        {
-            // If the user has made it to this point, that means they have been fully authenticated.
-            // This includes preventing any user, except a pre-defined set of system users, from
-            // connecting to an internal port. Therefore it's ok to always create a new role for
-            // the user.
-            let attributes = RoleAttributes::new();
-            let plan = CreateRolePlan {
-                name: session.user().name.to_string(),
-                attributes,
-            };
-            if let Err(err) = self.sequence_create_role_for_startup(&session, plan).await {
-                let _ = tx.send(Response {
-                    result: Err(err),
-                    session,
+        // Early return if successful, otherwise cleanup any possible state.
+        match self.handle_startup_inner(&user, &conn_id).await {
+            Ok(role_id) => {
+                let mut set_vars = Vec::new();
+                if !set_setting_keys
+                    .iter()
+                    .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
+                {
+                    let default = self
+                        .catalog()
+                        .state()
+                        .system_config()
+                        .statement_logging_default_sample_rate();
+                    set_vars.push((
+                        STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+                        default.to_string(),
+                    ));
+                }
+
+                let session_type = metrics::session_type_label_value(&user);
+                self.metrics
+                    .active_sessions
+                    .with_label_values(&[session_type])
+                    .inc();
+                let conn = ConnMeta {
+                    cancel_tx,
+                    secret_key,
+                    notice_tx,
+                    drop_sinks: Vec::new(),
+                    // TODO: Switch to authenticated role once implemented.
+                    authenticated_role: role_id,
+                    connected_at: self.now(),
+                    user,
+                    application_name,
+                    role_metadata: RoleMetadata {
+                        current_role: role_id,
+                        session_role: role_id,
+                    },
+                    uuid,
+                    conn_id: conn_id.clone(),
+                };
+                let update = self.catalog().state().pack_session_update(&conn, 1);
+                self.begin_session_for_statement_logging(&conn);
+                self.active_conns.insert(conn_id.clone(), conn);
+                self.send_builtin_table_updates(vec![update]).await;
+
+                let resp = Ok(StartupResponse {
+                    role_id,
+                    set_vars,
+                    catalog: self.owned_catalog(),
                 });
-                return;
+                if tx.send(resp).is_err() {
+                    // Failed to send to adapter, but everything is setup so we can terminate
+                    // normally.
+                    self.handle_terminate(conn_id).await;
+                }
+            }
+            Err(_) => {
+                // Error during startup or sending to adapter, cleanup possible state created by
+                // handle_startup_inner. A user may have been created and it can stay; no need to
+                // delete it.
+                self.catalog_mut()
+                    .drop_temporary_schema(&conn_id)
+                    .unwrap_or_terminate("unable to drop temporary schema");
             }
         }
+    }
 
+    // Failible startup work that needs to be cleaned up on error.
+    async fn handle_startup_inner(
+        &mut self,
+        user: &User,
+        conn_id: &ConnectionId,
+    ) -> Result<RoleId, AdapterError> {
+        if self.catalog().try_get_role_by_name(&user.name).is_none() {
+            // If the user has made it to this point, that means they have been fully authenticated.
+            // This includes preventing any user, except a pre-defined set of system users, from
+            // connecting to an internal port. Therefore it's ok to always create a new role for the
+            // user.
+            let attributes = RoleAttributes::new();
+            let plan = CreateRolePlan {
+                name: user.name.to_string(),
+                attributes,
+            };
+            self.sequence_create_role_for_startup(plan).await?;
+        }
         let role_id = self
             .catalog()
-            .try_get_role_by_name(&session.user().name)
+            .try_get_role_by_name(&user.name)
             .expect("created above")
             .id;
-        session.initialize_role_metadata(role_id);
-
-        if let Err(e) = self
-            .catalog_mut()
-            .create_temporary_schema(session.conn_id(), role_id)
-        {
-            let _ = tx.send(Response {
-                result: Err(e.into()),
-                session,
-            });
-            return;
-        }
-
-        let mut messages = vec![];
-        let catalog = self.catalog();
-        let catalog = catalog.for_session(&session);
-        if catalog.active_database().is_none() {
-            messages.push(StartupMessage::UnknownSessionDatabase(
-                session.vars().database().into(),
-            ));
-        }
-
-        let session_type = metrics::session_type_label_value(session.user());
-        self.metrics
-            .active_sessions
-            .with_label_values(&[session_type])
-            .inc();
-        self.active_conns.insert(
-            session.conn_id().clone(),
-            ConnMeta {
-                cancel_tx,
-                secret_key: session.secret_key(),
-                notice_tx: session.retain_notice_transmitter(),
-                drop_sinks: Vec::new(),
-                // TODO: Switch to authenticated role once implemented.
-                authenticated_role: session.session_role_id().clone(),
-            },
-        );
-        let update = self.catalog().state().pack_session_update(&session, 1);
-        self.send_builtin_table_updates(vec![update]).await;
-
-        ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
-            .send(Ok(StartupResponse { messages }), session)
+        self.catalog_mut()
+            .create_temporary_schema(conn_id, role_id)?;
+        Ok(role_id)
     }
 
     /// Handles an execute command.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn handle_execute(&mut self, portal_name: String, mut ctx: ExecuteContext) {
-        if ctx.session().vars().emit_trace_id_notice() {
+    pub(crate) async fn handle_execute(
+        &mut self,
+        portal_name: String,
+        mut session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        // If this command was part of another execute command
+        // (for example, executing a `FETCH` statement causes an execute to be
+        //  issued for the cursor it references),
+        // then `outer_context` should be `Some`.
+        // This instructs the coordinator that the
+        // outer execute should be considered finished once the inner one is.
+        outer_context: Option<ExecuteContextExtra>,
+    ) {
+        if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
                 .span()
                 .span_context()
                 .clone();
             if span_context.is_valid() {
-                ctx.session().add_notice(AdapterNotice::QueryTrace {
+                session.add_notice(AdapterNotice::QueryTrace {
                     trace_id: span_context.trace_id(),
                 });
             }
         }
 
-        if let Err(err) = self.verify_portal(ctx.session_mut(), &portal_name) {
+        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+            // If statement logging hasn't started yet, we don't need
+            // to add any "end" event, so just make up a no-op
+            // `ExecuteContextExtra` here, via `Default::default`.
+            //
+            // It's a bit unfortunate because the edge case of failed
+            // portal verifications won't show up in statement
+            // logging, but there seems to be nothing else we can do,
+            // because we need access to the portal to begin logging.
+            //
+            // Another option would be to log a begin and end event, but just fill in NULLs
+            // for everything we get from the portal (prepared statement id, params).
+            let extra = outer_context.unwrap_or_else(Default::default);
+            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
             return ctx.retire(Err(err));
         }
 
-        let portal = ctx
-            .session()
-            .get_portal_unverified(&portal_name)
-            .expect("known to exist");
+        // The reference to `portal` can't outlive `session`, which we
+        // use to construct the context, so scope the reference to this block where we
+        // get everything we need from the portal for later.
+        let (stmt, ctx, params) = {
+            let portal = session
+                .get_portal_unverified(&portal_name)
+                .expect("known to exist");
+            let params = portal.parameters.clone();
+            let stmt = portal.stmt.clone();
+            let logging = Arc::clone(&portal.logging);
 
-        let stmt = match &portal.stmt {
-            Some(stmt) => stmt.clone(),
-            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
+            let extra = if let Some(extra) = outer_context {
+                // We are executing in the context of another SQL statement, so we don't
+                // want to begin statement logging anew. The context of the actual statement
+                // being executed is the one that should be retired once this finishes.
+                extra
+            } else {
+                // This is a new statement, log it and return the context
+                let maybe_uuid =
+                    self.begin_statement_execution(&mut session, params.clone(), &logging);
+
+                ExecuteContextExtra::new(maybe_uuid)
+            };
+            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
+            (stmt, ctx, params)
         };
 
-        let logging = Arc::clone(&portal.logging);
-
-        self.begin_statement_execution(ctx.session_mut(), &logging);
-
-        let portal = ctx
-            .session()
-            .get_portal_unverified(&portal_name)
-            .expect("known to exist");
+        let stmt = match stmt {
+            Some(stmt) => stmt,
+            None => return ctx.retire(Ok(ExecuteResponse::EmptyQuery)),
+        };
 
         let session_type = metrics::session_type_label_value(ctx.session().user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
@@ -441,7 +420,6 @@ impl Coordinator {
             _ => {}
         }
 
-        let params = portal.parameters.clone();
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
@@ -510,7 +488,8 @@ impl Coordinator {
                     | Statement::Declare(_)
                     | Statement::Discard(_)
                     | Statement::Execute(_)
-                    | Statement::Explain(_)
+                    | Statement::ExplainPlan(_)
+                    | Statement::ExplainTimestamp(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
@@ -675,48 +654,6 @@ impl Coordinator {
         }
     }
 
-    fn handle_prepare(
-        &self,
-        tx: ClientTransmitter<()>,
-        mut session: Session,
-        name: String,
-        stmt: Option<Statement<Raw>>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-    ) {
-        let catalog = self.owned_catalog();
-        let now = self.now();
-        mz_ore::task::spawn(|| "coord::handle_prepare", async move {
-            // Note: This failpoint is used to simulate a request outliving the external connection
-            // that made it.
-            let mut async_pause = false;
-            (|| {
-                fail::fail_point!("async_prepare", |val| {
-                    async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
-                });
-            })();
-            if async_pause {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            };
-
-            let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
-                Ok(desc) => {
-                    session.set_prepared_statement(
-                        name,
-                        stmt,
-                        sql,
-                        desc,
-                        catalog.transient_revision(),
-                        now,
-                    );
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            };
-            tx.send(res, session);
-        });
-    }
-
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id` if the correct secret key is specified.
     ///
@@ -792,6 +729,11 @@ impl Coordinator {
                 conn_id: _,
                 cluster_id: _,
                 depends_on: _,
+                // We take responsibility for retiring the
+                // peek in `self.cancel_pending_peeks`,
+                // so we don't need to do anything with `ctx_extra` here.
+                ctx_extra: _,
+                is_fast_path: _,
             } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
@@ -805,29 +747,32 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, session: &mut Session) {
-        if self.active_conns.get(session.conn_id()).is_none() {
+    async fn handle_terminate(&mut self, conn_id: ConnectionId) {
+        if self.active_conns.get(&conn_id).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
             // debug. This panic is very infrequent so we want as much information as possible.
             // See https://github.com/MaterializeInc/materialize/issues/18996.
-            panic!("unknown session: {session:?}\n\n{self:?}")
+            panic!("unknown connection: {conn_id:?}\n\n{self:?}")
         }
 
-        self.clear_transaction(session);
+        // We do not need to call clear_transaction here because there are no side effects to run
+        // based on any session transaction state.
+        self.clear_connection(&conn_id);
 
-        self.drop_temp_items(session).await;
+        self.drop_temp_items(&conn_id).await;
         self.catalog_mut()
-            .drop_temporary_schema(session.conn_id())
+            .drop_temporary_schema(&conn_id)
             .unwrap_or_terminate("unable to drop temporary schema");
-        let session_type = metrics::session_type_label_value(session.user());
+        let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
+        let session_type = metrics::session_type_label_value(conn.user());
         self.metrics
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.active_conns.remove(session.conn_id());
-        self.cancel_pending_peeks(session.conn_id());
-        let update = self.catalog().state().pack_session_update(session, -1);
+        self.cancel_pending_peeks(conn.conn_id());
+        self.end_session_for_statement_logging(conn.uuid());
+        let update = self.catalog().state().pack_session_update(&conn, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }
 
@@ -879,7 +824,7 @@ impl Coordinator {
                     let body = desc
                         .get_by_name(&"body".into())
                         .map(|(_idx, ty)| ty.clone())
-                        .ok_or(name)?;
+                        .ok_or(name.clone())?;
                     let header = desc
                         .get_by_name(&"headers".into())
                         .map(|(_idx, ty)| ty.clone());
@@ -898,7 +843,11 @@ impl Coordinator {
             };
 
             // Get a channel so we can queue updates to be written.
-            let row_tx = coord.controller.storage.monotonic_appender(entry.id());
+            let row_tx = coord
+                .controller
+                .storage
+                .monotonic_appender(entry.id())
+                .map_err(|_| name)?;
             Ok(AppendWebhookResponse {
                 tx: row_tx,
                 body_ty,

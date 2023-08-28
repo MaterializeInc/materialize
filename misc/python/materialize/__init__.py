@@ -30,5 +30,5 @@ Consider writing additional Python code when:
 import os
 from pathlib import Path
 
-ROOT = Path(os.environ["MZ_ROOT"])
+MZ_ROOT = Path(os.environ["MZ_ROOT"])
 """The absolute path to the root of the Materialize repository."""

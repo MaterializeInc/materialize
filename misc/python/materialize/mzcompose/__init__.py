@@ -36,15 +36,12 @@ from tempfile import TemporaryFile
 from typing import (
     Any,
     Callable,
-    Dict,
     Iterable,
     Iterator,
-    List,
     Literal,
     Optional,
     OrderedDict,
     Sequence,
-    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -94,7 +91,7 @@ class Composition:
         self.preserve_ports = preserve_ports
         self.project_name = project_name
         self.silent = silent
-        self.workflows: Dict[str, Callable[..., None]] = {}
+        self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
 
         if name in self.repo.compositions:
@@ -164,7 +161,7 @@ class Composition:
         self._write_compose()
 
     def _munge_services(
-        self, services: List[Tuple[str, dict]]
+        self, services: list[tuple[str, dict]]
     ) -> mzbuild.DependencySet:
         images = []
 
@@ -499,7 +496,7 @@ class Composition:
         *args: str,
         detach: bool = False,
         rm: bool = False,
-        env_extra: Dict[str, str] = {},
+        env_extra: dict[str, str] = {},
         capture: bool = False,
         capture_stderr: bool = False,
         stdin: Optional[str] = None,
@@ -582,7 +579,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: List[str]) -> None:
+    def pull_if_variable(self, services: list[str]) -> None:
         """Pull fresh service images in case the tag indicates thee underlying image may change over time.
 
         Args:
@@ -631,7 +628,7 @@ class Composition:
         )
 
         if persistent:
-            self.compose = old_compose
+            self.compose = old_compose  # type: ignore
             self._write_compose()
 
     def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
@@ -720,7 +717,7 @@ class Composition:
             force: Whether to force the removal (i.e., don't error if the
                 volume does not exist).
         """
-        volumes = (f"{self.name}_{v}" for v in volumes)
+        volumes = tuple(f"{self.name}_{v}" for v in volumes)
         spawn.runv(
             ["docker", "volume", "rm", *(["--force"] if force else []), *volumes]
         )
@@ -789,7 +786,7 @@ class Composition:
         input: str,
         service: str = "testdrive",
         persistent: bool = True,
-        args: List[str] = [],
+        args: list[str] = [],
         caller: Optional[Traceback] = None,
     ) -> None:
         """Run a string as a testdrive script.
@@ -815,7 +812,7 @@ class ServiceHealthcheck(TypedDict, total=False):
     """Configuration for a check to determine whether the containers for this
     service are healthy."""
 
-    test: Union[List[str], str]
+    test: Union[list[str], str]
     """A specification of a command to run."""
 
     interval: str
@@ -892,13 +889,13 @@ class ServiceConfig(TypedDict, total=False):
     By default, the name of the service is used as the hostname.
     """
 
-    extra_hosts: List[str]
+    extra_hosts: list[str]
     """Additional hostname mappings."""
 
-    entrypoint: List[str]
+    entrypoint: list[str]
     """Override the entrypoint specified in the image."""
 
-    command: List[str]
+    command: list[str]
     """Override the command specified in the image."""
 
     init: bool
@@ -907,36 +904,36 @@ class ServiceConfig(TypedDict, total=False):
     ports: Sequence[Union[int, str]]
     """Service ports to expose to the host."""
 
-    environment: List[str]
+    environment: list[str]
     """Additional environment variables to set.
 
     Each entry must be in the form `NAME=VALUE`.
 
-    TODO(benesch): this should accept a `Dict[str, str]` instead.
+    TODO(benesch): this should accept a `dict[str, str]` instead.
     """
 
-    depends_on: Union[List[str], Dict[str, ServiceDependency]]
+    depends_on: Union[list[str], dict[str, ServiceDependency]]
     """The list of other services that must be started before this one."""
 
-    tmpfs: List[str]
+    tmpfs: list[str]
     """Paths at which to mount temporary file systems inside the container."""
 
-    volumes: List[str]
+    volumes: list[str]
     """Volumes to attach to the service."""
 
-    networks: Dict[str, Dict[str, List[str]]]
+    networks: dict[str, dict[str, list[str]]]
     """Additional networks to join.
 
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    deploy: dict[str, dict[str, dict[str, str]]]
     """Additional deployment configuration, like resource limits.
 
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    ulimits: Dict[str, Any]
+    ulimits: dict[str, Any]
     """Override the default ulimits for a container."""
 
     working_dir: str
@@ -972,7 +969,7 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
     the arguments that the user provided to the workflow.
     """
 
-    def __init__(self, name: str, description: Optional[str], args: List[str]):
+    def __init__(self, name: str, description: Optional[str], args: list[str]):
         self.args = args
         super().__init__(prog=f"mzcompose run {name}", description=description)
 
@@ -980,7 +977,7 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[str]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
+    ) -> tuple[argparse.Namespace, list[str]]:
         if args is None:
             args = self.args
         return super().parse_known_args(args, namespace)
@@ -988,8 +985,8 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
 
 # TODO(benesch): replace with Docker health checks.
 def _check_tcp(
-    cmd: List[str], host: str, port: int, timeout_secs: int, kind: str = ""
-) -> List[str]:
+    cmd: list[str], host: str, port: int, timeout_secs: int, kind: str = ""
+) -> list[str]:
     cmd.extend(
         [
             "timeout",

@@ -59,6 +59,7 @@ libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
+mime_guess = { version = "2.0.3" }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -72,16 +73,18 @@ phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+predicates = { version = "2.1.4" }
 proc-macro2 = { version = "1.0.66", features = ["span-locations"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.9" }
 quote = { version = "1.0.28" }
 rand = { version = "0.8.5", features = ["small_rng"] }
+rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
 regex-syntax = { version = "0.6.28" }
-reqwest = { version = "0.11.13", features = ["blocking", "json", "native-tls-vendored"] }
+reqwest = { version = "0.11.13", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 ring = { version = "0.16.20", features = ["std"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
@@ -99,6 +102,8 @@ tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
+toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
+toml_edit = { version = "0.19.14", features = ["serde"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
@@ -157,6 +162,7 @@ libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
+mime_guess = { version = "2.0.3" }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -170,16 +176,18 @@ phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+predicates = { version = "2.1.4" }
 proc-macro2 = { version = "1.0.66", features = ["span-locations"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.9" }
 quote = { version = "1.0.28" }
 rand = { version = "0.8.5", features = ["small_rng"] }
+rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.7.0" }
 regex-syntax = { version = "0.6.28" }
-reqwest = { version = "0.11.13", features = ["blocking", "json", "native-tls-vendored"] }
+reqwest = { version = "0.11.13", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 ring = { version = "0.16.20", features = ["std"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
@@ -198,6 +206,8 @@ tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
+toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
+toml_edit = { version = "0.19.14", features = ["serde"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }

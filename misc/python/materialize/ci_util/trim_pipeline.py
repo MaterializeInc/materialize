@@ -15,7 +15,7 @@ import sys
 
 import yaml
 
-from materialize import ROOT, spawn
+from materialize import MZ_ROOT, spawn
 
 
 def main() -> int:
@@ -29,7 +29,7 @@ def main() -> int:
         return 0
 
     # Otherwise, filter down to the selected tests.
-    with open(ROOT / "ci" / args.pipeline / "pipeline.yml") as f:
+    with open(MZ_ROOT / "ci" / args.pipeline / "pipeline.yml") as f:
         pipeline = yaml.safe_load(f.read())
     selected_tests = set(
         spawn.capture(["buildkite-agent", "meta-data", "get", "tests"]).splitlines()

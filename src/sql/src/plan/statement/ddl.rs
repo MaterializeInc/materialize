@@ -754,7 +754,7 @@ pub fn plan_create_source(
                 // of the types are text
                 let mut cast_scx = scx.clone();
                 cast_scx.param_types = Default::default();
-                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Static);
+                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
                 let mut column_types = vec![];
                 for column in table.columns.iter() {
                     column_types.push(ColumnType {
@@ -1437,6 +1437,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
+        mz_sql_parser::ast::LoadGenerator::Clock => LoadGenerator::Clock,
     };
 
     let mut available_subsources = BTreeMap::new();
@@ -1449,6 +1450,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
+                LoadGenerator::Clock => "clock".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
@@ -1835,11 +1837,15 @@ pub fn plan_view(
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
+    // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
+    // Note: Earlier, we were thinking to maybe persist the finishing information with the view
+    // here to help with materialize#724. However, in the meantime, there might be a better
+    // approach to solve materialize#724:
+    // https://github.com/MaterializeInc/materialize/issues/724#issuecomment-1688293709
+    assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    //TODO: materialize#724 - persist finishing information with the view?
-    expr.finish(finishing);
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
@@ -1976,10 +1982,11 @@ pub fn plan_create_materialized_view(
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+    // We get back a trivial finishing, see comment in `plan_view`.
+    assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    expr.finish(finishing);
     let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(

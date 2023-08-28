@@ -2048,6 +2048,7 @@ pub enum TableFunc {
         width: usize,
     },
     GenerateSubscriptsArray,
+    /// Execute some arbitrary scalar function as a table function.
     TabletizedScalar {
         name: String,
         relation: RelationType,
@@ -2397,7 +2398,7 @@ impl TableFunc {
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::Wrap { .. } => true,
-            TableFunc::TabletizedScalar { .. } => false,
+            TableFunc::TabletizedScalar { .. } => true,
         }
     }
 }

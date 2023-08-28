@@ -636,17 +636,17 @@ Explained Query:
           Get materialize.public.big // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a (delta join 1st input)
-  - materialize.public.big_idx_b (delta join)
-  - materialize.public.big_idx_c (delta join)
-  - materialize.public.big_idx_d (delta join)
-  - materialize.public.big_idx_e (delta join)
-  - materialize.public.big_idx_f (delta join)
-  - materialize.public.big_idx_g (delta join)
-  - materialize.public.big_idx_h (delta join)
-  - materialize.public.big_idx_i (delta join)
-  - materialize.public.big_idx_j (delta join)
-  - materialize.public.big_idx_k (delta join)
+  - materialize.public.big_idx_a (delta join 1st input (full scan))
+  - materialize.public.big_idx_b (delta join lookup)
+  - materialize.public.big_idx_c (delta join lookup)
+  - materialize.public.big_idx_d (delta join lookup)
+  - materialize.public.big_idx_e (delta join lookup)
+  - materialize.public.big_idx_f (delta join lookup)
+  - materialize.public.big_idx_g (delta join lookup)
+  - materialize.public.big_idx_h (delta join lookup)
+  - materialize.public.big_idx_i (delta join lookup)
+  - materialize.public.big_idx_j (delta join lookup)
+  - materialize.public.big_idx_k (delta join lookup)
 
 EOF
 
@@ -678,8 +678,8 @@ Explained Query:
           Get materialize.public.big // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a (delta join 1st input)
-  - materialize.public.big_idx_c (delta join)
+  - materialize.public.big_idx_a (delta join 1st input (full scan))
+  - materialize.public.big_idx_c (delta join lookup)
   - materialize.public.big_idx_y (lookup)
 
 EOF
@@ -727,6 +727,6 @@ Explained Query:
       ReadExistingIndex materialize.public.big lookup_value=(5) // { arity: 15 }
 
 Used Indexes:
-  - materialize.public.big_idx_a (lookup)
+  - materialize.public.big_idx_a (*** full scan ***, lookup)
 
 EOF

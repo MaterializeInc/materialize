@@ -13,12 +13,12 @@ import subprocess
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Optional, Union
 
 try:
     from semver.version import Version
 except ImportError:
-    from semver import VersionInfo as Version
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize import spawn
 
@@ -58,7 +58,7 @@ def rev_parse(rev: str, *, abbrev: bool = False) -> str:
 
 
 @lru_cache(maxsize=None)
-def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
+def expand_globs(root: Path, *specs: Union[Path, str]) -> set[str]:
     """Find unignored files within the specified paths."""
     # The goal here is to find all files in the working tree that are not
     # ignored by .gitignore. Naively using `git ls-files` doesn't work, because
@@ -87,7 +87,7 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> List[Version]:
+def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
     """List all the version-like tags in the repo
 
     Args:

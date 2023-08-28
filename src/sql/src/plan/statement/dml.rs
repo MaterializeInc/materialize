@@ -17,31 +17,29 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::MirRelationExpr;
-use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{Expr, OrderByExpr, SubscribeOutput};
+use mz_sql_parser::ast::{ExplainTimestampStatement, Expr, OrderByExpr, SubscribeOutput};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStage,
-    ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement, Statement,
-    SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement, UpdateStatement,
-    ViewDefinition,
+    DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
+    SelectStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement,
+    UpdateStatement,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{self, Aug, ResolvedItemName};
+use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{self, side_effecting_func};
+use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, Plan,
+    query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
 };
 use crate::session::vars;
@@ -196,11 +194,11 @@ pub fn plan_select(
     }))
 }
 
-pub fn describe_explain(
+pub fn describe_explain_plan(
     scx: &StatementContext,
-    ExplainStatement {
+    ExplainPlanStatement {
         stage, explainee, ..
-    }: ExplainStatement<Aug>,
+    }: ExplainPlanStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
 
@@ -220,10 +218,6 @@ pub fn describe_explain(
         ExplainStage::PhysicalPlan => {
             relation_desc =
                 relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
-        }
-        ExplainStage::Timestamp => {
-            relation_desc =
-                relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
         }
         ExplainStage::Trace => {
             relation_desc = relation_desc
@@ -250,123 +244,131 @@ pub fn describe_explain(
     )
 }
 
-pub fn plan_explain(
+pub fn describe_explain_timestamp(
     scx: &StatementContext,
-    ExplainStatement {
+    ExplainTimestampStatement { query, .. }: ExplainTimestampStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let mut relation_desc = RelationDesc::empty();
+    relation_desc = relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
+
+    Ok(StatementDesc::new(Some(relation_desc))
+        .with_params(describe_select(scx, SelectStatement { query, as_of: None })?.param_types))
+}
+
+pub fn plan_explain_plan(
+    scx: &StatementContext,
+    ExplainPlanStatement {
         stage,
         config_flags,
         format,
         no_errors,
         explainee,
-    }: ExplainStatement<Aug>,
+    }: ExplainPlanStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let is_view = matches!(explainee, Explainee::View(_));
-    let (explainee, query) = match explainee {
-        Explainee::View(name) => {
-            let view = scx.get_item_by_resolved_name(&name)?;
-            let item_type = view.item_type();
-            // Return a more helpful error on `EXPLAIN [...] VIEW <materialized-view>`.
-            if item_type == CatalogItemType::MaterializedView {
-                return Err(PlanError::ExplainViewOnMaterializedView(
-                    name.full_name_str(),
-                ));
-            } else if item_type != CatalogItemType::View {
-                sql_bail!(
-                    "Expected {} to be a view, not a {}",
-                    name.full_name_str(),
-                    item_type
-                );
-            }
-            let parsed = crate::parse::parse(view.create_sql())
-                .expect("Sql for existing view should be valid sql");
-            let query = match parsed.into_last().ast {
-                Statement::CreateView(CreateViewStatement {
-                    definition: ViewDefinition { query, .. },
-                    ..
-                }) => query,
-                _ => panic!("Sql for existing view should parse as a view"),
-            };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-            (
-                mz_repr::explain::Explainee::Dataflow(view.id()),
-                names::resolve(qcx.scx.catalog, query)?.0,
-            )
-        }
-        Explainee::MaterializedView(name) => {
-            let mview = scx.get_item_by_resolved_name(&name)?;
-            let item_type = mview.item_type();
-            if item_type != CatalogItemType::MaterializedView {
-                sql_bail!(
-                    "Expected {} to be a materialized view, not a {}",
-                    name,
-                    item_type
-                );
-            }
-            let parsed = crate::parse::parse(mview.create_sql())
-                .expect("Sql for existing materialized view should be valid sql");
-            let query = match parsed.into_last().ast {
-                Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-                    query,
-                    ..
-                }) => query,
-                _ => {
-                    panic!("Sql for existing materialized view should parse as a materialized view")
-                }
-            };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-            (
-                mz_repr::explain::Explainee::Dataflow(mview.id()),
-                names::resolve(qcx.scx.catalog, query)?.0,
-            )
-        }
-        Explainee::Query(query) => (mz_repr::explain::Explainee::Query, query),
-    };
-    // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-    // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let query::PlannedQuery {
-        mut expr,
-        desc,
-        finishing,
-        scope: _,
-    } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
-    let finishing = if is_view {
-        // views don't use a separate finishing
-        expr.finish(finishing);
-        None
-    } else if finishing.is_trivial(desc.arity()) {
-        None
-    } else {
-        Some(finishing)
-    };
-    expr.bind_parameters(params)?;
-
-    let config_flags = config_flags
-        .iter()
-        .map(|ident| ident.to_string().to_lowercase())
-        .collect::<BTreeSet<_>>();
-    let mut config = ExplainConfig::try_from(config_flags)?;
-
-    if config.filter_pushdown {
-        scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
-        // If filtering is disabled, explain plans should not include pushdown info.
-        config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
-    }
-
     let format = match format {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
 
-    Ok(Plan::Explain(ExplainPlan {
-        raw_plan: expr,
-        row_set_finishing: finishing,
+    let config = {
+        let config_flags = config_flags
+            .iter()
+            .map(|ident| ident.to_string().to_lowercase())
+            .collect::<BTreeSet<_>>();
+
+        let mut config = ExplainConfig::try_from(config_flags)?;
+
+        if config.filter_pushdown {
+            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
+            // If filtering is disabled, explain plans should not include pushdown info.
+            config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+        }
+
+        config
+    };
+
+    let explainee = match explainee {
+        Explainee::View(_) => {
+            bail_never_supported!(
+                "EXPLAIN ... VIEW <view_name>",
+                "sql/explain-plan",
+                "Use `EXPLAIN ... SELECT * FROM <view_name>` instead."
+            );
+        }
+        Explainee::MaterializedView(name) => {
+            let mview = scx.get_item_by_resolved_name(&name)?;
+            if mview.item_type() != CatalogItemType::MaterializedView {
+                sql_bail!(
+                    "Expected {} to be a materialized view, not a {}",
+                    name,
+                    mview.item_type()
+                );
+            }
+            crate::plan::Explainee::MaterializedView(mview.id())
+        }
+        Explainee::Query(query) => {
+            // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
+            // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
+            let query::PlannedQuery {
+                expr: mut raw_plan,
+                desc,
+                finishing,
+                scope: _,
+            } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+            raw_plan.bind_parameters(params)?;
+
+            let row_set_finishing = if finishing.is_trivial(desc.arity()) {
+                None
+            } else {
+                Some(finishing)
+            };
+
+            crate::plan::Explainee::Query {
+                raw_plan,
+                row_set_finishing,
+            }
+        }
+    };
+
+    Ok(Plan::ExplainPlan(ExplainPlanPlan {
         stage,
         format,
         config,
         no_errors,
         explainee,
+    }))
+}
+
+pub fn plan_explain_timestamp(
+    scx: &StatementContext,
+    ExplainTimestampStatement { format, query }: ExplainTimestampStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let format = match format {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    };
+
+    let raw_plan = {
+        // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
+        // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
+        let query::PlannedQuery {
+            expr: mut raw_plan,
+            desc: _,
+            finishing: _,
+            scope: _,
+        } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+        raw_plan.bind_parameters(params)?;
+
+        raw_plan
+    };
+
+    Ok(Plan::ExplainTimestamp(ExplainTimestampPlan {
+        format,
+        raw_plan,
     }))
 }
 
@@ -407,7 +409,7 @@ pub fn describe_subscribe(
         }
         SubscribeRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
-                query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+                query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             desc
         }
     };
@@ -499,12 +501,10 @@ pub fn plan_subscribe(
             (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
-            // There's no way to apply finishing operations to a `SUBSCRIBE`
-            // directly. So we wrap the query in another query so that the
-            // user-supplied query is planned as a subquery whose `ORDER
-            // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
-            let query = Query::query(query);
-            let query = plan_query(scx, query, &Params::empty(), QueryLifetime::OneShot)?;
+            let query = plan_query(scx, query, &Params::empty(), QueryLifetime::Subscribe)?;
+            // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
+            // finishing should have already been turned into a `TopK` by
+            // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
             assert!(query.finishing.is_trivial(query.desc.arity()));
             let desc = query.desc.clone();
             (
@@ -521,7 +521,7 @@ pub fn plan_subscribe(
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
 
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let qcx = QueryContext::root(scx, QueryLifetime::Subscribe);
     let ecx = ExprContext {
         qcx: &qcx,
         name: "",
@@ -537,7 +537,6 @@ pub fn plan_subscribe(
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
-            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)?;
             let order_by = key_columns
                 .iter()
                 .map(|ident| OrderByExpr {

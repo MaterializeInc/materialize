@@ -65,8 +65,10 @@
 
 use std::any::Any;
 use std::borrow::Borrow;
+use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::ops::RangeBounds;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
@@ -77,6 +79,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -747,7 +750,7 @@ mod upsert_rocksdb {
     };
 
     /// The upsert in memory state size threshold after which it will spill to disk.
-    /// The default is 256 MB = 268435456 bytes
+    /// The default is 85 MiB = 89128960 bytes
     pub const UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_auto_spill_threshold_bytes"),
         value: &mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD,
@@ -820,6 +823,17 @@ static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| 
     description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     internal: true,
 });
+
+// Note(parkmycar): This value was chosen arbitrarily.
+const DEFAULT_COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: Duration = Duration::from_millis(100);
+const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("coord_slow_message_reporting_threshold"),
+    value: &DEFAULT_COORD_SLOW_MESSAGE_REPORTING_THRESHOLD,
+    description:
+        "Sets the threshold at which we will report the handling of a coordinator message \
+    for being slow.",
+    internal: true,
+};
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
 /// when connecting to PG via replication.
@@ -895,11 +909,14 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
 /// dataflows_. This is distinct from `DATAFLOW_MAX_INFLIGHT_BYTES`, as this will
 /// supports more granular control (within a single timestamp).
+/// Currently defaults to 256MiB = 268435456 bytes
+/// Note: Backpressure will only be turned on if disk is enabled based on
+/// `storage_dataflow_max_inflight_bytes_disk_only` flag
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes"),
-    value: &None,
+    value: &Some(256 * 1024 * 1024),
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
-                  storage dataflows. Defaults to not backpressure enabled (Materialize).",
+                  storage dataflows. Defaults to backpressure enabled (Materialize).",
     internal: true,
 };
 
@@ -917,16 +934,18 @@ const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerV
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: ServerVar<Option<Numeric>> =
-    ServerVar {
-        name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
-        value: &None,
-        description:
-            "The fraction of the cluster replica size to be used as the maximum number of \
+static DEFAULT_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<Option<Numeric>> =
+    Lazy::new(|| Some(0.0025.into()));
+pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<
+    ServerVar<Option<Numeric>>,
+> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
+    value: &DEFAULT_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION,
+    description: "The fraction of the cluster replica size to be used as the maximum number of \
     in-flight bytes emitted by persist_sources feeding storage dataflows. \
     If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
-        internal: true,
-    };
+    internal: true,
+});
 
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes_disk_only"),
@@ -982,6 +1001,27 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
     internal: true,
 };
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_budget_bytes`].
+const PERSIST_STATS_BUDGET_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_stats_budget_bytes"),
+    value: &PersistConfig::DEFAULT_STATS_BUDGET_BYTES,
+    description: "The budget (in bytes) of how many stats to maintain per batch part.",
+    internal: true,
+};
+
+static PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS: Lazy<UntrimmableColumns> =
+    Lazy::new(|| PersistConfig::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone());
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_untrimmable_columns`].
+static PERSIST_STATS_UNTRIMMABLE_COLUMNS: Lazy<ServerVar<UntrimmableColumns>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("persist_stats_untrimmable_columns"),
+        value: &PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS,
+        description: "Which columns to always retain during persist stats trimming. The expected \
+        format is JSON (ex. `{\"equals\": [\"foo\"], \"prefixes\": [], \"suffixes\": [\"_bar\"]}`) \
+        and all strings must be lowercase.",
+        internal: true,
+    });
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
 const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
@@ -1096,6 +1136,17 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
+pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("statement_logging_sample_rate"),
+    value: &DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE,
+    description: "User-facing session variable indicating how many statement executions should be \
+    logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize).",
+    internal: false,
+}
+});
+
 /// Whether compute rendering should use Materialize's custom linear join implementation rather
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
@@ -1114,6 +1165,25 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
         "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
 };
+
+static DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("statement_logging_max_sample_rate"),
+    value: &DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+    description: "The maximum rate at which statements may be logged. If this value is less than \
+that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
+    internal: false,
+});
+
+static DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
+pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("statement_logging_default_sample_rate"),
+        value: &DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+        description:
+            "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
+        internal: false,
+    });
 
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
@@ -1364,10 +1434,6 @@ feature_flags!(
         "`ENVELOPE DEBEZIUM (KEY (..))`"
     ),
     (enable_envelope_materialize, "ENVELOPE MATERIALIZE"),
-    (
-        enable_envelope_upsert_in_subscribe,
-        "`ENVELOPE UPSERT` can be used in `SUBSCRIBE`"
-    ),
     (enable_index_options, "INDEX OPTIONS"),
     (
         enable_kafka_config_denylist_options,
@@ -1447,7 +1513,11 @@ feature_flags!(
         enable_arrangement_size_logging,
         "arrangement size logging",
         true
-    )
+    ),
+    (
+        statement_logging_use_reproducible_rng,
+        "statement logging with reproducible RNG"
+    ),
 );
 
 /// Represents the input to a variable.
@@ -1545,6 +1615,10 @@ impl SessionVars {
             )
             .with_var(&MAX_QUERY_RESULT_SIZE)
             .with_var(&MAX_IDENTIFIER_LENGTH)
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1938,6 +2012,10 @@ impl SessionVars {
         self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
             .expect("setting cluster from string succeeds");
     }
+
+    pub fn get_statement_logging_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_SAMPLE_RATE)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2088,6 +2166,8 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_STATS_BUDGET_BYTES)
+            .with_var(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
@@ -2111,6 +2191,7 @@ impl SystemVars {
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+            .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2122,7 +2203,16 @@ impl SystemVars {
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
-            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT);
+            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            )
+            .with_value_constrained_var(
+                &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
+            );
 
         vars.refresh_internal_state();
         vars
@@ -2612,6 +2702,17 @@ impl SystemVars {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
     }
 
+    /// Returns the `persist_stats_budget_bytes` configuration parameter.
+    pub fn persist_stats_budget_bytes(&self) -> usize {
+        *self.expect_value(&PERSIST_STATS_BUDGET_BYTES)
+    }
+
+    /// Returns the `persist_stats_untrimmable_columns` configuration parameter.
+    pub fn persist_stats_untrimmable_columns(&self) -> UntrimmableColumns {
+        self.expect_value(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
+            .clone()
+    }
+
     /// Returns the `persist_pubsub_client_enabled` configuration parameter.
     pub fn persist_pubsub_client_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_PUBSUB_CLIENT_ENABLED)
@@ -2691,6 +2792,10 @@ impl SystemVars {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 
+    pub fn coord_slow_message_reporting_threshold_ms(&self) -> Duration {
+        *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+    }
+
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
     }
@@ -2737,6 +2842,16 @@ impl SystemVars {
 
     pub fn cluster_soften_az_affinity_weight(&self) -> i32 {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+    }
+
+    /// Returns the `statement_logging_max_sample_rate` configuration parameter.
+    pub fn statement_logging_max_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_MAX_SAMPLE_RATE)
+    }
+
+    /// Returns the `statement_logging_default_sample_rate` configuration parameter.
+    pub fn statement_logging_default_sample_rate(&self) -> Numeric {
+        *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
     }
 }
 
@@ -3446,6 +3561,22 @@ impl Value for usize {
     }
 }
 
+impl Value for f64 {
+    fn type_name() -> String {
+        "double-precision floating-point number".to_string()
+    }
+
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<f64, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct NumericNonNegNonNan;
 
@@ -3456,6 +3587,44 @@ impl DomainConstraint<Numeric> for NumericNonNegNonNan {
                 parameter: var.into(),
                 values: vec![n.to_string()],
                 reason: "only supports non-negative, non-NaN numeric values".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct NumericInRange<R>(R);
+
+impl<R> DomainConstraint<Numeric> for NumericInRange<R>
+where
+    R: RangeBounds<f64> + std::fmt::Debug + Send + Sync,
+{
+    fn check(&self, var: &(dyn Var + Send + Sync), n: &Numeric) -> Result<(), VarError> {
+        let n: f64 = (*n)
+            .try_into()
+            .map_err(|_e| VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                // This first check can fail if the value is NaN, out of range,
+                // OR if it underflows (i.e. is very close to 0 without actually being 0, and the closest
+                // representable float is 0).
+                //
+                // The underflow case is very unlikely to be accidentally hit by a user, so let's
+                // not make the error message more confusing by talking about it, even though that makes
+                // the error message slightly inaccurate.
+                //
+                // If the user tries to set the paramater to 0.000<hundreds more zeros>001
+                // and gets the message "only supports values in range [0.0..=1.0]", I think they will
+                // understand, or at least accept, what's going on.
+                reason: format!("only supports values in range {:?}", self.0),
+            })?;
+        if !self.0.contains(&n) {
+            Err(VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                reason: format!("only supports values in range {:?}", self.0),
             })
         } else {
             Ok(())
@@ -4058,6 +4227,30 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
     }
 }
 
+impl Value for UntrimmableColumns {
+    fn type_name() -> String {
+        "UntrimmableColumns".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let cols: UntrimmableColumns =
+            serde_json::from_str(s).map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: vec![s.to_string()],
+                reason: format!("{}", e),
+            })?;
+        Ok(cols)
+    }
+
+    fn format(&self) -> String {
+        serde_json::to_string(self).expect("serializable")
+    }
+}
+
 impl Value for CloneableEnvFilter {
     fn type_name() -> String {
         "EnvFilter".to_string()
@@ -4146,6 +4339,8 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_STATS_BUDGET_BYTES.name()
+        || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
 }

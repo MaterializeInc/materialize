@@ -9,7 +9,6 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
@@ -23,13 +22,13 @@ class CreateSourceParameterized(ActionFactory):
     """Creates a source in Materialized."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
 
     def __init__(self, max_sources: int = 10) -> None:
         self.max_sources = max_sources
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_source_name = capabilities.get_free_capability_name(
             SourceExists, self.max_sources
         )
@@ -74,5 +73,5 @@ class CreateSource(Action):
             )
         )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.source]

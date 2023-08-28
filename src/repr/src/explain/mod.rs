@@ -249,7 +249,13 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 /// The type of object to be explained
 #[derive(Clone, Debug)]
 pub enum Explainee {
-    /// An object that will be served using a dataflow
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// An object that will be served using a dataflow.
+    ///
+    /// This variant is deprecated and will be removed in #18089.
     Dataflow(GlobalId),
     /// The object to be explained is a one-off query and may or may not served
     /// using a dataflow.
@@ -527,6 +533,10 @@ impl fmt::Display for Attributes {
 }
 
 /// A set of indexes that are used in the explained plan.
+///
+/// Each vector element consists of the following components:
+/// 1. The id of the index.
+/// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
 #[derive(Debug)]
 pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
 
@@ -546,29 +556,42 @@ impl Default for UsedIndexes {
     }
 }
 
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
-    /// `IndexedFilter`, e.g., something like `WHERE x = 42`.
-    Lookup,
-    /// Differential join. Only records that have a match are read.
+    /// Differential join. The work is proportional to the number of matches.
     DifferentialJoin,
     /// Delta join; the bool indicates whether it's the first input of the join.
     /// In a snapshot, the first input is scanned, the others only get lookups.
     /// When later input batches are arriving, all inputs are fully read.
     DeltaJoin(bool),
+    /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
+    Lookup,
     /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
-    /// situation that I know of when it occurs is if one index is used to directly build another
-    /// index (probably one with a different key). Note that we won't be able to actually observe
-    /// this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or `EXPLAIN CREATE INDEX`.
-    /// (`export_index` inserts the `ArrangeBy`.)
+    /// situation that I know of when it occurs is if one index is used to build another index
+    /// without any transformations (but possibly with a different key). Note that we won't be able
+    /// to actually observe this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or
+    /// `EXPLAIN CREATE INDEX`. (`export_index` is what inserts this `ArrangeBy`.)
     PlanRoot,
+    /// The index is used for directly writing to a sink. Can happen with a SUBSCRIBE to an indexed
+    /// view.
+    SinkExport,
+    /// The index is used for creating a new index. Currently, a `PlanRoot` usage will always
+    /// additionally be present together with an `IndexExport` usage.
+    IndexExport,
+    /// When a fast path peek has a LIMIT, but no ORDER BY, then we read from the index only as many
+    /// records (approximately), as the OFFSET + LIMIT needs.
+    /// Note: When a fast path peek does a lookup and also has a limit, the usage type will be
+    /// `Lookup`. However, the smart limiting logic will still apply.
+    FastPathLimit,
     /// We saw a dangling `ArrangeBy`, i.e., where we have no idea what the arrangement will be used
     /// for. This is an internal error. Can be a bug either in `CollectIndexRequests`, or some
     /// other transform that messed up the plan. It's also possible that somebody is trying to add
     /// an `ArrangeBy` marking for some operator other than a `Join`. (Which is fine, but please
     /// update `CollectIndexRequests`.)
+    DanglingArrangeBy,
+    /// Internal error in `CollectIndexRequests`.
     Unknown,
 }
 
@@ -581,10 +604,20 @@ impl std::fmt::Display for IndexUsageType {
                 IndexUsageType::FullScan => "*** full scan ***",
                 IndexUsageType::Lookup => "lookup",
                 IndexUsageType::DifferentialJoin => "differential join",
-                IndexUsageType::DeltaJoin(true) => "delta join 1st input",
-                IndexUsageType::DeltaJoin(false) => "delta join",
+                IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
+                // Technically, this is a lookup only for a snapshot. For later update batches, all
+                // records are read. However, I wrote lookup here, because in most cases the
+                // lookup/scan distinction matters only for a snapshot. This is because for arriving
+                // update records, something in the system will always do work proportional to the
+                // number of records anyway. In other words, something is always scanning new
+                // updates, but we can avoid scanning records again and again in snapshots.
+                IndexUsageType::DeltaJoin(false) => "delta join lookup",
                 IndexUsageType::PlanRoot => "plan root",
-                IndexUsageType::Unknown => "*** unknown -- INTERNAL ERROR ***",
+                IndexUsageType::SinkExport => "sink export",
+                IndexUsageType::IndexExport => "index export",
+                IndexUsageType::FastPathLimit => "fast path limit",
+                IndexUsageType::DanglingArrangeBy => "*** INTERNAL ERROR (dangling ArrangeBy) ***",
+                IndexUsageType::Unknown => "*** INTERNAL ERROR (unknown usage) ***",
             }
         )
     }
@@ -600,7 +633,11 @@ impl RustType<ProtoIndexUsageType> for IndexUsageType {
                 IndexUsageType::DifferentialJoin => DifferentialJoin(()),
                 IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
                 IndexUsageType::PlanRoot => PlanRoot(()),
+                IndexUsageType::SinkExport => SinkExport(()),
+                IndexUsageType::IndexExport => IndexExport(()),
+                IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
                 IndexUsageType::Unknown => Unknown(()),
+                IndexUsageType::FastPathLimit => FastPathLimit(()),
             }),
         }
     }
@@ -617,7 +654,11 @@ impl RustType<ProtoIndexUsageType> for IndexUsageType {
             DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
             DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
             PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
+            SinkExport(()) => Ok(IndexUsageType::SinkExport),
+            IndexExport(()) => Ok(IndexUsageType::IndexExport),
+            DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),
             Unknown(()) => Ok(IndexUsageType::Unknown),
+            FastPathLimit(()) => Ok(IndexUsageType::FastPathLimit),
         }
     }
 }

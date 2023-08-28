@@ -280,6 +280,7 @@ pub const TYPE_BOOL: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Bool,
         array_id: None,
+        typreceive_oid: Some(2436),
     },
 };
 
@@ -290,6 +291,7 @@ pub const TYPE_BYTEA: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Bytes,
         array_id: None,
+        typreceive_oid: Some(2412),
     },
 };
 
@@ -300,6 +302,7 @@ pub const TYPE_INT8: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Int64,
         array_id: None,
+        typreceive_oid: Some(2408),
     },
 };
 
@@ -310,6 +313,7 @@ pub const TYPE_INT4: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Int32,
         array_id: None,
+        typreceive_oid: Some(2406),
     },
 };
 
@@ -320,6 +324,7 @@ pub const TYPE_TEXT: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::String,
         array_id: None,
+        typreceive_oid: Some(2414),
     },
 };
 
@@ -330,6 +335,7 @@ pub const TYPE_OID: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Oid,
         array_id: None,
+        typreceive_oid: Some(2418),
     },
 };
 
@@ -340,6 +346,7 @@ pub const TYPE_FLOAT4: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Float32,
         array_id: None,
+        typreceive_oid: Some(2424),
     },
 };
 
@@ -350,6 +357,7 @@ pub const TYPE_FLOAT8: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Float64,
         array_id: None,
+        typreceive_oid: Some(2426),
     },
 };
 
@@ -362,6 +370,7 @@ pub const TYPE_BOOL_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_BOOL.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -374,6 +383,7 @@ pub const TYPE_BYTEA_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_BYTEA.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -386,6 +396,7 @@ pub const TYPE_INT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT4.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -398,6 +409,7 @@ pub const TYPE_TEXT_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TEXT.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -410,6 +422,7 @@ pub const TYPE_INT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT8.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -422,6 +435,7 @@ pub const TYPE_FLOAT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_FLOAT4.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -434,6 +448,7 @@ pub const TYPE_FLOAT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_FLOAT8.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -446,6 +461,7 @@ pub const TYPE_OID_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_OID.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -456,6 +472,7 @@ pub const TYPE_DATE: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Date,
         array_id: None,
+        typreceive_oid: Some(2468),
     },
 };
 
@@ -466,6 +483,7 @@ pub const TYPE_TIME: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Time,
         array_id: None,
+        typreceive_oid: Some(2470),
     },
 };
 
@@ -476,6 +494,7 @@ pub const TYPE_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Timestamp,
         array_id: None,
+        typreceive_oid: Some(2474),
     },
 };
 
@@ -488,6 +507,7 @@ pub const TYPE_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TIMESTAMP.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -500,6 +520,7 @@ pub const TYPE_DATE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_DATE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -512,6 +533,7 @@ pub const TYPE_TIME_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TIME.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -522,6 +544,7 @@ pub const TYPE_TIMESTAMPTZ: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::TimestampTz,
         array_id: None,
+        typreceive_oid: Some(2476),
     },
 };
 
@@ -534,6 +557,7 @@ pub const TYPE_TIMESTAMPTZ_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TIMESTAMPTZ.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -544,6 +568,7 @@ pub const TYPE_INTERVAL: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Interval,
         array_id: None,
+        typreceive_oid: Some(2478),
     },
 };
 
@@ -556,6 +581,7 @@ pub const TYPE_INTERVAL_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INTERVAL.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -566,6 +592,7 @@ pub const TYPE_NAME: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::PgLegacyName,
         array_id: None,
+        typreceive_oid: Some(2422),
     },
 };
 
@@ -578,6 +605,7 @@ pub const TYPE_NAME_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_NAME.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -588,6 +616,7 @@ pub const TYPE_NUMERIC: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Numeric,
         array_id: None,
+        typreceive_oid: Some(2460),
     },
 };
 
@@ -600,6 +629,7 @@ pub const TYPE_NUMERIC_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_NUMERIC.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -610,6 +640,7 @@ pub const TYPE_RECORD: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: Some(2402),
     },
 };
 
@@ -622,6 +653,7 @@ pub const TYPE_RECORD_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_RECORD.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -632,6 +664,7 @@ pub const TYPE_UUID: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Uuid,
         array_id: None,
+        typreceive_oid: Some(2961),
     },
 };
 
@@ -644,6 +677,7 @@ pub const TYPE_UUID_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_UUID.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -654,6 +688,7 @@ pub const TYPE_JSONB: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Jsonb,
         array_id: None,
+        typreceive_oid: Some(3805),
     },
 };
 
@@ -666,6 +701,7 @@ pub const TYPE_JSONB_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_JSONB.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -676,6 +712,7 @@ pub const TYPE_ANY: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -686,6 +723,7 @@ pub const TYPE_ANYARRAY: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: Some(2502),
     },
 };
 
@@ -696,6 +734,7 @@ pub const TYPE_ANYELEMENT: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -706,6 +745,7 @@ pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -716,6 +756,7 @@ pub const TYPE_ANYRANGE: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -726,6 +767,7 @@ pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::PgLegacyChar,
         array_id: None,
+        typreceive_oid: Some(2434),
     },
 };
 
@@ -736,6 +778,7 @@ pub const TYPE_VARCHAR: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::VarChar,
         array_id: None,
+        typreceive_oid: Some(2432),
     },
 };
 
@@ -746,6 +789,7 @@ pub const TYPE_INT2: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Int16,
         array_id: None,
+        typreceive_oid: Some(2404),
     },
 };
 
@@ -758,6 +802,7 @@ pub const TYPE_INT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT2.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -768,6 +813,7 @@ pub const TYPE_BPCHAR: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Char,
         array_id: None,
+        typreceive_oid: Some(2430),
     },
 };
 
@@ -780,6 +826,7 @@ pub const TYPE_CHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_CHAR.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -792,6 +839,7 @@ pub const TYPE_VARCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_VARCHAR.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -804,6 +852,7 @@ pub const TYPE_BPCHAR_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_BPCHAR.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -814,6 +863,7 @@ pub const TYPE_REGPROC: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::RegProc,
         array_id: None,
+        typreceive_oid: Some(2444),
     },
 };
 
@@ -826,6 +876,7 @@ pub const TYPE_REGPROC_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_REGPROC.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -836,6 +887,7 @@ pub const TYPE_REGTYPE: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::RegType,
         array_id: None,
+        typreceive_oid: Some(2454),
     },
 };
 
@@ -848,6 +900,7 @@ pub const TYPE_REGTYPE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_REGTYPE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -858,6 +911,7 @@ pub const TYPE_REGCLASS: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::RegClass,
         array_id: None,
+        typreceive_oid: Some(2452),
     },
 };
 
@@ -870,6 +924,7 @@ pub const TYPE_REGCLASS_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_REGCLASS.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -880,6 +935,7 @@ pub const TYPE_INT2_VECTOR: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Int2Vector,
         array_id: None,
+        typreceive_oid: Some(2410),
     },
 };
 
@@ -892,6 +948,7 @@ pub const TYPE_INT2_VECTOR_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT2_VECTOR.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -902,6 +959,7 @@ pub const TYPE_ANYCOMPATIBLE: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -912,6 +970,7 @@ pub const TYPE_ANYCOMPATIBLEARRAY: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: Some(5090),
     },
 };
 
@@ -922,6 +981,7 @@ pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -932,6 +992,7 @@ pub const TYPE_ANYCOMPATIBLERANGE: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -942,6 +1003,7 @@ pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -952,6 +1014,7 @@ pub const TYPE_MAP: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -962,6 +1025,7 @@ pub const TYPE_ANYCOMPATIBLELIST: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -972,6 +1036,7 @@ pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -982,6 +1047,7 @@ pub const TYPE_UINT2: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::UInt16,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -994,6 +1060,7 @@ pub const TYPE_UINT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_UINT2.name,
         },
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1004,6 +1071,7 @@ pub const TYPE_UINT4: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::UInt32,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1016,6 +1084,7 @@ pub const TYPE_UINT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_UINT4.name,
         },
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1026,6 +1095,7 @@ pub const TYPE_UINT8: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::UInt64,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1038,6 +1108,7 @@ pub const TYPE_UINT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_UINT8.name,
         },
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1048,6 +1119,7 @@ pub const TYPE_MZ_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::MzTimestamp,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1060,6 +1132,7 @@ pub const TYPE_MZ_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_MZ_TIMESTAMP.name,
         },
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1072,6 +1145,7 @@ pub const TYPE_INT4_RANGE: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT4.name,
         },
         array_id: None,
+        typreceive_oid: Some(3836),
     },
 };
 
@@ -1084,6 +1158,7 @@ pub const TYPE_INT4_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT4_RANGE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -1096,6 +1171,7 @@ pub const TYPE_INT8_RANGE: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT8.name,
         },
         array_id: None,
+        typreceive_oid: Some(3836),
     },
 };
 
@@ -1108,6 +1184,7 @@ pub const TYPE_INT8_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_INT8_RANGE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -1120,6 +1197,7 @@ pub const TYPE_DATE_RANGE: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_DATE.name,
         },
         array_id: None,
+        typreceive_oid: Some(3836),
     },
 };
 
@@ -1132,6 +1210,7 @@ pub const TYPE_DATE_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_DATE_RANGE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -1144,6 +1223,7 @@ pub const TYPE_NUM_RANGE: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_NUMERIC.name,
         },
         array_id: None,
+        typreceive_oid: Some(3836),
     },
 };
 
@@ -1156,6 +1236,7 @@ pub const TYPE_NUM_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_NUM_RANGE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -1168,6 +1249,7 @@ pub const TYPE_TS_RANGE: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TIMESTAMP.name,
         },
         array_id: None,
+        typreceive_oid: Some(3836),
     },
 };
 
@@ -1180,6 +1262,7 @@ pub const TYPE_TS_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TS_RANGE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -1192,6 +1275,7 @@ pub const TYPE_TSTZ_RANGE: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TIMESTAMPTZ.name,
         },
         array_id: None,
+        typreceive_oid: Some(3836),
     },
 };
 
@@ -1204,6 +1288,7 @@ pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_TSTZ_RANGE.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
     },
 };
 
@@ -1214,6 +1299,7 @@ pub const TYPE_MZ_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::MzAclItem,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1226,6 +1312,7 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_MZ_ACL_ITEM.name,
         },
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1236,6 +1323,7 @@ pub const TYPE_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::AclItem,
         array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1248,6 +1336,18 @@ pub const TYPE_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
             element_reference: TYPE_ACL_ITEM.name,
         },
         array_id: None,
+        typreceive_oid: Some(2400),
+    },
+};
+
+pub const TYPE_INTERNAL: BuiltinType<NameReference> = BuiltinType {
+    name: "internal",
+    schema: PG_CATALOG_SCHEMA,
+    oid: 2281,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+        typreceive_oid: None,
     },
 };
 
@@ -1303,12 +1403,6 @@ pub const MZ_COMPUTE_EXPORTS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_compute_exports_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
-};
-
-pub const MZ_COMPUTE_DEPENDENCIES_PER_WORKER: BuiltinLog = BuiltinLog {
-    name: "mz_compute_dependencies_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
 
 pub const MZ_COMPUTE_FRONTIERS_PER_WORKER: BuiltinLog = BuiltinLog {
@@ -1468,6 +1562,14 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_compute_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("dependency_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1659,6 +1761,16 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
+    is_retained_metrics_object: false,
+});
+/// PostgreSQL-specific metadata about types that doesn't make sense to expose
+/// in the `mz_types` table as part of our public, stable API.
+pub static MZ_TYPE_PG_METADATA: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_type_pg_metadata",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("typreceive", ScalarType::Oid.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2340,15 +2452,6 @@ FROM mz_internal.mz_compute_exports_per_worker
 WHERE worker_id = 0",
 };
 
-pub const MZ_COMPUTE_DEPENDENCIES: BuiltinView = BuiltinView {
-    name: "mz_compute_dependencies",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_compute_dependencies AS
-SELECT export_id, import_id
-FROM mz_internal.mz_compute_dependencies_per_worker
-WHERE worker_id = 0",
-};
-
 pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2760,7 +2863,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     )
         AS typarray,
     (CASE mztype WHEN 'a' THEN 'array_in' ELSE NULL END)::pg_catalog.regproc AS typinput,
-    NULL::pg_catalog.oid AS typreceive,
+    COALESCE(mz_internal.mz_type_pg_metadata.typreceive, 0) AS typreceive,
     false::pg_catalog.bool AS typnotnull,
     0::pg_catalog.oid AS typbasetype,
     -1::pg_catalog.int4 AS typtypmod,
@@ -2769,6 +2872,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     NULL::pg_catalog.text AS typdefault
 FROM
     mz_catalog.mz_types
+    LEFT JOIN mz_internal.mz_type_pg_metadata ON mz_catalog.mz_types.id = mz_internal.mz_type_pg_metadata.id
     JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_types.schema_id
     JOIN (
             -- 'a' is not a supported typtype, but we use it to denote an array. It is
@@ -3671,6 +3775,7 @@ SELECT
     o.name AS table_name,
     c.name AS column_name,
     c.position::int8 AS ordinal_position,
+    CASE WHEN c.nullable THEN 'YES' ELSE 'NO' END AS is_nullable,
     c.type AS data_type,
     NULL::pg_catalog.int4 AS character_maximum_length,
     NULL::pg_catalog.int4 AS numeric_precision,
@@ -3700,6 +3805,38 @@ FROM information_schema.table_privileges
 WHERE
     grantor IN (SELECT role_name FROM information_schema.enabled_roles)
     OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
+};
+
+pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
+    name: "key_column_usage",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.key_column_usage AS SELECT
+    NULL::text AS constraint_catalog,
+    NULL::text AS constraint_schema,
+    NULL::text AS constraint_name,
+    NULL::text AS table_catalog,
+    NULL::text AS table_schema,
+    NULL::text AS table_name,
+    NULL::text AS column_name,
+    NULL::integer AS ordinal_position,
+    NULL::integer AS position_in_unique_constraint
+WHERE false",
+};
+
+pub const INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: BuiltinView = BuiltinView {
+    name: "referential_constraints",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.referential_constraints AS SELECT
+    NULL::text AS constraint_catalog,
+    NULL::text AS constraint_schema,
+    NULL::text AS constraint_name,
+    NULL::text AS unique_constraint_catalog,
+    NULL::text AS unique_constraint_schema,
+    NULL::text AS unique_constraint_name,
+    NULL::text AS match_option,
+    NULL::text AS update_rule,
+    NULL::text AS delete_rule
+WHERE false",
 };
 
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
@@ -3745,6 +3882,24 @@ FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_TABLE_CONSTRAINTS: BuiltinView = BuiltinView {
+    name: "table_constraints",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.table_constraints AS SELECT
+    NULL::text AS constraint_catalog,
+    NULL::text AS constraint_schema,
+    NULL::text AS constraint_name,
+    NULL::text AS table_catalog,
+    NULL::text AS table_schema,
+    NULL::text AS table_name,
+    NULL::text AS constraint_type,
+    NULL::text AS is_deferrable,
+    NULL::text AS initially_deferred,
+    NULL::text AS enforced,
+    NULL::text AS nulls_distinct
+WHERE false",
 };
 
 pub const INFORMATION_SCHEMA_TABLE_PRIVILEGES: BuiltinView = BuiltinView {
@@ -3835,6 +3990,20 @@ FROM mz_catalog.mz_views v
 JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
+};
+
+pub const INFORMATION_SCHEMA_CHARACTER_SETS: BuiltinView = BuiltinView {
+    name: "character_sets",
+    schema: INFORMATION_SCHEMA,
+    sql: "CREATE VIEW information_schema.character_sets AS SELECT
+    NULL as character_set_catalog,
+    NULL as character_set_schema,
+    'UTF8' as character_set_name,
+    'UCS' as character_repertoire,
+    'UTF8' as form_of_use,
+    current_database() as default_collate_catalog,
+    'pg_catalog' as default_collate_schema,
+    'en_US.utf8' as default_collate_name",
 };
 
 // MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
@@ -4417,7 +4586,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 WHERE object_type = 'cluster-replica' AND event_type = 'drop'
             )
         SELECT
-            creates.replica_id AS internal_replica_id,
+            creates.replica_id,
             creates.size,
             creates.cluster_name,
             creates.replica_name,
@@ -4821,6 +4990,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_MZ_ACL_ITEM_ARRAY),
         Builtin::Type(&TYPE_ACL_ITEM),
         Builtin::Type(&TYPE_ACL_ITEM_ARRAY),
+        Builtin::Type(&TYPE_INTERNAL),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -4848,7 +5018,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_DEPENDENCIES_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -4871,6 +5040,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        Builtin::Table(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
@@ -4883,6 +5053,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_TYPES),
+        Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
         Builtin::Table(&MZ_BASE_TYPES),
         Builtin::Table(&MZ_LIST_TYPES),
@@ -4936,7 +5107,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_EXPORTS),
-        Builtin::View(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
@@ -5004,13 +5174,17 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_APPLICABLE_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_ENABLED_ROLES),
+        Builtin::View(&INFORMATION_SCHEMA_KEY_COLUMN_USAGE),
+        Builtin::View(&INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS),
         Builtin::View(&INFORMATION_SCHEMA_ROUTINES),
         Builtin::View(&INFORMATION_SCHEMA_SCHEMATA),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
+        Builtin::View(&INFORMATION_SCHEMA_TABLE_CONSTRAINTS),
         Builtin::View(&INFORMATION_SCHEMA_TABLE_PRIVILEGES),
         Builtin::View(&INFORMATION_SCHEMA_ROLE_TABLE_GRANTS),
         Builtin::View(&INFORMATION_SCHEMA_TRIGGERS),
         Builtin::View(&INFORMATION_SCHEMA_VIEWS),
+        Builtin::View(&INFORMATION_SCHEMA_CHARACTER_SETS),
         Builtin::View(&MZ_SHOW_ROLE_MEMBERS),
         Builtin::View(&MZ_SHOW_MY_ROLE_MEMBERS),
         Builtin::View(&MZ_SHOW_SYSTEM_PRIVILEGES),
@@ -5177,6 +5351,7 @@ mod tests {
                 ty: String,
                 elem: u32,
                 array: u32,
+                receive: Option<u32>,
             }
 
             struct PgOper {
@@ -5213,7 +5388,7 @@ mod tests {
 
             let pg_type: BTreeMap<_, _> = client
                 .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
+                    "SELECT oid, typname, typtype::text, typelem, typarray, nullif(typreceive::oid, 0) as typreceive FROM pg_type",
                     &[],
                 )
                 .await
@@ -5226,6 +5401,7 @@ mod tests {
                         ty: row.get("typtype"),
                         elem: row.get("typelem"),
                         array: row.get("typarray"),
+                        receive: row.get("typreceive"),
                     };
                     (oid, pg_type)
                 })
@@ -5259,6 +5435,10 @@ mod tests {
                     .expect("unable to resolve type")
                     .oid()
             };
+
+            let func_oids: BTreeSet<_> = BUILTINS::funcs()
+                .flat_map(|f| f.inner.func_impls().into_iter().map(|f| f.oid))
+                .collect();
 
             let mut all_oids = BTreeSet::new();
 
@@ -5309,6 +5489,21 @@ mod tests {
                             "oid {} has name {} in postgres; expected {}",
                             ty.oid, pg_ty.name, ty.name,
                         );
+
+                        assert_eq!(
+                            ty.details.typreceive_oid, pg_ty.receive,
+                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
+                            ty.name, ty.details.typreceive_oid, pg_ty.receive,
+                        );
+
+                        if let Some(typreceive_oid) = ty.details.typreceive_oid {
+                            assert!(
+                                func_oids.contains(&typreceive_oid),
+                                "type {} has typreceive OID {} that does not exist in pg_proc",
+                                ty.name,
+                                typreceive_oid,
+                            );
+                        }
 
                         // Ensure the type matches.
                         match &ty.details.typ {
@@ -5538,6 +5733,7 @@ mod tests {
             // Extracted during planning; always panics when executed.
             let ignore_names = BTreeSet::from([
                 "avg",
+                "avg_internal_v1",
                 "bool_and",
                 "bool_or",
                 "mod",

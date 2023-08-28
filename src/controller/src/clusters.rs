@@ -418,8 +418,13 @@ where
     /// Remove orphaned replicas.
     pub async fn remove_orphaned_replicas(
         &mut self,
-        next_replica_id: ReplicaId,
+        next_user_replica_id: u64,
+        next_system_replica_id: u64,
     ) -> Result<(), anyhow::Error> {
+        // Remove replicas with the old service name format.
+        // TODO(teskje): Remove this after v0.67 has been rolled out.
+        self.deprovision_old_services().await?;
+
         let desired: BTreeSet<_> = self.metrics_tasks.keys().copied().collect();
 
         let actual: BTreeSet<_> = self
@@ -431,20 +436,43 @@ where
             .collect::<Result<_, _>>()?;
 
         for (cluster_id, replica_id) in actual {
-            if replica_id >= next_replica_id {
+            let smaller_next = match replica_id {
+                ReplicaId::User(id) if id >= next_user_replica_id => {
+                    Some(ReplicaId::User(next_user_replica_id))
+                }
+                ReplicaId::System(id) if id >= next_system_replica_id => {
+                    Some(ReplicaId::System(next_system_replica_id))
+                }
+                _ => None,
+            };
+            if let Some(next) = smaller_next {
                 // Found a replica in kubernetes with a higher replica ID than
                 // what we are aware of. This must have been created by an
                 // environmentd with higher epoch number.
-                halt!(
-                    "found replica id ({}) in orchestrator >= next id ({})",
-                    replica_id,
-                    next_replica_id
-                );
+                halt!("found replica ID ({replica_id}) in orchestrator >= next ID ({next})");
             }
 
             if !desired.contains(&replica_id) {
                 self.deprovision_replica(cluster_id, replica_id).await?;
             }
+        }
+
+        Ok(())
+    }
+
+    async fn deprovision_old_services(&self) -> Result<(), anyhow::Error> {
+        static OLD_SERVICE_NAME_RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?-u)^[us]\d+-replica-\d+$").unwrap());
+
+        let old_services = self
+            .orchestrator
+            .list_services()
+            .await?
+            .into_iter()
+            .filter(|s| OLD_SERVICE_NAME_RE.is_match(s));
+
+        for service_name in old_services {
+            self.orchestrator.drop_service(&service_name).await?;
         }
 
         Ok(())
@@ -652,7 +680,7 @@ fn parse_replica_service_name(
     service_name: &str,
 ) -> Result<(ComputeInstanceId, ReplicaId), anyhow::Error> {
     static SERVICE_NAME_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-(\d+)$").unwrap());
+        Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)$").unwrap());
 
     let caps = SERVICE_NAME_RE
         .captures(service_name)

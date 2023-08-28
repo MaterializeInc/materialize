@@ -125,7 +125,7 @@ def validate(c: Composition) -> None:
         """
 # Dataflows
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=\\d{13} replacement=<TIMESTAMP>
 
 > SET cluster=cluster2
 

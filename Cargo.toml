@@ -37,7 +37,9 @@ members = [
     "src/orchestrator-tracing",
     "src/ore",
     "src/persist",
+    "src/persist-cli",
     "src/persist-client",
+    "src/persist-txn",
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
@@ -172,6 +174,10 @@ kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a
 
 # Waiting on `lru` dep to update to `0.11.0`
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
+
+# Removes dependencies required for WASM support that create duplicated deps.
+reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.

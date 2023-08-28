@@ -483,9 +483,6 @@ SHOW CREATE VIEW mv
 statement error materialize\.public\.mv is not a view\nHINT: Use ALTER MATERIALIZED VIEW to rename a materialized view\.
 ALTER VIEW mv RENAME TO mv2
 
-statement error materialize\.public\.mv is not a view\nHINT: Use EXPLAIN \[\.\.\.\] MATERIALIZED VIEW to explain a materialized view\.
-EXPLAIN WITH(arity, join_impls) VIEW mv
-
 # We should not be able to create materialized views on top of 'SHOW' commands.
 
 statement error SHOW commands are not allowed in views
@@ -529,6 +526,38 @@ CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
 
 statement error SHOW commands are not allowed in views
 CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
+
+# LIMIT in materialized view
+
+statement ok
+CREATE MATERIALIZED VIEW mv_limited AS
+SELECT a
+FROM t
+ORDER BY a DESC, a+b
+LIMIT 3;
+
+query I
+SELECT * FROM mv_limited;
+----
+3
+5
+7
+
+statement ok
+DELETE FROM t WHERE a = 5;
+
+query I
+SELECT * FROM mv_limited;
+----
+3
+7
+
+query I
+SELECT * FROM mv_limited
+ORDER BY a
+LIMIT 1;
+----
+3
 
 # Cleanup
 

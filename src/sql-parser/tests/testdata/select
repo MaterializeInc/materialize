@@ -118,6 +118,28 @@ VALUES (1)
 VALUES (1)
 
 parse-statement roundtrip
+TABLE t
+----
+TABLE t
+
+parse-statement roundtrip
+TABLE a.b.c
+----
+TABLE a.b.c
+
+parse-statement roundtrip
+TABLE t UNION TABLE t ORDER BY 1
+----
+TABLE t UNION TABLE t ORDER BY 1
+
+parse-statement
+TABLE 1 + 1
+----
+error: Expected identifier, found number "1"
+TABLE 1 + 1
+      ^
+
+parse-statement roundtrip
 SELECT (1)
 ----
 SELECT (1)

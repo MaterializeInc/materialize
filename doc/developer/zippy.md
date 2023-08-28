@@ -111,7 +111,7 @@ Actions have a `requires()` and a `provides()` method. The `requires()` method i
 ```python
 class CreateView(Action):
     @classmethod
-    def requires(self) -> List[Set[Type[Capability]]]:
+    def requires(cls) -> List[Set[Type[Capability]]]:
         return [{MzIsRunning, SourceExists}, {MzIsRunning, TableExists}]
 ```
 

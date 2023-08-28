@@ -46,18 +46,18 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
+use crate::severity::Severity;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
-const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
 /// Metadata about a Session's role.
 #[derive(Debug, Clone)]
-struct RoleMetadata {
+pub struct RoleMetadata {
     /// The role of the current execution context.
-    current_role: RoleId,
+    pub current_role: RoleId,
     /// The role that initiated the database context. Fixed for the duration of the connection.
-    session_role: RoleId,
+    pub session_role: RoleId,
 }
 
 /// A session holds per-connection state.
@@ -68,8 +68,6 @@ pub struct Session<T = mz_repr::Timestamp> {
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
     uuid: Uuid,
-    /// The time when the session's connection was initiated.
-    connect_time: EpochMillis,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
@@ -115,10 +113,9 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
-        connect_time: EpochMillis,
     ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(build_info, conn_id, user, connect_time)
+        Self::new_internal(build_info, conn_id, user)
     }
 
     /// Creates new statement logging metadata for a one-off
@@ -161,12 +158,8 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        let mut dummy = Self::new_internal(
-            &DUMMY_BUILD_INFO,
-            DUMMY_CONNECTION_ID,
-            SYSTEM_USER.clone(),
-            DUMMY_CONNECT_TIME,
-        );
+        let mut dummy =
+            Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone());
         dummy.initialize_role_metadata(RoleId::User(0));
         dummy
     }
@@ -175,7 +168,6 @@ impl<T: TimestampManipulation> Session<T> {
         build_info: &'static BuildInfo,
         conn_id: ConnectionId,
         user: User,
-        connect_time: EpochMillis,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
@@ -187,7 +179,6 @@ impl<T: TimestampManipulation> Session<T> {
         Session {
             conn_id,
             uuid: Uuid::new_v4(),
-            connect_time,
             transaction: TransactionStatus::Default,
             pcx: None,
             prepared_statements: BTreeMap::new(),
@@ -207,11 +198,6 @@ impl<T: TimestampManipulation> Session<T> {
     /// Returns the connection ID associated with the session.
     pub fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
-    }
-
-    /// Returns the time at which the session connected to Materialize.
-    pub fn connect_time(&self) -> EpochMillis {
-        self.connect_time
     }
 
     /// Returns the secret key associated with the session.
@@ -414,6 +400,12 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Returns Some if the notice should be reported, otherwise None.
     fn notice_filter(&mut self, notice: AdapterNotice) -> Option<AdapterNotice> {
+        // Filter out low threshold severity.
+        let minimum_client_severity = self.vars.client_min_messages();
+        let sev = Severity::for_adapter_notice(&notice);
+        if !sev.should_output_to_client(minimum_client_severity) {
+            return None;
+        }
         // Filter out notices for other clusters.
         if let AdapterNotice::ClusterReplicaStatusChanged { cluster, .. } = &notice {
             if cluster != self.vars.cluster() {
@@ -491,7 +483,6 @@ impl<T: TimestampManipulation> Session<T> {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        // TODO[btv] - This will be used by statement logging
         sql: String,
         desc: StatementDesc,
         catalog_revision: u64,

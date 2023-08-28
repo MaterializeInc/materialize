@@ -36,6 +36,37 @@ a
 b
 c
 
+> CREATE VIEW webhook_text_ascii_code AS SELECT ascii(body) FROM webhook_text WHERE ascii(body) % 2 = 0;
+
+> SELECT * FROM webhook_text_ascii_code;
+98
+
+> ALTER SOURCE webhook_text RENAME TO webhook_text_renamed;
+
+! SELECT * FROM webhook_text;
+contains: unknown catalog item 'webhook_text'
+
+$ webhook-append database=materialize schema=public name=webhook_text status=404
+d
+
+> SELECT * FROM webhook_text_renamed;
+a
+b
+c
+
+$ webhook-append database=materialize schema=public name=webhook_text_renamed
+d
+
+> SELECT * FROM webhook_text_renamed;
+a
+b
+c
+d
+
+> SELECT * FROM webhook_text_ascii_code;
+98
+100
+
 > CREATE SOURCE webhook_json_with_headers IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADERS;
@@ -100,11 +131,6 @@ x
 > CREATE TABLE not_a_webhook ( a int8 );
 $ webhook-append database=materialize schema=public name=not_a_webhook status=404
 d
-
-> SELECT * FROM webhook_text;
-a
-b
-c
 
 > CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES;

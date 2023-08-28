@@ -48,11 +48,19 @@ FROM t
 GROUP BY a
 
 statement ok
+CREATE MATERIALIZED VIEW hierarchical_group_by_mv AS
+SELECT * FROM hierarchical_group_by
+
+statement ok
 CREATE VIEW hierarchical_global AS
 SELECT
   MIN(b),
   MAX(DISTINCT b)
 FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW hierarchical_global_mv AS
+SELECT * FROM hierarchical_global
 
 statement ok
 CREATE VIEW collated_group_by AS
@@ -68,6 +76,10 @@ FROM t
 GROUP BY a
 
 statement ok
+CREATE MATERIALIZED VIEW collated_group_by_mv AS
+SELECT * FROM collated_group_by
+
+statement ok
 CREATE VIEW collated_global AS
 SELECT
   COUNT(DISTINCT b),
@@ -77,6 +89,10 @@ SELECT
   SUM(b),
   STRING_AGG(b::text || '2',  ',') AS b2
 FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW collated_global_mv AS
+SELECT * FROM collated_global
 
 mode cockroach
 
@@ -167,10 +183,10 @@ EOF
 # TopKBasic plan.
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
-VIEW ov
+SELECT * FROM ov
 ----
-materialize.public.ov:
-  TopK::Basic order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+Explained Query:
+  TopK::MonotonicTopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 must_consolidate
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -437,9 +453,9 @@ EOF
 # Test Reduce::Hierarchical (with GROUP BY).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
-VIEW hierarchical_group_by
+MATERIALIZED VIEW hierarchical_group_by_mv
 ----
-materialize.public.hierarchical_group_by:
+materialize.public.hierarchical_group_by_mv:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
     skips=[0, 0]
@@ -486,9 +502,9 @@ EOF
 # Test Reduce::Hierarchical (global aggregate).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
-VIEW hierarchical_global
+MATERIALIZED VIEW hierarchical_global_mv
 ----
-materialize.public.hierarchical_global:
+materialize.public.hierarchical_global_mv:
   Return
     Union
       ArrangeBy
@@ -660,9 +676,9 @@ EOF
 # Test Reduce::Collated (with GROUP BY).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
-VIEW collated_group_by
+MATERIALIZED VIEW collated_group_by_mv
 ----
-materialize.public.collated_group_by:
+materialize.public.collated_group_by_mv:
   Reduce::Collation
     aggregate_types=[a, b, h, h, a, b]
     accumulable
@@ -727,9 +743,9 @@ EOF
 # Test Reduce::Collated (global aggregate).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
-VIEW collated_global
+MATERIALIZED VIEW collated_global_mv
 ----
-materialize.public.collated_global:
+materialize.public.collated_global_mv:
   Return
     Union
       ArrangeBy
@@ -1009,9 +1025,9 @@ Explained Query:
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
-  - materialize.public.t_a_idx (delta join 1st input)
-  - materialize.public.u_c_idx (delta join)
-  - materialize.public.v_e_idx (delta join)
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
 
 EOF
 

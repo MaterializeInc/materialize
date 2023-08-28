@@ -173,6 +173,16 @@ impl<T> Instance<T> {
         self.collections.iter()
     }
 
+    fn add_collection(&mut self, id: GlobalId, state: CollectionState<T>) {
+        self.collections.insert(id, state);
+        self.report_dependency_updates(id, 1);
+    }
+
+    fn remove_collection(&mut self, id: GlobalId) {
+        self.report_dependency_updates(id, -1);
+        self.collections.remove(&id);
+    }
+
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
@@ -231,6 +241,26 @@ impl<T> Instance<T> {
         self.metrics
             .subscribe_count
             .set(u64::cast_from(self.subscribes.len()));
+    }
+
+    /// Report updates (inserts or retractions) to the identified collection's dependencies.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the identified collection does not exist.
+    fn report_dependency_updates(&mut self, id: GlobalId, diff: i64) {
+        let collection = self.collections.get(&id).expect("collection must exist");
+
+        let mut dependencies = Vec::new();
+        dependencies.extend(collection.compute_dependencies.iter());
+        dependencies.extend(collection.storage_dependencies.iter());
+
+        let resp = ComputeControllerResponse::DependencyUpdate {
+            id,
+            dependencies,
+            diff,
+        };
+        self.ready_responses.push_back(resp);
     }
 }
 
@@ -611,7 +641,7 @@ where
         // Install collection state for each of the exports.
         let mut updates = Vec::new();
         for export_id in dataflow.export_ids() {
-            self.compute.collections.insert(
+            self.compute.add_collection(
                 export_id,
                 CollectionState::new(
                     as_of.clone(),
@@ -1087,7 +1117,7 @@ where
                         .values()
                         .all(|frontier| frontier.is_empty())
                 {
-                    self.compute.collections.remove(&id);
+                    self.compute.remove_collection(id);
                 }
             }
         }

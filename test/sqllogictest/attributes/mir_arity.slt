@@ -40,9 +40,9 @@ CREATE VIEW test1 AS
 ORDER BY t.b LIMIT 10 OFFSET 1);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR VIEW test1
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR SELECT * FROM test1
 ----
-materialize.public.test1:
+Explained Query:
   Return // { arity: 4 }
     Threshold // { arity: 4 }
       Union // { arity: 4 }
@@ -165,6 +165,6 @@ Source materialize.public.v
   filter=((#0) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.u_d_idx (differential join)
+  - materialize.public.u_d_idx (*** full scan ***, differential join)
 
 EOF

@@ -59,13 +59,6 @@ pub enum ComputeEvent {
         /// Identifier of the export.
         id: GlobalId,
     },
-    /// Dataflow export depends on a named dataflow import.
-    ExportDependency {
-        /// Identifier of the export.
-        export_id: GlobalId,
-        /// Identifier of the import on which the export depends.
-        import_id: GlobalId,
-    },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for dataflow exports.
@@ -177,7 +170,6 @@ pub(super) fn construct<A: Allocate + 'static>(
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
         let mut input = demux.new_input(&logs, Pipeline);
         let (mut export_out, export) = demux.new_output();
-        let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
         let (mut import_frontier_out, import_frontier) = demux.new_output();
         let (mut frontier_delay_out, frontier_delay) = demux.new_output();
@@ -194,7 +186,6 @@ pub(super) fn construct<A: Allocate + 'static>(
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
-                let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
                 let mut import_frontier = import_frontier_out.activate();
                 let mut frontier_delay = frontier_delay_out.activate();
@@ -210,7 +201,6 @@ pub(super) fn construct<A: Allocate + 'static>(
 
                     let mut output_sessions = DemuxOutput {
                         export: export.session(&cap),
-                        dependency: dependency.session(&cap),
                         frontier: frontier.session(&cap),
                         import_frontier: import_frontier.session(&cap),
                         frontier_delay: frontier_delay.session(&cap),
@@ -247,13 +237,6 @@ pub(super) fn construct<A: Allocate + 'static>(
                 Datum::String(&datum.id.to_string()),
                 Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(u64::cast_from(datum.dataflow_id)),
-            ])
-        });
-        let dataflow_dependency = dependency.as_collection().map(move |datum| {
-            Row::pack_slice(&[
-                Datum::String(&datum.export_id.to_string()),
-                Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker_id)),
             ])
         });
         let frontier_current = frontier.as_collection().map(move |datum| {
@@ -322,7 +305,6 @@ pub(super) fn construct<A: Allocate + 'static>(
         use ComputeLog::*;
         let logs = [
             (DataflowCurrent, dataflow_current),
-            (DataflowDependency, dataflow_dependency),
             (FrontierCurrent, frontier_current),
             (ImportFrontierCurrent, import_frontier_current),
             (FrontierDelay, frontier_delay),
@@ -426,7 +408,6 @@ type OutputSession<'a, D> = Session<'a, Timestamp, Vec<Update<D>>, Pusher<D>>;
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
     export: OutputSession<'a, ExportDatum>,
-    dependency: OutputSession<'a, DependencyDatum>,
     frontier: OutputSession<'a, FrontierDatum>,
     import_frontier: OutputSession<'a, ImportFrontierDatum>,
     frontier_delay: OutputSession<'a, FrontierDelayDatum>,
@@ -442,12 +423,6 @@ struct DemuxOutput<'a> {
 struct ExportDatum {
     id: GlobalId,
     dataflow_id: usize,
-}
-
-#[derive(Clone)]
-struct DependencyDatum {
-    export_id: GlobalId,
-    import_id: GlobalId,
 }
 
 #[derive(Clone)]
@@ -513,10 +488,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         match event {
             Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
             ExportDropped { id } => self.handle_export_dropped(id),
-            ExportDependency {
-                export_id,
-                import_id,
-            } => self.handle_export_dependency(export_id, import_id),
             Peek(peek, true) => self.handle_peek_install(peek),
             Peek(peek, false) => self.handle_peek_retire(peek),
             Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
@@ -586,15 +557,9 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             );
         }
 
-        // Remove dependency and frontier delay logging for this export.
+        // Remove frontier delay logging for this export.
         if let Some(imports) = self.state.export_imports.remove(&id) {
             for (import_id, delay_state) in imports {
-                let datum = DependencyDatum {
-                    export_id: id,
-                    import_id,
-                };
-                self.output.dependency.give((datum, ts, -1));
-
                 for (delay_pow, count) in delay_state.delay_map {
                     let datum = FrontierDelayDatum {
                         export_id: id,
@@ -641,24 +606,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             if !was_new {
                 error!(dataflow = ?id, "dataflow already shutdown");
             }
-        }
-    }
-
-    fn handle_export_dependency(&mut self, export_id: GlobalId, import_id: GlobalId) {
-        let ts = self.ts();
-        let datum = DependencyDatum {
-            export_id,
-            import_id,
-        };
-        self.output.dependency.give((datum, ts, 1));
-
-        if let Some(imports) = self.state.export_imports.get_mut(&export_id) {
-            imports.insert(import_id, Default::default());
-        } else {
-            error!(
-                export = ?export_id, import = ?import_id,
-                "tried to create import for export that doesn't exist"
-            );
         }
     }
 
@@ -762,14 +709,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         // by a dataflow `inspect_container` operator, which may outlive the corresponding trace or
         // sink recording in the current `ComputeState` until Timely eventually drops it.
         if let Some(import_map) = self.state.export_imports.get_mut(&export_id) {
-            if let Some(delay_state) = import_map.get_mut(&import_id) {
-                delay_state.time_deque.push_back((frontier, self.time));
-            } else {
-                error!(
-                    export = ?export_id, import = ?import_id,
-                    "tried to create update frontier for import that doesn't exist"
-                );
-            }
+            let delay_state = import_map.entry(import_id).or_default();
+            delay_state.time_deque.push_back((frontier, self.time));
         }
     }
 

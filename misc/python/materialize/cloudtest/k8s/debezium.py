@@ -24,14 +24,12 @@ from kubernetes.client import (
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class DebeziumDeployment(K8sDeployment):
-    def __init__(
-        self,
-        namespace: str = DEFAULT_K8S_NAMESPACE,
-    ) -> None:
+    def __init__(self, namespace: str, redpanda_namespace: str) -> None:
         super().__init__(namespace)
         ports = [V1ContainerPort(container_port=8083, name="debezium")]
 
@@ -50,11 +48,11 @@ class DebeziumDeployment(K8sDeployment):
             ),
             V1EnvVar(
                 name="CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL",
-                value="http://redpanda:8081",
+                value=f"http://redpanda.{redpanda_namespace}:8081",
             ),
             V1EnvVar(
                 name="CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL",
-                value="http://redpanda:8081",
+                value=f"http://redpanda.{redpanda_namespace}:8081",
             ),
             V1EnvVar(
                 name="CONNECT_OFFSET_COMMIT_POLICY", value="AlwaysCommitOffsetPolicy"
@@ -87,7 +85,7 @@ class DebeziumDeployment(K8sDeployment):
 class DebeziumService(K8sService):
     def __init__(
         self,
-        namespace: str = DEFAULT_K8S_NAMESPACE,
+        namespace: str,
     ) -> None:
         super().__init__(namespace)
         ports = [
@@ -104,4 +102,11 @@ class DebeziumService(K8sService):
         )
 
 
-DEBEZIUM_RESOURCES = [DebeziumDeployment(), DebeziumService()]
+def debezium_resources(
+    debezium_namespace: str = DEFAULT_K8S_NAMESPACE,
+    redpanda_namespace: str = DEFAULT_K8S_NAMESPACE,
+) -> list[K8sResource]:
+    return [
+        DebeziumDeployment(debezium_namespace, redpanda_namespace=redpanda_namespace),
+        DebeziumService(debezium_namespace),
+    ]

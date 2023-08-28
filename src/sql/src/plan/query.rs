@@ -122,6 +122,10 @@ pub fn plan_root_query(
     // `finishing.project`).
     try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
 
+    if lifetime.is_maintained() {
+        expr.finish_maintained(&mut finishing);
+    }
+
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
         finishing
@@ -831,6 +835,8 @@ pub fn plan_up_to(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
+    // Even though this is part of a SUBSCRIBE, we need a QueryLifetime::OneShot (instead of
+    // QueryLifetime::Subscribe), because the UP TO is evaluated only once.
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
@@ -859,6 +865,8 @@ pub fn plan_as_of(
             AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
+                // Even for a SUBSCRIBE, we need QueryLifetime::OneShot, because the AS OF is
+                // evaluated only once.
                 let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
                 transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
@@ -915,7 +923,7 @@ pub fn plan_webhook_validate_using(
     scx: &StatementContext,
     validate_using: CreateWebhookSourceCheck<Aug>,
 ) -> Result<WebhookValidation, PlanError> {
-    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+    let qcx = QueryContext::root(scx, QueryLifetime::Source);
 
     let CreateWebhookSourceCheck {
         options,
@@ -1139,7 +1147,7 @@ pub fn plan_index_exprs<'a>(
     exprs: Vec<Expr<Aug>>,
 ) -> Result<Vec<mz_expr::MirScalarExpr>, PlanError> {
     let scope = Scope::from_source(None, on_desc.iter_names());
-    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+    let qcx = QueryContext::root(scx, QueryLifetime::Index);
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -1621,6 +1629,10 @@ fn plan_set_expr(
             Ok((relation_expr, scope))
         }
         SetExpr::Values(Values(values)) => plan_values(qcx, values),
+        SetExpr::Table(name) => {
+            let (expr, scope) = qcx.resolve_table_name(name.clone())?;
+            Ok((expr, scope))
+        }
         SetExpr::Query(query) => {
             let (expr, scope) = plan_nested_query(qcx, query)?;
             Ok((expr, scope))
@@ -1639,7 +1651,7 @@ fn plan_set_expr(
             //
             // TODO(jkosh44) Add message to error that prints out an equivalent view definition
             // with all show commands expanded into their equivalent SELECT statements.
-            if qcx.lifetime == QueryLifetime::Static {
+            if !qcx.lifetime.allow_show() {
                 return Err(PlanError::ShowCommandInView);
             }
 
@@ -5582,15 +5594,64 @@ impl Visit<'_, Aug> for WindowFuncCollector {
     }
 }
 
-/// Specifies how long a query will live. This impacts whether the query is
-/// allowed to reason about the time at which it is running, e.g., by calling
-/// the `now()` function.
+/// Specifies how long a query will live.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum QueryLifetime {
-    /// The query's result will be computed at one point in time.
+    /// The query's (or the expression's) result will be computed at one point in time.
     OneShot,
-    /// The query's result will be maintained indefinitely.
-    Static,
+    /// The query (or expression) is used in a dataflow that maintains an index.
+    Index,
+    /// The query (or expression) is used in a dataflow that maintains a materialized view.
+    MaterializedView,
+    /// The query (or expression) is used in a dataflow that maintains a SUBSCRIBE.
+    Subscribe,
+    /// The query (or expression) is part of a (non-materialized) view.
+    View,
+    /// The expression is part of a source definition.
+    Source,
+}
+
+impl QueryLifetime {
+    /// (This used to impact whether the query is allowed to reason about the time at which it is
+    /// running, e.g., by calling the `now()` function. Nowadays, this is decided by a different
+    /// mechanism, see `ExprPrepStyle`.)
+    pub fn is_one_shot(&self) -> bool {
+        let result = match self {
+            QueryLifetime::OneShot => true,
+            QueryLifetime::Index => false,
+            QueryLifetime::MaterializedView => false,
+            QueryLifetime::Subscribe => false,
+            QueryLifetime::View => false,
+            QueryLifetime::Source => false,
+        };
+        assert_eq!(!result, self.is_maintained());
+        result
+    }
+
+    /// Maintained dataflows can't have a finishing applied directly. Therefore, the finishing is
+    /// turned into a `TopK`.
+    pub fn is_maintained(&self) -> bool {
+        match self {
+            QueryLifetime::OneShot => false,
+            QueryLifetime::Index => true,
+            QueryLifetime::MaterializedView => true,
+            QueryLifetime::Subscribe => true,
+            QueryLifetime::View => true,
+            QueryLifetime::Source => true,
+        }
+    }
+
+    /// Most maintained dataflows don't allow SHOW commands currently. However, SUBSCRIBE does.
+    pub fn allow_show(&self) -> bool {
+        match self {
+            QueryLifetime::OneShot => true,
+            QueryLifetime::Index => false,
+            QueryLifetime::MaterializedView => false,
+            QueryLifetime::Subscribe => true, // SUBSCRIBE allows SHOW commands!
+            QueryLifetime::View => false,
+            QueryLifetime::Source => false,
+        }
+    }
 }
 
 /// Description of a CTE sufficient for query planning.

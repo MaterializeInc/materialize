@@ -3349,14 +3349,21 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "axum",
  "clap",
+ "csv",
  "dirs",
+ "hyper",
  "indicatif",
+ "maplit",
  "mz-build-info",
+ "mz-cloud-api",
+ "mz-frontegg-auth",
+ "mz-frontegg-client",
  "mz-ore",
  "once_cell",
  "open",
@@ -3366,8 +3373,13 @@ dependencies = [
  "rpassword",
  "security-framework",
  "serde",
+ "serde-aux",
+ "serde_json",
+ "tabled",
+ "thiserror",
  "tokio",
  "toml",
+ "toml_edit",
  "url",
  "uuid",
  "workspace-hack",
@@ -3429,6 +3441,7 @@ dependencies = [
  "prost",
  "qcell",
  "rand",
+ "rand_chacha",
  "rdkafka",
  "regex",
  "reqwest",
@@ -3660,6 +3673,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-proto",
+ "mz-stash",
  "once_cell",
  "prometheus",
  "proptest",
@@ -3682,7 +3696,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.65.0-dev"
+version = "0.68.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3834,7 +3848,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.65.0-dev"
+version = "0.68.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4025,13 +4039,16 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64 0.13.1",
  "derivative",
  "jsonwebtoken",
  "mz-ore",
- "mz-sql",
  "reqwest",
+ "reqwest-middleware",
+ "reqwest-retry",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
@@ -4386,12 +4403,11 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.65.0-dev"
+version = "0.68.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "axum",
  "bytes",
  "clap",
  "criterion",
@@ -4401,17 +4417,15 @@ dependencies = [
  "futures-task",
  "futures-util",
  "h2",
- "humantime",
+ "hex",
  "mz-build-info",
- "mz-http-util",
- "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
- "num_enum",
+ "once_cell",
  "prometheus",
  "proptest",
  "proptest-derive",
@@ -4431,6 +4445,21 @@ dependencies = [
  "tonic-build",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-persist-txn"
+version = "0.0.0"
+dependencies = [
+ "differential-dataflow",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "serde_json",
+ "timely",
+ "tokio",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -4925,6 +4954,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "dec",
  "fallible-iterator",
  "futures",
  "itertools",
@@ -5816,6 +5846,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
+name = "papergrid"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1526bb6aa9f10ec339fb10360f22c57edf81d5678d0278e93bc12a47ffbe4b01"
+dependencies = [
+ "bytecount",
+ "fnv",
+ "unicode-width",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5921,6 +5962,37 @@ name = "percent-encoding"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
+
+[[package]]
+name = "persistcli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "clap",
+ "differential-dataflow",
+ "futures",
+ "humantime",
+ "mz-http-util",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-txn",
+ "mz-persist-types",
+ "num_cpus",
+ "num_enum",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
 
 [[package]]
 name = "petgraph"
@@ -6628,6 +6700,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "once_cell",
  "percent-encoding",
@@ -6646,10 +6719,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest-middleware"
+version = "0.2.3"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest",
+ "serde",
+ "task-local-extensions",
+ "thiserror",
+]
+
+[[package]]
+name = "reqwest-retry"
+version = "0.2.2"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "http",
+ "hyper",
+ "reqwest",
+ "reqwest-middleware",
+ "retry-policies",
+ "task-local-extensions",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "retain_mut"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4389f1d5789befaf6029ebd9f7dac4af7f7e3d61b69d4f30e2ac02b57e7712b0"
+
+[[package]]
+name = "retry-policies"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e09bbcb5003282bcb688f0bae741b278e9c7e8f378f561522c9806c58e075d9b"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rand",
+]
 
 [[package]]
 name = "ring"
@@ -7034,6 +7151,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-aux"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3dfe1b7eb6f9dcf011bd6fad169cdeaae75eda0d61b1a99a3f015b41b0cae39"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "serde-value"
 version = "0.7.0"
 source = "git+https://github.com/MaterializeInc/serde-value.git#62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
@@ -7101,6 +7229,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
 dependencies = [
  "regex",
+ "serde",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96426c9936fd7a0124915f9185ea1d20aa9445cc9821142f0a73bc9207a2e186"
+dependencies = [
  "serde",
 ]
 
@@ -7540,6 +7677,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "tabled"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56c3ee73732ffceaea7b8f6b719ce3bb17f253fa27461ffeaf568ebd0cdb4b85"
+dependencies = [
+ "papergrid",
+ "tabled_derive",
+ "unicode-width",
+]
+
+[[package]]
+name = "tabled_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "beca1b4eaceb4f2755df858b88d9b9315b7ccfd1ffd0d7a48a52602301f01a57"
+dependencies = [
+ "heck",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
+]
+
+[[package]]
 name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7560,6 +7721,15 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "task-local-extensions"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba323866e5d033818e3240feeb9f7db2c4296674e4d9e16b97b7bf8f490434e8"
+dependencies = [
+ "pin-utils",
 ]
 
 [[package]]
@@ -7977,6 +8147,9 @@ name = "toml_datetime"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cda73e2f1397b1262d6dfdcef8aafae14d1de7748d66822d3bfeeb6d03e5e4b"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "toml_edit"
@@ -7985,6 +8158,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8123f27e969974a3dfba720fdb560be359f57b44302d280ba72e76a74480e8a"
 dependencies = [
  "indexmap 2.0.0",
+ "serde",
+ "serde_spanned",
  "toml_datetime",
  "winnow",
 ]
@@ -8809,6 +8984,7 @@ dependencies = [
  "log",
  "lru",
  "memchr",
+ "mime_guess",
  "native-tls",
  "nix",
  "nom",
@@ -8823,12 +8999,14 @@ dependencies = [
  "phf_shared",
  "postgres",
  "postgres-types",
+ "predicates",
  "proc-macro2",
  "prost",
  "prost-reflect",
  "prost-types",
  "quote",
  "rand",
+ "rand_chacha",
  "rdkafka-sys",
  "regex",
  "regex-syntax",
@@ -8854,6 +9032,8 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
+ "toml_datetime",
+ "toml_edit",
  "tower",
  "tower-http",
  "tracing",

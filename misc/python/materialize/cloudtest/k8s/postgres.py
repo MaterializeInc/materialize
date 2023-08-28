@@ -24,13 +24,14 @@ from kubernetes.client import (
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class PostgresService(K8sService):
     def __init__(
         self,
-        namespace: str = DEFAULT_K8S_NAMESPACE,
+        namespace: str,
     ) -> None:
         super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=5432)
@@ -52,7 +53,7 @@ class PostgresService(K8sService):
 class PostgresDeployment(K8sDeployment):
     def __init__(
         self,
-        namespace: str = DEFAULT_K8S_NAMESPACE,
+        namespace: str,
     ) -> None:
         super().__init__(namespace)
         env = [
@@ -85,7 +86,10 @@ class PostgresDeployment(K8sDeployment):
         )
 
 
-POSTGRES_RESOURCES = [
-    PostgresService(),
-    PostgresDeployment(),
-]
+def postgres_resources(
+    namespace: str = DEFAULT_K8S_NAMESPACE,
+) -> list[K8sResource]:
+    return [
+        PostgresService(namespace),
+        PostgresDeployment(namespace),
+    ]

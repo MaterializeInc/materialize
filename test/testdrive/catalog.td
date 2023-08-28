@@ -517,13 +517,12 @@ name                                           type   size  cluster
 ------------------------------------------------------------------
 mz_active_peeks_per_worker                   log   <null>   <null>
 mz_arrangement_batches_raw                   log   <null>   <null>
-mz_arrangement_heap_allocations_raw          log   <null>   <null>
-mz_arrangement_heap_capacity_raw             log   <null>   <null>
-mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_records_raw                   log   <null>   <null>
 mz_arrangement_sharing_raw                   log   <null>   <null>
+mz_arrangement_heap_size_raw                 log   <null>   <null>
+mz_arrangement_heap_capacity_raw             log   <null>   <null>
+mz_arrangement_heap_allocations_raw          log   <null>   <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
-mz_compute_dependencies_per_worker           log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
 mz_compute_import_frontiers_per_worker       log   <null>   <null>
@@ -534,10 +533,10 @@ mz_dataflow_operator_reachability_raw        log   <null>   <null>
 mz_dataflow_operators_per_worker             log   <null>   <null>
 mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
 mz_frontiers                                 source <null>  <null>
-mz_message_batch_counts_received_raw         log   <null>   <null>
-mz_message_batch_counts_sent_raw             log   <null>   <null>
 mz_message_counts_received_raw               log   <null>   <null>
 mz_message_counts_sent_raw                   log   <null>   <null>
+mz_message_batch_counts_received_raw         log   <null>   <null>
+mz_message_batch_counts_sent_raw             log   <null>   <null>
 mz_peek_durations_histogram_raw              log   <null>   <null>
 mz_scheduling_elapsed_raw                    log   <null>   <null>
 mz_scheduling_parks_histogram_raw            log   <null>   <null>
@@ -556,6 +555,7 @@ mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
+mz_compute_dependencies
 mz_kafka_sources
 mz_postgres_sources
 mz_prepared_statement_history
@@ -564,6 +564,7 @@ mz_sessions
 mz_statement_execution_history
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys
 mz_object_dependencies
@@ -580,7 +581,6 @@ mz_cluster_replica_history
 mz_cluster_replica_utilization
 mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
-mz_compute_dependencies
 mz_compute_exports
 mz_compute_frontiers
 mz_compute_import_frontiers
@@ -654,11 +654,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-49
+51
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-102
+99
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

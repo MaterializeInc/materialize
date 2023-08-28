@@ -219,11 +219,15 @@ pub trait ArrangementSize {
 /// Helper to compute the size of a vector in memory.
 ///
 /// The function only considers the immediate allocation of the vector, but is oblivious of any
-/// pointers to owned allocations.
+/// pointers to owned allocations. It only invokes the callback for allocations that exist, i.e.,
+/// calling [`vec_size`] on a vector with no capacity will not invoke `callback`.
 #[inline]
 fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
     let size_of_t = std::mem::size_of::<T>();
-    callback(data.len() * size_of_t, data.capacity() * size_of_t);
+    // A vector only owns an allocation if the capacity is > 0.
+    if data.capacity() > 0 {
+        callback(data.len() * size_of_t, data.capacity() * size_of_t);
+    }
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.

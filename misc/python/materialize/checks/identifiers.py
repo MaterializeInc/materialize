@@ -8,13 +8,14 @@
 # by the Apache License, Version 2.0.
 from random import Random
 from textwrap import dedent
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from pg8000.converters import literal  # type: ignore
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
@@ -42,7 +43,7 @@ def cluster() -> str:
 
 
 class Identifiers(Check):
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         # CREATE ROLE not compatible with older releases
         return self.base_version >= MzVersion.parse("0.47.0-dev")
 
@@ -232,7 +233,7 @@ class Identifiers(Check):
 
         return Testdrive(schemas() + cluster() + dedent(cmds))
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         cmds = [
             f"""
             > SET CLUSTER=identifiers;

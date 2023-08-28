@@ -130,8 +130,9 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
 
+        junit_report = ci_util.junit_report_filename(c.name)
+
         try:
-            junit_report = ci_util.junit_report_filename(c.name)
             c.run(
                 "testdrive",
                 f"--junit-report={junit_report}",
@@ -355,7 +356,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             where s.name ='{source_name}'"""
         )[0]
         prefix = "/scratch"
-        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id[1:]}"
+        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}"
         return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
 
     # Returns the number of files recursive in a given directory

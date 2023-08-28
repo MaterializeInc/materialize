@@ -510,7 +510,8 @@ pub mod defaults {
     pub const DEFAULT_COMPACTION_STYLE: CompactionStyle = CompactionStyle::Level;
 
     /// From here: <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L102>
-    pub const DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: usize = 512 * 1024 * 1024;
+    /// And then setting it to 1/3rd from our testing in production
+    pub const DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: usize = 512 * 1024 * 1024 / 3;
 
     pub const DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: bool = true;
 
@@ -521,11 +522,12 @@ pub mod defaults {
 
     pub const DEFAULT_COMPRESSION_TYPE: CompressionType = CompressionType::Lz4;
 
-    pub const DEFAULT_BOTTOMMOST_COMPRESSION_TYPE: CompressionType = CompressionType::Zstd;
+    pub const DEFAULT_BOTTOMMOST_COMPRESSION_TYPE: CompressionType = CompressionType::Lz4;
 
     /// A reasonable default batch size for gets and puts in RocksDB. Based
     /// on advice here: <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ>.
-    pub const DEFAULT_BATCH_SIZE: usize = 1024;
+    /// Based on our testing we are using 20 times that.
+    pub const DEFAULT_BATCH_SIZE: usize = 20 * 1024;
 
     /// The default max duration for retrying the retry-able errors in rocksdb.
     pub const DEFAULT_RETRY_DURATION: Duration = Duration::from_secs(1);

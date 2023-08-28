@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
+from typing import Optional
 
 import pytest
 
@@ -31,7 +31,7 @@ class CloudtestUpgrade(Scenario):
     def base_version(self) -> MzVersion:
         return LAST_RELEASED_VERSION
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             Initialize(self),
             Manipulate(self, phase=1),
@@ -56,7 +56,11 @@ def test_upgrade(
         log_filter=log_filter,
         release_mode=(not dev),
     )
-    wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
+    wait(
+        condition="condition=Ready",
+        resource="pod",
+        label="cluster.environmentd.materialize.cloud/cluster-id=u1",
+    )
 
     executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)

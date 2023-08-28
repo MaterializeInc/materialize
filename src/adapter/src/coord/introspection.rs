@@ -19,11 +19,10 @@
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
 use mz_expr::CollectionPlan;
-use mz_repr::explain::Explainee;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
-use mz_sql::plan::{ExplainPlan, Plan, SubscribeFrom};
+use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
@@ -52,11 +51,14 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         ),
-        Plan::Explain(ExplainPlan {
-            raw_plan,
-            explainee: Explainee::Query,
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Query { raw_plan, .. },
             ..
         }) => (
+            raw_plan.depends_on(),
+            raw_plan.could_run_expensive_function(),
+        ),
+        Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
             raw_plan.could_run_expensive_function(),
         ),
@@ -82,6 +84,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
@@ -91,8 +94,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
-        | Plan::CopyRows(_)
-        | Plan::Explain(_)
+        | Plan::ExplainPlan(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
@@ -250,14 +252,15 @@ pub fn user_privilege_hack(
         //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
         //     details.
         //
-        Plan::ShowCreate(_) => {
+        Plan::ShowCreate(_) | Plan::ShowColumns(_) => {
             return Ok(());
         }
 
         Plan::Subscribe(_)
         | Plan::Select(_)
         | Plan::CopyFrom(_)
-        | Plan::Explain(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainTimestamp(_)
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
@@ -322,7 +325,6 @@ pub fn user_privilege_hack(
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzSupport {

@@ -11,9 +11,9 @@
 
 import sys
 from pprint import pprint
-from typing import Dict, List, Optional
+from typing import Optional
 
-from materialize import ROOT
+from materialize import MZ_ROOT
 from materialize.cargo import Workspace
 
 
@@ -21,7 +21,7 @@ def check_rust_versions(workspace: Workspace) -> bool:
     """Checks that every crate has a minimum specified rust version, and furthermore,
     that they are all the same."""
 
-    rust_version_to_crate_name: Dict[Optional[str], List[str]] = {}
+    rust_version_to_crate_name: dict[Optional[str], list[str]] = {}
     for name, crate in workspace.crates.items():
         rust_version_to_crate_name.setdefault(crate.rust_version, []).append(name)
     success = (
@@ -54,7 +54,7 @@ def check_namespaced_features(workspace: Workspace) -> bool:
 
 
 def main() -> None:
-    workspace = Workspace(ROOT)
+    workspace = Workspace(MZ_ROOT)
     lints = [check_rust_versions, check_namespaced_features]
     success = True
     for lint in lints:

@@ -94,3 +94,72 @@ SELECT * FROM data AS OF NULL::numeric;
 
 query error can't use null as a mz_timestamp for AS OF
 SUBSCRIBE (SELECT 1) AS OF NULL::timestamptz;
+
+# Test that timestamps are used for constant queries with temporal filters
+
+statement ok
+create view events_over_time as values ('joe', 100), ('mike', 101), ('sam', 200), ('end', 18446744073709551615);
+
+statement ok
+create view events as select * from events_over_time where mz_now() >= column2;
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE events AS OF 0
+
+query IITI
+FETCH ALL c
+----
+100                   1  joe   100
+101                   1  mike  101
+200                   1  sam   200
+18446744073709551615  1  end  18446744073709551615
+
+statement ok
+COMMIT
+
+query TI
+SELECT * FROM events AS OF 0
+----
+
+query TI
+SELECT * FROM events AS OF 100
+----
+joe  100
+
+query TI
+SELECT * FROM events AS OF 101
+----
+joe  100
+mike 101
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1) AS OF 42
+
+# TODO(jkosh44) It's not entirely clear what the answer to this should be.
+query III
+FETCH ALL c
+----
+18446744073709551615  1  1
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1)
+
+query III
+FETCH ALL c
+----
+18446744073709551615  1  1
+
+statement ok
+COMMIT

@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor, MzcomposeExecutorParallel
 from materialize.util import MzVersion
 
 
@@ -114,9 +114,12 @@ class Owners(Check):
             [f"! {cmd} CASCADE\ncontains: must be owner of\n" for cmd in cmds]
         )
 
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         # Object owner changes weren't persisted in some cases earlier than 0.63.0.
-        return self.base_version >= MzVersion.parse("0.63.0-dev")
+        # ALTER SET OWNER hangs in parallel mode - #21317
+        return self.base_version >= MzVersion.parse("0.63.0-dev") and not isinstance(
+            e, MzcomposeExecutorParallel
+        )
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -142,7 +145,7 @@ class Owners(Check):
             + self._alter_object_owners(2, expensive=True)
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [

@@ -28,7 +28,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
-use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
+use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -36,9 +36,11 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
+
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::util::{send_immediate_rows, ResultExt};
-use crate::AdapterError;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
+use crate::util::ResultExt;
+use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -47,6 +49,10 @@ pub(crate) struct PendingPeek {
     pub(crate) cluster_id: ClusterId,
     /// All `GlobalId`s that the peek depend on.
     pub(crate) depends_on: BTreeSet<GlobalId>,
+    /// Context about the execute that produced this peek,
+    /// needed by the coordinator for retiring it.
+    pub(crate) ctx_extra: ExecuteContextExtra,
+    pub(crate) is_fast_path: bool,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -175,9 +181,10 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
-    dataflow_plan: &mut DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
+pub fn create_fast_path_plan<T: Timestamp>(
+    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
+    finishing: Option<&RowSetFinishing>,
 ) -> Result<Option<FastPathPlan>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -186,7 +193,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
-        let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
+        let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
@@ -196,12 +203,40 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                 mir.typ(),
             )));
         } else {
+            // If there is a TopK that would be completely covered by the finishing, then jump
+            // through the TopK.
+            if let MirRelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic: _,
+                expected_group_size: _,
+            } = mir
+            {
+                if let Some(finishing) = finishing {
+                    if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
+                        // The following is roughly `limit >= finishing.limit`, but with Options.
+                        let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
+                            (None, _) => true,
+                            (Some(..), None) => false,
+                            (Some(topk_limit), Some(finishing_limit)) => {
+                                *topk_limit >= finishing_limit
+                            }
+                        };
+                        if finishing_limits_at_least_as_topk {
+                            mir = input;
+                        }
+                    }
+                }
+            }
             // In the case of a linear operator around an indexed view, we
             // can skip creating a dataflow and instead pull all the rows in
             // index and apply the linear operator against them.
             let (mfp, mir) = mz_expr::MapFilterProject::extract_from_expression(mir);
             match mir {
-                mz_expr::MirRelationExpr::Get { id, .. } => {
+                MirRelationExpr::Get { id, .. } => {
                     // Just grab any arrangement
                     // Nothing to be done if an arrangement does not exist
                     for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
@@ -214,7 +249,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                         }
                     }
                 }
-                mz_expr::MirRelationExpr::Join { implementation, .. } => {
+                MirRelationExpr::Join { implementation, .. } => {
                     if let mz_expr::JoinImplementation::IndexedFilter(id, key, vals) =
                         implementation
                     {
@@ -242,6 +277,29 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     Ok(None)
 }
 
+impl FastPathPlan {
+    pub fn used_indexes(&self, finishing: &Option<RowSetFinishing>) -> UsedIndexes {
+        match self {
+            FastPathPlan::Constant(..) => UsedIndexes::new(Vec::new()),
+            FastPathPlan::PeekExisting(id, literal_constraints, _mfp) => {
+                if literal_constraints.is_some() {
+                    UsedIndexes::new(vec![(*id, vec![IndexUsageType::Lookup])])
+                } else {
+                    if let Some(finishing) = finishing {
+                        if finishing.limit.is_some() && finishing.order_by.is_empty() {
+                            UsedIndexes::new(vec![(*id, vec![IndexUsageType::FastPathLimit])])
+                        } else {
+                            UsedIndexes::new(vec![(*id, vec![IndexUsageType::FullScan])])
+                        }
+                    } else {
+                        UsedIndexes::new(vec![(*id, vec![IndexUsageType::FullScan])])
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl crate::coord::Coordinator {
     /// Creates a [`PeekPlan`] for the given `dataflow`.
     ///
@@ -257,9 +315,10 @@ impl crate::coord::Coordinator {
         key: Vec<MirScalarExpr>,
         permutation: BTreeMap<usize, usize>,
         thinned_arity: usize,
+        finishing: &RowSetFinishing,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id)?;
+        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id, Some(finishing))?;
         // derive a PeekPlan from the optional FastPathPlan
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default
@@ -294,6 +353,7 @@ impl crate::coord::Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_peek_plan(
         &mut self,
+        ctx_extra: &mut ExecuteContextExtra,
         plan: PlannedPeek,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
@@ -336,10 +396,24 @@ impl crate::coord::Coordinator {
                 }
             }
             let results = finishing.finish(results, max_result_size);
-            return match results {
-                Ok(rows) => Ok(send_immediate_rows(rows)),
-                Err(e) => Err(AdapterError::ResultSize(e)),
+            let (ret, reason) = match results {
+                Ok(rows) => {
+                    let rows_returned = u64::cast_from(rows.len());
+                    (
+                        Ok(Self::send_immediate_rows(rows)),
+                        StatementEndedExecutionReason::Success {
+                            rows_returned: Some(rows_returned),
+                            execution_strategy: Some(StatementExecutionStrategy::Constant),
+                        },
+                    )
+                }
+                Err(error) => (
+                    Err(AdapterError::ResultSize(error.clone())),
+                    StatementEndedExecutionReason::Errored { error },
+                ),
             };
+            self.retire_execution(reason, std::mem::take(ctx_extra));
+            return ret;
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
@@ -350,7 +424,7 @@ impl crate::coord::Coordinator {
         // differently.
 
         // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow) = match fast_path {
+        let (peek_command, drop_dataflow, is_fast_path) = match fast_path {
             PeekPlan::FastPath(FastPathPlan::PeekExisting(
                 id,
                 literal_constraints,
@@ -358,6 +432,7 @@ impl crate::coord::Coordinator {
             )) => (
                 (id, literal_constraints, timestamp, map_filter_project),
                 None,
+                true,
             ),
             PeekPlan::SlowPath(PeekDataflowPlan {
                 desc: dataflow,
@@ -406,6 +481,7 @@ impl crate::coord::Coordinator {
                         map_filter_project,
                     ),
                     Some(index_id),
+                    false,
                 )
             }
             _ => {
@@ -432,6 +508,8 @@ impl crate::coord::Coordinator {
                 conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
+                ctx_extra: std::mem::take(ctx_extra),
+                is_fast_path,
             },
         );
         self.client_pending_peeks
@@ -505,10 +583,15 @@ impl crate::coord::Coordinator {
                 }
             }
 
-            uuids
+            let mut ret = uuids
                 .iter()
                 .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
-                .collect()
+                .collect::<Vec<_>>();
+            for peek in &mut ret {
+                let ctx_extra = std::mem::take(&mut peek.ctx_extra);
+                self.retire_execution(StatementEndedExecutionReason::Canceled, ctx_extra);
+            }
+            ret
         } else {
             Vec::new()
         }
@@ -527,8 +610,28 @@ impl crate::coord::Coordinator {
             conn_id: _,
             cluster_id: _,
             depends_on: _,
+            ctx_extra,
+            is_fast_path,
         }) = self.remove_pending_peek(&uuid)
         {
+            let reason = match &response {
+                PeekResponse::Rows(r) => {
+                    let rows_returned: u64 = r.iter().map(|(_, n)| u64::cast_from(n.get())).sum();
+                    StatementEndedExecutionReason::Success {
+                        rows_returned: Some(rows_returned),
+                        execution_strategy: Some(if is_fast_path {
+                            StatementExecutionStrategy::FastPath
+                        } else {
+                            StatementExecutionStrategy::Standard
+                        }),
+                    }
+                }
+                PeekResponse::Error(e) => {
+                    StatementEndedExecutionReason::Errored { error: e.clone() }
+                }
+                PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
+            };
+            self.retire_execution(reason, ctx_extra);
             otel_ctx.attach_as_parent();
             // Peek cancellations are best effort, so we might still
             // receive a response, even though the recipient is gone.
@@ -552,6 +655,16 @@ impl crate::coord::Coordinator {
             }
         }
         pending_peek
+    }
+
+    /// Constructs an [`ExecuteResponse`] that that will send some rows to the
+    /// client immediately, as opposed to asking the dataflow layer to send along
+    /// the rows after some computation.
+    pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
+        ExecuteResponse::SendingRowsImmediate {
+            rows,
+            span: tracing::Span::none(),
+        }
     }
 }
 

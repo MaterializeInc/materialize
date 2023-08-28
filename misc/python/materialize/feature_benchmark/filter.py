@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
 
 import numpy as np
 
@@ -16,7 +15,7 @@ from materialize.feature_benchmark.measurement import Measurement
 
 class Filter:
     def __init__(self) -> None:
-        self._data: List[float] = []
+        self._data: list[float] = []
 
     def filter(self, measurement: Measurement) -> bool:
         raise NotImplementedError

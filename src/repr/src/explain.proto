@@ -21,5 +21,9 @@ message ProtoIndexUsageType {
         bool delta_join = 4;
         google.protobuf.Empty plan_root = 5;
         google.protobuf.Empty unknown = 6;
+        google.protobuf.Empty dangling_arrange_by = 7;
+        google.protobuf.Empty sink_export = 8;
+        google.protobuf.Empty index_export = 9;
+        google.protobuf.Empty fast_path_limit = 10;
     }
 }

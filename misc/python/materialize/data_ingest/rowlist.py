@@ -7,16 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
 
 from materialize.data_ingest.row import Row
 
 
 class RowList:
-    rows: List[Row]
+    rows: list[Row]
     # TODO: Implement generator_properties
 
-    def __init__(self, rows: List[Row]):
+    def __init__(self, rows: list[Row]):
         self.rows = rows
 
     def __repr__(self) -> str:

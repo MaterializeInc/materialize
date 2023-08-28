@@ -307,63 +307,6 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
 }
 EOF
 
-# Test TopK.
-query T multiline
-EXPLAIN RAW PLAN AS JSON FOR
-VIEW ov
-----
-{
-  "Project": {
-    "input": {
-      "TopK": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 1
-              }
-            },
-            "typ": {
-              "column_types": [
-                {
-                  "scalar_type": "Int32",
-                  "nullable": true
-                },
-                {
-                  "scalar_type": "Int32",
-                  "nullable": true
-                }
-              ],
-              "keys": []
-            }
-          }
-        },
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 1,
-            "desc": false,
-            "nulls_last": true
-          },
-          {
-            "column": 0,
-            "desc": true,
-            "nulls_last": false
-          }
-        ],
-        "limit": 5,
-        "offset": 0,
-        "expected_group_size": null
-      }
-    },
-    "outputs": [
-      0,
-      1
-    ]
-  }
-}
-EOF
-
 # Test Finish (TODO).
 query T multiline
 EXPLAIN RAW PLAN AS JSON FOR

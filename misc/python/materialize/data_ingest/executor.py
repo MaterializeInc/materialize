@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 import confluent_kafka  # type: ignore
 import pg8000
@@ -30,7 +30,7 @@ class Executor:
     num_transactions: int
     mz_conn: pg8000.Connection
 
-    def __init__(self, ports: Dict[str, int]) -> None:
+    def __init__(self, ports: dict[str, int]) -> None:
         self.num_transactions = 0
         self.mz_conn = pg8000.connect(
             host="localhost",
@@ -68,13 +68,13 @@ class KafkaExecutor(Executor):
     key_serialization_context: SerializationContext
     topic: str
     table: str
-    fields: List[Field]
+    fields: list[Field]
 
     def __init__(
         self,
         num: int,
-        ports: Dict[str, int],
-        fields: List[Field],
+        ports: dict[str, int],
+        fields: list[Field],
     ):
         super().__init__(ports)
 
@@ -113,7 +113,7 @@ class KafkaExecutor(Executor):
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
             [
-                confluent_kafka.admin.NewTopic(
+                confluent_kafka.admin.NewTopic(  # type: ignore
                     self.topic, num_partitions=1, replication_factor=1
                 )
             ]
@@ -214,8 +214,8 @@ class PgExecutor(Executor):
     def __init__(
         self,
         num: int,
-        ports: Dict[str, int],
-        fields: List[Field],
+        ports: dict[str, int],
+        fields: list[Field],
     ):
         super().__init__(ports)
         self.pg_conn = pg8000.connect(

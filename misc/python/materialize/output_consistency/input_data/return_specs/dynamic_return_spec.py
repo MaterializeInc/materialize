@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
@@ -18,7 +17,7 @@ class DynamicReturnTypeSpec(ReturnTypeSpec):
         super().__init__(DataTypeCategory.DYNAMIC, [param_index_to_take_type])
 
     def resolve_type_category(
-        self, input_arg_type_hints: List[DataTypeCategory]
+        self, input_arg_type_hints: list[DataTypeCategory]
     ) -> DataTypeCategory:
         if input_arg_type_hints is None:
             raise RuntimeError(

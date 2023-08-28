@@ -14,12 +14,18 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
+use mz_sql_parser::ast::visit_mut::VisitMut;
+use mz_sql_parser::ast::{Function, Ident};
 use mz_storage_client::types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{storage, Catalog, ConnCatalog, SerializedCatalogItem};
+
+/// A flag to indicate whether or not we've already run the migration to rename existing uses of
+/// the AVG(...) function. Runs in versions <=0.66.
+const RENAME_AVG_FUNCTION_MIGRATION_FLAG: &str = "rename_avg_function_migration_flag";
 
 async fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
@@ -72,6 +78,21 @@ pub(crate) async fn migrate(
     // First, do basic AST -> AST transformations.
     // rewrite_items(&mut tx, None, |_tx, _cat, _stmt| Box::pin(async { Ok(()) })).await?;
 
+    // Only run this migration if we haven't run it already.
+    let avg_function_has_run =
+        tx.check_migration_has_run(RENAME_AVG_FUNCTION_MIGRATION_FLAG.to_string())?;
+    info!("{RENAME_AVG_FUNCTION_MIGRATION_FLAG}, already_run: {avg_function_has_run}");
+
+    if !avg_function_has_run {
+        rewrite_items(&mut tx, None, |_tx, _cat, stmt| {
+            Box::pin(async { ast_rename_avg_function_0_66_0(stmt) })
+        })
+        .await?;
+        // Important: Mark the migration as being completed in the same transaction that we used
+        // to do the migration.
+        tx.mark_migration_has_run(RENAME_AVG_FUNCTION_MIGRATION_FLAG.to_string())?;
+    }
+
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
     // migrations are *weird*: they're rewriting the catalog while looking at
@@ -115,6 +136,48 @@ pub(crate) async fn migrate(
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+fn ast_rename_avg_function_0_66_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    struct AvgFunctionRenamer;
+    impl<'ast> VisitMut<'ast, Raw> for AvgFunctionRenamer {
+        fn visit_function_mut(&mut self, node: &'ast mut Function<Raw>) {
+            let components = &mut node.name.name_mut().0;
+            let len = components.len();
+            if len < 2 {
+                return;
+            }
+            let Some(last_two) = components.get_mut(len - 2..) else {
+                return;
+            };
+
+            // Rewrite the the function to be "avg_internal_v1".
+            if last_two[0].as_str() == "pg_catalog" && last_two[1].as_str() == "avg" {
+                last_two[0] = Ident::new("mz_catalog");
+                last_two[1] = Ident::new("avg_internal_v1");
+            }
+
+            // No one should have an object with this function as a dependency, but we check for it
+            // here just to be safe.
+            if last_two[0].as_str() == "mz_internal" && last_two[1].as_str() == "mz_avg_promotion" {
+                last_two[1] = Ident::new("mz_avg_promotion_internal_v1");
+            }
+
+            // Continue to recurse.
+            self.visit_function_args_mut(&mut node.args);
+            if let Some(v) = &mut node.filter {
+                self.visit_expr_mut(&mut *v);
+            }
+            if let Some(v) = &mut node.over {
+                self.visit_window_spec_mut(&mut *v);
+            }
+        }
+    }
+
+    AvgFunctionRenamer.visit_statement_mut(stmt);
+    Ok(())
+}
 
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog

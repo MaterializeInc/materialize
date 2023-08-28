@@ -128,5 +128,3 @@ pub use crate::scalar::{
     PropDict, PropList, ProtoScalarType, ScalarBaseType, ScalarType,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
-
-pub mod statement_logging;

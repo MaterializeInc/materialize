@@ -157,16 +157,28 @@ pub fn rehydration_finished<G, T>(
 
     builder.build(move |_capabilities| async move {
         loop {
-            if let Some(AsyncEvent::Progress(frontier)) = input.next().await {
-                if PartialOrder::less_equal(&resume_upper, &frontier) {
-                    tracing::info!(
-                        "timely-{} source {} reached the resume upper ({:?}) across all workers",
+            match input.next().await {
+                Some(AsyncEvent::Progress(frontier)) => {
+                    if PartialOrder::less_equal(&resume_upper, &frontier) {
+                        tracing::info!(
+                        "timely-{} upsert source {} has downgraded past the resume upper ({:?}) across all workers",
                         worker_id,
                         id,
                         resume_upper
                     );
+                        drop(token);
+                        break;
+                    }
+                }
+                None => {
+                    // Shutdown has been triggered or the shard is closed, so we shutdown.
+                    // Note that we will likely get a `Progress([])` event before this,
+                    // but we cover it for an abundance of caution.
                     drop(token);
                     break;
+                }
+                _ => {
+                    // we don't expect data
                 }
             }
         }
@@ -191,6 +203,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Rc<dyn Any>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -339,6 +352,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Rc<dyn Any>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -376,7 +390,7 @@ where
     let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
-    builder.build(move |caps| async move {
+    let shutdown_button = builder.build(move |caps| async move {
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::new(
@@ -651,6 +665,7 @@ where
             Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
         }),
         health_stream,
+        Rc::new(shutdown_button.press_on_drop()),
     )
 }
 

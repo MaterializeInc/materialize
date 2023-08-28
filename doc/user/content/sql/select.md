@@ -53,7 +53,7 @@ have on Materialize.
 
 ### Creating materialized views
 
-Creating a materialized view generates a persistent dataflow, which has a
+Creating a [materialized view](/sql/create-materialized-view) generates a persistent dataflow, which has a
 different performance profile from performing a `SELECT` in an RDBMS.
 
 A materialized view has resource and latency costs that should
@@ -61,18 +61,21 @@ be carefully considered depending on its main usage. Materialize must maintain
 the results of the query in durable storage, but often it must also maintain
 additional intermediate state.
 
-### Reading from indexed relations
+### Creating indexes
+
+Creating an [index](/sql/create-index) also generates a persistent dataflow. The difference from a materialized view is that the results are maintained in memory rather than on persistent storage. This allows ad hoc queries to perform efficient point-lookups in indexes.
+
+### Ad hoc queries
+
+An ad hoc query (a.k.a. one-off `SELECT`) simply performs the query once and returns the results. Ad hoc queries can either read from an existing index, or they can start an ephemeral dataflow to compute the results.
 
 Performing a `SELECT` on an **indexed** source, view or materialized view is
 Materialize's ideal operation. When Materialize receives such a `SELECT` query,
 it quickly returns the maintained results from memory.
+Materialize also quickly returns results for queries that only filter, project, transform with scalar functions,
+and re-order data that is maintained by an index.
 
-Materialize also quickly returns results for queries that only filter, project,
-and re-order results.
-
-### Ad hoc queries
-
-Queries over non-materialized views will create an ephemeral dataflow to compute
+Queries that can't simply read out from an index will create an ephemeral dataflow to compute
 the results. These dataflows are bound to the active [cluster](/get-started/key-concepts#clusters),
  which you can change using:
 
@@ -80,10 +83,7 @@ the results. These dataflows are bound to the active [cluster](/get-started/key-
 SET cluster = <cluster name>;
 ```
 
-Performing a `SELECT` query that does not directly read out of a dataflow
-requires Materialize to evaluate your query. Materialize will construct a
-temporary dataflow to materialize your query, and remove the dataflow as soon as
-it returns the query results to you.
+Materialize will remove the dataflow as soon as it has returned the query results to you.
 
 ### Common table expressions (CTEs)
 
@@ -149,38 +149,39 @@ columns. If an unqualified name refers to both an input and output column,
 
 ## Examples
 
-### Creating a view
+### Creating an indexed view
 
 This assumes you've already [created a source](../create-source).
 
-The following query creates a materialized view representing the total of all
-purchases made by users per region.
+The following query creates a view representing the total of all
+purchases made by users per region, and then creates an index on this view.
 
-``` sql
-CREATE MATERIALIZED VIEW mat_view AS
+```sql
+CREATE VIEW purchases_by_region AS
     SELECT region.id, sum(purchase.total)
     FROM mysql_simple_purchase AS purchase
     JOIN mysql_simple_user AS user ON purchase.user_id = user.id
     JOIN mysql_simple_region AS region ON user.region_id = region.id
     GROUP BY region.id;
+
+CREATE INDEX purchases_by_region_idx ON purchases_by_region(id);
 ```
 
-In this case, Materialized will create a dataflow to maintain the results of
-this query, and that dataflow will live on until the view it's maintaining is
+In this case, Materialize will create a dataflow to maintain the results of
+this query, and that dataflow will live on until the index it's maintaining is
 dropped.
 
 ### Reading from a view
 
-Assuming you create the view listed above, named `mat_view`:
+Assuming you've created the indexed view listed above, named `purchases_by_region`, you can simply read from the index with an ad hoc `SELECT` query:
 
 ```sql
-SELECT * FROM mat_view
+SELECT * FROM purchases_by_region;
 ```
 
-In this case, Materialized simply returns the results of the dataflow you
-created to maintain the view.
+In this case, Materialize simply returns the results that the index is maintaining, by reading from memory.
 
-### Querying views
+### Ad hoc querying
 
 ```sql
 SELECT region.id, sum(purchase.total)
@@ -190,10 +191,10 @@ JOIN mysql_simple_region AS region ON user.region_id = region.id
 GROUP BY region.id;
 ```
 
-In this case, Materialized will spin up the same dataflow as it did for creating
-a materialized view, but it will tear down the dataflow once it's returned its
+In this case, Materialize will spin up a similar dataflow as it did for creating
+the above indexed view, but it will tear down the dataflow once it's returned its
 results to the client. If you regularly want to view the results of this query,
-you may want to [create a view](../create-view) for it.
+you may want to create an [index](/sql/create-index) (in memory) and/or a [materialized view](/sql/create-materialized-view) (on persistent storage) for it.
 
 ### Using regular CTEs
 
@@ -223,7 +224,7 @@ Both `regional_sales` and `top_regions` are CTEs. You could write a query that
 produces the same results by replacing references to the CTE with the query it
 names, but the CTEs make the entire query simpler to understand.
 
-With regard to dataflows, this is similar to [Querying views](#querying-views)
+With regard to dataflows, this is similar to [ad hoc querying](#ad-hoc-querying)
 above: Materialize tears down the created dataflow after returning the results.
 
 ### Using query hints

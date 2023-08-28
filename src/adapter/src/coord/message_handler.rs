@@ -34,6 +34,7 @@ use crate::coord::{
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
     SinkConnectionReady,
 };
+use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -58,14 +59,6 @@ impl Coordinator {
                 self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::Execute {
-                portal_name,
-                ctx,
-                span,
-            } => {
-                let span = tracing::debug_span!(parent: &span, "message (execute)");
-                self.handle_execute(portal_name, ctx).instrument(span).await;
-            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -101,8 +94,8 @@ impl Coordinator {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
-            Message::RetireExecute { data } => {
-                self.retire_execute(data);
+            Message::RetireExecute { data, reason } => {
+                self.retire_execution(reason, data);
             }
             Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
@@ -184,7 +177,7 @@ impl Coordinator {
             });
         }
 
-        if let Err(err) = self.catalog_transact(None, ops).await {
+        if let Err(err) = self.catalog_transact(None::<&Session>, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.schedule_storage_usage_collection();
@@ -334,6 +327,18 @@ impl Coordinator {
                     };
                     self.buffer_builtin_table_updates(updates);
                 }
+            }
+            ControllerResponse::ComputeDependencyUpdate {
+                id,
+                dependencies,
+                diff,
+            } => {
+                let state = self.catalog().state();
+                let updates = dependencies
+                    .into_iter()
+                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
+                    .collect();
+                self.buffer_builtin_table_updates(updates);
             }
         }
     }
@@ -616,7 +621,7 @@ impl Coordinator {
             let old_status = replica.status();
 
             self.catalog_transact(
-                None,
+                None::<&Session>,
                 vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],
@@ -739,7 +744,7 @@ impl Coordinator {
                 id_bundle,
             } => {
                 let result = self.sequence_explain_timestamp_finish(
-                    ctx.session_mut(),
+                    &mut ctx,
                     format,
                     cluster_id,
                     optimized_plan,

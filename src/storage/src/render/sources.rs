@@ -494,7 +494,7 @@ where
                                 } else {
                                     (Collection::new(empty(scope)), None, None, None)
                                 };
-                            let (upsert, health_update) = crate::render::upsert::upsert(
+                            let (upsert, health_update, upsert_token) = crate::render::upsert::upsert(
                                 &upsert_input.enter(scope),
                                 upsert_envelope.clone(),
                                 refine_antichain(&resume_upper),
@@ -505,6 +505,12 @@ where
                                 &storage_state.dataflow_parameters,
                                 backpressure_metrics,
                             );
+
+                            // Even though we register the `persist_sink` token at a top-level,
+                            // which will stop any data from being committed, we also register
+                            // a token for the `upsert` operator which may be in the middle of
+                            // rehydration processing the `persist_source` input above.
+                            needed_tokens.push(upsert_token);
 
                             use mz_timely_util::probe::ProbeNotify;
                             let handle = mz_timely_util::probe::Handle::default();

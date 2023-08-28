@@ -11,10 +11,13 @@
 
 //! The tunable knobs for persist.
 
+use once_cell::sync::Lazy;
+use std::string::ToString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::batch::UntrimmableColumns;
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
@@ -165,6 +168,10 @@ impl PersistConfig {
                 stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
+                stats_budget_bytes: AtomicUsize::new(Self::DEFAULT_STATS_BUDGET_BYTES),
+                stats_untrimmable_columns: RwLock::new(
+                    Self::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone(),
+                ),
                 pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
@@ -210,7 +217,6 @@ impl PersistConfig {
     }
 
     /// Returns a new instance of [PersistConfig] for tests.
-    #[cfg(test)]
     pub fn new_for_tests() -> Self {
         use mz_build_info::DUMMY_BUILD_INFO;
         use mz_ore::now::SYSTEM_TIME;
@@ -243,12 +249,34 @@ impl PersistConfig {
     pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
     pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
+    /// Default value for [`DynamicConfig::stats_budget_bytes`].
+    pub const DEFAULT_STATS_BUDGET_BYTES: usize = 1024;
     /// Default value for [`DynamicConfig::pubsub_client_enabled`].
     pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
     pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::rollup_threshold`].
     pub const DEFAULT_ROLLUP_THRESHOLD: usize = 128;
+
+    pub const DEFAULT_STATS_UNTRIMMABLE_COLUMNS: Lazy<UntrimmableColumns> = Lazy::new(|| {
+        UntrimmableColumns {
+            equals: vec![
+                // If we trim the "err" column, then we can't ever use pushdown on a part
+                // (because it could have >0 errors).
+                "err".to_string(),
+                "ts".to_string(),
+                "receivedat".to_string(),
+                "createdat".to_string(),
+            ],
+            prefixes: vec!["last_".to_string()],
+            suffixes: vec![
+                "timestamp".to_string(),
+                "time".to_string(),
+                "_at".to_string(),
+                "_tstamp".to_string(),
+            ],
+        }
+    });
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -357,6 +385,8 @@ pub struct DynamicConfig {
     stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
+    stats_budget_bytes: AtomicUsize,
+    stats_untrimmable_columns: RwLock<UntrimmableColumns>,
     pubsub_client_enabled: AtomicBool,
     pubsub_push_diff_enabled: AtomicBool,
     rollup_threshold: AtomicUsize,
@@ -561,6 +591,21 @@ impl DynamicConfig {
         self.stats_filter_enabled.load(Self::LOAD_ORDERING)
     }
 
+    /// The budget (in bytes) of how many stats to write down per batch part.
+    /// When the budget is exceeded, stats will be trimmed away according to
+    /// a variety of heuristics.
+    pub fn stats_budget_bytes(&self) -> usize {
+        self.stats_budget_bytes.load(Self::LOAD_ORDERING)
+    }
+
+    /// The stats columns that will never be trimmed, even if they go over budget.
+    pub fn stats_untrimmable_columns(&self) -> UntrimmableColumns {
+        self.stats_untrimmable_columns
+            .read()
+            .expect("lock poisoned")
+            .clone()
+    }
+
     /// Determines whether PubSub clients should connect to the PubSub server.
     pub fn pubsub_client_enabled(&self) -> bool {
         self.pubsub_client_enabled.load(Self::LOAD_ORDERING)
@@ -673,6 +718,10 @@ pub struct PersistParameters {
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
     pub stats_filter_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::stats_budget_bytes`].
+    pub stats_budget_bytes: Option<usize>,
+    /// Configures [`DynamicConfig::stats_untrimmable_columns`].
+    pub stats_untrimmable_columns: Option<UntrimmableColumns>,
     /// Configures [`DynamicConfig::pubsub_client_enabled`]
     pub pubsub_client_enabled: Option<bool>,
     /// Configures [`DynamicConfig::pubsub_push_diff_enabled`]
@@ -700,6 +749,8 @@ impl PersistParameters {
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
+            stats_budget_bytes: self_stats_budget_bytes,
+            stats_untrimmable_columns: self_stats_untrimmable_columns,
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
             rollup_threshold: self_rollup_threshold,
@@ -718,6 +769,8 @@ impl PersistParameters {
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
+            stats_budget_bytes: other_stats_budget_bytes,
+            stats_untrimmable_columns: other_stats_untrimmable_columns,
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
             rollup_threshold: other_rollup_threshold,
@@ -761,6 +814,12 @@ impl PersistParameters {
         if let Some(v) = other_stats_filter_enabled {
             *self_stats_filter_enabled = Some(v)
         }
+        if let Some(v) = other_stats_budget_bytes {
+            *self_stats_budget_bytes = Some(v)
+        }
+        if let Some(v) = other_stats_untrimmable_columns {
+            *self_stats_untrimmable_columns = Some(v)
+        }
         if let Some(v) = other_pubsub_client_enabled {
             *self_pubsub_client_enabled = Some(v)
         }
@@ -792,6 +851,8 @@ impl PersistParameters {
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            stats_budget_bytes,
+            stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
@@ -809,6 +870,8 @@ impl PersistParameters {
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
+            && stats_budget_bytes.is_none()
+            && stats_untrimmable_columns.is_none()
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
             && rollup_threshold.is_none()
@@ -835,6 +898,8 @@ impl PersistParameters {
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            stats_budget_bytes,
+            stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
@@ -923,6 +988,19 @@ impl PersistParameters {
                 .stats_filter_enabled
                 .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(stats_budget_bytes) = stats_budget_bytes {
+            cfg.dynamic
+                .stats_budget_bytes
+                .store(*stats_budget_bytes, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(stats_untrimmable_columns) = stats_untrimmable_columns {
+            let mut columns = cfg
+                .dynamic
+                .stats_untrimmable_columns
+                .write()
+                .expect("lock poisoned");
+            *columns = stats_untrimmable_columns.clone();
+        }
         if let Some(pubsub_client_enabled) = pubsub_client_enabled {
             cfg.dynamic
                 .pubsub_client_enabled
@@ -961,6 +1039,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
+            stats_budget_bytes: self.stats_budget_bytes.into_proto(),
+            stats_untrimmable_columns: self.stats_untrimmable_columns.into_proto(),
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
             rollup_threshold: self.rollup_threshold.into_proto(),
@@ -986,6 +1066,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
+            stats_budget_bytes: proto.stats_budget_bytes.into_rust()?,
+            stats_untrimmable_columns: proto.stats_untrimmable_columns.into_rust()?,
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
             rollup_threshold: proto.rollup_threshold.into_rust()?,

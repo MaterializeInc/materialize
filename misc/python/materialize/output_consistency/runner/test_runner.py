@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from datetime import datetime, timedelta
-from typing import List
 
 from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
@@ -45,7 +44,7 @@ class ConsistencyTestRunner:
         self,
         config: ConsistencyTestConfiguration,
         input_data: ConsistencyTestInputData,
-        evaluation_strategies: List[EvaluationStrategy],
+        evaluation_strategies: list[EvaluationStrategy],
         expression_generator: ExpressionGenerator,
         query_generator: QueryGenerator,
         outcome_comparator: ResultComparator,

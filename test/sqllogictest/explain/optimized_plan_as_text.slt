@@ -169,9 +169,9 @@ EOF
 # Test TopK.
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
-VIEW ov
+SELECT * FROM ov
 ----
-materialize.public.ov:
+Explained Query:
   TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     Get materialize.public.t
 
@@ -282,7 +282,7 @@ Explained Query:
                         Get materialize.public.mv
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
+  - materialize.public.t_a_idx (*** full scan ***, differential join)
 
 EOF
 
@@ -485,7 +485,7 @@ Explained Query:
         Get materialize.public.t
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
+  - materialize.public.t_a_idx (*** full scan ***, differential join)
 
 EOF
 
@@ -631,10 +631,10 @@ Explained Query:
           Get materialize.public.v
 
 Used Indexes:
-  - materialize.public.u_c_idx (delta join)
-  - materialize.public.u_d_idx (delta join)
-  - materialize.public.v_e_idx (delta join)
-  - materialize.public.t_b_idx (delta join 1st input)
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_b_idx (delta join 1st input (full scan))
 
 EOF
 
@@ -661,10 +661,10 @@ Explained Query:
           Get materialize.public.v
 
 Used Indexes:
-  - materialize.public.u_c_idx (delta join)
-  - materialize.public.u_d_idx (delta join)
-  - materialize.public.v_e_idx (delta join)
-  - materialize.public.t_b_idx (delta join 1st input)
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.v_e_idx (delta join lookup)
+  - materialize.public.t_b_idx (delta join 1st input (full scan))
 
 EOF
 
@@ -854,7 +854,7 @@ Explained Query:
 
 EOF
 
-# Let's test the weird situation that two identical indexes exist.
+## "Used indexes" tests
 
 statement ok
 CREATE TABLE t (
@@ -867,6 +867,67 @@ CREATE TABLE u (
   c int,
   d int
 );
+
+# If two indexes exist on the same table, then "Used indexes" should print the one that we are actually going to use
+
+statement ok
+CREATE INDEX u_c ON u(c);
+
+statement ok
+CREATE INDEX u_d ON u(d);
+
+query T multiline
+EXPLAIN
+SELECT *
+FROM t, u
+WHERE t.b = u.c;
+----
+Explained Query:
+  Project (#0, #1, #1, #3)
+    Filter (#1) IS NOT NULL
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          Filter (#1) IS NOT NULL
+            Get materialize.public.t
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.u
+
+Source materialize.public.t
+  filter=((#1) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.u_c (differential join)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT *
+FROM t, u
+WHERE t.b = u.d;
+----
+Explained Query:
+  Project (#0..=#2, #1)
+    Filter (#1) IS NOT NULL
+      Join on=(#1 = #3) type=differential
+        ArrangeBy keys=[[#1]]
+          Filter (#1) IS NOT NULL
+            Get materialize.public.t
+        ArrangeBy keys=[[#1]]
+          Get materialize.public.u
+
+Source materialize.public.t
+  filter=((#1) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.u_d (differential join)
+
+EOF
+
+statement ok
+DROP INDEX u_c;
+
+# Let's test the weird situation that two identical indexes exist.
 
 statement ok
 CREATE INDEX t_a_idx_1 ON t(a);
@@ -890,10 +951,8 @@ Explained Query:
           Filter (#0) IS NOT NULL
             Get materialize.public.u
 
-Source materialize.public.u
-  filter=((#0) IS NOT NULL)
-
 Used Indexes:
+  - materialize.public.u_d (*** full scan ***)
   - materialize.public.t_a_idx_1 (differential join)
 
 EOF
@@ -919,6 +978,258 @@ Explained Query:
         Get materialize.public.t
 
 Used Indexes:
-  - materialize.public.t_a_idx_1 (delta join 1st input, delta join, delta join)
+  - materialize.public.t_a_idx_1 (delta join lookup, delta join 1st input (full scan))
+
+EOF
+
+# An index is used in both a join and a full scan.
+query T multiline
+EXPLAIN
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t AS t1, t AS t2
+ WHERE t1.a = t2.a)
+UNION
+(SELECT *
+ FROM t
+ WHERE b > 5)
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0, #1]
+      Union
+        Project (#4, #5)
+          Filter (#0) IS NOT NULL
+            Map ((#0 + #0), (#1 + #3))
+              Join on=(#0 = #2) type=differential
+                Get l0
+                Get l0
+        Filter (#1 > 5)
+          Get materialize.public.t
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***, differential join)
+
+EOF
+
+# An index exists that can't be used for the join because of having the wrong key.
+query T multiline
+EXPLAIN
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t AS t1, t AS t2
+ WHERE t1.b = t2.b)
+UNION
+(SELECT *
+ FROM t
+ WHERE b > 5)
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0, #1]
+      Union
+        Project (#4, #5)
+          Map ((#0 + #2), (#1 + #1))
+            Join on=(#1 = #3) type=differential
+              Get l0
+              Get l0
+        Filter (#1 > 5)
+          Get materialize.public.t
+  With
+    cte l0 =
+      ArrangeBy keys=[[#1]]
+        Filter (#1) IS NOT NULL
+          Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+EOF
+
+# Similar to the previous test, but exercises the full scan code inside the context loop of the Get case in
+# `collect_index_reqs_inner`, where we don't have an index for the requested key.
+
+statement ok
+CREATE TABLE t_non_null (
+  a int NOT NULL,
+  b int NOT NULL
+);
+
+statement ok
+CREATE INDEX t_non_null_a_idx ON t_non_null(a);
+
+query T multiline
+EXPLAIN
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t_non_null AS t1, t_non_null AS t2
+ WHERE t1.b = t2.b)
+UNION
+(SELECT *
+ FROM t_non_null
+ WHERE b > 5)
+----
+Explained Query:
+  Return
+    Distinct group_by=[#0, #1]
+      Union
+        Project (#4, #5)
+          Map ((#0 + #2), (#1 + #1))
+            Join on=(#1 = #3) type=differential
+              Get l0
+              Get l0
+        Filter (#1 > 5)
+          Get materialize.public.t_non_null
+  With
+    cte l0 =
+      ArrangeBy keys=[[#1]]
+        Get materialize.public.t_non_null
+
+Used Indexes:
+  - materialize.public.t_non_null_a_idx (*** full scan ***)
+
+EOF
+
+# This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
+query T multiline
+EXPLAIN
+(SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
+ FROM t_non_null AS t1, t_non_null AS t2
+ WHERE t1.b = t2.b + 1)
+UNION
+(SELECT *
+ FROM t_non_null
+ WHERE b > 5)
+----
+Explained Query:
+  Distinct group_by=[#0, #1]
+    Union
+      Project (#4, #5)
+        Map ((#0 + #2), (#1 + #3))
+          Join on=(#1 = (#3 + 1)) type=differential
+            ArrangeBy keys=[[#1]]
+              Get materialize.public.t_non_null
+            ArrangeBy keys=[[(#1 + 1)]]
+              Get materialize.public.t_non_null
+      Filter (#1 > 5)
+        Get materialize.public.t_non_null
+
+Used Indexes:
+  - materialize.public.t_non_null_a_idx (*** full scan ***)
+
+EOF
+
+# An index is used in both a lookup and a full scan.
+query T multiline
+EXPLAIN
+SELECT * FROM t
+UNION
+SELECT * FROM t WHERE a = 5;
+----
+Explained Query:
+  Distinct group_by=[#0, #1]
+    Union
+      Get materialize.public.t
+      Project (#0, #1)
+        ReadExistingIndex materialize.public.t lookup_value=(5)
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***, lookup)
+
+EOF
+
+# Several lookups using different indexes
+
+statement ok
+CREATE INDEX t_b_idx ON t(b);
+
+query T multiline
+EXPLAIN
+SELECT * FROM t
+UNION ALL
+SELECT * FROM t WHERE b = 7
+UNION ALL
+SELECT * FROM t WHERE a = 5
+UNION ALL
+SELECT * FROM u WHERE c = 3
+UNION ALL
+SELECT * FROM u WHERE d = 1;
+----
+Explained Query:
+  Union
+    Get materialize.public.t
+    Project (#0, #1)
+      ReadExistingIndex materialize.public.t lookup_value=(7)
+    Project (#0, #1)
+      ReadExistingIndex materialize.public.t lookup_value=(5)
+    Filter (#0 = 3)
+      Get materialize.public.u
+    Project (#0, #1)
+      ReadExistingIndex materialize.public.u lookup_value=(1)
+
+Used Indexes:
+  - materialize.public.u_d (*** full scan ***, lookup)
+  - materialize.public.t_a_idx_1 (*** full scan ***, lookup)
+  - materialize.public.t_b_idx (lookup)
+
+EOF
+
+# Fast path with a LIMIT and no ORDER BY. This is not a full scan.
+query T multiline
+EXPLAIN
+SELECT a+b as x
+FROM t
+WHERE a < 7
+LIMIT 3;
+----
+Explained Query (fast path):
+  Finish limit=3 output=[#0]
+    Project (#2)
+      Filter (#0 < 7)
+        Map ((#0 + #1))
+          ReadExistingIndex materialize.public.t_a_idx_1
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (fast path limit)
+
+EOF
+
+# Same query without a LIMIT, so full scan
+query T multiline
+EXPLAIN
+SELECT a+b as x
+FROM t
+WHERE a < 7;
+----
+Explained Query (fast path):
+  Project (#2)
+    Filter (#0 < 7)
+      Map ((#0 + #1))
+        ReadExistingIndex materialize.public.t_a_idx_1
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
+
+EOF
+
+# Same query with a LIMIT + ORDER BY, so full scan
+query T multiline
+EXPLAIN
+SELECT a+b as x
+FROM t
+WHERE a < 7
+ORDER BY x
+LIMIT 3;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last] limit=3 output=[#0]
+    Project (#2)
+      Filter (#0 < 7)
+        Map ((#0 + #1))
+          ReadExistingIndex materialize.public.t_a_idx_1
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***)
 
 EOF

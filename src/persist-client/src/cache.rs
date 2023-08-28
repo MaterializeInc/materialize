@@ -102,7 +102,6 @@ impl PersistClientCache {
 
     /// A test helper that returns a [PersistClientCache] disconnected from
     /// metrics.
-    #[cfg(test)]
     pub fn new_no_metrics() -> Self {
         Self::new(
             PersistConfig::new_for_tests(),

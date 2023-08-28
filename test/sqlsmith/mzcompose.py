@@ -13,7 +13,7 @@ import random
 import time
 from datetime import datetime
 from threading import Thread
-from typing import Any, Dict, FrozenSet, List, Tuple
+from typing import Any, FrozenSet
 
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized
@@ -68,6 +68,8 @@ known_errors = [
     "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
+    "aggregate functions are not allowed in",  # https://github.com/MaterializeInc/materialize/issues/21295
+    "nested aggregate functions are not allowed",  # https://github.com/MaterializeInc/materialize/issues/21295
     "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
@@ -147,11 +149,13 @@ known_errors = [
     "requested length too large",
     "number of columns must be a positive integer literal",
     "regex_extract requires a string literal as its first argument",
+    "regex parse error",
     "out of valid range",
     '" does not exist',  # role does not exist
     "csv_extract number of columns too large",
     "coalesce types text and oid cannot be matched",  # with ACL-related functions
     "coalesce types oid and text cannot be matched",  # with ACL-related functions
+    "Expected FOR, found WITH",  # introduced by the EXPLAIN refactor in #21383
 ]
 
 
@@ -162,7 +166,7 @@ def is_known_error(e: str) -> bool:
     return False
 
 
-def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
+def run_sqlsmith(c: Composition, cmd: str, aggregate: dict[str, Any]) -> None:
     result = c.run(
         *cmd,
         capture=True,
@@ -229,8 +233,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     killer = Thread(target=kill_sqlsmith_with_delay)
     killer.start()
 
-    threads: List[Thread] = []
-    aggregate: Dict[str, Any] = {"errors": [], "version": "", "queries": 0}
+    threads: list[Thread] = []
+    aggregate: dict[str, Any] = {"errors": [], "version": "", "queries": 0}
     for i in range(args.num_sqlsmith):
         cmd = [
             "sqlsmith",
@@ -252,7 +256,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: Dict[FrozenSet[Tuple[str, Any]], List[Dict[str, Any]]] = {}
+    new_errors: dict[FrozenSet[tuple[str, Any]], list[dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(

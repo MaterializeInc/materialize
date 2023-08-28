@@ -14,7 +14,7 @@ import argparse
 import os
 import re
 import sys
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Optional
 
 import requests
 
@@ -94,7 +94,7 @@ associated open Github issues in Materialize repository.""",
     return 0
 
 
-def annotate_errors(errors: List[str], title: str, style: str) -> None:
+def annotate_errors(errors: list[str], title: str, style: str) -> None:
     if not errors:
         return
 
@@ -123,7 +123,7 @@ def annotate_errors(errors: List[str], title: str, style: str) -> None:
     )
 
 
-def annotate_logged_errors(log_files: List[str]) -> None:
+def annotate_logged_errors(log_files: list[str]) -> None:
     error_logs = get_error_logs(log_files)
 
     if not error_logs:
@@ -137,10 +137,10 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
-    known_errors: List[str] = []
+    known_errors: list[str] = []
 
     # Keep track of known errors so we log each only once
-    already_reported_issue_numbers: Set[int] = set()
+    already_reported_issue_numbers: set[int] = set()
 
     for error in error_logs:
         for artifact in artifacts:
@@ -197,7 +197,7 @@ def annotate_logged_errors(log_files: List[str]) -> None:
     annotate_errors(known_errors, "Known errors in logs, ignoring", "info")
 
 
-def get_error_logs(log_files: List[str]) -> List[ErrorLog]:
+def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
     error_logs = []
     for log_file in log_files:
         with open(log_file) as f:
@@ -231,7 +231,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     return issues_json
 
 
-def get_known_issues_from_github() -> Tuple[List[KnownIssue], List[str]]:
+def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
     page = 1
     issues_json = get_known_issues_from_github_page(page)
     while issues_json["total_count"] > len(issues_json["items"]):

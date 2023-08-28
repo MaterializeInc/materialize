@@ -2214,3 +2214,42 @@ query R
 SELECT sum(f1) FROM A;
 ----
 -Infinity
+
+# sqllogictest rounding/truncation behavior.
+#
+# Note: this behavior is called out in the developer docs, so if it ever changes be sure to update
+# those docs.
+
+query I
+SELECT '1.9'::numeric
+----
+2
+
+query I
+SELECT '1.5'::numeric
+----
+2
+
+query I
+SELECT '1.1'::numeric
+----
+1
+
+mode standard
+
+# For SQLite compatibility, we truncate Numerics when interpreting as an Int.
+
+query I
+SELECT '1.9'::numeric
+----
+1
+
+query I
+SELECT '1.5'::numeric
+----
+1
+
+query I
+SELECT '1.1'::numeric
+----
+1

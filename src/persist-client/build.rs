@@ -88,6 +88,27 @@ fn main() {
             ".mz_persist_client.internal.state",
             "#[derive(serde::Serialize)]",
         )
+        .type_attribute(
+            ".mz_persist_client.internal.state.ProtoHollowBatch",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
+            ".mz_persist_client.internal.state.ProtoHollowBatchPart",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
+            ".mz_persist_client.internal.state.ProtoU64Description",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
+            ".mz_persist_client.internal.state.ProtoU64Antichain",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
+            ".mz_persist_client.batch",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
         .bytes([
             ".mz_persist_client.internal.diff.ProtoStateFieldDiffs",
@@ -107,6 +128,7 @@ fn main() {
         .compile_with_config(
             config,
             &[
+                "persist-client/src/batch.proto",
                 "persist-client/src/cfg.proto",
                 "persist-client/src/internal/service.proto",
                 "persist-client/src/internal/state.proto",

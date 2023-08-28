@@ -190,6 +190,13 @@ pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
     }
 }
 
+// SAFETY: A message type is trivially wire compatible with itself.
+unsafe impl<T: prost::Message + Default> WireCompatible<T> for T {
+    fn convert(old: Self) -> Self {
+        old
+    }
+}
+
 /// Defines one protobuf type as wire compatible with another.
 ///
 /// ```text

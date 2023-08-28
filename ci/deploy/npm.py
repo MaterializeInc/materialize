@@ -20,7 +20,7 @@ from typing import Optional
 import requests
 from semver.version import VersionInfo
 
-from materialize import ROOT, cargo, spawn
+from materialize import MZ_ROOT, cargo, spawn
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -62,7 +62,7 @@ def generate_version(
 def build_package(version: Version, crate_path: Path) -> Path:
     spawn.runv(["bin/wasm-build", str(crate_path)])
     package_path = crate_path / "pkg"
-    shutil.copyfile(str(ROOT / "LICENSE"), str(package_path / "LICENSE"))
+    shutil.copyfile(str(MZ_ROOT / "LICENSE"), str(package_path / "LICENSE"))
     with open(package_path / "package.json", "r+") as package_file:
         package = json.load(package_file)
         # Since all packages are scoped to the MaterializeInc org, names don't need prefixes
@@ -162,7 +162,7 @@ if __name__ == "__main__":
             build_id = int(os.environ["BUILDKITE_BUILD_NUMBER"])
     if args.do_release and "NPM_TOKEN" not in os.environ:
         raise ValueError("'NPM_TOKEN' must be set")
-    workspace = cargo.Workspace(ROOT)
+    workspace = cargo.Workspace(MZ_ROOT)
     crate_version = workspace.crates["mz-environmentd"].version
     version = generate_version(crate_version, build_id)
     build_all(workspace, version, do_release=args.do_release)

@@ -10,11 +10,11 @@
 import os
 import random
 import tempfile
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import toml
 
-from materialize import ROOT
+from materialize import MZ_ROOT
 from materialize.mzcompose import (
     Service,
     ServiceConfig,
@@ -55,6 +55,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_with_mutually_recursive": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
+    "enable_disk_cluster_replicas": "true",
+    "statement_logging_max_sample_rate": "1.0",
+    "statement_logging_default_sample_rate": "1.0",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
@@ -83,11 +86,11 @@ class Materialized(Service):
         self,
         name: str = "materialized",
         image: Optional[str] = None,
-        environment_extra: List[str] = [],
-        volumes_extra: List[str] = [],
-        depends_on: List[str] = [],
+        environment_extra: list[str] = [],
+        volumes_extra: list[str] = [],
+        depends_on: list[str] = [],
         memory: Optional[str] = None,
-        options: List[str] = [],
+        options: list[str] = [],
         persist_blob_url: Optional[str] = None,
         default_size: int = Size.DEFAULT_SIZE,
         environment_id: Optional[str] = None,
@@ -97,12 +100,12 @@ class Materialized(Service):
         unsafe_mode: bool = True,
         restart: Optional[str] = None,
         use_default_volumes: bool = True,
-        ports: Optional[List[str]] = None,
-        system_parameter_defaults: Optional[Dict[str, str]] = None,
-        additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
+        ports: Optional[list[str]] = None,
+        system_parameter_defaults: Optional[dict[str, str]] = None,
+        additional_system_parameter_defaults: Optional[dict[str, str]] = None,
         soft_assertions: bool = True,
     ) -> None:
-        depends_on: Dict[str, ServiceDependency] = {
+        depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
@@ -154,7 +157,7 @@ class Materialized(Service):
         command += [f"--environment-id={environment_id}"]
 
         if external_minio:
-            depends_on["minio"] = {"condition": "service_healthy"}
+            depends_graph["minio"] = {"condition": "service_healthy"}
             persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
 
         if persist_blob_url:
@@ -187,7 +190,7 @@ class Materialized(Service):
         ]
 
         if external_cockroach:
-            depends_on["cockroach"] = {"condition": "service_healthy"}
+            depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
                 "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
                 "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
@@ -224,7 +227,7 @@ class Materialized(Service):
 
         config.update(
             {
-                "depends_on": depends_on,
+                "depends_on": depends_graph,
                 "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
@@ -255,9 +258,9 @@ class Clusterd(Service):
         self,
         name: str = "clusterd",
         image: Optional[str] = None,
-        environment_extra: List[str] = [],
+        environment_extra: list[str] = [],
         memory: Optional[str] = None,
-        options: List[str] = [],
+        options: list[str] = [],
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -301,8 +304,8 @@ class Zookeeper(Service):
         image: str = "confluentinc/cp-zookeeper",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 2181,
-        volumes: List[str] = [],
-        environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
+        volumes: list[str] = [],
+        environment: list[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
             name=name,
@@ -331,7 +334,7 @@ class Kafka(Service):
         auto_create_topics: bool = False,
         broker_id: int = 1,
         offsets_topic_replication_factor: int = 1,
-        environment: List[str] = [
+        environment: list[str] = [
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
             "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
             "KAFKA_MIN_INSYNC_REPLICAS=1",
@@ -341,9 +344,9 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
-        environment_extra: List[str] = [],
-        depends_on_extra: List[str] = [],
-        volumes: List[str] = [],
+        environment_extra: list[str] = [],
+        depends_on_extra: list[str] = [],
+        volumes: list[str] = [],
         listener_type: str = "PLAINTEXT",
     ) -> None:
         environment = [
@@ -382,8 +385,8 @@ class Redpanda(Service):
         version: str = "v23.1.9",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
-        aliases: Optional[List[str]] = None,
-        ports: Optional[List[int]] = None,
+        aliases: Optional[list[str]] = None,
+        ports: Optional[list[int]] = None,
     ) -> None:
         if image is None:
             image = f"vectorized/redpanda:{version}"
@@ -442,16 +445,16 @@ class SchemaRegistry(Service):
         image: str = "confluentinc/cp-schema-registry",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 8081,
-        kafka_servers: List[Tuple[str, str]] = [("kafka", "9092")],
+        kafka_servers: list[tuple[str, str]] = [("kafka", "9092")],
         bootstrap_server_type: str = "PLAINTEXT",
-        environment: List[str] = [
+        environment: list[str] = [
             # NOTE(guswynn): under docker, kafka *can* be really slow, which means
             # the default of 500ms won't work, so we give it PLENTY of time
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
             "SCHEMA_REGISTRY_HOST_NAME=localhost",
         ],
-        depends_on_extra: List[str] = [],
-        volumes: List[str] = [],
+        depends_on_extra: list[str] = [],
+        volumes: list[str] = [],
     ) -> None:
         bootstrap_servers = ",".join(
             f"{bootstrap_server_type}://{kafka}:{port}" for kafka, port in kafka_servers
@@ -528,9 +531,9 @@ class Cockroach(Service):
     def __init__(
         self,
         name: str = "cockroach",
-        aliases: List[str] = ["cockroach"],
+        aliases: list[str] = ["cockroach"],
         image: Optional[str] = None,
-        command: Optional[List[str]] = None,
+        command: Optional[list[str]] = None,
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: Optional[ServiceHealthcheck] = None,
@@ -547,7 +550,7 @@ class Cockroach(Service):
 
         if setup_materialize:
             path = os.path.relpath(
-                ROOT / "misc" / "cockroach" / "setup_materialize.sql",
+                MZ_ROOT / "misc" / "cockroach" / "setup_materialize.sql",
                 loader.composition_path,
             )
             volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
@@ -586,7 +589,7 @@ class Postgres(Service):
         mzbuild: str = "postgres",
         image: Optional[str] = None,
         port: int = 5432,
-        command: List[str] = [
+        command: list[str] = [
             "postgres",
             "-c",
             "wal_level=logical",
@@ -597,8 +600,8 @@ class Postgres(Service):
             "-c",
             "max_connections=5000",
         ],
-        environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
-        volumes: List[str] = [],
+        environment: list[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        volumes: list[str] = [],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
@@ -627,7 +630,7 @@ class SqlServer(Service):
         sa_password: str = DEFAULT_SA_PASSWORD,
         name: str = "sql-server",
         image: str = "mcr.microsoft.com/mssql/server",
-        environment_extra: List[str] = [],
+        environment_extra: list[str] = [],
     ) -> None:
         super().__init__(
             name=name,
@@ -653,7 +656,7 @@ class Debezium(Service):
         image: str = f"debezium/connect:{DEFAULT_DEBEZIUM_VERSION}",
         port: int = 8083,
         redpanda: bool = False,
-        environment: List[str] = [
+        environment: list[str] = [
             "BOOTSTRAP_SERVERS=kafka:9092",
             "CONFIG_STORAGE_TOPIC=connect_configs",
             "OFFSET_STORAGE_TOPIC=connect_offsets",
@@ -669,7 +672,7 @@ class Debezium(Service):
             "CONNECT_ERRORS_RETRY_DELAY_MAX_MS=1000",
         ],
     ) -> None:
-        depends_on: Dict[str, ServiceDependency] = {
+        depends_on: dict[str, ServiceDependency] = {
             "kafka": {"condition": "service_healthy"},
             "schema-registry": {"condition": "service_healthy"},
         }
@@ -724,7 +727,7 @@ class Squid(Service):
         name: str = "squid",
         image: str = "sameersbn/squid:3.5.27-2",
         port: int = 3128,
-        volumes: List[str] = ["./squid.conf:/etc/squid/squid.conf"],
+        volumes: list[str] = ["./squid.conf:/etc/squid/squid.conf"],
     ) -> None:
         super().__init__(
             name=name,
@@ -738,8 +741,8 @@ class Localstack(Service):
         name: str = "localstack",
         image: str = "localstack/localstack:0.13.1",
         port: int = 4566,
-        environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
-        volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
+        environment: list[str] = ["HOSTNAME_EXTERNAL=localstack"],
+        volumes: list[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
     ) -> None:
         super().__init__(
             name=name,
@@ -801,7 +804,7 @@ class Testdrive(Service):
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
-        materialize_params: Dict[str, str] = {},
+        materialize_params: dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
         kafka_args: Optional[str] = None,
@@ -811,10 +814,10 @@ class Testdrive(Service):
         seed: Optional[int] = None,
         consistent_seed: bool = False,
         validate_postgres_stash: Optional[str] = None,
-        entrypoint: Optional[List[str]] = None,
-        entrypoint_extra: List[str] = [],
-        environment: Optional[List[str]] = None,
-        volumes_extra: List[str] = [],
+        entrypoint: Optional[list[str]] = None,
+        entrypoint_extra: list[str] = [],
+        environment: Optional[list[str]] = None,
+        volumes_extra: list[str] = [],
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
@@ -867,7 +870,7 @@ class Testdrive(Service):
         if no_reset:
             entrypoint.append("--no-reset")
 
-        for (k, v) in materialize_params.items():
+        for k, v in materialize_params.items():
             entrypoint.append(f"--materialize-param={k}={v}")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
@@ -928,11 +931,11 @@ class SqlLogicTest(Service):
         self,
         name: str = "sqllogictest",
         mzbuild: str = "sqllogictest",
-        environment: List[str] = [
+        environment: list[str] = [
             "MZ_SOFT_ASSERTIONS=1",
         ],
-        volumes: List[str] = ["../..:/workdir"],
-        depends_on: List[str] = ["cockroach"],
+        volumes: list[str] = ["../..:/workdir"],
+        depends_on: list[str] = ["cockroach"],
     ) -> None:
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
@@ -959,7 +962,7 @@ class Kgen(Service):
         self,
         name: str = "kgen",
         mzbuild: str = "kgen",
-        depends_on: List[str] = ["kafka"],
+        depends_on: list[str] = ["kafka"],
     ) -> None:
         entrypoint = [
             "kgen",
@@ -1002,7 +1005,7 @@ class SshBastionHost(Service):
         max_startups: Optional[str] = None,
     ) -> None:
         setup_path = os.path.relpath(
-            ROOT / "misc" / "images" / "sshd" / "setup.sh",
+            MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
             loader.composition_path,
         )
         super().__init__(
@@ -1034,7 +1037,6 @@ class Mz(Service):
         name: str = "mz",
         region: str = "aws/us-east-1",
         environment: str = "staging",
-        username: str,
         app_password: str,
     ) -> None:
         # We must create the temporary config file in a location
@@ -1050,13 +1052,13 @@ class Mz(Service):
         )
         toml.dump(
             {
-                "current_profile": "default",
+                "profile": "default",
                 "profiles": {
                     "default": {
-                        "email": username,
                         "app-password": app_password,
                         "region": region,
-                        "endpoint": f"https://{environment}.cloud.materialize.com/",
+                        "cloud-endpoint": f"https://api.{environment}.cloud.materialize.com",
+                        "admin-endpoint": f"https://admin.{environment}.cloud.materialize.com",
                     },
                 },
             },
@@ -1067,7 +1069,7 @@ class Mz(Service):
             name=name,
             config={
                 "mzbuild": "mz",
-                "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
+                "volumes": [f"{config.name}:/root/.config/materialize/mz.toml"],
             },
         )
 
@@ -1080,7 +1082,9 @@ class Prometheus(Service):
                 "image": "prom/prometheus:v2.41.0",
                 "ports": ["9090"],
                 "volumes": [
-                    str(ROOT / "misc" / "mzcompose" / "prometheus" / "prometheus.yml")
+                    str(
+                        MZ_ROOT / "misc" / "mzcompose" / "prometheus" / "prometheus.yml"
+                    )
                     + ":/etc/prometheus/prometheus.yml",
                     "mzdata:/mnt/mzdata",
                 ],
@@ -1100,7 +1104,7 @@ class Grafana(Service):
                     "GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
                 ],
                 "volumes": [
-                    str(ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
+                    str(MZ_ROOT / "misc" / "mzcompose" / "grafana" / "datasources")
                     + ":/etc/grafana/provisioning/datasources",
                 ],
             },

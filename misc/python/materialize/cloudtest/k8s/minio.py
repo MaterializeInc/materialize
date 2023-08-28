@@ -57,7 +57,7 @@ class Minio(K8sResource):
             "-c",
             ";".join(
                 [
-                    "mc config host add myminio http://minio-service.default:9000 minio minio123",
+                    f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123",
                     f"mc rm -r --force myminio/{bucket}",
                     f"mc mb myminio/{bucket}",
                 ]

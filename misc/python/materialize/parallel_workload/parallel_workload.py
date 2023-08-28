@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
-from typing import DefaultDict, List, Optional, Type
+from typing import DefaultDict, Optional
 
 import pg8000
 
@@ -65,7 +65,8 @@ def run(
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
         cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
-        cur.execute("ALTER SYSTEM SET max_tables = 105")
+        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
+        cur.execute("ALTER SYSTEM SET max_tables = 200")
         cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
         cur.execute("ALTER SYSTEM SET max_sources = 105")
         cur.execute("ALTER SYSTEM SET max_roles = 105")
@@ -95,9 +96,9 @@ def run(
 
     workers = []
     threads = []
+    worker_rng = random.Random(rng.randrange(SEED_RANGE))
     for i in range(num_threads):
-        worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        weights: List[float]
+        weights: list[float]
         if complexity == Complexity.DDL:
             weights = [60, 30, 30, 30, 10]
         elif complexity == Complexity.DML:
@@ -215,7 +216,7 @@ def run(
         database.drop(Executor(rng, cur))
     conn.close()
 
-    ignored_errors: DefaultDict[str, Counter[Type[Action]]] = defaultdict(Counter)
+    ignored_errors: DefaultDict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
     for worker in workers:
         for action_class, counter in worker.ignored_errors.items():

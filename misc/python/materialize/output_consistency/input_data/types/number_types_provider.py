@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional, Set
+from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -30,7 +30,7 @@ class NumberDataType(DataType):
         smallest_value: str,
         max_value: str,
         max_negative_value: Optional[str],
-        further_tiny_dec_values: Optional[Set[str]] = None,
+        further_tiny_dec_values: Optional[set[str]] = None,
         is_floating_point_type: bool = False,
     ):
         super().__init__(identifier, type_name, DataTypeCategory.NUMERIC)
@@ -45,7 +45,7 @@ class NumberDataType(DataType):
         self.is_floating_point_type = is_floating_point_type
 
     def resolve_return_type_spec(
-        self, characteristics: Set[ExpressionCharacteristics]
+        self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return NumericReturnTypeSpec(
             only_integer=not self.is_decimal
@@ -174,26 +174,26 @@ DOUBLE_TYPE = NumberDataType(
     is_floating_point_type=True,
 )
 
-SIGNED_INT_TYPES: List[NumberDataType] = [
+SIGNED_INT_TYPES: list[NumberDataType] = [
     INT2_TYPE,
     INT4_TYPE,
     INT8_TYPE,
 ]
 
-UNSIGNED_INT_TYPES: List[NumberDataType] = [
+UNSIGNED_INT_TYPES: list[NumberDataType] = [
     UINT2_TYPE,
     UINT4_TYPE,
     UINT8_TYPE,
 ]
 
-FLOAT_OR_DECIMAL_DATA_TYPES: List[NumberDataType] = [
+FLOAT_OR_DECIMAL_DATA_TYPES: list[NumberDataType] = [
     DECIMAL39_0_TYPE,
     DECIMAL39_8_TYPE,
     REAL_TYPE,
     DOUBLE_TYPE,
 ]
 
-NUMERIC_DATA_TYPES: List[NumberDataType] = []
+NUMERIC_DATA_TYPES: list[NumberDataType] = []
 NUMERIC_DATA_TYPES.extend(SIGNED_INT_TYPES)
 NUMERIC_DATA_TYPES.extend(UNSIGNED_INT_TYPES)
 NUMERIC_DATA_TYPES.extend(FLOAT_OR_DECIMAL_DATA_TYPES)

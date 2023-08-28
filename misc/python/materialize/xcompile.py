@@ -13,9 +13,9 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Optional
 
-from materialize import ROOT, spawn
+from materialize import MZ_ROOT, spawn
 
 
 class Arch(Enum):
@@ -55,8 +55,8 @@ def target(arch: Arch) -> str:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: List[str], channel: Optional[str] = None
-) -> List[str]:
+    arch: Arch, subcommand: str, rustflags: list[str], channel: Optional[str] = None
+) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
     Args:
@@ -84,7 +84,7 @@ def cargo(
         extra_env = {
             "CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            "CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
+            "CARGO_TARGET_DIR": str(MZ_ROOT / "target-xcompile"),
             "TARGET_AR": f"{_target}-ar",
             "TARGET_CPP": f"{_target}-cpp",
             "TARGET_CC": f"{_target}-cc",
@@ -101,7 +101,7 @@ def cargo(
             "-Clink-arg=-fuse-ld=lld",
             f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
         ]
-        extra_env: Dict[str, str] = {}
+        extra_env: dict[str, str] = {}
 
     env = {
         **extra_env,
@@ -121,7 +121,7 @@ def cargo(
 
 def tool(
     arch: Arch, name: str, channel: Optional[str] = None, prefix_name: bool = True
-) -> List[str]:
+) -> list[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
@@ -143,7 +143,7 @@ def tool(
     ]
 
 
-def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
+def _enter_builder(arch: Arch, channel: Optional[str] = None) -> list[str]:
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:
@@ -161,7 +161,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # cross-compiling toolchain on the host and use that instead.
 
     BOOTSTRAP_VERSION = "4"
-    BOOTSTRAP_FILE = ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
+    BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
     except FileNotFoundError:

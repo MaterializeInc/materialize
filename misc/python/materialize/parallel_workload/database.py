@@ -10,7 +10,7 @@
 import random
 import threading
 from copy import copy
-from typing import List, Optional, Set, Type
+from typing import Optional
 
 from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
@@ -33,7 +33,7 @@ MAX_INITIAL_ROLES = 3
 # TODO: Create/Drop source (load generator, pg circle from Mz)
 class Column:
     column_id: int
-    data_type: Type[DataType]
+    data_type: type[DataType]
     db_object: "DBObject"
     nullable: bool
     default: Optional[str]
@@ -43,7 +43,7 @@ class Column:
         self,
         rng: random.Random,
         column_id: int,
-        data_type: Type[DataType],
+        data_type: type[DataType],
         db_object: "DBObject",
     ):
         self.column_id = column_id
@@ -75,7 +75,7 @@ class Column:
 
 
 class DBObject:
-    columns: List[Column]
+    columns: list[Column]
 
 
 class Table(DBObject):
@@ -110,8 +110,8 @@ class View(DBObject):
     view_id: int
     base_object: DBObject
     base_object2: Optional[DBObject]
-    columns: List[Column]
-    source_columns: List[Column]
+    columns: list[Column]
+    source_columns: list[Column]
     materialized: bool
     join_column: Optional[Column]
     join_column2: Optional[Column]
@@ -213,7 +213,7 @@ class Cluster(DBObject):
     cluster_id: int
     managed: bool
     size: str
-    replicas: List[ClusterReplica]
+    replicas: list[ClusterReplica]
     replica_id: int
     introspection_interval: str
 
@@ -257,15 +257,15 @@ class Database:
     host: str
     port: int
     system_port: int
-    tables: List[Table]
+    tables: list[Table]
     table_id: int
-    views: List[View]
+    views: list[View]
     view_id: int
-    roles: List[Role]
+    roles: list[Role]
     role_id: int
-    clusters: List[Cluster]
+    clusters: list[Cluster]
     cluster_id: int
-    indexes: Set[str]
+    indexes: set[str]
     lock: threading.Lock
 
     def __init__(

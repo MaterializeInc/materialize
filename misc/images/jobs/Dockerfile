@@ -11,7 +11,7 @@ MZFROM ubuntu-base
 
 RUN apt-get update && apt-get -qy install ca-certificates
 
-COPY examples/persistcli /usr/local/bin/persistcli
+COPY persistcli /usr/local/bin/persistcli
 
 # TODO: the intention is for this image to eventually serve as the one-off
 # job launcher for all of materialize, not just for persist. but because of

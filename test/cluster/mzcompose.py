@@ -8,10 +8,12 @@
 # by the Apache License, Version 2.0.
 
 import json
+import re
 import time
+from datetime import datetime
 from textwrap import dedent
 from threading import Thread
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -83,6 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-query-without-default-cluster",
         "test-clusterd-death-detection",
         "test-replica-metrics",
+        "test-metrics-retention-across-restart",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -249,7 +252,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.up("clusterd1")
 
     # helper function to get command history metrics
-    def find_command_history_metrics(c: Composition) -> Tuple[int, int, int, int]:
+    def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
         controller_metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -314,7 +317,7 @@ def workflow_test_github_15531(c: Composition) -> None:
             STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            WORKERS 1
         ));
         SET cluster = cluster1;
         -- table for fast-path peeks
@@ -337,11 +340,9 @@ def workflow_test_github_15531(c: Composition) -> None:
     assert controller_command_count > 0, "controller history cannot be empty"
     assert (
         controller_dataflow_count == 1
-    ), "more dataflows than expected in controller history"
+    ), "expected a single dataflow in controller history"
     assert replica_command_count > 0, "replica history cannot be empty"
-    assert (
-        replica_dataflow_count == 1
-    ), "more dataflows than expected in replica history"
+    assert replica_dataflow_count == 1, "expected a single dataflow in replica history"
 
     # execute 400 fast- and slow-path peeks
     for _ in range(20):
@@ -370,8 +371,8 @@ def workflow_test_github_15531(c: Composition) -> None:
             """
         )
 
-    # check that dataflow count is the same and
-    # that history size is well-behaved
+    # Check that history size and dataflow count are well-behaved.
+    # Dataflow count can plausibly be more than 1, if compaction is delayed.
     (
         controller_command_count,
         controller_dataflow_count,
@@ -382,11 +383,17 @@ def workflow_test_github_15531(c: Composition) -> None:
         controller_command_count < 100
     ), "controller history grew more than expected after peeks"
     assert (
+        controller_dataflow_count > 0
+    ), "at least one dataflow expected in controller history"
+    assert (
         controller_dataflow_count < 5
     ), "more dataflows than expected in controller history"
     assert (
         replica_command_count < 100
     ), "replica history grew more than expected after peeks"
+    assert (
+        replica_dataflow_count > 0
+    ), "at least one dataflow expected in replica history"
     assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 
@@ -432,7 +439,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
 
-    def extract_frontiers(output: str) -> Tuple[int, int]:
+    def extract_frontiers(output: str) -> tuple[int, int]:
         j = json.loads(output)
         (upper,) = j["determination"]["upper"]["elements"]
         (since,) = j["determination"]["since"]["elements"]
@@ -1587,7 +1594,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Helper function to get reconciliation metrics for clusterd.
-    def fetch_reconciliation_metrics() -> Tuple[int, int]:
+    def fetch_reconciliation_metrics() -> tuple[int, int]:
         metrics = c.exec(
             "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -1794,7 +1801,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """Stop a susbscribe started with `start_subscribe`."""
         cursor.execute("ROLLBACK")
 
-    def check_mz_subscriptions(expected: Tuple) -> None:
+    def check_mz_subscriptions(expected: tuple) -> None:
         """
         Check that the expected subscribes exist in mz_subscriptions.
         We identify subscribes by user, cluster, and target table only.
@@ -2012,7 +2019,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
 
 
 class Metrics:
-    metrics: Dict[str, str]
+    metrics: dict[str, str]
 
     def __init__(self, raw: str) -> None:
         self.metrics = {}
@@ -2020,7 +2027,7 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
-    def with_name(self, metric_name: str) -> Dict[str, float]:
+    def with_name(self, metric_name: str) -> dict[str, float]:
         items = {}
         for key, value in self.metrics.items():
             if key.startswith(metric_name):
@@ -2141,3 +2148,64 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None
+
+
+def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
+    """
+    Test that sinces of retained-metrics objects are held back across
+    restarts of environmentd.
+    """
+
+    # There are three kinds of retained-metrics objects currently:
+    #  * tables (like `mz_cluster_replicas`)
+    #  * indexes (like `mz_cluster_replicas_ind`)
+
+    # Generally, metrics tables are indexed in `mz_introspection` and
+    # not indexed in the `default` cluster, so we can use that to
+    # collect the `since` frontiers we want.
+    def collect_sinces() -> tuple[int, int]:
+        explain = c.sql_query(
+            "SET cluster = default;"
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
+        )[0][0]
+        table_since = parse_since_from_explain(explain)
+
+        explain = c.sql_query(
+            "SET cluster = mz_introspection;"
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
+        )[0][0]
+        index_since = parse_since_from_explain(explain)
+
+        return table_since, index_since
+
+    def parse_since_from_explain(explain: str) -> int:
+        since_line = re.compile(r"\s*read frontier:\[(?P<since>\d+) \(.+\)\]")
+        for line in explain.splitlines():
+            if match := since_line.match(line):
+                return int(match.group("since"))
+
+        raise AssertionError(f"since not found in explain: {explain}")
+
+    def validate_since(since: int, name: str) -> None:
+        now = datetime.now()
+        dt = datetime.fromtimestamp(since / 1000.0)
+        diff = now - dt
+
+        assert (
+            diff.days >= 30
+        ), f"{name} greater than expected (since={since}, diff={diff})"
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    table_since1, index_since1 = collect_sinces()
+    validate_since(table_since1, "table_since1")
+    validate_since(index_since1, "index_since1")
+
+    # Restart Materialize.
+    c.kill("materialized")
+    c.up("materialized")
+
+    table_since2, index_since2 = collect_sinces()
+    validate_since(table_since2, "table_since2")
+    validate_since(index_since2, "index_since2")

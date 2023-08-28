@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSource};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
+use mz_repr::GlobalId;
 
 use crate::plan::Plan;
 use crate::types::dataflows::DataflowDescription;
@@ -43,15 +44,20 @@ impl<'a> DataflowDescription<Plan> {
         &'a mut self,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, Plan>, ExplainError> {
+        let export_ids = export_ids_for(self);
         let plans = self
             .objects_to_build
             .iter_mut()
             .rev()
             .map(|build_desc| {
+                let public_id = export_ids
+                    .get(&build_desc.id)
+                    .unwrap_or(&build_desc.id)
+                    .clone();
                 let id = context
                     .humanizer
-                    .humanize_id(build_desc.id)
-                    .unwrap_or_else(|| build_desc.id.to_string());
+                    .humanize_id(public_id)
+                    .unwrap_or_else(|| public_id.to_string());
                 let plan = AnnotatedPlan {
                     plan: &build_desc.plan,
                     annotations: BTreeMap::default(),
@@ -105,6 +111,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
         &'a mut self,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
+        let export_ids = export_ids_for(self);
         let plans = self
             .objects_to_build
             .iter_mut()
@@ -116,10 +123,14 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
                     enforce_linear_chains(build_desc.plan.as_inner_mut())?;
                 };
 
+                let id = export_ids
+                    .get(&build_desc.id)
+                    .unwrap_or(&build_desc.id)
+                    .clone();
                 let id = context
                     .humanizer
-                    .humanize_id(build_desc.id)
-                    .unwrap_or_else(|| build_desc.id.to_string());
+                    .humanize_id(id)
+                    .unwrap_or_else(|| id.to_string());
                 let plan = AnnotatedPlan {
                     plan: build_desc.plan.as_inner(),
                     annotations: BTreeMap::default(),
@@ -148,4 +159,18 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             plans,
         })
     }
+}
+
+pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
+    let mut map = BTreeMap::<GlobalId, GlobalId>::default();
+
+    for (public_id, export) in dd.sink_exports.iter() {
+        map.insert(export.from, *public_id);
+    }
+
+    for (public_id, (export, _)) in dd.index_exports.iter() {
+        map.insert(export.on_id, *public_id);
+    }
+
+    map
 }

@@ -106,6 +106,7 @@ impl<'a> DirectiveArgs<'a> {
                 .map(|x| HollowBatchPart {
                     key: PartialBatchKey((*x).to_owned()),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 })
                 .collect(),
@@ -200,6 +201,9 @@ mod tests {
                             "compact" => machine_dd::compact(&mut state, args).await,
                             "compare-and-append" => {
                                 machine_dd::compare_and_append(&mut state, args).await
+                            }
+                            "compare-and-append-batches" => {
+                                machine_dd::compare_and_append_batches(&mut state, args).await
                             }
                             "compare-and-downgrade-since" => {
                                 machine_dd::compare_and_downgrade_since(&mut state, args).await

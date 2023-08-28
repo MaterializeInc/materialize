@@ -82,17 +82,17 @@ Field               | Type      | Meaning
 The `mz_clusters` table contains a row for each cluster in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_clusters -->
-| Field                | Type                 | Meaning                                                                                                            |
-|----------------------|----------------------|--------------------------------------------------------------------------------------------------------------------|
-| `id`                 | [`text`]             | Materialize's unique ID for the cluster.                                                                           |
-| `name`               | [`text`]             | The name of the cluster.                                                                                           |
-| `owner_id`           | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles). |
-| `privileges`         | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                           |
-| `managed`            | [`boolean`]          | Whether the cluster has automatically managed replicas.                                                            |
-| `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. If the cluster is unmanaged, `NULL`.        |
-| `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. If the cluster is unmanaged, `NULL`.     |
-| `disk`               | [`boolean`]          | If the replicas have a local disk.                                                                                 |
-| `availability_zones` | [`list`]             | The AWS availability zones of the cluster.                                                                         |
+| Field                | Type                 | Meaning                                                                                                                                  |
+|----------------------|----------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`                 | [`text`]             | Materialize's unique ID for the cluster.                                                                                                 |
+| `name`               | [`text`]             | The name of the cluster.                                                                                                                 |
+| `owner_id`           | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).                       |
+| `privileges`         | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                                                 |
+| `managed`            | [`boolean`]          | Whether the cluster is a [managed cluster](/sql/create-cluster/#managed-clusters) with automatically managed replicas.                   |
+| `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.                                    |
+| `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.                                 |
+| `disk`               | [`boolean`]          | **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.                   |
+| `availability_zones` | [`text list`]        | **Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters. |
 
 ### `mz_columns`
 

@@ -9,7 +9,6 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
@@ -23,13 +22,13 @@ class CreateSinkParameterized(ActionFactory):
     """Creates a sink over an existing view. Then creates a source over that sink and a view over that source."""
 
     @classmethod
-    def requires(self) -> List[Set[Type[Capability]]]:
+    def requires(cls) -> list[set[type[Capability]]]:
         return [{MzIsRunning, StoragedRunning, ViewExists}]
 
     def __init__(self, max_sinks: int = 10) -> None:
         self.max_sinks = max_sinks
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_sink_name = capabilities.get_free_capability_name(
             SinkExists, self.max_sinks
         )
@@ -115,5 +114,5 @@ class CreateSink(Action):
             + dest_view_sql
         )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.sink, self.sink.dest_view]

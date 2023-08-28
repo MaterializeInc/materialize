@@ -10,7 +10,7 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET allow_real_time_recency = true
 
-$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)) replacement=<>
+$ set-regex match=(s\d+|\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)) replacement=<>
 
 > CREATE TABLE t1 (a INT);
 
@@ -29,3 +29,7 @@ $ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)) rep
 > SET REAL_TIME_RECENCY TO TRUE
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+
+# Test autorouting explain timestamp queries
+> EXPLAIN TIMESTAMP FOR SELECT * from mz_internal.mz_cluster_replica_metrics
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource mz_internal.mz_cluster_replica_metrics_ind (<>, compute):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"

@@ -18,14 +18,12 @@ bids                    subsource      <null>                         <null>
 organizations           subsource      <null>                         <null>
 users                   subsource      <null>                         <null>
 
-# Adding test to check for tables() work
-> CREATE SCHEMA a;
-> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids);
-
-> SHOW SOURCES FROM a;
-auction_bids            load-generator ${arg.default-storage-size}  materialize_a_auction_bids
-auction_bids_progress   progress       <null>                       <null>
-bids                    subsource      <null>                       <null>
+# FOR TABLES doesn't always work.
+# A previous test here checked bids, which worked.
+# It did not check users, which causes a panic.
+# If this is fixed in the future, tests should probably exhaustively check each subsource.
+! CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR TABLES (user);
+contains: FOR TABLES (..) invalid for LOAD GENERATOR sources
 
 # For Tables with mentioned schema should work
 > CREATE SCHEMA another;
@@ -39,21 +37,6 @@ auctions                subsource      <null>                       <null>
 bids                    subsource      <null>                       <null>
 organizations           subsource      <null>                       <null>
 users                   subsource      <null>                       <null>
-
-# Subsources should be created in source schema if no schema is provided
-> CREATE SCHEMA foo;
-> CREATE SCHEMA bar;
-> CREATE SOURCE foo.auction_subset
-  FROM LOAD GENERATOR AUCTION
-  FOR TABLES (bids as foo_bids, users as bar.bar_users);
-
-> SHOW SOURCES FROM foo;
-auction_subset            load-generator ${arg.default-storage-size}  materialize_foo_auction_subset
-auction_subset_progress   progress       <null>                       <null>
-foo_bids                  subsource      <null>                       <null>
-
-> SHOW SOURCES FROM bar;
-bar_users                 subsource      <null>                       <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -70,7 +53,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 # Check that non-append-only `COUNTER` sources reach the proper size
 
-> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s') WITH (SIZE '1')
+> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
 
 > SELECT count(*) FROM counter
 8
@@ -83,10 +66,10 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 8
 
 # Check that negative max cardinalities are rejected
-! CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1) WITH (SIZE '1')
+! CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1)
 contains: unsupported max cardinality
 
-> CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0) WITH (SIZE '1')
+> CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0)
 
 > SELECT count(*) FROM counter3
 0
@@ -120,9 +103,3 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
   FOR ALL TABLES;
 contains: FOR ALL TABLES is only valid for multi-output sources
-
-# Check that for tables() clause is rejected with no subsources
-! CREATE SOURCE counter6
-  FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
-  FOR TABLES(t1);
-contains: FOR TABLES (..) is only valid for multi-output sources

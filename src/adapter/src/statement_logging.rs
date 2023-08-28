@@ -1,0 +1,199 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+use mz_ore::cast::CastFrom;
+use mz_ore::now::EpochMillis;
+use uuid::Uuid;
+
+use crate::{AdapterError, ExecuteResponse};
+/// Contains all the information necessary to generate the initial
+/// entry in `mz_statement_execution_history`. We need to keep this
+/// around in order to modify the entry later once the statement finishes executing.
+#[derive(Clone, Debug)]
+pub struct StatementBeganExecutionRecord {
+    pub id: Uuid,
+    pub prepared_statement_id: Uuid,
+    pub sample_rate: f64,
+    pub params: Vec<Option<String>>,
+    pub began_at: EpochMillis,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum StatementExecutionStrategy {
+    /// The statement was executed by spinning up a dataflow.
+    Standard,
+    /// The statement was executed by reading from an existing
+    /// arrangement.
+    FastPath,
+    /// The statement was determined to be constant by
+    /// environmentd, and not sent to a cluster.
+    Constant,
+}
+
+impl StatementExecutionStrategy {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::FastPath => "fast-path",
+            Self::Constant => "constant",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum StatementEndedExecutionReason {
+    Success {
+        rows_returned: Option<u64>,
+        execution_strategy: Option<StatementExecutionStrategy>,
+    },
+    Canceled,
+    Errored {
+        error: String,
+    },
+    Aborted,
+}
+
+#[derive(Clone, Debug)]
+pub struct StatementEndedExecutionRecord {
+    pub id: Uuid,
+    pub reason: StatementEndedExecutionReason,
+    pub ended_at: EpochMillis,
+}
+
+/// Contains all the information necessary to generate an entry in
+/// `mz_prepared_statement_history`
+#[derive(Clone, Debug)]
+pub struct StatementPreparedRecord {
+    pub id: Uuid,
+    pub sql: String,
+    pub name: String,
+    pub session_id: Uuid,
+    pub prepared_at: EpochMillis,
+}
+
+#[derive(Clone, Debug)]
+pub enum StatementLoggingEvent {
+    Prepared(StatementPreparedRecord),
+    BeganExecution(StatementBeganExecutionRecord),
+    EndedExecution(StatementEndedExecutionRecord),
+    BeganSession(SessionHistoryEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionHistoryEvent {
+    pub id: Uuid,
+    pub connected_at: EpochMillis,
+    pub application_name: String,
+    pub authenticated_user: String,
+}
+
+impl From<&Result<ExecuteResponse, AdapterError>> for StatementEndedExecutionReason {
+    fn from(value: &Result<ExecuteResponse, AdapterError>) -> StatementEndedExecutionReason {
+        match value {
+            Ok(resp) => resp.into(),
+            Err(e) => StatementEndedExecutionReason::Errored {
+                error: e.to_string(),
+            },
+        }
+    }
+}
+
+impl From<&ExecuteResponse> for StatementEndedExecutionReason {
+    fn from(value: &ExecuteResponse) -> StatementEndedExecutionReason {
+        match value {
+            ExecuteResponse::CopyTo { resp, .. } => match resp.as_ref() {
+                // NB [btv]: It's not clear that this combination
+                // can ever actually happen.
+                ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                    StatementEndedExecutionReason::Success {
+                        rows_returned: Some(u64::cast_from(rows.len())),
+                        execution_strategy: Some(StatementExecutionStrategy::Constant),
+                    }
+                }
+                ExecuteResponse::SendingRows { .. } => {
+                    panic!("SELECTs terminate on peek finalization, not here.")
+                }
+                ExecuteResponse::Subscribing { .. } => {
+                    panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+                }
+                _ => panic!("Invalid COPY response type"),
+            },
+            ExecuteResponse::CopyFrom { .. } => {
+                panic!("COPY FROMs terminate in the protocol layer, not here.")
+            }
+            ExecuteResponse::Fetch { .. } => {
+                panic!("FETCHes terminate after a follow-up message is sent.")
+            }
+            ExecuteResponse::SendingRows { .. } => {
+                panic!("SELECTs terminate on peek finalization, not here.")
+            }
+            ExecuteResponse::Subscribing { .. } => {
+                panic!("SUBSCRIBEs terminate in the protocol layer, not here.")
+            }
+
+            ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                StatementEndedExecutionReason::Success {
+                    rows_returned: Some(u64::cast_from(rows.len())),
+                    execution_strategy: Some(StatementExecutionStrategy::Constant),
+                }
+            }
+            ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
+
+            ExecuteResponse::AlteredDefaultPrivileges
+            | ExecuteResponse::AlteredObject(_)
+            | ExecuteResponse::AlteredIndexLogicalCompaction
+            | ExecuteResponse::AlteredRole
+            | ExecuteResponse::AlteredSystemConfiguration
+            | ExecuteResponse::ClosedCursor
+            | ExecuteResponse::CreatedConnection
+            | ExecuteResponse::CreatedDatabase
+            | ExecuteResponse::CreatedSchema
+            | ExecuteResponse::CreatedRole
+            | ExecuteResponse::CreatedCluster
+            | ExecuteResponse::CreatedClusterReplica
+            | ExecuteResponse::CreatedIndex
+            | ExecuteResponse::CreatedSecret
+            | ExecuteResponse::CreatedSink
+            | ExecuteResponse::CreatedSource
+            | ExecuteResponse::CreatedTable
+            | ExecuteResponse::CreatedView
+            | ExecuteResponse::CreatedViews
+            | ExecuteResponse::CreatedWebhookSource { .. }
+            | ExecuteResponse::CreatedMaterializedView
+            | ExecuteResponse::CreatedType
+            | ExecuteResponse::Deallocate { .. }
+            | ExecuteResponse::DeclaredCursor
+            | ExecuteResponse::Deleted(_)
+            | ExecuteResponse::DiscardedTemp
+            | ExecuteResponse::DiscardedAll
+            | ExecuteResponse::DroppedObject(_)
+            | ExecuteResponse::DroppedOwned
+            | ExecuteResponse::EmptyQuery
+            | ExecuteResponse::GrantedPrivilege
+            | ExecuteResponse::GrantedRole
+            | ExecuteResponse::Inserted(_)
+            | ExecuteResponse::Prepare
+            | ExecuteResponse::Raised
+            | ExecuteResponse::ReassignOwned
+            | ExecuteResponse::RevokedPrivilege
+            | ExecuteResponse::RevokedRole
+            | ExecuteResponse::SetVariable { .. }
+            | ExecuteResponse::StartedTransaction
+            | ExecuteResponse::TransactionCommitted { .. }
+            | ExecuteResponse::TransactionRolledBack { .. }
+            | ExecuteResponse::Updated(_)
+            | ExecuteResponse::ValidatedConnection { .. } => {
+                StatementEndedExecutionReason::Success {
+                    rows_returned: None,
+                    execution_strategy: None,
+                }
+            }
+        }
+    }
+}

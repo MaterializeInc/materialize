@@ -122,6 +122,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
+    ShowColumns(ShowColumnsPlan),
     ShowVariable(ShowVariablePlan),
     InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
@@ -133,8 +134,8 @@ pub enum Plan {
     Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
-    CopyRows(CopyRowsPlan),
-    Explain(ExplainPlan),
+    ExplainPlan(ExplainPlanPlan),
+    ExplainTimestamp(ExplainTimestampPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
     AlterNoop(AlterNoopPlan),
@@ -243,7 +244,8 @@ impl Plan {
             StatementKind::DropObjects => vec![PlanKind::DropObjects],
             StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
-            StatementKind::Explain => vec![PlanKind::Explain],
+            StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
+            StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
             StatementKind::Fetch => vec![PlanKind::Fetch],
             StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
@@ -262,6 +264,7 @@ impl Plan {
                 PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
+                PlanKind::ShowColumns,
                 PlanKind::ShowAllVariables,
                 PlanKind::InspectShard,
             ],
@@ -313,6 +316,7 @@ impl Plan {
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
+            Plan::ShowColumns(_) => "show columns",
             Plan::ShowVariable(_) => "show variable",
             Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
@@ -323,9 +327,9 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
-            Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
-            Plan::Explain(_) => "explain",
+            Plan::ExplainPlan(_) => "explain plan",
+            Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -759,6 +763,13 @@ impl SubscribeFrom {
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
         }
     }
+
+    pub fn contains_temporal(&self) -> bool {
+        match self {
+            SubscribeFrom::Id(_) => false,
+            SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -768,28 +779,47 @@ pub struct ShowCreatePlan {
 }
 
 #[derive(Debug)]
+pub struct ShowColumnsPlan {
+    pub id: GlobalId,
+    pub select_plan: SelectPlan,
+    pub new_resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
 }
 
-#[derive(Debug)]
-pub struct CopyRowsPlan {
-    pub id: GlobalId,
-    pub columns: Vec<usize>,
-    pub rows: Vec<Row>,
-}
-
 #[derive(Clone, Debug)]
-pub struct ExplainPlan {
-    pub raw_plan: HirRelationExpr,
-    pub row_set_finishing: Option<RowSetFinishing>,
+pub struct ExplainPlanPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
     pub no_errors: bool,
-    pub explainee: mz_repr::explain::Explainee,
+    pub explainee: Explainee,
+}
+
+/// The type of object to be explained
+#[derive(Clone, Debug)]
+pub enum Explainee {
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// The object to be explained is a one-off query and may or may not served
+    /// using a dataflow.
+    Query {
+        raw_plan: HirRelationExpr,
+        row_set_finishing: Option<RowSetFinishing>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct ExplainTimestampPlan {
+    pub format: ExplainFormat,
+    pub raw_plan: HirRelationExpr,
 }
 
 #[derive(Debug)]
@@ -1236,7 +1266,7 @@ impl QueryWhen {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum MutationKind {
     Insert,
     Update,

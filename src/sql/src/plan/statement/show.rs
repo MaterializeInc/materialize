@@ -16,7 +16,7 @@
 use std::fmt::Write;
 
 use mz_ore::collections::CollectionExt;
-use mz_repr::{Datum, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
@@ -31,13 +31,15 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
-    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedItemName,
-    ResolvedSchemaName,
+    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedIds,
+    ResolvedItemName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowCreatePlan};
+use crate::plan::{
+    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan,
+};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -600,7 +602,7 @@ pub fn show_indexes<'a>(
 pub fn show_columns<'a>(
     scx: &'a StatementContext<'a>,
     ShowColumnsStatement { table_name, filter }: ShowColumnsStatement<Aug>,
-) -> Result<ShowSelect<'a>, PlanError> {
+) -> Result<ShowColumnsSelect<'a>, PlanError> {
     let entry = scx.get_item_by_resolved_name(&table_name)?;
     let full_name = scx.catalog.resolve_full_name(entry.name());
 
@@ -629,13 +631,18 @@ pub fn show_columns<'a>(
          WHERE mz_columns.id = '{}'",
         entry.id(),
     );
-    ShowSelect::new(
+    let (show_select, new_resolved_ids) = ShowSelect::new_with_resolved_ids(
         scx,
         query,
         filter,
         Some("position"),
         Some(&["name", "nullable", "type"]),
-    )
+    )?;
+    Ok(ShowColumnsSelect {
+        id: entry.id(),
+        show_select,
+        new_resolved_ids,
+    })
 }
 
 // The rationale for which fields to include in the tuples are those
@@ -714,6 +721,17 @@ impl<'a> ShowSelect<'a> {
         order: Option<&str>,
         projection: Option<&[&str]>,
     ) -> Result<ShowSelect<'a>, PlanError> {
+        Self::new_with_resolved_ids(scx, query, filter, order, projection)
+            .map(|(show_select, _)| show_select)
+    }
+
+    fn new_with_resolved_ids(
+        scx: &'a StatementContext,
+        query: String,
+        filter: Option<ShowStatementFilter<Aug>>,
+        order: Option<&str>,
+        projection: Option<&[&str]>,
+    ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
         let filter = match filter {
             Some(ShowStatementFilter::Like(like)) => format!("name LIKE {}", Value::String(like)),
             Some(ShowStatementFilter::Where(expr)) => expr.to_string(),
@@ -733,9 +751,9 @@ impl<'a> ShowSelect<'a> {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
-        let (mut stmt, _) = names::resolve(scx.catalog, stmt)?;
+        let (mut stmt, new_resolved_ids) = names::resolve(scx.catalog, stmt)?;
         transform_ast::transform(scx, &mut stmt)?;
-        Ok(ShowSelect { scx, stmt })
+        Ok((ShowSelect { scx, stmt }, new_resolved_ids))
     }
 
     /// Computes the shape of this `ShowSelect`.
@@ -751,6 +769,42 @@ impl<'a> ShowSelect<'a> {
     /// Converts this `ShowSelect` into a [`(HirRelationExpr, Scope)`].
     pub fn plan_hir(self, qcx: &QueryContext) -> Result<(HirRelationExpr, Scope), PlanError> {
         query::plan_nested_query(&mut qcx.clone(), &self.stmt.query)
+    }
+}
+
+pub struct ShowColumnsSelect<'a> {
+    id: GlobalId,
+    new_resolved_ids: ResolvedIds,
+    show_select: ShowSelect<'a>,
+}
+
+impl<'a> ShowColumnsSelect<'a> {
+    pub fn describe(self) -> Result<StatementDesc, PlanError> {
+        self.show_select.describe()
+    }
+
+    pub fn plan(self) -> Result<Plan, PlanError> {
+        let select_plan = self.show_select.plan()?;
+        match select_plan {
+            Plan::Select(select_plan) => Ok(Plan::ShowColumns(ShowColumnsPlan {
+                id: self.id,
+                select_plan,
+                new_resolved_ids: self.new_resolved_ids,
+            })),
+            _ => {
+                tracing::error!(
+                    "SHOW COLUMNS produced a non select plan. plan: {:?}",
+                    select_plan
+                );
+                Err(PlanError::Unstructured(
+                    "SHOW COLUMNS produced an unexpected plan. Please file a bug.".to_string(),
+                ))
+            }
+        }
+    }
+
+    pub fn plan_hir(self, qcx: &QueryContext) -> Result<(HirRelationExpr, Scope), PlanError> {
+        self.show_select.plan_hir(qcx)
     }
 }
 

@@ -133,7 +133,7 @@ create_source_kafka ::=
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
-  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'MARKETING' | 'TPCH')
+  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'MARKETING' | 'TPCH' | 'CLOCK')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   (
     'FOR ALL TABLES' |
@@ -230,17 +230,21 @@ drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
-explain ::=
+explain_plan ::=
   'EXPLAIN'
-  ( ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )? | 'TIMESTAMP' ? )
+  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
   (
     select_stmt |
-    'VIEW' view_name |
     'MATERIALIZED VIEW' view_name
   )
+explain_timestamp ::=
+  'EXPLAIN' 'TIMESTAMP'
+  ( 'AS' ( 'TEXT' | 'JSON' ) )?
+  'FOR'
+  select_stmt
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
@@ -432,6 +436,7 @@ table_ref ::=
     | 'LATERAL'? table_func_call
     | '(' join_expr ')'
   ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
+table_expr ::= 'TABLE' table_name
 time_unit ::=
   'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=
@@ -478,6 +483,7 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
+values_expr ::= 'VALUES' '(' expr (',' expr)* ')' (',' '(' expr (',' expr)* ')')*
 with_ctes ::=
   'WITH'
     cte_binding ( ',' cte_binding )*

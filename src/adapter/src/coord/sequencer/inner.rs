@@ -25,18 +25,18 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_expr::explain::ExplainContext;
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
+    RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, Explainee, UsedIndexes};
+use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, ExprHumanizer, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -52,8 +52,9 @@ use mz_sql::names::{
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan;
 use mz_sql::plan::{
-    AlterOptionParameter, IndexOption, MaterializedView, MutationKind, OptimizerConfig, Params,
-    Plan, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege,
+    AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
+    Params, Plan, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom,
+    UpdatePrivilege,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -66,7 +67,9 @@ use mz_sql_parser::ast::{
     TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
+use mz_storage_client::controller::{
+    CollectionDescription, DataSource, DataSourceOther, ReadPolicy, StorageError,
+};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -78,6 +81,7 @@ use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
     StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
+use crate::client::ConnectionId;
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{
@@ -99,13 +103,12 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::explain::Explainable;
 use crate::notice::AdapterNotice;
 use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
-use crate::util::{
-    send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
-};
+use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 /// Attempts to evaluate an expression. If an error is returned then the error is sent
@@ -230,7 +233,10 @@ impl Coordinator {
                             source_status_collection_id,
                         ),
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                        DataSourceDesc::Source => (
+                            DataSource::Other(DataSourceOther::Source),
+                            source_status_collection_id,
+                        ),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => (DataSource::Webhook, None),
                         DataSourceDesc::Introspection(_) => {
@@ -492,7 +498,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_role(
         &mut self,
-        session: &Session,
+        conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let oid = self.catalog_mut().allocate_oid()?;
@@ -501,7 +507,7 @@ impl Coordinator {
             oid,
             attributes,
         };
-        self.catalog_transact(Some(session), vec![op])
+        self.catalog_transact_conn(conn_id, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
@@ -547,7 +553,10 @@ impl Coordinator {
                 // Determine the initial validity for the table.
                 let since_ts = self.peek_local_write_ts();
 
-                let collection_desc = table.desc.clone().into();
+                let collection_desc = CollectionDescription::from_desc(
+                    table.desc.clone(),
+                    DataSourceOther::TableWrites,
+                );
                 self.controller
                     .storage
                     .create_collections(vec![(table_id, collection_desc)])
@@ -571,7 +580,7 @@ impl Coordinator {
                 let appends = vec![(table_id, Vec::new(), upper)];
                 self.controller
                     .storage
-                    .append(appends)
+                    .append_table(appends)
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")
@@ -713,7 +722,7 @@ impl Coordinator {
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
         let result = self
-            .catalog_transact_with(Some(ctx.session()), ops, move |txn| {
+            .catalog_transact_with(Some(ctx.session().conn_id()), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
                     .storage
@@ -963,9 +972,9 @@ impl Coordinator {
         // Allocate a unique ID that can be used by the dataflow builder to
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
-
         let optimized_expr = self.view_optimizer.optimize(view_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
+        let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
 
         // Pick the least valid read timestamp as the as-of for the view
         // dataflow. This makes the materialized view include the maximum possible
@@ -996,12 +1005,22 @@ impl Coordinator {
         });
 
         match self
-            .catalog_transact_with(Some(session), ops, |txn| {
+            .catalog_transact_with(Some(session.conn_id()), ops, |txn| {
                 // Create a dataflow that materializes the view query and sinks
                 // it to storage.
-                let df = txn
-                    .dataflow_builder(cluster_id)
-                    .build_materialized_view_dataflow(id, internal_view_id)?;
+                let CatalogItem::MaterializedView(mv) = txn.catalog.get_entry(&id).item() else {
+                    unreachable!()
+                };
+
+                let mut builder = txn.dataflow_builder(cluster_id);
+                let df = builder.build_materialized_view(
+                    id,
+                    internal_view_id,
+                    debug_name,
+                    &mv.optimized_expr,
+                    &mv.desc,
+                )?;
+
                 Ok(df)
             })
             .await
@@ -1014,7 +1033,7 @@ impl Coordinator {
                         id,
                         CollectionDescription {
                             desc,
-                            data_source: DataSource::Other,
+                            data_source: DataSource::Other(DataSourceOther::Compute),
                             since: Some(as_of.clone()),
                             status_collection_id: None,
                         },
@@ -1028,8 +1047,11 @@ impl Coordinator {
                 )
                 .await;
 
+                self.catalog_mut().set_optimized_plan(id, df.clone());
+
                 df.set_as_of(as_of);
-                self.must_ship_dataflow(df, cluster_id).await;
+                let df = self.must_ship_dataflow(df, cluster_id).await;
+                self.catalog_mut().set_physical_plan(id, df);
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1097,7 +1119,7 @@ impl Coordinator {
             owner_id,
         };
         match self
-            .catalog_transact_with(Some(session), vec![op], |txn| {
+            .catalog_transact_with(Some(session.conn_id()), vec![op], |txn| {
                 let mut builder = txn.dataflow_builder(cluster_id);
                 let df = builder.build_index_dataflow(id)?;
                 Ok(df)
@@ -1135,6 +1157,7 @@ impl Coordinator {
             details: CatalogTypeDetails {
                 array_id: None,
                 typ: plan.typ.inner,
+                typreceive_oid: None,
             },
             resolved_ids,
         };
@@ -1547,7 +1570,7 @@ impl Coordinator {
             .map(|v| (v.name(), v.value(), v.description()))
             .collect::<Vec<_>>();
         rows.sort_by_cached_key(|(name, _, _)| name.to_lowercase());
-        Ok(send_immediate_rows(
+        Ok(Self::send_immediate_rows(
             rows.into_iter()
                 .map(|(name, val, desc)| {
                     Row::pack_slice(&[
@@ -1561,7 +1584,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_show_variable(
-        &self,
+        &mut self,
         session: &Session,
         plan: plan::ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -1576,7 +1599,7 @@ impl Coordinator {
                         .name()
                         .schema;
                     let row = Row::pack_slice(&[Datum::String(schema_name)]);
-                    Ok(send_immediate_rows(vec![row]))
+                    Ok(Self::send_immediate_rows(vec![row]))
                 }
                 None => {
                     session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
@@ -1587,7 +1610,9 @@ impl Coordinator {
                             .map(|schema| schema.to_string())
                             .collect(),
                     });
-                    Ok(send_immediate_rows(vec![Row::pack_slice(&[Datum::Null])]))
+                    Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
+                        Datum::Null,
+                    ])]))
                 }
             };
         }
@@ -1619,7 +1644,7 @@ impl Coordinator {
             let name = variable.value();
             session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
-        Ok(send_immediate_rows(vec![row]))
+        Ok(Self::send_immediate_rows(vec![row]))
     }
 
     pub(super) async fn sequence_inspect_shard(
@@ -1642,7 +1667,7 @@ impl Coordinator {
             .inspect_persist_state(plan.id)
             .await?;
         let jsonb = Jsonb::from_serde_json(state)?;
-        Ok(send_immediate_rows(vec![jsonb.into_row()]))
+        Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
     }
 
     pub(super) fn sequence_set_variable(
@@ -1882,7 +1907,7 @@ impl Coordinator {
                 } else {
                     Datum::False
                 };
-                Ok(send_immediate_rows(vec![Row::pack_slice(&[res])]))
+                Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])]))
             }
         }
     }
@@ -1946,7 +1971,7 @@ impl Coordinator {
                     None => return,
                 },
                 PeekStage::Finish(stage) => {
-                    let res = self.peek_stage_finish(ctx.session_mut(), stage).await;
+                    let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
                     return;
                 }
@@ -2258,7 +2283,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_finish(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         PeekStageFinish {
             validity: _,
             finishing,
@@ -2283,7 +2308,7 @@ impl Coordinator {
         });
         let peek_plan = self.plan_peek(
             dataflow,
-            session,
+            ctx.session_mut(),
             &when,
             cluster_id,
             view_id,
@@ -2294,17 +2319,19 @@ impl Coordinator {
             real_time_recency_ts,
             key,
             typ,
+            &finishing,
         )?;
 
         let determination = peek_plan.determination.clone();
 
         let max_query_result_size = std::cmp::min(
-            session.vars().max_query_result_size(),
+            ctx.session().vars().max_query_result_size(),
             self.catalog().system_config().max_result_size(),
         );
         // Implement the peek, and capture the response.
         let resp = self
             .implement_peek_plan(
+                ctx.extra_mut(),
                 peek_plan,
                 finishing,
                 cluster_id,
@@ -2313,10 +2340,11 @@ impl Coordinator {
             )
             .await?;
 
-        if session.vars().emit_timestamp_notice() {
+        if ctx.session().vars().emit_timestamp_notice() {
             let explanation =
-                self.explain_timestamp(session, cluster_id, &id_bundle, determination);
-            session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                self.explain_timestamp(ctx.session(), cluster_id, &id_bundle, determination);
+            ctx.session()
+                .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
 
         match copy_to {
@@ -2456,6 +2484,7 @@ impl Coordinator {
         real_time_recency_ts: Option<Timestamp>,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
+        finishing: &RowSetFinishing,
     ) -> Result<PlannedPeek, AdapterError> {
         let conn_id = session.conn_id().clone();
         let determination = self.sequence_peek_timestamp(
@@ -2492,6 +2521,7 @@ impl Coordinator {
             key,
             permutation,
             thinning.len(),
+            finishing,
         )?;
 
         Ok(PlannedPeek {
@@ -2526,7 +2556,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_subscribe(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::SubscribePlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -2542,10 +2572,10 @@ impl Coordinator {
 
         let cluster = self
             .catalog()
-            .resolve_target_cluster(target_cluster, session)?;
+            .resolve_target_cluster(target_cluster, ctx.session())?;
         let cluster_id = cluster.id;
 
-        let target_replica_name = session.vars().cluster_replica();
+        let target_replica_name = ctx.session().vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
                 cluster.replica_id_by_name.get(name).copied().ok_or(
@@ -2562,7 +2592,8 @@ impl Coordinator {
         if when == QueryWhen::Immediately {
             // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Subscribe)?;
+            ctx.session_mut()
+                .add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
         // Determine the frontier of updates to subscribe *from*.
@@ -2572,9 +2603,21 @@ impl Coordinator {
         let id_bundle = self
             .index_oracle(cluster_id)
             .sufficient_collections(&depends_on);
-        let timeline = self.validate_timeline_context(id_bundle.iter())?;
+        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
+            // If the from IDs are timestamp independent but the query contains temporal functions
+            // then the timeline context needs to be upgraded to timestamp dependent.
+            timeline = TimelineContext::TimestampDependent;
+        }
         let as_of = self
-            .determine_timestamp(session, &id_bundle, &when, cluster_id, &timeline, None)?
+            .determine_timestamp(
+                ctx.session(),
+                &id_bundle,
+                &when,
+                cluster_id,
+                &timeline,
+                None,
+            )?
             .timestamp_context
             .timestamp_or_default();
 
@@ -2606,12 +2649,12 @@ impl Coordinator {
                     .desc(
                         &self
                             .catalog()
-                            .resolve_full_name(from.name(), Some(session.conn_id())),
+                            .resolve_full_name(from.name(), Some(ctx.session().conn_id())),
                     )
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
                 let sink_id = self.allocate_transient_id()?;
-                let sink_desc = make_sink_desc(self, session, from_id, from_desc)?;
+                let sink_desc = make_sink_desc(self, ctx.session_mut(), from_id, from_desc)?;
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -2620,7 +2663,7 @@ impl Coordinator {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = make_sink_desc(self, session, id, desc)?;
+                let sink_desc = make_sink_desc(self, ctx.session_mut(), id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
@@ -2638,8 +2681,8 @@ impl Coordinator {
             .expect("subscribes have a single sink export");
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
-            user: session.user().clone(),
-            conn_id: session.conn_id().clone(),
+            user: ctx.session().user().clone(),
+            conn_id: ctx.session().conn_id().clone(),
             channel: tx,
             emit_progress,
             as_of,
@@ -2668,7 +2711,7 @@ impl Coordinator {
         }
 
         self.active_conns
-            .get_mut(session.conn_id())
+            .get_mut(ctx.session().conn_id())
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
@@ -2676,7 +2719,10 @@ impl Coordinator {
                 global_id: sink_id,
             });
 
-        let resp = ExecuteResponse::Subscribing { rx };
+        let resp = ExecuteResponse::Subscribing {
+            rx,
+            ctx_extra: std::mem::take(ctx.extra_mut()),
+        };
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -2686,34 +2732,136 @@ impl Coordinator {
         }
     }
 
-    pub(super) async fn sequence_explain(
+    pub(super) async fn sequence_explain_plan(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainPlanPlan,
         target_cluster: TargetCluster,
     ) {
-        match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(ctx, plan),
-            _ => {
-                let result = self
-                    .sequence_explain_plan(ctx.session_mut(), plan, target_cluster)
-                    .await;
-                ctx.retire(result);
+        let result = match plan.explainee {
+            Explainee::Query { .. } => {
+                let result = self.explain_query(&mut ctx, plan, target_cluster);
+                result.await
             }
-        }
+            Explainee::MaterializedView(_) => {
+                let result = self.explain_materialized_view(&mut ctx, plan);
+                result
+            }
+            Explainee::Index(_) => {
+                let result = self.explain_index(&mut ctx, plan);
+                result
+            }
+        };
+        ctx.retire(result);
     }
 
-    async fn sequence_explain_plan(
+    fn explain_materialized_view(
         &mut self,
-        session: &mut Session,
-        plan: plan::ExplainPlan,
+        ctx: &mut ExecuteContext,
+        plan: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            no_errors: _,
+            explainee,
+        } = plan;
+
+        let Explainee::MaterializedView(id) = explainee else {
+            // This is currently asserted in the `sequence_explain` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
+            // This is currently asserted in the planner. However, this
+            // assumption might change when we make changes for #18089.
+            unreachable!()
+        };
+
+        fn explain<T>(
+            mut plan: DataflowDescription<T>,
+            format: ExplainFormat,
+            config: &ExplainConfig,
+            humanizer: &dyn ExprHumanizer,
+        ) -> Result<String, AdapterError>
+        where
+            for<'a> Explainable<'a, DataflowDescription<T>>:
+                Explain<'a, Context = ExplainContext<'a>>,
+        {
+            // Collect the list of indexes used by the dataflow at this point.
+            let used_indexes = UsedIndexes::new(
+                plan
+                    .index_imports
+                    .iter()
+                    .map(|(id, index_import)| {
+                        (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
+                    })
+                    .collect(),
+            );
+
+            let context = ExplainContext {
+                config,
+                humanizer,
+                used_indexes,
+                finishing: None,
+                duration: Duration::default(),
+            };
+
+            Ok(Explainable::new(&mut plan).explain(&format, &context)?)
+        }
+
+        let explain = match stage {
+            ExplainStage::OptimizedPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
+                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                };
+                explain(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
+                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                };
+                explain(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
+    }
+
+    fn explain_index(
+        &mut self,
+        _ctx: &mut ExecuteContext,
+        _plan: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        coord_bail!("unsupported operation: explain_index");
+    }
+
+    async fn explain_query(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: plan::ExplainPlanPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use ExplainStage::*;
-
-        let plan::ExplainPlan {
-            raw_plan,
-            row_set_finishing,
+        let plan::ExplainPlanPlan {
             stage,
             format,
             config,
@@ -2721,26 +2869,27 @@ impl Coordinator {
             explainee,
         } = plan;
 
-        let cluster_id = {
-            let catalog = self.catalog();
-            let cluster = match explainee {
-                Explainee::Dataflow(_) => catalog.active_cluster(session)?,
-                Explainee::Query => catalog.resolve_target_cluster(target_cluster, session)?,
-            };
-            cluster.id
+        let Explainee::Query { raw_plan, row_set_finishing } = explainee else {
+            // This is currently asserted in the `sequence_explain` code that
+            // calls this method.
+            unreachable!()
         };
 
-        assert_ne!(stage, ExplainStage::Timestamp);
-
         let optimizer_trace = match stage {
-            Trace => OptimizerTrace::new(), // collect all trace entries
+            ExplainStage::Trace => OptimizerTrace::new(), // collect all trace entries
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
         let pipeline_result = {
-            self.sequence_explain_plan_pipeline(explainee, raw_plan, no_errors, cluster_id, session)
-                .with_subscriber(&optimizer_trace)
-                .await
+            self.explain_optimizer_pipeline(
+                raw_plan,
+                no_errors,
+                target_cluster,
+                ctx.session_mut(),
+                &row_set_finishing,
+            )
+            .with_subscriber(&optimizer_trace)
+            .await
         };
 
         let (used_indexes, fast_path_plan) = match pipeline_result {
@@ -2762,14 +2911,14 @@ impl Coordinator {
         let trace = optimizer_trace.drain_all(
             format,
             config,
-            self.catalog().for_session(session),
+            self.catalog().for_session(ctx.session()),
             row_set_finishing,
             used_indexes,
             fast_path_plan,
         )?;
 
         let rows = match stage {
-            Trace => {
+            ExplainStage::Trace => {
                 // For the `Trace` (pseudo-)stage, return the entire trace as (time,
                 // path, plan) triples.
                 let rows = trace
@@ -2804,17 +2953,17 @@ impl Coordinator {
             }
         };
 
-        Ok(send_immediate_rows(rows))
+        Ok(Self::send_immediate_rows(rows))
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn sequence_explain_plan_pipeline(
+    async fn explain_optimizer_pipeline(
         &mut self,
-        explainee: Explainee,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
-        cluster_id: mz_storage_client::types::instances::StorageInstanceId,
+        target_cluster: TargetCluster,
         session: &mut Session,
+        finishing: &Option<RowSetFinishing>,
     ) -> Result<(UsedIndexes, Option<FastPathPlan>), AdapterError> {
         use mz_repr::explain::trace_plan;
 
@@ -2839,10 +2988,10 @@ impl Coordinator {
             }
         }
 
-        let (explainee_id, is_oneshot) = match explainee {
-            Explainee::Dataflow(id) => (id, false),
-            Explainee::Query => (GlobalId::Explain, true),
-        };
+        let catalog = self.catalog();
+        let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        let explainee_id = GlobalId::Explain;
+        let is_oneshot = true;
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
@@ -2859,8 +3008,7 @@ impl Coordinator {
 
         let mut timeline_context =
             self.validate_timeline_context(decorrelated_plan.depends_on())?;
-        if matches!(explainee, Explainee::Query)
-            && matches!(timeline_context, TimelineContext::TimestampIndependent)
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && decorrelated_plan.contains_temporal()
         {
             // If the source IDs are timestamp independent but the query contains temporal functions,
@@ -2929,8 +3077,8 @@ impl Coordinator {
             )
         })?;
 
-        // Save the list of indexes used by the dataflow at this point
-        let used_indexes = UsedIndexes::new(
+        // Collect the list of indexes used by the dataflow at this point
+        let mut used_indexes = UsedIndexes::new(
             dataflow
                 .index_imports
                 .iter()
@@ -2941,37 +3089,30 @@ impl Coordinator {
         );
 
         // Determine if fast path plan will be used for this explainee.
-        //
-        // TODO: If we switch to a fast path plan here, that will currently use the same index
-        // in the same way as the slow path plan, so it's ok that we continue using the
-        // `used_indexes` that we saved above. But this still sounds a bit dangerous, so we should
-        // maybe recreate `used_indexes` here based on the `FastPathPlan` to avoid getting out of
-        // sync.
-        let fast_path_plan = match explainee {
-            Explainee::Query => {
-                dataflow.set_as_of(query_as_of);
-                let style = ExprPrepStyle::OneShot {
-                    logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
-                    session,
-                };
-                let state = self.catalog().state();
-                dataflow.visit_children(
-                    |r| prep_relation_expr(state, r, style),
-                    |s| prep_scalar_expr(state, s, style),
-                )?;
-                peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-            }
-            _ => None,
+        let fast_path_plan = {
+            dataflow.set_as_of(query_as_of);
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                session,
+            };
+            let state = self.catalog().state();
+            dataflow.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
+            )?;
+            peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain, finishing.as_ref())?
         };
 
-        if matches!(explainee, Explainee::Query) {
-            // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-            // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-            if let Some(as_of) = dataflow.as_of.as_ref() {
-                if !as_of.is_empty() {
-                    if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
-                        dataflow.until = timely::progress::Antichain::from_elem(next);
-                    }
+        if let Some(fast_path_plan) = &fast_path_plan {
+            used_indexes = fast_path_plan.used_indexes(finishing);
+        }
+
+        // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+        // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+        if let Some(as_of) = dataflow.as_of.as_ref() {
+            if !as_of.is_empty() {
+                if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
+                    dataflow.until = timely::progress::Antichain::from_elem(next);
                 }
             }
         }
@@ -2989,13 +3130,14 @@ impl Coordinator {
         Ok((used_indexes, fast_path_plan))
     }
 
-    fn sequence_explain_timestamp_begin(
+    pub fn sequence_explain_timestamp(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainTimestampPlan,
+        target_cluster: TargetCluster,
     ) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan),
+            self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
             ctx
         );
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
@@ -3048,7 +3190,8 @@ impl Coordinator {
     fn sequence_explain_timestamp_begin_inner(
         &mut self,
         session: &Session,
-        plan: plan::ExplainPlan,
+        plan: plan::ExplainTimestampPlan,
+        target_cluster: TargetCluster,
     ) -> Result<
         (
             ExplainFormat,
@@ -3059,14 +3202,14 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let plan::ExplainPlan {
-            raw_plan, format, ..
-        } = plan;
+        let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
-        let cluster = self.catalog().active_cluster(session)?;
+        let cluster = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, session)?;
         let id_bundle = self
             .index_oracle(cluster.id)
             .sufficient_collections(&source_ids);
@@ -3176,76 +3319,7 @@ impl Coordinator {
             explanation.to_string()
         };
         let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
-        Ok(send_immediate_rows(rows))
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn sequence_send_diffs(
-        session: &mut Session,
-        mut plan: plan::SendDiffsPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let affected_rows = {
-            let mut affected_rows = Diff::from(0);
-            let mut all_positive_diffs = true;
-            // If all diffs are positive, the number of affected rows is just the
-            // sum of all unconsolidated diffs.
-            for (_, diff) in plan.updates.iter() {
-                if *diff < 0 {
-                    all_positive_diffs = false;
-                    break;
-                }
-
-                affected_rows += diff;
-            }
-
-            if !all_positive_diffs {
-                // Consolidate rows. This is useful e.g. for an UPDATE where the row
-                // doesn't change, and we need to reflect that in the number of
-                // affected rows.
-                differential_dataflow::consolidation::consolidate(&mut plan.updates);
-
-                affected_rows = 0;
-                // With retractions, the number of affected rows is not the number
-                // of rows we see, but the sum of the absolute value of their diffs,
-                // e.g. if one row is retracted and another is added, the total
-                // number of rows affected is 2.
-                for (_, diff) in plan.updates.iter() {
-                    affected_rows += diff.abs();
-                }
-            }
-
-            usize::try_from(affected_rows).expect("positive isize must fit")
-        };
-        event!(
-            Level::TRACE,
-            affected_rows,
-            id = format!("{:?}", plan.id),
-            kind = format!("{:?}", plan.kind),
-            updates = plan.updates.len(),
-            returning = plan.returning.len(),
-        );
-
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
-            id: plan.id,
-            rows: plan.updates,
-        }]))?;
-        if !plan.returning.is_empty() {
-            let finishing = RowSetFinishing {
-                order_by: Vec::new(),
-                limit: None,
-                offset: 0,
-                project: (0..plan.returning[0].0.iter().count()).collect(),
-            };
-            return match finishing.finish(plan.returning, plan.max_result_size) {
-                Ok(rows) => Ok(send_immediate_rows(rows)),
-                Err(e) => Err(AdapterError::ResultSize(e)),
-            };
-        }
-        Ok(match plan.kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-            MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
-        })
+        Ok(Self::send_immediate_rows(rows))
     }
 
     pub(super) async fn sequence_insert(
@@ -3265,12 +3339,8 @@ impl Coordinator {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
-                    let result = Self::sequence_insert_constant(
-                        &catalog,
-                        ctx.session_mut(),
-                        plan.id,
-                        selection,
-                    );
+                    let result =
+                        Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
                     ctx.retire(result);
                 });
             }
@@ -3320,80 +3390,6 @@ impl Coordinator {
                     .await;
             }
         }
-    }
-
-    fn sequence_insert_constant(
-        catalog: &Catalog,
-        session: &mut Session,
-        id: GlobalId,
-        constants: MirRelationExpr,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // Insert can be queued, so we need to re-verify the id exists.
-        let desc = match catalog.try_get_entry(&id) {
-            Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
-            }
-            None => {
-                return Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                )))
-            }
-        };
-
-        match constants.as_const() {
-            Some((rows, ..)) => {
-                let rows = rows.clone()?;
-                for (row, _) in &rows {
-                    for (i, datum) in row.iter().enumerate() {
-                        desc.constraints_met(i, &datum)?;
-                    }
-                }
-                let diffs_plan = plan::SendDiffsPlan {
-                    id,
-                    updates: rows,
-                    kind: MutationKind::Insert,
-                    returning: Vec::new(),
-                    max_result_size: catalog.system_config().max_result_size(),
-                };
-                Self::sequence_send_diffs(session, diffs_plan)
-            }
-            None => panic!(
-                "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
-                constants
-            ),
-        }
-    }
-
-    pub(super) fn sequence_copy_rows(
-        &mut self,
-        mut ctx: ExecuteContext,
-        id: GlobalId,
-        columns: Vec<usize>,
-        rows: Vec<Row>,
-    ) {
-        let catalog = self.owned_catalog();
-        mz_ore::task::spawn(|| "coord::sequence_copy_rows", async move {
-            let conn_catalog = catalog.for_session(ctx.session());
-            let result: Result<_, AdapterError> =
-                mz_sql::plan::plan_copy_from(ctx.session().pcx(), &conn_catalog, id, columns, rows)
-                    .err_into()
-                    .and_then(|values| values.lower().err_into())
-                    .and_then(|values| {
-                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
-                            .optimize(values)
-                            .err_into()
-                    })
-                    .and_then(|values| {
-                        // Copied rows must always be constants.
-                        Self::sequence_insert_constant(
-                            &catalog,
-                            ctx.session_mut(),
-                            id,
-                            values.into_inner(),
-                        )
-                    });
-            ctx.retire(result);
-        });
     }
 
     /// ReadThenWrite is a plan whose writes depend on the results of a
@@ -3482,6 +3478,17 @@ impl Coordinator {
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
         let (tx, _, session, extra) = ctx.into_parts();
+        // We construct a new execute context for the peek, with a trivial (`Default::default()`)
+        // execution context, because this peek does not directly correspond to an execute,
+        // and so we don't need to take any action on its retirement.
+        // TODO[btv]: we might consider extending statement logging to log the inner
+        // statement separately, here. That would require us to plumb through the SQL of the inner statement,
+        // and mint a new "real" execution context here. We'd also have to add some logic to
+        // make sure such "sub-statements" are always sampled when the top-level statement is
+        //
+        // It's debatable whether this makes sense conceptually,
+        // because the inner fragment here is not actually a
+        // "statement" in its own right.
         let peek_ctx = ExecuteContext::from_parts(
             peek_client_tx,
             self.internal_cmd_tx.clone(),
@@ -3523,7 +3530,49 @@ impl Coordinator {
             };
             let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
             let timeout_dur = *ctx.session().vars().statement_timeout();
-            let arena = RowArena::new();
+            let make_diffs = move |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
+                let arena = RowArena::new();
+                // Use 2x row len incase there's some assignments.
+                let mut diffs = Vec::with_capacity(rows.len() * 2);
+                let mut datum_vec = mz_repr::DatumVec::new();
+                for row in rows {
+                    if !assignments.is_empty() {
+                        assert!(
+                            matches!(kind, MutationKind::Update),
+                            "only updates support assignments"
+                        );
+                        let mut datums = datum_vec.borrow_with(&row);
+                        let mut updates = vec![];
+                        for (idx, expr) in &assignments {
+                            let updated = match expr.eval(&datums, &arena) {
+                                Ok(updated) => updated,
+                                Err(e) => return Err(AdapterError::Unstructured(anyhow!(e))),
+                            };
+                            updates.push((*idx, updated));
+                        }
+                        for (idx, new_value) in updates {
+                            datums[idx] = new_value;
+                        }
+                        let updated = Row::pack_slice(&datums);
+                        diffs.push((updated, 1));
+                    }
+                    match kind {
+                        // Updates and deletes always remove the
+                        // current row. Updates will also add an
+                        // updated value.
+                        MutationKind::Update | MutationKind::Delete => diffs.push((row, -1)),
+                        MutationKind::Insert => diffs.push((row, 1)),
+                    }
+                }
+                for (row, diff) in &diffs {
+                    if *diff > 0 {
+                        for (idx, datum) in row.iter().enumerate() {
+                            desc.constraints_met(idx, &datum)?;
+                        }
+                    }
+                }
+                Ok(diffs)
+            };
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
                     future: batch,
@@ -3535,56 +3584,7 @@ impl Coordinator {
                     // clusters.
                     match tokio::time::timeout(timeout_dur, batch).await {
                         Ok(res) => match res {
-                            PeekResponseUnary::Rows(rows) => {
-                                |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
-                                    // Use 2x row len incase there's some assignments.
-                                    let mut diffs = Vec::with_capacity(rows.len() * 2);
-                                    let mut datum_vec = mz_repr::DatumVec::new();
-                                    for row in rows {
-                                        if !assignments.is_empty() {
-                                            assert!(
-                                                matches!(kind, MutationKind::Update),
-                                                "only updates support assignments"
-                                            );
-                                            let mut datums = datum_vec.borrow_with(&row);
-                                            let mut updates = vec![];
-                                            for (idx, expr) in &assignments {
-                                                let updated = match expr.eval(&datums, &arena) {
-                                                    Ok(updated) => updated,
-                                                    Err(e) => {
-                                                        return Err(AdapterError::Unstructured(
-                                                            anyhow!(e),
-                                                        ))
-                                                    }
-                                                };
-                                                updates.push((*idx, updated));
-                                            }
-                                            for (idx, new_value) in updates {
-                                                datums[idx] = new_value;
-                                            }
-                                            let updated = Row::pack_slice(&datums);
-                                            diffs.push((updated, 1));
-                                        }
-                                        match kind {
-                                            // Updates and deletes always remove the
-                                            // current row. Updates will also add an
-                                            // updated value.
-                                            MutationKind::Update | MutationKind::Delete => {
-                                                diffs.push((row, -1))
-                                            }
-                                            MutationKind::Insert => diffs.push((row, 1)),
-                                        }
-                                    }
-                                    for (row, diff) in &diffs {
-                                        if *diff > 0 {
-                                            for (idx, datum) in row.iter().enumerate() {
-                                                desc.constraints_met(idx, &datum)?;
-                                            }
-                                        }
-                                    }
-                                    Ok(diffs)
-                                }(rows)
-                            }
+                            PeekResponseUnary::Rows(rows) => make_diffs(rows),
                             PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
@@ -3605,6 +3605,7 @@ impl Coordinator {
                         }
                     }
                 }
+                ExecuteResponse::SendingRowsImmediate { rows, span: _ } => make_diffs(rows),
                 resp @ ExecuteResponse::Canceled => {
                     ctx.retire(Ok(resp));
                     return;
@@ -3701,7 +3702,7 @@ impl Coordinator {
 
             match diffs {
                 Ok(diffs) => {
-                    let result = Self::sequence_send_diffs(
+                    let result = Self::send_diffs(
                         ctx.session_mut(),
                         plan::SendDiffsPlan {
                             id,
@@ -4314,7 +4315,10 @@ impl Coordinator {
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
+                        DataSourceDesc::Source => (
+                            DataSource::Other(DataSourceOther::Source),
+                            source_status_collection_id,
+                        ),
                         o => {
                             unreachable!(
                                 "ALTER SOURCE...ADD SUBSOURCE only creates subsources but got {:?}",
@@ -4868,7 +4872,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_reassign_owned(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::ReassignOwnedPlan {
             old_roles,
             new_role,

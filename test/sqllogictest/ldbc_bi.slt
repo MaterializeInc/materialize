@@ -1,0 +1,4549 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The underlying LDBC SNB BI benchmark is under the Apache 2.0 license
+# as well; see materialize/test/ldbc-bi/LICENSE.txt.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive TO true;
+----
+COMPLETE 0
+
+######################################################################
+# TABLE DEFINITIONS
+######################################################################
+
+# PRIMARY KEY annotations (which are in the spec) are currently
+# removed from this slt, because we don't support them at the moment.
+# (Note that _in slts_ they are actually supported, but it's better to
+# match the plans of real runs more closely.)
+
+statement ok
+CREATE TABLE Organisation (
+    id bigint,
+    type text NOT NULL,
+    name text NOT NULL,
+    url text NOT NULL,
+    LocationPlaceId bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Organisation_id ON Organisation (id)
+
+statement ok
+CREATE TABLE Place (
+    id bigint,
+    name text NOT NULL,
+    url text NOT NULL,
+    type text NOT NULL,
+    PartOfPlaceId bigint -- null for continents
+)
+
+statement ok
+CREATE INDEX Place_id ON Place (id)
+
+statement ok
+CREATE TABLE Tag (
+    id bigint,
+    name text NOT NULL,
+    url text NOT NULL,
+    TypeTagClassId bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Tag_id ON Tag (id)
+
+statement ok
+CREATE INDEX Tag_name ON Tag (name)
+
+statement ok
+CREATE TABLE TagClass (
+    id bigint,
+    name text NOT NULL,
+    url text NOT NULL,
+    SubclassOfTagClassId bigint -- null for the root TagClass (Thing)
+)
+
+statement ok
+CREATE INDEX TagClass_id ON TagClass (id)
+
+statement ok
+CREATE INDEX TagClass_name ON TagClass (name)
+
+
+statement ok
+CREATE TABLE Comment (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint NOT NULL,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    content text NOT NULL,
+    length int NOT NULL,
+    CreatorPersonId bigint NOT NULL,
+    LocationCountryId bigint NOT NULL,
+    ParentPostId bigint,
+    ParentCommentId bigint
+)
+
+statement ok
+CREATE INDEX Comment_id ON Comment (id)
+
+statement ok
+CREATE TABLE Forum (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint,
+    title text NOT NULL,
+    ModeratorPersonId bigint -- can be null as its cardinality is 0..1
+)
+
+statement ok
+CREATE INDEX Forum_id ON Forum (id)
+
+statement ok
+CREATE TABLE Post (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint NOT NULL,
+    imageFile text,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    language text,
+    content text,
+    length int NOT NULL,
+    CreatorPersonId bigint NOT NULL,
+    ContainerForumId bigint NOT NULL,
+    LocationCountryId bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Post_id ON Post (id)
+
+statement ok
+CREATE TABLE Person (
+    creationDate timestamp with time zone NOT NULL,
+    id bigint,
+    firstName text NOT NULL,
+    lastName text NOT NULL,
+    gender text NOT NULL,
+    birthday date NOT NULL,
+    locationIP text NOT NULL,
+    browserUsed text NOT NULL,
+    LocationCityId bigint NOT NULL,
+    speaks text NOT NULL,
+    email text NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_id ON Person (id)
+
+statement ok
+CREATE TABLE Comment_hasTag_Tag (
+    creationDate timestamp with time zone NOT NULL,
+    CommentId bigint NOT NULL,
+    TagId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Post_hasTag_Tag (
+    creationDate timestamp with time zone NOT NULL,
+    PostId bigint NOT NULL,
+    TagId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Forum_hasMember_Person (
+    creationDate timestamp with time zone NOT NULL,
+    ForumId bigint NOT NULL,
+    PersonId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Forum_hasTag_Tag (
+    creationDate timestamp with time zone NOT NULL,
+    ForumId bigint NOT NULL,
+    TagId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Person_hasInterest_Tag (
+    creationDate timestamp with time zone NOT NULL,
+    PersonId bigint NOT NULL,
+    TagId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Person_likes_Comment (
+    creationDate timestamp with time zone NOT NULL,
+    PersonId bigint NOT NULL,
+    CommentId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Person_likes_Post (
+    creationDate timestamp with time zone NOT NULL,
+    PersonId bigint NOT NULL,
+    PostId bigint NOT NULL
+)
+
+statement ok
+CREATE TABLE Person_studyAt_University (
+    creationDate timestamp with time zone NOT NULL,
+    PersonId bigint NOT NULL,
+    UniversityId bigint NOT NULL,
+    classYear int NOT NULL
+)
+
+statement ok
+CREATE TABLE Person_workAt_Company (
+    creationDate timestamp with time zone NOT NULL,
+    PersonId bigint NOT NULL,
+    CompanyId bigint NOT NULL,
+    workFrom int NOT NULL
+)
+
+statement ok
+CREATE TABLE Person_knows_Person (
+    creationDate timestamp with time zone NOT NULL,
+    Person1id bigint NOT NULL,
+    Person2id bigint NOT NULL
+)
+
+statement ok
+CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
+
+######################################################################
+# VIEWS
+######################################################################
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Country AS
+    SELECT id, name, url, PartOfPlaceId AS PartOfContinentId
+    FROM Place
+    WHERE type = 'Country'
+
+statement ok
+CREATE INDEX Country_id ON Country (id)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW City AS
+    SELECT id, name, url, PartOfPlaceId AS PartOfCountryId
+    FROM Place
+    WHERE type = 'City'
+
+statement ok
+CREATE INDEX City_id ON City (id)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Company AS
+    SELECT id, name, url, LocationPlaceId AS LocatedInCountryId
+    FROM Organisation
+    WHERE type = 'Company'
+
+statement ok
+CREATE INDEX Company_id ON Company (id)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW University AS
+    SELECT id, name, url, LocationPlaceId AS LocatedInCityId
+    FROM Organisation
+    WHERE type = 'University'
+
+statement ok
+CREATE INDEX University_id ON University (id)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Message_hasTag_Tag AS
+  (SELECT creationDate, CommentId as MessageId, TagId FROM Comment_hasTag_Tag)
+  UNION
+  (SELECT creationDate, PostId as MessageId, TagId FROM Post_hasTag_Tag)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Person_likes_Message AS
+  (SELECT creationDate, PersonId, CommentId as MessageId FROM Person_likes_Comment)
+  UNION
+  (SELECT creationDate, PersonId, PostId as MessageId FROM Person_likes_Post)
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Message AS
+WITH MUTUALLY RECURSIVE
+  -- compute the transitive closure (with root information) using minimnal info
+  roots (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT id AS MessageId, id AS RootPostId, language AS RootPostLanguage, ContainerForumId, NULL::bigint AS ParentMessageId FROM Post
+     UNION SELECT
+              Comment.id AS MessageId,
+         ParentPostId AS RootPostId,
+         language AS RootPostLanguage,
+         Post.ContainerForumId AS ContainerForumId,
+         ParentPostId AS ParentMessageId
+           FROM Comment
+       JOIN Post
+       ON Comment.ParentPostId = Post.id),
+  ms (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS
+    (      SELECT *
+           FROM roots
+     UNION SELECT
+              Comment.id AS MessageId,
+         ms.RootPostId AS RootPostId,
+         ms.RootPostLanguage AS RootPostLanguage,
+         ms.ContainerForumId AS ContainerForumId,
+         ParentCommentId AS ParentMessageId
+           FROM Comment
+       JOIN ms
+       ON ParentCommentId = ms.MessageId)
+  -- now do the late materialization
+  (     SELECT
+          creationDate,
+          id AS MessageId,
+          id AS RootPostId,
+          language AS RootPostLanguage,
+          content,
+          imageFile,
+          locationIP,
+          browserUsed,
+          length,
+          CreatorPersonId,
+          ContainerForumId,
+          LocationCountryId,
+          NULL::bigint AS ParentMessageId
+        FROM Post
+  UNION (SELECT
+          Comment.creationDate AS creationDate,
+          Comment.id AS MessageId,
+          ms.RootPostId AS RootPostId,
+          ms.RootPostLanguage AS RootPostLanguage,
+          Comment.content AS content,
+          NULL::text AS imageFile,
+          Comment.locationIP AS locationIP,
+          Comment.browserUsed AS browserUsed,
+          Comment.length AS length,
+          Comment.CreatorPersonId AS CreatorPersonId,
+          ms.ContainerForumId AS ContainerForumId,
+          Comment.LocationCountryId AS LocationCityId,
+          ms.ParentMessageId AS ParentMessageId
+    FROM Comment
+    JOIN ms
+    ON Comment.id = ms.MessageId))
+
+statement ok
+CREATE INDEX Message_MessageId ON Message (MessageId)
+
+statement ok
+CREATE INDEX Message_ParentMessageId ON Message (ParentMessageId)
+
+statement ok
+CREATE INDEX Message_CreatorPersonId ON Message (CreatorPersonId)
+
+statement ok
+CREATE INDEX Message_RootPostLanguage ON Message (RootPostLanguage)
+
+statement ok
+CREATE OR REPLACE VIEW Comment_View AS
+    SELECT creationDate, MessageId AS id, locationIP, browserUsed, content, length, CreatorPersonId, LocationCountryId, ParentMessageId
+    FROM Message
+    WHERE ParentMessageId IS NOT NULL
+
+statement ok
+CREATE OR REPLACE VIEW Post_View AS
+    SELECT creationDate, MessageId AS id, imageFile, locationIP, browserUsed, RootPostLanguage, content, length, CreatorPersonId, ContainerForumId, LocationCountryId
+    FROM Message
+    WHERE ParentMessageId IS NULL
+
+######################################################################
+# QUERY 01
+######################################################################
+
+# \set datetime '\'2010-06-11T09:21:46.000+00:00\'::TIMESTAMP'
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+  message_count AS (
+    SELECT 0.0 + count(*) AS cnt
+      FROM Message
+     WHERE creationDate < '2010-06-11T09:21:46.000+00:00'::TIMESTAMP
+)
+, message_prep AS (
+    SELECT extract(year from creationDate) AS messageYear
+         , ParentMessageId IS NOT NULL AS isComment
+         , CASE
+             WHEN length <  40 THEN 0 -- short
+             WHEN length <  80 THEN 1 -- one liner
+             WHEN length < 160 THEN 2 -- tweet
+             ELSE                   3 -- long
+           END AS lengthCategory
+         , length
+      FROM Message
+     WHERE creationDate < '2010-06-11T09:21:46.000+00:00'::TIMESTAMP
+       AND content IS NOT NULL
+)
+SELECT messageYear, isComment, lengthCategory
+     , count(*) AS messageCount
+     , avg(length::bigint) AS averageMessageLength
+     , sum(length::bigint) AS sumMessageLength
+     , count(*) / mc.cnt AS percentageOfMessages
+  FROM message_prep
+     , message_count mc
+ GROUP BY messageYear, isComment, lengthCategory, mc.cnt
+ ORDER BY messageYear DESC, isComment ASC, lengthCategory ASC
+----
+Explained Query:
+  Finish order_by=[#0 desc nulls_first, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#6]
+    Return // { arity: 7 }
+      Project (#0..=#2, #4, #7, #5, #8) // { arity: 7 }
+        Map ((#5 / bigint_to_numeric(case when (#6 = 0) then null else #6 end)), (bigint_to_numeric(#4) / #3)) // { arity: 9 }
+          Reduce group_by=[#1..=#4] aggregates=[count(*), sum(integer_to_bigint(#0)), count(integer_to_bigint(#0))] // { arity: 7 }
+            CrossJoin type=differential // { arity: 5 }
+              implementation
+                %1[×]U » %0:message[×]if
+              ArrangeBy keys=[[]] // { arity: 4 }
+                Project (#8, #13..=#15) // { arity: 4 }
+                  Filter (#0 < 2010-06-11 09:21:46 UTC) AND (#4) IS NOT NULL // { arity: 16 }
+                    Map (extract_year_tstz(#0), (#12) IS NOT NULL, case when (#8 < 40) then 0 else case when (#8 < 80) then 1 else case when (#8 < 160) then 2 else 3 end end end) // { arity: 16 }
+                      Get materialize.public.message // { arity: 13 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map ((0 + bigint_to_numeric(#0))) // { arity: 2 }
+                    Union // { arity: 1 }
+                      Get l0 // { arity: 1 }
+                      Map (0) // { arity: 1 }
+                        Union // { arity: 0 }
+                          Negate // { arity: 0 }
+                            Project () // { arity: 0 }
+                              Get l0 // { arity: 1 }
+                          Constant // { arity: 0 }
+                            - ()
+    With
+      cte l0 =
+        Reduce aggregates=[count(*)] // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 < 2010-06-11 09:21:46 UTC) // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.message_messageid (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 02
+######################################################################
+
+# \set date '\'2010-06-08\'::TIMESTAMP'
+# \set tagClass '\'ChristianBishop\''
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+MyTag AS (
+SELECT Tag.id AS id, Tag.name AS name
+  FROM TagClass
+  JOIN Tag
+    ON Tag.TypeTagClassId = TagClass.id
+ WHERE TagClass.name = 'ChristianBishop'
+),
+detail AS (
+SELECT t.id as TagId
+     , count(CASE WHEN Message.creationDate <  '2010-06-08'::TIMESTAMP + INTERVAL '100 days' THEN Message.MessageId ELSE NULL END) AS countMonth1
+     , count(CASE WHEN Message.creationDate >= '2010-06-08'::TIMESTAMP + INTERVAL '100 days' THEN Message.MessageId ELSE NULL END) AS countMonth2
+  FROM MyTag t
+  JOIN Message_hasTag_Tag
+         ON Message_hasTag_tag.TagId = t.id
+  JOIN Message
+    ON Message.MessageId = Message_hasTag_tag.MessageId
+   AND Message.creationDate >= '2010-06-08'::TIMESTAMP
+   AND Message.creationDate <  '2010-06-08'::TIMESTAMP + INTERVAL '200 days'
+ GROUP BY t.id
+)
+SELECT t.name AS "tag.name"
+     , coalesce(countMonth1, 0)
+     , coalesce(countMonth2, 0)
+     , abs(coalesce(countMonth1, 0)-coalesce(countMonth2, 0)) AS diff
+  FROM MyTag t LEFT JOIN detail ON t.id = detail.TagId
+ ORDER BY diff desc, t.name
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#3 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0..=#3]
+    Return // { arity: 4 }
+      Project (#0, #3..=#5) // { arity: 4 }
+        Map (coalesce(#1, 0), coalesce(#2, 0), abs((#3 - #4))) // { arity: 6 }
+          Union // { arity: 3 }
+            Map (null, null) // { arity: 3 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l2 // { arity: 3 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+            Get l2 // { arity: 3 }
+    With
+      cte l2 =
+        Project (#1, #3, #4) // { arity: 3 }
+          Join on=(#0 = #2) type=differential // { arity: 5 }
+            implementation
+              %1[#0]UKA » %0:l1[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l1 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 3 }
+              Reduce group_by=[#0] aggregates=[count(case when (#2 < 2010-09-16 00:00:00 UTC) then #1 else null end), count(case when (#2 >= 2010-09-16 00:00:00 UTC) then #1 else null end)] // { arity: 3 }
+                Project (#0, #1, #3) // { arity: 3 }
+                  Filter (#3 < 2010-12-25 00:00:00 UTC) AND (#3 >= 2010-06-08 00:00:00 UTC) // { arity: 16 }
+                    Join on=(#0 = #2 AND #1 = #4) type=differential // { arity: 16 }
+                      implementation
+                        %2:message[#1]KAiif » %1:message_hastag_tag[#0]Kiif » %0:l1[#0]Kiif
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Get l1 // { arity: 2 }
+                      ArrangeBy keys=[[#0]] // { arity: 2 }
+                        Project (#1, #2) // { arity: 2 }
+                          Get materialize.public.message_hastag_tag // { arity: 3 }
+                      ArrangeBy keys=[[#1]] // { arity: 13 }
+                        Get materialize.public.message // { arity: 13 }
+      cte l1 =
+        Filter (#0) IS NOT NULL // { arity: 2 }
+          Get l0 // { arity: 2 }
+      cte l0 =
+        Project (#5, #6) // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 8 }
+            Join on=(#0 = #7) type=differential // { arity: 8 }
+              implementation
+                %0:tagclass[#0]KAe » %1:tag[#2]Ke
+              ArrangeBy keys=[[#0]] // { arity: 5 }
+                ReadExistingIndex materialize.public.tagclass lookup_value=("ChristianBishop") // { arity: 5 }
+              ArrangeBy keys=[[#2]] // { arity: 3 }
+                Project (#0, #1, #3) // { arity: 3 }
+                  Get materialize.public.tag // { arity: 4 }
+
+Used Indexes:
+  - materialize.public.tag_id (*** full scan ***)
+  - materialize.public.tagclass_name (lookup)
+  - materialize.public.message_messageid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 03
+######################################################################
+
+# \set tagClass '\'Philosopher\''
+# \set country '\'China\''
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) SELECT Forum.id                AS "forum.id"
+     , Forum.title             AS "forum.title"
+     , Forum.creationDate      AS "forum.creationDate"
+     , Forum.ModeratorPersonId AS "person.id"
+     , count(Message.MessageId) AS messageCount
+FROM Message
+JOIN Forum
+  ON Forum.id = Message.ContainerForumId
+JOIN Person AS ModeratorPerson
+  ON ModeratorPerson.id = Forum.ModeratorPersonId
+JOIN City
+  ON City.id = ModeratorPerson.LocationCityId
+JOIN Country
+  ON Country.id = City.PartOfCountryId
+ AND Country.name = 'China'
+WHERE EXISTS (
+  SELECT 1
+    FROM TagClass
+    JOIN Tag
+      ON Tag.TypeTagClassId = TagClass.id
+    JOIN Message_hasTag_Tag
+      ON Message_hasTag_Tag.TagId = Tag.id
+   WHERE Message.MessageId = Message_hasTag_Tag.MessageId AND TagClass.name = 'Philosopher')
+GROUP BY Forum.id, Forum.title, Forum.creationDate, Forum.ModeratorPersonId
+ORDER BY messageCount DESC, Forum.id
+LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=20 output=[#0..=#4]
+    Reduce group_by=[#0, #2, #1, #3] aggregates=[count(*)] // { arity: 5 }
+      Project (#10, #13, #15, #16) // { arity: 4 }
+        Filter (#33 = "China") AND (#10) IS NOT NULL AND (#16) IS NOT NULL AND (#25) IS NOT NULL AND (#31) IS NOT NULL // { arity: 37 }
+          Join on=(#1 = #36 AND #10 = #14 AND #16 = #18 AND #25 = #28 AND #31 = #32) type=differential // { arity: 37 }
+            implementation
+              %5[#0]UKA » %0:message[#1]KA » %1:forum[#1]KA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
+            ArrangeBy keys=[[#1]] // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#1]] // { arity: 4 }
+              Get materialize.public.forum // { arity: 4 }
+            ArrangeBy keys=[[#1]] // { arity: 11 }
+              Get materialize.public.person // { arity: 11 }
+            ArrangeBy keys=[[#0]] // { arity: 4 }
+              Get materialize.public.city // { arity: 4 }
+            ArrangeBy keys=[[#0]] // { arity: 4 }
+              Get materialize.public.country // { arity: 4 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#7) // { arity: 1 }
+                  Filter (#0) IS NOT NULL // { arity: 9 }
+                    Join on=(#0 = #6 AND #5 = #8) type=differential // { arity: 9 }
+                      implementation
+                        %0:tagclass[#0]KAe » %1:tag[#1]Ke » %2:message_hastag_tag[#1]Ke
+                      ArrangeBy keys=[[#0]] // { arity: 5 }
+                        ReadExistingIndex materialize.public.tagclass lookup_value=("Philosopher") // { arity: 5 }
+                      ArrangeBy keys=[[#1]] // { arity: 2 }
+                        Project (#0, #3) // { arity: 2 }
+                          Filter (#0) IS NOT NULL // { arity: 4 }
+                            Get materialize.public.tag // { arity: 4 }
+                      ArrangeBy keys=[[#1]] // { arity: 2 }
+                        Project (#1, #2) // { arity: 2 }
+                          Get materialize.public.message_hastag_tag // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.tag_id (*** full scan ***)
+  - materialize.public.tagclass_name (lookup)
+  - materialize.public.forum_id (differential join)
+  - materialize.public.person_id (differential join)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (differential join)
+  - materialize.public.message_messageid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 04
+######################################################################
+
+# \set date '\'2010-02-12\''::timestamp
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW Top100PopularForumsQ04 AS
+  SELECT
+    T.id AS id,
+    Forum.creationdate AS creationDate,
+    T.maxNumberOfMembers AS maxNumberOfMembers
+  FROM (SELECT
+          ForumId AS id,
+          MAX(numberOfMembers) AS maxNumberOfMembers
+        FROM (SELECT
+                Forum_hasMember_Person.ForumId AS ForumId,
+                count(Person.id) AS numberOfMembers,
+                City.PartOfCountryId AS CountryId
+              FROM Forum_hasMember_Person
+              JOIN Person
+              ON Person.id = Forum_hasMember_Person.PersonId
+              JOIN City
+              ON City.id = Person.LocationCityId
+              GROUP BY City.PartOfCountryId, Forum_hasMember_Person.ForumId)
+              ForumMembershipPerCountry
+        GROUP BY ForumId) T, Forum
+  WHERE T.id = Forum.id
+
+statement ok
+CREATE INDEX Top100PopularForumsQ04_id ON Top100PopularForumsQ04 (id);
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+  Top100_Popular_Forums AS (
+    SELECT id, creationDate, maxNumberOfMembers
+    FROM Top100PopularForumsQ04
+    WHERE creationDate > '2010-02-12'::timestamp
+    ORDER BY maxNumberOfMembers DESC, id
+    LIMIT 100
+  ),
+  au AS (
+    SELECT *
+    FROM Person
+    WHERE EXISTS (SELECT 1
+          FROM Top100_Popular_Forums
+          INNER JOIN Forum_hasMember_Person
+                  ON Forum_hasMember_Person.ForumId = Top100_Popular_Forums.id
+          WHERE Forum_hasMember_Person.PersonId = Person.id)
+  ),
+  Top100_Message AS (
+    SELECT MessageId,
+           CreatorPersonId
+    FROM Message
+    WHERE Message.ContainerForumId IN (SELECT id FROM Top100_Popular_Forums)
+  )
+
+SELECT au.id AS "person.id"
+     , au.firstName AS "person.firstName"
+     , au.lastName AS "person.lastName"
+     , au.creationDate
+     -- a single person might be member of more than 1 of the top100 forums, so their messages should be DISTINCT counted
+     , COUNT(Top100_Message.MessageId) AS messageCount
+FROM      au
+LEFT JOIN Top100_Message
+       ON au.id = Top100_Message.CreatorPersonId
+GROUP BY au.id, au.firstName, au.lastName, au.creationDate
+ORDER BY messageCount DESC, au.id
+LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0..=#4]
+    Return // { arity: 5 }
+      Reduce group_by=[#1..=#3, #0] aggregates=[count(#4)] // { arity: 5 }
+        Union // { arity: 5 }
+          Map (null) // { arity: 5 }
+            Union // { arity: 4 }
+              Negate // { arity: 4 }
+                Project (#0..=#3) // { arity: 4 }
+                  Join on=(#1 = #4) type=differential // { arity: 5 }
+                    implementation
+                      %1[#0]UKA » %0:l2[#1]K
+                    Get l2 // { arity: 4 }
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#1) // { arity: 1 }
+                          Get l3 // { arity: 5 }
+              Get l1 // { arity: 4 }
+          Get l3 // { arity: 5 }
+    With
+      cte l3 =
+        Project (#0..=#3, #5) // { arity: 5 }
+          Join on=(#1 = #13 AND eq(#14, #17, #18)) type=differential // { arity: 19 }
+            implementation
+              %0:l2[#1]K » %1:message[#9]KA » %2[#0]UKA » %3[#0]UKA
+            Get l2 // { arity: 4 }
+            ArrangeBy keys=[[#9]] // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#10) // { arity: 1 }
+                  Filter (#10) IS NOT NULL // { arity: 13 }
+                    Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Get l0 // { arity: 1 }
+      cte l2 =
+        ArrangeBy keys=[[#1]] // { arity: 4 }
+          Get l1 // { arity: 4 }
+      cte l1 =
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(eq(#1, #11, #12)) type=delta // { arity: 13 }
+            implementation
+              %0:person » %1[#0]UKA » %2[#0]UKA
+              %1 » %2[#0]UKA » %0:person[#1]KA
+              %2 » %1[#0]UKA » %0:person[#1]KA
+            ArrangeBy keys=[[#1]] // { arity: 11 }
+              Get materialize.public.person // { arity: 11 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Filter (#1) IS NOT NULL // { arity: 11 }
+                    Get materialize.public.person // { arity: 11 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#2) // { arity: 1 }
+                  Join on=(#0 = #1) type=differential // { arity: 3 }
+                    implementation
+                      %0:l0[#0]K » %1:forum_hasmember_person[#0]K
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Get l0 // { arity: 1 }
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Project (#1, #2) // { arity: 2 }
+                        Get materialize.public.forum_hasmember_person // { arity: 3 }
+      cte l0 =
+        Project (#0) // { arity: 1 }
+          TopK order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 // { arity: 2 }
+            Project (#0, #2) // { arity: 2 }
+              Filter (#1 > 2010-02-12 00:00:00 UTC) // { arity: 3 }
+                Get materialize.public.top100popularforumsq04 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***, delta join 1st input (full scan))
+  - materialize.public.message_messageid (*** full scan ***)
+  - materialize.public.message_creatorpersonid (differential join)
+  - materialize.public.top100popularforumsq04_id (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 05
+######################################################################
+
+# \set tag '\'Sikh_Empire\''
+
+# TODO(mgree) predicate push down anomaly on Tag.name
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH detail AS (
+SELECT Message.CreatorPersonId AS CreatorPersonId
+     , sum(coalesce(Cs.c, 0))  AS replyCount
+     , sum(coalesce(Plm.c, 0)) AS likeCount
+     , count(Message.MessageId) AS messageCount
+  FROM Tag
+  JOIN Message_hasTag_Tag
+    ON Message_hasTag_Tag.TagId = Tag.id
+  JOIN Message
+    ON Message.MessageId = Message_hasTag_Tag.MessageId
+  LEFT JOIN (SELECT ParentMessageId, count(*) FROM Message c WHERE ParentMessageId IS NOT NULL GROUP BY ParentMessageId) Cs(id, c) ON Cs.id = Message.MessageId
+  LEFT JOIN (SELECT MessageId, count(*) FROM Person_likes_Message GROUP BY MessageId) Plm(id, c) ON Plm.id = Message.MessageId
+ WHERE Tag.name = 'Sikh_Empire'
+ GROUP BY Message.CreatorPersonId
+)
+SELECT CreatorPersonId AS "person.id"
+     , replyCount
+     , likeCount
+     , messageCount
+     , 1*messageCount + 2*replyCount + 10*likeCount AS score
+  FROM detail
+ ORDER BY score DESC, CreatorPersonId
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0..=#4]
+    Return // { arity: 5 }
+      Map (((bigint_to_numeric((1 * #3)) + (2 * #1)) + (10 * #2))) // { arity: 5 }
+        Reduce group_by=[#0] aggregates=[sum(coalesce(#1, 0)), sum(coalesce(#2, 0)), count(*)] // { arity: 4 }
+          Union // { arity: 3 }
+            Map (null) // { arity: 3 }
+              Union // { arity: 2 }
+                Negate // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Get l3 // { arity: 3 }
+                Project (#1, #2) // { arity: 2 }
+                  Get l2 // { arity: 3 }
+            Get l3 // { arity: 3 }
+    With
+      cte l3 =
+        Project (#1, #2, #4) // { arity: 3 }
+          Join on=(#0 = #3) type=differential // { arity: 5 }
+            implementation
+              %1[#0]UKA » %0:l2[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 3 }
+              Get l2 // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#2) // { arity: 1 }
+                  Get materialize.public.person_likes_message // { arity: 3 }
+      cte l2 =
+        Union // { arity: 3 }
+          Map (null) // { arity: 3 }
+            Union // { arity: 2 }
+              Negate // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Get l1 // { arity: 3 }
+              Get l0 // { arity: 2 }
+          Get l1 // { arity: 3 }
+      cte l1 =
+        Project (#0, #1, #3) // { arity: 3 }
+          Join on=(#0 = #2) type=differential // { arity: 4 }
+            implementation
+              %1[#0]UKA » %0:l0[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l0 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#12) // { arity: 1 }
+                  Filter (#12) IS NOT NULL // { arity: 13 }
+                    Get materialize.public.message // { arity: 13 }
+      cte l0 =
+        Project (#5, #16) // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 20 }
+            Join on=(#0 = #6 AND #5 = #8) type=differential // { arity: 20 }
+              implementation
+                %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
+              ArrangeBy keys=[[#0]] // { arity: 5 }
+                ReadExistingIndex materialize.public.tag lookup_value=("Sikh_Empire") // { arity: 5 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.message_hastag_tag // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (*** full scan ***, differential join)
+
+EOF
+
+######################################################################
+# QUERY 06
+######################################################################
+
+# \set tag '\'Bob_Geldof\''
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW PopularityScoreQ06 AS
+  SELECT
+      message2.CreatorPersonId AS person2id,
+      count(*) AS popularityScore
+  FROM Message message2
+  JOIN Person_likes_Message like2
+      ON like2.MessageId = message2.MessageId
+  GROUP BY message2.CreatorPersonId;
+
+statement ok
+CREATE INDEX PopularityScoreQ06_person2id ON PopularityScoreQ06 (person2id);
+
+# rewritten query to manually push filter down
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH applicable_posts AS (
+       SELECT message1.MessageId,
+              message1.CreatorPersonId AS person1id
+         FROM Tag
+         JOIN Message_hasTag_Tag
+           ON Message_hasTag_Tag.TagId = Tag.id
+         JOIN Message message1
+           ON message1.MessageId = Message_hasTag_Tag.MessageId
+        WHERE Tag.name = 'Bob_Geldof'
+     ),
+     poster_w_liker AS (
+        SELECT DISTINCT
+            message1.person1id,
+            like2.PersonId AS person2id
+        FROM applicable_posts message1
+        LEFT JOIN Person_likes_Message like2
+               ON like2.MessageId = message1.MessageId
+           -- we don't need the Person itself as its ID is in the like
+    )
+SELECT pl.person1id AS "person1.id",
+       sum(coalesce(ps.popularityScore, 0)) AS authorityScore
+FROM poster_w_liker pl
+LEFT JOIN PopularityScoreQ06 ps
+         ON ps.person2id = pl.person2id
+GROUP BY pl.person1id
+ORDER BY authorityScore DESC, pl.person1id ASC
+LIMIT 100
+;
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[sum(coalesce(#1, 0))] // { arity: 2 }
+        Union // { arity: 2 }
+          Map (null) // { arity: 2 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l4 // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Get l3 // { arity: 2 }
+          Get l4 // { arity: 2 }
+    With
+      cte l4 =
+        Project (#0, #3) // { arity: 2 }
+          Join on=(#1 = #2) type=differential // { arity: 4 }
+            implementation
+              %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Filter (#1) IS NOT NULL // { arity: 2 }
+                Get l3 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.popularityscoreq06 // { arity: 2 }
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Union // { arity: 2 }
+            Map (null) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Join on=(#0 = #2) type=differential // { arity: 3 }
+                      implementation
+                        %1[#0]UKA » %0:l1[#0]K
+                      Get l1 // { arity: 2 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Distinct group_by=[#0] // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            Get l2 // { arity: 3 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+            Project (#1, #2) // { arity: 2 }
+              Get l2 // { arity: 3 }
+      cte l2 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#0 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l1[#0]K » %1:person_likes_message[#1]K
+            Get l1 // { arity: 2 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
+                Get materialize.public.person_likes_message // { arity: 3 }
+      cte l1 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get l0 // { arity: 2 }
+      cte l0 =
+        Project (#5, #16) // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 20 }
+            Join on=(#0 = #6 AND #5 = #8) type=differential // { arity: 20 }
+              implementation
+                %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
+              ArrangeBy keys=[[#0]] // { arity: 5 }
+                ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.message_hastag_tag // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.popularityscoreq06_person2id (differential join)
+
+EOF
+
+
+# Gábor's version, yields identical output
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH poster_w_liker AS (
+        SELECT DISTINCT
+            message1.CreatorPersonId AS person1id,
+            like2.PersonId AS person2id
+        FROM (SELECT id FROM Tag WHERE Tag.name = 'Bob_Geldof') AS Tag_filtered
+        JOIN Message_hasTag_Tag
+          ON Message_hasTag_Tag.TagId = Tag_filtered.id
+        JOIN Message message1
+          ON message1.MessageId = Message_hasTag_Tag.MessageId
+        LEFT JOIN Person_likes_Message like2
+               ON like2.MessageId = message1.MessageId
+           -- we don't need the Person itself as its ID is in the like
+    )
+SELECT pl.person1id AS "person1.id",
+       sum(coalesce(ps.popularityScore, 0)) AS authorityScore
+FROM poster_w_liker pl
+LEFT JOIN PopularityScoreQ06 ps
+         ON ps.person2id = pl.person2id
+GROUP BY pl.person1id
+ORDER BY authorityScore DESC, pl.person1id ASC
+LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[sum(coalesce(#1, 0))] // { arity: 2 }
+        Union // { arity: 2 }
+          Map (null) // { arity: 2 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l4 // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Get l3 // { arity: 2 }
+          Get l4 // { arity: 2 }
+    With
+      cte l4 =
+        Project (#0, #3) // { arity: 2 }
+          Join on=(#1 = #2) type=differential // { arity: 4 }
+            implementation
+              %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Filter (#1) IS NOT NULL // { arity: 2 }
+                Get l3 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.popularityscoreq06 // { arity: 2 }
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Union // { arity: 2 }
+            Map (null) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Join on=(#0 = #2) type=differential // { arity: 3 }
+                      implementation
+                        %1[#0]UKA » %0:l1[#0]K
+                      Get l1 // { arity: 2 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Distinct group_by=[#0] // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            Get l2 // { arity: 3 }
+                Project (#1) // { arity: 1 }
+                  Get l0 // { arity: 2 }
+            Project (#1, #2) // { arity: 2 }
+              Get l2 // { arity: 3 }
+      cte l2 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#0 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l1[#0]K » %1:person_likes_message[#1]K
+            Get l1 // { arity: 2 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
+                Get materialize.public.person_likes_message // { arity: 3 }
+      cte l1 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get l0 // { arity: 2 }
+      cte l0 =
+        Project (#5, #16) // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 20 }
+            Join on=(#0 = #6 AND #5 = #8) type=differential // { arity: 20 }
+              implementation
+                %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
+              ArrangeBy keys=[[#0]] // { arity: 5 }
+                ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.message_hastag_tag // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.popularityscoreq06_person2id (differential join)
+
+EOF
+
+# TODO(mgree) predicate push down anomaly on Tag.name
+# original umbra query
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH poster_w_liker AS (
+        SELECT DISTINCT
+            message1.CreatorPersonId AS person1id,
+            like2.PersonId AS person2id
+        FROM Tag
+        JOIN Message_hasTag_Tag
+          ON Message_hasTag_Tag.TagId = Tag.id
+        JOIN Message message1
+          ON message1.MessageId = Message_hasTag_Tag.MessageId
+        LEFT JOIN Person_likes_Message like2
+               ON like2.MessageId = message1.MessageId
+           -- we don't need the Person itself as its ID is in the like
+         WHERE Tag.name = 'Bob_Geldof'
+    )
+SELECT pl.person1id AS "person1.id",
+       sum(coalesce(ps.popularityScore, 0)) AS authorityScore
+FROM poster_w_liker pl
+LEFT JOIN PopularityScoreQ06 ps
+         ON ps.person2id = pl.person2id
+GROUP BY pl.person1id
+ORDER BY authorityScore DESC, pl.person1id ASC
+LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[sum(coalesce(#1, 0))] // { arity: 2 }
+        Union // { arity: 2 }
+          Map (null) // { arity: 2 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l4 // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Get l3 // { arity: 2 }
+          Get l4 // { arity: 2 }
+    With
+      cte l4 =
+        Project (#0, #3) // { arity: 2 }
+          Join on=(#1 = #2) type=differential // { arity: 4 }
+            implementation
+              %1:popularityscoreq06[#0]UKA » %0:l3[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Filter (#1) IS NOT NULL // { arity: 2 }
+                Get l3 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get materialize.public.popularityscoreq06 // { arity: 2 }
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Union // { arity: 2 }
+            Map (null) // { arity: 2 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Join on=(#0 = #2) type=differential // { arity: 3 }
+                      implementation
+                        %1[#0]UKA » %0:l2[#0]Kef
+                      ArrangeBy keys=[[#0]] // { arity: 2 }
+                        Project (#1, #2) // { arity: 2 }
+                          Get l2 // { arity: 3 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Distinct group_by=[#0] // { arity: 1 }
+                          Project (#1) // { arity: 1 }
+                            Get l1 // { arity: 4 }
+                Project (#2) // { arity: 1 }
+                  Get l2 // { arity: 3 }
+            Project (#2, #3) // { arity: 2 }
+              Filter (#0 = "Bob_Geldof") // { arity: 4 }
+                Get l1 // { arity: 4 }
+      cte l2 =
+        Filter (#0 = "Bob_Geldof") // { arity: 3 }
+          Get l0 // { arity: 3 }
+      cte l1 =
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(#1 = #4) type=differential // { arity: 5 }
+            implementation
+              %0:l0[#1]K » %1:person_likes_message[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 3 }
+              Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
+                Get materialize.public.person_likes_message // { arity: 3 }
+      cte l0 =
+        Project (#1, #4, #15) // { arity: 3 }
+          Filter (#0) IS NOT NULL // { arity: 19 }
+            Join on=(#0 = #5 AND #4 = #7) type=differential // { arity: 19 }
+              implementation
+                %0:tag[#0]KA » %1:message_hastag_tag[#1]K » %2:message[#1]KA
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.tag // { arity: 4 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.message_hastag_tag // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.tag_id (differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.popularityscoreq06_person2id (differential join)
+
+EOF
+
+######################################################################
+# QUERY 07
+######################################################################
+
+# \set tag '\'Slovenia\''
+
+# TODO(mgree) predicate push down anomaly on Tag.name
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH MyMessage AS (
+  SELECT m.MessageId
+  FROM Message_hasTag_Tag m, Tag
+  WHERE Tag.name = 'Slovenia' and m.TagId = Tag.Id
+)
+SELECT RelatedTag.name AS "relatedTag.name"
+     , count(*) AS count
+  FROM MyMessage ParentMessage_HasTag_Tag
+  -- as an optimization, we don't need message here as it's ID is in ParentMessage_HasTag_Tag
+  -- so proceed to the comment directly
+  INNER JOIN Message Comment
+          ON ParentMessage_HasTag_Tag.MessageId = Comment.ParentMessageId
+  -- comment's tag
+  LEFT  JOIN Message_hasTag_Tag ct
+          ON Comment.MessageId = ct.MessageId
+  INNER JOIN Tag RelatedTag
+          ON RelatedTag.id = ct.TagId
+ WHERE TRUE
+  -- comment doesn't have the given tag
+   AND Comment.MessageId NOT In (SELECT MessageId FROM MyMessage)
+   AND Comment.ParentMessageId IS NOT NULL
+ GROUP BY RelatedTag.Name
+ ORDER BY count DESC, RelatedTag.name
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Join on=(#0 = #2) type=differential // { arity: 3 }
+            implementation
+              %0:l2[#0]K » %1[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l2 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Join on=(#0 = #1) type=differential // { arity: 2 }
+                      implementation
+                        %0:l3[#0]UKA » %1[#0]UKA
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Get l3 // { arity: 1 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Distinct group_by=[#0] // { arity: 1 }
+                          Get l1 // { arity: 1 }
+                Get l3 // { arity: 1 }
+    With
+      cte l3 =
+        Distinct group_by=[#0] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get l2 // { arity: 2 }
+      cte l2 =
+        Project (#2, #17) // { arity: 2 }
+          Filter (#0) IS NOT NULL AND (#15) IS NOT NULL // { arity: 20 }
+            Join on=(#0 = #13 AND #2 = #14 AND #15 = #16) type=differential // { arity: 20 }
+              implementation
+                %1:message[#12]KA » %0:l1[#0]K » %2:l0[#0]K » %3:tag[#0]KA
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Get l1 // { arity: 1 }
+              ArrangeBy keys=[[#12]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Get l0 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.tag // { arity: 4 }
+      cte l1 =
+        Project (#0) // { arity: 1 }
+          Filter (#1) IS NOT NULL // { arity: 7 }
+            Join on=(#1 = #2) type=differential // { arity: 7 }
+              implementation
+                %1:tag[#0]KAe » %0:l0[#1]Ke
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Get l0 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 5 }
+                ReadExistingIndex materialize.public.tag lookup_value=("Slovenia") // { arity: 5 }
+      cte l0 =
+        Project (#1, #2) // { arity: 2 }
+          Get materialize.public.message_hastag_tag // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.tag_id (differential join)
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_parentmessageid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 08
+######################################################################
+
+# \set tag '\'Abbas_I_of_Persia\''
+# \set startDate '\'2010-06-14\''::timestamp
+# \set endDate '\'2010-06-28\''::timestamp
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH Person_interested_in_Tag AS (
+    SELECT Person.id AS PersonId
+      FROM Person
+      JOIN Person_hasInterest_Tag
+        ON Person_hasInterest_Tag.PersonId = Person.id
+      JOIN Tag
+        ON Tag.id = Person_hasInterest_Tag.TagId
+       AND Tag.name = 'Abbas_I_of_Persia'
+)
+   , Person_Message_score AS (
+    SELECT Person.id AS PersonId
+         , count(*) AS message_score
+      FROM Tag
+      JOIN Message_hasTag_Tag
+        ON Message_hasTag_Tag.TagId = Tag.id
+      JOIN Message
+        ON Message_hasTag_Tag.MessageId = Message.MessageId
+       AND '2010-06-14'::TIMESTAMP < Message.creationDate
+      JOIN Person
+        ON Person.id = Message.CreatorPersonId
+     WHERE Tag.name = 'Abbas_I_of_Persia'
+       AND Message.creationDate < '2010-06-28'::TIMESTAMP
+     GROUP BY Person.id
+)
+   , Person_score AS (
+    SELECT coalesce(Person_interested_in_Tag.PersonId, pms.PersonId) AS PersonId
+         , CASE WHEN Person_interested_in_Tag.PersonId IS NULL then 0 ELSE 100 END -- scored from interest in the given tag
+         + coalesce(pms.message_score, 0) AS score
+      FROM Person_interested_in_Tag
+           FULL JOIN Person_Message_score pms
+                  ON Person_interested_in_Tag.PersonId = pms.PersonId
+)
+SELECT p.PersonId AS "person.id"
+     , p.score AS score
+     , coalesce(sum(f.score), 0) AS friendsScore
+  FROM Person_score p
+  LEFT JOIN Person_knows_Person
+    ON Person_knows_Person.Person1Id = p.PersonId
+  LEFT JOIN Person_score f -- the friend
+    ON f.PersonId = Person_knows_Person.Person2Id
+ GROUP BY p.PersonId, p.score
+ ORDER BY p.score + coalesce(sum(f.score), 0) DESC, p.PersonId
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1, #3]
+    Return // { arity: 5 }
+      Map (coalesce(#2, 0), (bigint_to_numeric(#1) + #3)) // { arity: 5 }
+        Reduce group_by=[#0, #1] aggregates=[sum(#2)] // { arity: 3 }
+          Union // { arity: 3 }
+            Map (null) // { arity: 3 }
+              Union // { arity: 2 }
+                Negate // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Join on=(#2 = #3) type=differential // { arity: 4 }
+                      implementation
+                        %1[#0]UKA » %0:l10[#2]K
+                      ArrangeBy keys=[[#2]] // { arity: 3 }
+                        Get l10 // { arity: 3 }
+                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                        Distinct group_by=[#0] // { arity: 1 }
+                          Project (#2) // { arity: 1 }
+                            Get l11 // { arity: 4 }
+                Project (#0, #1) // { arity: 2 }
+                  Get l10 // { arity: 3 }
+            Project (#0, #1, #3) // { arity: 3 }
+              Get l11 // { arity: 4 }
+    With
+      cte l11 =
+        Project (#0..=#2, #4) // { arity: 4 }
+          Join on=(#2 = #3) type=differential // { arity: 5 }
+            implementation
+              %0:l10[#2]K » %1:l8[#0]K
+            ArrangeBy keys=[[#2]] // { arity: 3 }
+              Filter (#2) IS NOT NULL // { arity: 3 }
+                Get l10 // { arity: 3 }
+            Get l8 // { arity: 2 }
+      cte l10 =
+        Union // { arity: 3 }
+          Map (null) // { arity: 3 }
+            Union // { arity: 2 }
+              Negate // { arity: 2 }
+                Project (#0, #1) // { arity: 2 }
+                  Join on=(#0 = #2) type=differential // { arity: 3 }
+                    implementation
+                      %1[#0]UKA » %0:l7[#0]K
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Get l7 // { arity: 2 }
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Get l9 // { arity: 3 }
+              Get l7 // { arity: 2 }
+          Get l9 // { arity: 3 }
+      cte l9 =
+        Project (#0, #1, #3) // { arity: 3 }
+          Join on=(#0 = #2) type=differential // { arity: 4 }
+            implementation
+              %0:l8[#0]K » %1:person_knows_person[#0]K
+            Get l8 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
+                Get materialize.public.person_knows_person // { arity: 3 }
+      cte l8 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get l7 // { arity: 2 }
+      cte l7 =
+        Project (#3, #4) // { arity: 2 }
+          Map (coalesce(#0, #1), (integer_to_bigint(case when (#0) IS NULL then 0 else 100 end) + coalesce(#2, 0))) // { arity: 5 }
+            Union // { arity: 3 }
+              Project (#2, #0, #1) // { arity: 3 }
+                Map (null) // { arity: 3 }
+                  Union // { arity: 2 }
+                    Negate // { arity: 2 }
+                      Project (#0, #1) // { arity: 2 }
+                        Join on=(#0 = #2) type=differential // { arity: 3 }
+                          implementation
+                            %0:l4[#0]UKA » %1[#0]UKA
+                          Get l4 // { arity: 2 }
+                          ArrangeBy keys=[[#0]] // { arity: 1 }
+                            Distinct group_by=[#0] // { arity: 1 }
+                              Get l6 // { arity: 1 }
+                    Get l3 // { arity: 2 }
+              Map (null, null) // { arity: 3 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Get l6 // { arity: 1 }
+                  Get l2 // { arity: 1 }
+              Project (#0, #0, #1) // { arity: 3 }
+                Get l5 // { arity: 2 }
+      cte l6 =
+        Project (#0) // { arity: 1 }
+          Get l5 // { arity: 2 }
+      cte l5 =
+        Project (#0, #2) // { arity: 2 }
+          Join on=(#0 = #1) type=differential // { arity: 3 }
+            implementation
+              %1:l4[#0]UKA » %0:l2[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Get l2 // { arity: 1 }
+            Get l4 // { arity: 2 }
+      cte l4 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get l3 // { arity: 2 }
+      cte l3 =
+        Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+          Project (#16) // { arity: 1 }
+            Filter (#7 < 2010-06-28 00:00:00 UTC) AND (2010-06-14 00:00:00 UTC < #7) AND (#0) IS NOT NULL AND (#16) IS NOT NULL // { arity: 31 }
+              Join on=(#0 = #6 AND #5 = #8 AND #16 = #21) type=differential // { arity: 31 }
+                implementation
+                  %0:l1[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAeiif » %3:l0[#1]KAeiif
+                Get l1 // { arity: 5 }
+                ArrangeBy keys=[[#1]] // { arity: 2 }
+                  Project (#1, #2) // { arity: 2 }
+                    Get materialize.public.message_hastag_tag // { arity: 3 }
+                ArrangeBy keys=[[#1]] // { arity: 13 }
+                  Get materialize.public.message // { arity: 13 }
+                Get l0 // { arity: 11 }
+      cte l2 =
+        Project (#1) // { arity: 1 }
+          Filter (#1) IS NOT NULL AND (#12) IS NOT NULL // { arity: 18 }
+            Join on=(#1 = #11 AND #12 = #13) type=differential // { arity: 18 }
+              implementation
+                %2:l1[#0]KAe » %1:person_hasinterest_tag[#1]Ke » %0:l0[#1]KAe
+              Get l0 // { arity: 11 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.person_hasinterest_tag // { arity: 3 }
+              Get l1 // { arity: 5 }
+      cte l1 =
+        ArrangeBy keys=[[#0]] // { arity: 5 }
+          ReadExistingIndex materialize.public.tag lookup_value=("Abbas_I_of_Persia") // { arity: 5 }
+      cte l0 =
+        ArrangeBy keys=[[#1]] // { arity: 11 }
+          Get materialize.public.person // { arity: 11 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.person_id (differential join)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.message_messageid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 09
+######################################################################
+
+# \set startDate '\'2012-08-29\''::timestamp
+# \set endDate '\'2012-11-24\''::timestamp
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+MPP AS (SELECT RootPostId, count(*) as MessageCount FROM Message WHERE Message.creationDate BETWEEN '2012-08-29'::TIMESTAMP AND '2012-11-24'::TIMESTAMP GROUP BY RootPostId)
+SELECT Person.id AS "person.id"
+     , Person.firstName AS "person.firstName"
+     , Person.lastName AS "person.lastName"
+     , count(Post.id) AS threadCount
+     , sum(MPP.MessageCount) AS messageCount
+  FROM Person
+  JOIN Post_View Post
+    ON Person.id = Post.CreatorPersonId
+  JOIN MPP
+    ON Post.id = MPP.RootPostId
+ WHERE Post.creationDate BETWEEN '2012-08-29'::TIMESTAMP AND '2012-11-24'::TIMESTAMP
+ GROUP BY Person.id, Person.firstName, Person.lastName
+ ORDER BY messageCount DESC, Person.id
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0..=#4]
+    Reduce group_by=[#0..=#2] aggregates=[count(*), sum(#3)] // { arity: 5 }
+      Project (#1..=#3, #25) // { arity: 4 }
+        Filter (#23) IS NULL AND (#11 <= 2012-11-24 00:00:00 UTC) AND (#11 >= 2012-08-29 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 26 }
+          Join on=(#1 = #20 AND #12 = #24) type=delta // { arity: 26 }
+            implementation
+              %0:person » %1:message[#9]KAniif » %2[#0]UKA
+              %1:message » %2[#0]UKA » %0:person[#1]KA
+              %2 » %1:message[#1]KAniif » %0:person[#1]KA
+            ArrangeBy keys=[[#1]] // { arity: 11 }
+              Get materialize.public.person // { arity: 11 }
+            ArrangeBy keys=[[#1], [#9]] // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                Project (#2) // { arity: 1 }
+                  Filter (#0 <= 2012-11-24 00:00:00 UTC) AND (#0 >= 2012-08-29 00:00:00 UTC) AND (#2) IS NOT NULL // { arity: 13 }
+                    Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.person_id (delta join 1st input (full scan))
+  - materialize.public.message_messageid (*** full scan ***, delta join lookup)
+  - materialize.public.message_creatorpersonid (delta join lookup)
+
+EOF
+
+######################################################################
+# QUERY 10
+######################################################################
+
+# \set personId 6597069770479
+# \set country '\'Italy\''
+# \set tagClass '\'Thing\''
+# \set minPathDistance 3 -- fixed value
+# \set maxPathDistance 4 -- fixed value
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH friends AS
+  (SELECT Person2Id
+     FROM Person_knows_Person
+    WHERE Person1Id = 6597069770479
+  )
+  , friends_of_friends AS
+  (SELECT knowsB.Person2Id AS Person2Id
+     FROM friends
+     JOIN Person_knows_Person knowsB
+       ON friends.Person2Id = knowsB.Person1Id
+  )
+  , friends_and_friends_of_friends AS
+  (SELECT Person2Id
+     FROM friends
+    UNION -- using plain UNION to eliminate duplicates
+   SELECT Person2Id
+     FROM friends_of_friends
+  )
+  , friends_between_3_and_4_hops AS (
+    -- people reachable through 1..4 hops
+    (SELECT DISTINCT knowsD.Person2Id AS Person2Id
+      FROM friends_and_friends_of_friends ffoaf
+      JOIN Person_knows_Person knowsC
+        ON knowsC.Person1Id = ffoaf.Person2Id
+      JOIN Person_knows_Person knowsD
+        ON knowsD.Person1Id = knowsC.Person2Id
+    )
+    -- removing people reachable through 1..2 hops, yielding the ones reachable through 3..4 hops
+    EXCEPT
+    (SELECT Person2Id
+      FROM friends_and_friends_of_friends
+    )
+  )
+  , friend_list AS (
+    SELECT f.person2Id AS friendId
+      FROM friends_between_3_and_4_hops f
+      JOIN Person tf -- the friend's person record
+        ON tf.id = f.person2Id
+      JOIN City
+        ON City.id = tf.LocationCityId
+      JOIN Country
+        ON Country.id = City.PartOfCountryId
+       AND Country.name = 'Italy'
+  )
+  , messages_of_tagclass_by_friends AS (
+    SELECT DISTINCT f.friendId
+         , Message.MessageId AS messageid
+      FROM friend_list f
+      JOIN Message
+        ON Message.CreatorPersonId = f.friendId
+      JOIN Message_hasTag_Tag
+        ON Message_hasTag_Tag.MessageId = Message.MessageId
+      JOIN Tag
+        ON Tag.id = Message_hasTag_Tag.TagId
+      JOIN TagClass
+        ON TagClass.id = Tag.TypeTagClassId
+      WHERE TagClass.name = 'Thing'
+  )
+SELECT m.friendId AS "person.id"
+     , Tag.name AS "tag.name"
+     , count(*) AS messageCount
+  FROM messages_of_tagclass_by_friends m
+  JOIN Message_hasTag_Tag
+    ON Message_hasTag_Tag.MessageId = m.MessageId
+  JOIN Tag
+    ON Tag.id = Message_hasTag_Tag.TagId
+ GROUP BY m.friendId, Tag.name
+ ORDER BY messageCount DESC, Tag.name, m.friendId
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#2 desc nulls_first, #1 asc nulls_last, #0 asc nulls_last] limit=100 output=[#0..=#2]
+    Return // { arity: 3 }
+      Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+        Project (#0, #8) // { arity: 2 }
+          Filter (#6) IS NOT NULL // { arity: 11 }
+            Join on=(eq(#0, #1, #2) AND eq(#3, #4, #5) AND #6 = #7) type=differential // { arity: 11 }
+              implementation
+                %0[#0]UKA » %1[#0]UKA » %2[#0]K » %3[#0]UKA » %4:l3[#0]K » %5:tag[#0]KA
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Distinct group_by=[#0] // { arity: 1 }
+                  Threshold // { arity: 1 }
+                    Union // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#4) // { arity: 1 }
+                          Join on=(#0 = #1 AND #2 = #3) type=differential // { arity: 5 }
+                            implementation
+                              %0:l2[#0]UKA » %1:l1[#0]K » %2:l1[#0]K
+                            ArrangeBy keys=[[#0]] // { arity: 1 }
+                              Get l2 // { arity: 1 }
+                            Get l1 // { arity: 2 }
+                            Get l1 // { arity: 2 }
+                      Negate // { arity: 1 }
+                        Get l2 // { arity: 1 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Distinct group_by=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#5 = "Italy") AND (#3) IS NOT NULL // { arity: 8 }
+                      Join on=(#1 = #2 AND #3 = #4) type=differential // { arity: 8 }
+                        implementation
+                          %2:country[#0]KAef » %1:city[#1]Kef » %0:person[#1]Kef
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Project (#1, #8) // { arity: 2 }
+                            Filter (#1) IS NOT NULL // { arity: 11 }
+                              Get materialize.public.person // { arity: 11 }
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Project (#0, #3) // { arity: 2 }
+                            Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
+                              Get materialize.public.city // { arity: 4 }
+                        ArrangeBy keys=[[#0]] // { arity: 4 }
+                          Get materialize.public.country // { arity: 4 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Distinct group_by=[#1, #0] // { arity: 2 }
+                  Project (#1, #9) // { arity: 2 }
+                    Get materialize.public.message // { arity: 13 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Distinct group_by=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#3) IS NOT NULL // { arity: 9 }
+                      Join on=(#1 = #2 AND #3 = #4) type=differential // { arity: 9 }
+                        implementation
+                          %2:tagclass[#0]KAe » %1:tag[#1]Ke » %0:l3[#1]Ke
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Get l3 // { arity: 2 }
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Project (#0, #3) // { arity: 2 }
+                            Filter (#0) IS NOT NULL // { arity: 4 }
+                              Get materialize.public.tag // { arity: 4 }
+                        ArrangeBy keys=[[#0]] // { arity: 5 }
+                          ReadExistingIndex materialize.public.tagclass lookup_value=("Thing") // { arity: 5 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Get l3 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.tag // { arity: 4 }
+    With
+      cte l3 =
+        Project (#1, #2) // { arity: 2 }
+          Get materialize.public.message_hastag_tag // { arity: 3 }
+      cte l2 =
+        Distinct group_by=[#0] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l0 // { arity: 1 }
+            Project (#2) // { arity: 1 }
+              Join on=(#0 = #1) type=differential // { arity: 3 }
+                implementation
+                  %0:l0[#0]Kef » %1:l1[#0]Kef
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Get l0 // { arity: 1 }
+                Get l1 // { arity: 2 }
+      cte l1 =
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
+            Get materialize.public.person_knows_person // { arity: 3 }
+      cte l0 =
+        Project (#2) // { arity: 1 }
+          Filter (#1 = 6597069770479) // { arity: 3 }
+            Get materialize.public.person_knows_person // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.tag_id (*** full scan ***, differential join)
+  - materialize.public.tagclass_name (lookup)
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 11
+######################################################################
+
+# \set country '\'India\''
+# \set startDate '\'2012-09-28\''::timestamp
+# \set endDate '\'2013-01-10\''::timestamp
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH Persons_of_country_w_friends AS (
+    SELECT Person.id AS PersonId
+         , Person_knows_Person.Person2Id AS FriendId
+         , Person_knows_Person.creationDate AS creationDate
+      FROM Person
+      JOIN City
+        ON City.id = Person.LocationCityId
+      JOIN Country
+        ON Country.id = City.PartOfCountryId
+       AND Country.name = 'India'
+      JOIN Person_knows_Person
+        ON Person_knows_Person.Person1Id = Person.id
+)
+SELECT count(*)
+  FROM Persons_of_country_w_friends p1
+  JOIN Persons_of_country_w_friends p2
+    ON p1.FriendId = p2.PersonId
+  JOIN Persons_of_country_w_friends p3
+    ON p2.FriendId = p3.PersonId
+   AND p3.FriendId = p1.PersonId
+ WHERE true
+    -- filter: unique triangles only
+   AND p1.PersonId < p2.PersonId
+   AND p2.PersonId < p3.PersonId
+    -- filter: only edges created after :startDate
+   AND '2012-09-28'::TIMESTAMP <= p1.creationDate AND p1.creationDate <= '2013-01-10'::TIMESTAMP
+   AND '2012-09-28'::TIMESTAMP <= p2.creationDate AND p2.creationDate <= '2013-01-10'::TIMESTAMP
+   AND '2012-09-28'::TIMESTAMP <= p3.creationDate AND p3.creationDate <= '2013-01-10'::TIMESTAMP
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l2 // { arity: 1 }
+      Map (0) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l2 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l2 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          Join on=(#0 = #5 AND #1 = #2 AND #3 = #4) type=differential // { arity: 6 }
+            implementation
+              %0:l1[#1]Kf » %1:l1[#0]Kf » %2:l0[#0, #1]KKf
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Get l1 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l1 // { arity: 2 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Get l0 // { arity: 2 }
+    cte l1 =
+      Filter (#0 < #1) // { arity: 2 }
+        Get l0 // { arity: 2 }
+    cte l0 =
+      Project (#0, #9) // { arity: 2 }
+        Filter (#5 = "India") AND (#3) IS NOT NULL // { arity: 10 }
+          Join on=(#0 = #8 AND #1 = #2 AND #3 = #4) type=differential // { arity: 10 }
+            implementation
+              %2:country[#0]KAef » %1:city[#1]Kef » %0:person[#1]Kef » %3:person_knows_person[#0]Keiif
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Project (#1, #8) // { arity: 2 }
+                Filter (#1) IS NOT NULL // { arity: 11 }
+                  Get materialize.public.person // { arity: 11 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Project (#0, #3) // { arity: 2 }
+                Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
+                  Get materialize.public.city // { arity: 4 }
+            ArrangeBy keys=[[#0]] // { arity: 4 }
+              Get materialize.public.country // { arity: 4 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
+                Filter (#0 <= 2013-01-10 00:00:00 UTC) AND (2012-09-28 00:00:00 UTC <= #0) // { arity: 3 }
+                  Get materialize.public.person_knows_person // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 12
+######################################################################
+
+# \set startDate '\'2012-06-03\''::timestamp
+# \set lengthThreshold '120'
+# \set languages '\'{es, ta, pt}\''::varchar[]
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+  matching_message AS (
+    SELECT MessageId,
+           CreatorPersonId
+    FROM Message
+    WHERE Message.content IS NOT NULL
+      AND Message.length < 120
+      AND Message.creationDate > '2012-06-03'::TIMESTAMP
+      AND Message.RootPostLanguage IN ('es', 'ta', 'pt') -- MZ change to use postgres containment check
+  ),
+  person_w_posts AS (
+    SELECT Person.id, count(matching_message.MessageId) as messageCount
+      FROM Person
+      LEFT JOIN matching_message
+        ON Person.id = matching_message.CreatorPersonId
+     GROUP BY Person.id
+  ),
+  message_count_distribution AS (
+    SELECT pp.messageCount, count(*) as personCount
+      FROM person_w_posts pp
+     GROUP BY pp.messageCount
+     ORDER BY personCount DESC, messageCount DESC
+  )
+SELECT *
+  FROM message_count_distribution
+ORDER BY personCount DESC, messageCount DESC
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+            Union // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Project (#1) // { arity: 1 }
+                      Join on=(#1 = #11) type=differential // { arity: 12 }
+                        implementation
+                          %1[#0]UKA » %0:l0[#1]KA
+                        Get l0 // { arity: 11 }
+                        ArrangeBy keys=[[#0]] // { arity: 1 }
+                          Distinct group_by=[#0] // { arity: 1 }
+                            Project (#0) // { arity: 1 }
+                              Get l1 // { arity: 2 }
+                  Project (#1) // { arity: 1 }
+                    Get materialize.public.person // { arity: 11 }
+              Get l1 // { arity: 2 }
+    With
+      cte l1 =
+        Project (#1, #12) // { arity: 2 }
+          Filter (#19 < 120) AND (#11 > 2012-06-03 00:00:00 UTC) AND (#1) IS NOT NULL AND (#15) IS NOT NULL // { arity: 25 }
+            Join on=(#1 = #20) type=differential // { arity: 25 }
+              implementation
+                %1:message[#9]KAeiif » %0:l0[#1]KAeiif
+              Get l0 // { arity: 11 }
+              ArrangeBy keys=[[#9]] // { arity: 14 }
+                ReadExistingIndex materialize.public.message lookup_values=[("es"); ("pt"); ("ta")] // { arity: 14 }
+      cte l0 =
+        ArrangeBy keys=[[#1]] // { arity: 11 }
+          Get materialize.public.person // { arity: 11 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***, differential join)
+  - materialize.public.message_rootpostlanguage (lookup)
+
+EOF
+
+
+# original version
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH person_w_posts AS (
+    SELECT Person.id, count(Message.MessageId) as messageCount
+      FROM Person
+      LEFT JOIN Message
+        ON Person.id = Message.CreatorPersonId
+       AND Message.content IS NOT NULL
+       AND Message.length < 120
+       AND Message.creationDate > '2012-06-03'::TIMESTAMP
+       AND Message.RootPostLanguage = ANY ('{es, ta, pt}'::varchar[]) -- MZ change to use postgres containment check
+     GROUP BY Person.id
+)
+, message_count_distribution AS (
+    SELECT pp.messageCount, count(*) as personCount
+      FROM person_w_posts pp
+     GROUP BY pp.messageCount
+     ORDER BY personCount DESC, messageCount DESC
+)
+SELECT *
+  FROM message_count_distribution
+ORDER BY personCount DESC, messageCount DESC
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+            Union // { arity: 2 }
+              Project (#1, #11) // { arity: 2 }
+                Get l1 // { arity: 12 }
+              Project (#1, #22) // { arity: 2 }
+                Map (null) // { arity: 23 }
+                  Join on=(#0 = #11 AND #1 = #12 AND #2 = #13 AND #3 = #14 AND #4 = #15 AND #5 = #16 AND #6 = #17 AND #7 = #18 AND #8 = #19 AND #9 = #20 AND #10 = #21) type=differential // { arity: 22 }
+                    implementation
+                      %0[#0..=#10]KKKKKKKKKKK » %1:person[#0..=#10]KKKKKKKKKKK
+                    ArrangeBy keys=[[#0..=#10]] // { arity: 11 }
+                      Union // { arity: 11 }
+                        Negate // { arity: 11 }
+                          Distinct group_by=[#0..=#10] // { arity: 11 }
+                            Project (#0..=#10) // { arity: 11 }
+                              Get l1 // { arity: 12 }
+                        Distinct group_by=[#0..=#10] // { arity: 11 }
+                          Get materialize.public.person // { arity: 11 }
+                    ArrangeBy keys=[[#0..=#10]] // { arity: 11 }
+                      Get materialize.public.person // { arity: 11 }
+    With
+      cte l1 =
+        Project (#0..=#11) // { arity: 12 }
+          Join on=(#12 = #13) type=differential // { arity: 14 }
+            implementation
+              %1[#0]UKA » %0:l0[#12]Kiif
+            ArrangeBy keys=[[#12]] // { arity: 13 }
+              Project (#0..=#10, #12, #13) // { arity: 13 }
+                Filter (#15 < 120) AND (#11 > 2012-06-03 00:00:00 UTC) AND (#14) IS NOT NULL AND (#1 = #16) // { arity: 17 }
+                  Get l0 // { arity: 17 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#0 = varchar_to_text(#1)) // { arity: 2 }
+                    FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#13) // { arity: 1 }
+                          Get l0 // { arity: 17 }
+      cte l0 =
+        CrossJoin type=differential // { arity: 17 }
+          implementation
+            %0:person[×] » %1:message[×]
+          ArrangeBy keys=[[]] // { arity: 11 }
+            Get materialize.public.person // { arity: 11 }
+          ArrangeBy keys=[[]] // { arity: 6 }
+            Project (#0, #1, #3, #4, #8, #9) // { arity: 6 }
+              Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 13
+######################################################################
+
+# \set country '\'India\''
+# \set endDate '\'2012-11-09\''::timestamp
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH Zombies AS (
+    SELECT Person.id AS zombieid
+      FROM Country
+      JOIN City
+        ON City.PartOfCountryId = Country.id
+      JOIN Person
+        ON Person.LocationCityId = City.id
+      LEFT JOIN Message
+         ON Person.id = Message.CreatorPersonId
+        AND Message.creationDate BETWEEN Person.creationDate AND '2012-11-09'::TIMESTAMP -- the lower bound is an optmization to prune messages
+     WHERE Country.name = 'India'
+       AND Person.creationDate < '2012-11-09'::TIMESTAMP
+     GROUP BY Person.id, Person.creationDate
+        -- average of [0, 1) messages per month is equivalent with having less messages than the month span between person creationDate and parameter '2012-11-09'::TIMESTAMP
+    HAVING count(Message.MessageId) < 12*extract(YEAR FROM '2012-11-09'::TIMESTAMP) + extract(MONTH FROM '2012-11-09'::TIMESTAMP)
+                            - (12*extract(YEAR FROM Person.creationDate) + extract(MONTH FROM Person.creationDate))
+                            + 1
+)
+SELECT Z.zombieid AS "zombie.id"
+     , coalesce(t.zombieLikeCount, 0) AS zombieLikeCount
+     , coalesce(t.totalLikeCount, 0) AS totalLikeCount
+     , CASE WHEN t.totalLikeCount > 0 THEN t.zombieLikeCount::float/t.totalLikeCount ELSE 0 END AS zombieScore
+  FROM Zombies Z LEFT JOIN (
+    SELECT Z.zombieid, count(*) as totalLikeCount, sum(case when exists (SELECT 1 FROM Zombies ZL WHERE ZL.zombieid = p.id) then 1 else 0 end) AS zombieLikeCount
+    FROM Person p, Person_likes_Message plm, Message m, Zombies Z
+    WHERE Z.zombieid = m.CreatorPersonId AND p.creationDate < '2012-11-09'::TIMESTAMP
+        AND p.id = plm.PersonId AND m.MessageId = plm.MessageId
+    GROUP BY Z.zombieid
+  ) t ON (Z.zombieid = t.zombieid)
+ ORDER BY zombieScore DESC, Z.zombieid
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#3 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0..=#3]
+    Return // { arity: 4 }
+      Project (#0, #3..=#5) // { arity: 4 }
+        Map (coalesce(#2, 0), coalesce(#1, 0), case when (#1 > 0) then (bigint_to_double(#2) / bigint_to_double(#1)) else 0 end) // { arity: 6 }
+          Union // { arity: 3 }
+            Map (null, null) // { arity: 3 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l8 // { arity: 3 }
+                Get l2 // { arity: 1 }
+            Get l8 // { arity: 3 }
+    With
+      cte l8 =
+        Project (#0, #2, #3) // { arity: 3 }
+          Join on=(#0 = #1) type=differential // { arity: 4 }
+            implementation
+              %1[#0]UKA » %0:l4[#0]K
+            Get l4 // { arity: 1 }
+            ArrangeBy keys=[[#0]] // { arity: 3 }
+              Reduce group_by=[#0] aggregates=[count(*), sum(case when #1 then 1 else 0 end)] // { arity: 3 }
+                Project (#1, #3) // { arity: 2 }
+                  Join on=(#0 = #2) type=differential // { arity: 4 }
+                    implementation
+                      %0:l5[#0]K » %1[#0]K
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Get l5 // { arity: 2 }
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Union // { arity: 2 }
+                        Map (true) // { arity: 2 }
+                          Get l7 // { arity: 1 }
+                        Map (false) // { arity: 2 }
+                          Union // { arity: 1 }
+                            Negate // { arity: 1 }
+                              Get l7 // { arity: 1 }
+                            Get l6 // { arity: 1 }
+      cte l7 =
+        Project (#0) // { arity: 1 }
+          Join on=(#0 = #1) type=differential // { arity: 2 }
+            implementation
+              %0:l6[#0]UKA » %1[#0]UKA
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Get l6 // { arity: 1 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Get l3 // { arity: 1 }
+      cte l6 =
+        Distinct group_by=[#0] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get l5 // { arity: 2 }
+      cte l5 =
+        Project (#1, #22) // { arity: 2 }
+          Filter (#0 < 2012-11-09 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 27 }
+            Join on=(#1 = #11 AND #12 = #14 AND #22 = #26) type=differential // { arity: 27 }
+              implementation
+                %0:person[#1]KAif » %1:person_likes_message[#0]Kif » %2:message[#1]KAif » %3:l4[#0]Kif
+              ArrangeBy keys=[[#1]] // { arity: 11 }
+                Get materialize.public.person // { arity: 11 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.person_likes_message // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+              Get l4 // { arity: 1 }
+      cte l4 =
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l3 // { arity: 1 }
+      cte l3 =
+        Filter (#0) IS NOT NULL // { arity: 1 }
+          Get l2 // { arity: 1 }
+      cte l2 =
+        Project (#0) // { arity: 1 }
+          Filter (bigint_to_numeric(#2) < ((24155 - ((12 * extract_year_tstz(#1)) + extract_month_tstz(#1))) + 1)) // { arity: 3 }
+            Reduce group_by=[#1, #0] aggregates=[count(#2)] // { arity: 3 }
+              Union // { arity: 3 }
+                Project (#6, #7, #16) // { arity: 3 }
+                  Get l1 // { arity: 17 }
+                Project (#6, #7, #32) // { arity: 3 }
+                  Map (null) // { arity: 33 }
+                    Join on=(#0 = #16 AND #1 = #17 AND #2 = #18 AND #3 = #19 AND #4 = #20 AND #5 = #21 AND #6 = #22 AND #7 = #23 AND #8 = #24 AND #9 = #25 AND #10 = #26 AND #11 = #27 AND #12 = #28 AND #13 = #29 AND #14 = #30 AND #15 = #31) type=differential // { arity: 32 }
+                      implementation
+                        %0[#0..=#15]KKKKKKKKKKKKKKKK » %1:l0[#0..=#15]KKKKKKKKKKKKKKKK
+                      ArrangeBy keys=[[#0..=#15]] // { arity: 16 }
+                        Union // { arity: 16 }
+                          Negate // { arity: 16 }
+                            Distinct group_by=[#0..=#15] // { arity: 16 }
+                              Project (#0..=#15) // { arity: 16 }
+                                Filter (#0 = #0) AND (#3 = #3) // { arity: 17 }
+                                  Get l1 // { arity: 17 }
+                          Distinct group_by=[#0..=#15] // { arity: 16 }
+                            Filter (#0 = #0) AND (#3 = #3) // { arity: 16 }
+                              Get l0 // { arity: 16 }
+                      ArrangeBy keys=[[#0..=#15]] // { arity: 16 }
+                        Get l0 // { arity: 16 }
+      cte l1 =
+        Project (#0..=#15, #17) // { arity: 17 }
+          Filter (#16 <= 2012-11-09 00:00:00 UTC) AND (#16 >= #6) // { arity: 29 }
+            Join on=(#7 = #25) type=differential // { arity: 29 }
+              implementation
+                %1:message[#9]KAif » %0:l0[#7]Kif
+              ArrangeBy keys=[[#7]] // { arity: 16 }
+                Filter (#7) IS NOT NULL // { arity: 16 }
+                  Get l0 // { arity: 16 }
+              ArrangeBy keys=[[#9]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+      cte l0 =
+        Project (#0, #2..=#6, #8..=#15, #17, #18) // { arity: 16 }
+          Filter (#1 = "India") AND (#0) IS NOT NULL // { arity: 19 }
+            Join on=(#0 = #7 AND #4 = #16) type=differential // { arity: 19 }
+              implementation
+                %0:country[#0]KAef » %1:city[#3]Kef » %2:person[#8]Keif
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.country // { arity: 4 }
+              ArrangeBy keys=[[#3]] // { arity: 4 }
+                Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
+                  Get materialize.public.city // { arity: 4 }
+              ArrangeBy keys=[[#8]] // { arity: 11 }
+                Filter (#0 < 2012-11-09 00:00:00 UTC) // { arity: 11 }
+                  Get materialize.public.person // { arity: 11 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***, differential join)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_creatorpersonid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 14
+######################################################################
+
+# \set country1 '\'Philippines\''
+# \set country2 '\'Taiwan\''
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH PersonPairCandidates AS (
+    SELECT Person1.id AS Person1Id
+         , Person2.id AS Person2Id
+         , City1.id AS cityId
+         , City1.name AS cityName
+      FROM Country Country1
+      JOIN City City1
+        ON City1.PartOfCountryId = Country1.id
+      JOIN Person Person1
+        ON Person1.LocationCityId = City1.id
+      JOIN Person_knows_Person
+        ON Person_knows_Person.Person1Id = Person1.id
+      JOIN Person Person2
+        ON Person2.id = Person_knows_Person.Person2Id
+      JOIN City City2
+        ON Person2.LocationCityId = City2.id
+      JOIN Country Country2
+        ON Country2.id = City2.PartOfCountryId
+     WHERE Country1.name = 'Philippines'
+       AND Country2.name = 'Taiwan'
+)
+,  PPC(Person1Id, Person2Id, Flipped) AS (
+   SELECT Person1Id AS Person1Id, Person2Id AS Person2Id, false AS Flipped FROM PersonPairCandidates
+   UNION ALL
+   SELECT Person2Id AS Person1Id, Person1Id AS Person2Id, true As Flipped FROM PersonPairCandidates
+)
+,  pair_scores AS (
+    SELECT CASE WHEN Flipped THEN Person2Id ELSE Person1Id END AS Person1Id,
+           CASE WHEN Flipped THEN Person1Id ELSE Person2Id END AS Person2Id,
+        (
+        CASE WHEN EXISTS (SELECT 1 FROM Message m, Message r WHERE m.MessageId = r.ParentMessageId AND Person1Id = r.CreatorPersonId AND Person2Id = m.CreatorPersonId AND EXISTS (SELECT 1 FROM PPC x WHERE x.Person1Id = r.CreatorPersonId)) THEN (CASE WHEN Flipped THEN 1 ELSE 4 END) ELSE 0 END +
+        CASE WHEN EXISTS (SELECT 1 FROM Message m, Person_likes_Message l WHERE Person2Id = m.CreatorPersonId AND m.MessageId = l.MessageId AND l.PersonId = Person1Id AND EXISTS (SELECT 1 FROM PPC x WHERE x.Person1Id = l.PersonId)) THEN (CASE WHEN Flipped THEN 1 ELSE 10 END) ELSE 0 END
+        ) as score
+      FROM PPC
+)
+,  pair_scoresX AS (
+    SELECT Person1Id, Person2Id, sum(score) as score
+      FROM pair_scores
+      GROUP BY Person1Id, Person2Id
+)
+,  score_ranks AS (
+    SELECT DISTINCT ON (cityId)
+         PersonPairCandidates.Person1Id, PersonPairCandidates.Person2Id, cityId, cityName
+         , s.score AS score
+      FROM PersonPairCandidates
+      LEFT JOIN pair_scoresX s
+             ON s.Person1Id = PersonPairCandidates.Person1Id
+            AND s.person2Id = PersonPairCandidates.Person2Id
+      ORDER BY cityId, s.score DESC, PersonPairCandidates.Person1Id, PersonPairCandidates.Person2Id
+)
+SELECT score_ranks.Person1Id AS "person1.id"
+     , score_ranks.Person2Id AS "person2.id"
+     , score_ranks.cityName AS "city1.name"
+     , score_ranks.score
+  FROM score_ranks
+ ORDER BY score_ranks.score DESC, score_ranks.Person1Id, score_ranks.Person2Id
+ LIMIT 100
+----
+Explained Query:
+  Finish order_by=[#3 desc nulls_first, #0 asc nulls_last, #1 asc nulls_last] limit=100 output=[#0..=#3]
+    Return // { arity: 4 }
+      Project (#0, #1, #3, #4) // { arity: 4 }
+        TopK group_by=[#2] order_by=[#4 desc nulls_first, #0 asc nulls_last, #1 asc nulls_last] limit=1 // { arity: 5 }
+          Union // { arity: 5 }
+            Map (null) // { arity: 5 }
+              Union // { arity: 4 }
+                Negate // { arity: 4 }
+                  Project (#2, #3, #0, #1) // { arity: 4 }
+                    Get l9 // { arity: 5 }
+                Project (#2, #3, #0, #1) // { arity: 4 }
+                  Get l1 // { arity: 4 }
+            Project (#2, #3, #0, #1, #4) // { arity: 5 }
+              Get l9 // { arity: 5 }
+    With
+      cte l9 =
+        Project (#0..=#3, #6) // { arity: 5 }
+          Join on=(#2 = #4 AND #3 = #5) type=differential // { arity: 7 }
+            implementation
+              %1[#0, #1]UKKA » %0:l1[#2, #3]KK
+            ArrangeBy keys=[[#2, #3]] // { arity: 4 }
+              Get l1 // { arity: 4 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+              Reduce group_by=[#1, #2] aggregates=[sum((case when #3 then case when #0 then 1 else 4 end else 0 end + case when #4 then case when #0 then 1 else 10 end else 0 end))] // { arity: 3 }
+                Project (#2..=#5, #8) // { arity: 5 }
+                  Join on=(#0 = #6 AND #1 = #7) type=differential // { arity: 9 }
+                    implementation
+                      %0:l6[#0, #1]KK » %1[#0, #1]KK
+                    ArrangeBy keys=[[#0, #1]] // { arity: 6 }
+                      Get l6 // { arity: 6 }
+                    ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                      Union // { arity: 3 }
+                        Map (true) // { arity: 3 }
+                          Get l8 // { arity: 2 }
+                        Map (false) // { arity: 3 }
+                          Union // { arity: 2 }
+                            Negate // { arity: 2 }
+                              Get l8 // { arity: 2 }
+                            Get l7 // { arity: 2 }
+      cte l8 =
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l7[#0, #1]UKKA » %1[#0, #1]UKKA
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Get l7 // { arity: 2 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Distinct group_by=[#1, #0] // { arity: 2 }
+                Project (#9, #13) // { arity: 2 }
+                  Join on=(#1 = #14) type=differential // { arity: 15 }
+                    implementation
+                      %0:l4[#1]KA » %1:person_likes_message[#1]K
+                    Get l4 // { arity: 13 }
+                    ArrangeBy keys=[[#1]] // { arity: 2 }
+                      Project (#1, #2) // { arity: 2 }
+                        Get materialize.public.person_likes_message // { arity: 3 }
+      cte l7 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            Get l6 // { arity: 6 }
+      cte l6 =
+        Project (#0..=#4, #7) // { arity: 6 }
+          Join on=(#0 = #5 AND #1 = #6) type=differential // { arity: 8 }
+            implementation
+              %0:l2[#0, #1]KK » %1[#0, #1]KK
+            ArrangeBy keys=[[#0, #1]] // { arity: 5 }
+              Get l2 // { arity: 5 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+              Union // { arity: 3 }
+                Map (true) // { arity: 3 }
+                  Get l5 // { arity: 2 }
+                Map (false) // { arity: 3 }
+                  Union // { arity: 2 }
+                    Negate // { arity: 2 }
+                      Get l5 // { arity: 2 }
+                    Get l3 // { arity: 2 }
+      cte l5 =
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l3[#0, #1]UKKA » %1[#0, #1]UKKA
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Get l3 // { arity: 2 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Distinct group_by=[#1, #0] // { arity: 2 }
+                Project (#9, #22) // { arity: 2 }
+                  Filter (#1) IS NOT NULL // { arity: 26 }
+                    Join on=(#1 = #25) type=differential // { arity: 26 }
+                      implementation
+                        %0:l4[#1]KA » %1:message[#12]KA
+                      Get l4 // { arity: 13 }
+                      ArrangeBy keys=[[#12]] // { arity: 13 }
+                        Get materialize.public.message // { arity: 13 }
+      cte l4 =
+        ArrangeBy keys=[[#1]] // { arity: 13 }
+          Get materialize.public.message // { arity: 13 }
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            Get l2 // { arity: 5 }
+      cte l2 =
+        Map (case when #2 then #1 else #0 end, case when #2 then #0 else #1 end) // { arity: 5 }
+          Union // { arity: 3 }
+            Project (#2..=#4) // { arity: 3 }
+              Map (false) // { arity: 5 }
+                Get l1 // { arity: 4 }
+            Project (#3, #2, #4) // { arity: 3 }
+              Map (true) // { arity: 5 }
+                Get l1 // { arity: 4 }
+      cte l1 =
+        Project (#4, #5, #7, #10) // { arity: 4 }
+          Filter (#1 = "Philippines") AND (#27 = "Taiwan") AND (#0) IS NOT NULL AND (#10) IS NOT NULL AND (#19) IS NOT NULL AND (#25) IS NOT NULL // { arity: 30 }
+            Join on=(#0 = #6 AND #4 = #8 AND #7 = #9 AND #10 = #12 AND #19 = #22 AND #25 = #26) type=differential // { arity: 30 }
+              implementation
+                %0:l0[#0]KAef » %1:city[#2]Kef » %2:person[#1]Kef » %3:person_knows_person[#0]Kef » %4:person[#1]KAef » %5:city[#0]KAef » %6:l0[#0]KAef
+              Get l0 // { arity: 4 }
+              ArrangeBy keys=[[#2]] // { arity: 3 }
+                Project (#0, #1, #3) // { arity: 3 }
+                  Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
+                    Get materialize.public.city // { arity: 4 }
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #8) // { arity: 2 }
+                  Filter (#1) IS NOT NULL // { arity: 11 }
+                    Get materialize.public.person // { arity: 11 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.person_knows_person // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 11 }
+                Get materialize.public.person // { arity: 11 }
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.city // { arity: 4 }
+              Get l0 // { arity: 4 }
+      cte l0 =
+        ArrangeBy keys=[[#0]] // { arity: 4 }
+          Get materialize.public.country // { arity: 4 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***, differential join)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.country_id (differential join)
+  - materialize.public.city_id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_parentmessageid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 15
+######################################################################
+
+# \set person1Id 1450::bigint
+# \set person2Id 15393162796819
+# \set startDate '\'2012-11-06\''::timestamp
+# \set endDate '\'2012-11-10\''::timestamp
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+  -- forums within the date range
+  myForums AS (
+      SELECT id FROM Forum f WHERE f.creationDate BETWEEN '2012-11-06'::TIMESTAMP AND '2012-11-10'::TIMESTAMP
+  ),
+  -- the (inverse) interaction scores between folks who know each other
+  mm AS (
+      SELECT least(msg.CreatorPersonId, reply.CreatorPersonId) AS src,
+             greatest(msg.CreatorPersonId, reply.CreatorPersonId) AS dst,
+             sum(case when msg.ParentMessageId is null then 10 else 5 end) AS w
+      FROM Person_knows_Person pp, Message msg, Message reply
+      WHERE true
+            AND pp.person1id = msg.CreatorPersonId
+            AND pp.person2id = reply.CreatorPersonId
+            AND reply.ParentMessageId = msg.MessageId
+            AND EXISTS (SELECT * FROM myForums f WHERE f.id = msg.containerforumid)
+            AND EXISTS (SELECT * FROM myForums f WHERE f.id = reply.containerforumid)
+      GROUP BY src, dst
+  ),
+  -- the true interaction scores, with 0 default for folks with no interactions
+  edge AS (
+      SELECT pp.person1id AS src,
+             pp.person2id AS dst,
+             10::double precision / (coalesce(w, 0) + 10) AS w
+        FROM Person_knows_Person pp
+   LEFT JOIN mm
+          ON least(pp.person1id, pp.person2id) = mm.src
+         AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  completed_paths AS (
+    WITH MUTUALLY RECURSIVE
+      paths (src bigint, dst bigint, w double precision) AS (
+          SELECT 1450::bigint AS src, 1450::bigint AS dst, 0::double precision AS w
+          UNION
+          SELECT paths1.src, paths2.dst, paths1.w + paths2.w
+            FROM minimal_paths paths1
+            JOIN edge paths2 -- step-transitive closure
+              ON paths1.dst = paths2.src
+      ),
+      minimal_paths (src bigint, dst bigint, w double precision) AS (
+        SELECT src, dst, min(w)
+          FROM paths
+      GROUP BY src, dst
+      )
+    SELECT src, dst, w
+      FROM minimal_paths
+     WHERE dst = 15393162796819),
+  results AS (
+    SELECT dst, w
+      FROM completed_paths
+     WHERE w IN (SELECT min(w) FROM completed_paths)
+  )
+SELECT coalesce(w, -1) FROM results ORDER BY w ASC LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#1 asc nulls_last] limit=20 output=[#2]
+    Return // { arity: 3 }
+      Project (#1, #2, #2) // { arity: 3 }
+        Filter (#1 = 15393162796819) AND (#2 = #2) // { arity: 3 }
+          Get l3 // { arity: 3 }
+    With Mutually Recursive
+      cte l3 =
+        Project (#2, #0, #1) // { arity: 3 }
+          Map (1450) // { arity: 3 }
+            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              Distinct group_by=[#0, #1] // { arity: 2 }
+                Union // { arity: 2 }
+                  Project (#3, #5) // { arity: 2 }
+                    Map ((#1 + #4)) // { arity: 6 }
+                      Join on=(#0 = #2) type=differential // { arity: 5 }
+                        implementation
+                          %0:l3[#0]K » %1[#0]K
+                        ArrangeBy keys=[[#0]] // { arity: 2 }
+                          Project (#1, #2) // { arity: 2 }
+                            Get l3 // { arity: 3 }
+                        ArrangeBy keys=[[#0]] // { arity: 3 }
+                          Project (#0, #1, #3) // { arity: 3 }
+                            Map ((10 / bigint_to_double((coalesce(#2, 0) + 10)))) // { arity: 4 }
+                              Union // { arity: 3 }
+                                Project (#1..=#3) // { arity: 3 }
+                                  Get l2 // { arity: 4 }
+                                Project (#1, #2, #6) // { arity: 3 }
+                                  Map (null) // { arity: 7 }
+                                    Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                                      implementation
+                                        %0[#0..=#2]KKK » %1:person_knows_person[#0..=#2]KKK
+                                      ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                                        Union // { arity: 3 }
+                                          Negate // { arity: 3 }
+                                            Distinct group_by=[#0..=#2] // { arity: 3 }
+                                              Project (#0..=#2) // { arity: 3 }
+                                                Get l2 // { arity: 4 }
+                                          Distinct group_by=[#0..=#2] // { arity: 3 }
+                                            Get materialize.public.person_knows_person // { arity: 3 }
+                                      ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                                        Get materialize.public.person_knows_person // { arity: 3 }
+                  Constant // { arity: 2 }
+                    - (1450, 0)
+      cte l2 =
+        Project (#0..=#2, #5) // { arity: 4 }
+          Join on=(#3 = least(#1, #2) AND #4 = greatest(#1, #2)) type=differential // { arity: 6 }
+            implementation
+              %1[#1, #0]UKK » %0:person_knows_person[greatest(#1, #2), least(#1, #2)]KK
+            ArrangeBy keys=[[greatest(#1, #2), least(#1, #2)]] // { arity: 3 }
+              Get materialize.public.person_knows_person // { arity: 3 }
+            ArrangeBy keys=[[#1, #0]] // { arity: 3 }
+              Reduce group_by=[least(#0, #1), greatest(#0, #1)] aggregates=[sum(case when (#2) IS NULL then 10 else 5 end)] // { arity: 3 }
+                Project (#0..=#2) // { arity: 3 }
+                  Join on=(eq(#3, #4, #5)) type=delta // { arity: 6 }
+                    implementation
+                      %0:l1 » %1[#0]UKA » %2[#0]UKA
+                      %1 » %2[#0]UKA » %0:l1[#3]KA
+                      %2 » %1[#0]UKA » %0:l1[#3]KA
+                    ArrangeBy keys=[[#3]] // { arity: 4 }
+                      Get l1 // { arity: 4 }
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#3) // { arity: 1 }
+                          Filter (#3) IS NOT NULL // { arity: 4 }
+                            Get l1 // { arity: 4 }
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#1) // { arity: 1 }
+                          Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
+                            Get materialize.public.forum // { arity: 4 }
+      cte l1 =
+        Project (#0, #1, #3, #4) // { arity: 4 }
+          Join on=(eq(#2, #5, #6)) type=delta // { arity: 7 }
+            implementation
+              %0:l0 » %1[#0]UKA » %2[#0]UKA
+              %1 » %2[#0]UKA » %0:l0[#2]KA
+              %2 » %1[#0]UKA » %0:l0[#2]KA
+            ArrangeBy keys=[[#2]] // { arity: 5 }
+              Get l0 // { arity: 5 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#2) // { arity: 1 }
+                  Filter (#2) IS NOT NULL // { arity: 5 }
+                    Get l0 // { arity: 5 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
+                    Get materialize.public.forum // { arity: 4 }
+      cte l0 =
+        Project (#1, #2, #13, #15, #26) // { arity: 5 }
+          Filter (#4) IS NOT NULL // { arity: 29 }
+            Join on=(#1 = #12 AND #2 = #25 AND #4 = #28) type=differential // { arity: 29 }
+              implementation
+                %1:message[#1]KA » %2:message[#12]KA » %0:person_knows_person[#1, #2]KKA
+              ArrangeBy keys=[[#1, #2]] // { arity: 3 }
+                Get materialize.public.person_knows_person // { arity: 3 }
+              ArrangeBy keys=[[#1]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+              ArrangeBy keys=[[#12]] // { arity: 13 }
+                Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.forum_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_parentmessageid (differential join)
+
+EOF
+
+# original, w/crossjoins
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH MUTUALLY RECURSIVE
+  srcs (f bigint) AS (SELECT 1450::bigint),
+  dsts (t bigint) AS (SELECT 15393162796819),
+  myForums (id bigint) AS (
+      SELECT id FROM Forum f WHERE f.creationDate BETWEEN '2012-11-06'::TIMESTAMP AND '2012-11-10'::TIMESTAMP
+  ),
+  mm (src bigint, dst bigint, w bigint) AS (
+      SELECT least(msg.CreatorPersonId, reply.CreatorPersonId) AS src,
+             greatest(msg.CreatorPersonId, reply.CreatorPersonId) AS dst,
+             sum(case when msg.ParentMessageId is null then 10 else 5 end) AS w
+      FROM Person_knows_Person pp, Message msg, Message reply
+      WHERE true
+            AND pp.person1id = msg.CreatorPersonId
+            AND pp.person2id = reply.CreatorPersonId
+            AND reply.ParentMessageId = msg.MessageId
+            AND EXISTS (SELECT * FROM myForums f WHERE f.id = msg.containerforumid)
+            AND EXISTS (SELECT * FROM myForums f WHERE f.id = reply.containerforumid)
+      GROUP BY src, dst
+  ),
+  path (src bigint, dst bigint, w double precision) AS (
+      SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
+      FROM Person_knows_Person pp left join mm on least(pp.person1id, pp.person2id) = mm.src AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  -- bidirectional bfs for nonexistant paths
+  pexists (src bigint, dir bool) AS (
+      (
+          SELECT f, true FROM srcs
+          UNION
+          SELECT t, false FROM dsts
+      )
+      UNION
+      (
+          WITH
+          ss (src, dir) AS (SELECT src, dir FROM pexists),
+          ns (src, dir) AS (SELECT p.dst, ss.dir FROM ss, path p WHERE ss.src = p.src),
+          bb (src, dir) AS (SELECT src, dir FROM ns UNION ALL SELECT src, dir FROM ss),
+          found (found) AS (
+              SELECT 1 AS found
+              FROM bb b1, bb b2
+              WHERE b1.dir AND (NOT b2.dir) AND b1.src = b2.src
+          )
+          SELECT src, dir
+          FROM ns
+          WHERE NOT EXISTS (SELECT 1 FROM found)
+          UNION
+          SELECT -1, true
+          WHERE EXISTS (SELECT 1 FROM found)
+      )
+  ),
+  pathfound (c bool) AS (
+      SELECT true AS c
+      FROM pexists
+      WHERE src = -1 AND dir
+  ),
+  shorts (dir bool, gsrc bigint, dst bigint, w double precision, dead bool, iter bigint) AS (
+      (
+          SELECT false, f, f, 0::double precision, false, 0 FROM srcs WHERE EXISTS (SELECT 1 FROM pathfound)
+          UNION ALL
+          SELECT true, t, t, 0::double precision, false, 0 FROM dsts WHERE EXISTS (SELECT 1 FROM pathfound)
+      )
+      UNION
+      (
+          WITH
+          ss (dir, gsrc, dst, w, dead, iter) AS
+             (SELECT * FROM shorts),
+          toExplore (dir, gsrc, dst, w, dead, iter) AS
+             (SELECT * FROM ss WHERE dead = false ORDER BY w limit 1000),
+          -- assumes graph is undirected
+          newPoints (dir, gsrc, dst, w, dead) AS (
+              SELECT e.dir, e.gsrc AS gsrc, p.dst AS dst, e.w + p.w AS w, false AS dead
+              FROM path p join toExplore e on (e.dst = p.src)
+              UNION ALL
+              SELECT dir, gsrc, dst, w, dead OR EXISTS (SELECT * FROM toExplore e WHERE e.dir = o.dir AND e.gsrc = o.gsrc AND e.dst = o.dst) FROM ss o
+          ),
+          fullTable (dir, gsrc, dst, w, dead) AS (
+              SELECT DISTINCT ON(dir, gsrc, dst) dir, gsrc, dst, w, dead
+              FROM newPoints
+              ORDER BY dir, gsrc, dst, w, dead DESC
+          ),
+          found AS (
+              SELECT min(l.w + r.w) AS w
+              FROM fullTable l, fullTable r
+              WHERE l.dir = false AND r.dir = true AND l.dst = r.dst
+          )
+          SELECT dir,
+                 gsrc,
+                 dst,
+                 w,
+                 dead OR (coalesce(t.w > (SELECT f.w/2 FROM found f), false)),
+                 e.iter + 1 AS iter
+          FROM fullTable t, (SELECT iter FROM toExplore limit 1) e
+      )
+  ),
+  ss (dir bool, gsrc bigint, dst bigint, w double precision, iter bigint) AS (
+      SELECT dir, gsrc, dst, w, iter FROM shorts WHERE iter = (SELECT max(iter) FROM shorts)
+  ),
+  results(f bigint, t bigint, w double precision) AS (
+      SELECT l.gsrc, r.gsrc, min(l.w + r.w)
+      FROM ss l, ss r
+      WHERE l.dir = false AND r.dir = true AND l.dst = r.dst
+      GROUP BY l.gsrc, r.gsrc
+  )
+SELECT coalesce(min(w), -1) FROM results
+----
+Explained Query:
+  Return // { arity: 1 }
+    Return // { arity: 1 }
+      Project (#1) // { arity: 1 }
+        Map (coalesce(#0, -1)) // { arity: 2 }
+          Union // { arity: 1 }
+            Get l18 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l18 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+    With
+      cte l18 =
+        Reduce aggregates=[min(#0)] // { arity: 1 }
+          Project (#2) // { arity: 1 }
+            Reduce group_by=[#0, #2] aggregates=[min((#1 + #3))] // { arity: 3 }
+              Project (#0, #2, #3, #5) // { arity: 4 }
+                Join on=(#1 = #4) type=differential // { arity: 6 }
+                  implementation
+                    %0:l17[#1]Kef » %1:l17[#1]Kef
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Project (#1..=#3) // { arity: 3 }
+                      Filter (#0 = false) // { arity: 4 }
+                        Get l17 // { arity: 4 }
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Project (#1..=#3) // { arity: 3 }
+                      Filter (#0 = true) // { arity: 4 }
+                        Get l17 // { arity: 4 }
+      cte l17 =
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(#4 = #5) type=differential // { arity: 6 }
+            implementation
+              %1[#0]UK » %0:l16[#4]K
+            ArrangeBy keys=[[#4]] // { arity: 5 }
+              Project (#0..=#3, #5) // { arity: 5 }
+                Filter (#5) IS NOT NULL // { arity: 6 }
+                  Get l16 // { arity: 6 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Filter (#0) IS NOT NULL // { arity: 1 }
+                Reduce aggregates=[max(#0)] // { arity: 1 }
+                  Project (#5) // { arity: 1 }
+                    Get l16 // { arity: 6 }
+  With Mutually Recursive
+    cte l16 =
+      Distinct group_by=[#0..=#5] // { arity: 6 }
+        Union // { arity: 6 }
+          Map (0) // { arity: 6 }
+            Union // { arity: 5 }
+              Project (#1, #0, #0, #2, #1) // { arity: 5 }
+                Map (1450, false, 0) // { arity: 3 }
+                  Get l15 // { arity: 0 }
+              Project (#1, #0, #0, #2, #3) // { arity: 5 }
+                Map (15393162796819, true, 0, false) // { arity: 4 }
+                  Get l15 // { arity: 0 }
+          Project (#0..=#3, #7, #8) // { arity: 6 }
+            Map ((#4 OR coalesce((#3 > #6), false)), (#5 + 1)) // { arity: 9 }
+              CrossJoin type=delta // { arity: 7 }
+                implementation
+                  %0:l12 » %1[×]UA » %2[×]UA
+                  %1 » %2[×]UA » %0:l12[×]A
+                  %2 » %1[×]UA » %0:l12[×]A
+                ArrangeBy keys=[[]] // { arity: 5 }
+                  Get l12 // { arity: 5 }
+                ArrangeBy keys=[[]] // { arity: 1 }
+                  TopK limit=1 // { arity: 1 }
+                    Project (#4) // { arity: 1 }
+                      Get l8 // { arity: 5 }
+                ArrangeBy keys=[[]] // { arity: 1 }
+                  Union // { arity: 1 }
+                    Get l14 // { arity: 1 }
+                    Map (null) // { arity: 1 }
+                      Union // { arity: 0 }
+                        Negate // { arity: 0 }
+                          Project () // { arity: 0 }
+                            Get l14 // { arity: 1 }
+                        Constant // { arity: 0 }
+                          - ()
+    cte l15 =
+      Distinct // { arity: 0 }
+        Project () // { arity: 0 }
+          Filter #1 AND (#0 = -1) // { arity: 2 }
+            Get l7 // { arity: 2 }
+    cte l14 =
+      Project (#1) // { arity: 1 }
+        Map ((#0 / 2)) // { arity: 2 }
+          Union // { arity: 1 }
+            Get l13 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l13 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+    cte l13 =
+      Reduce aggregates=[min((#0 + #1))] // { arity: 1 }
+        Project (#1, #3) // { arity: 2 }
+          Join on=(#0 = #2) type=differential // { arity: 4 }
+            implementation
+              %0:l12[#0]Kef » %1:l12[#0]Kef
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#2, #3) // { arity: 2 }
+                Filter (#0 = false) // { arity: 5 }
+                  Get l12 // { arity: 5 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#2, #3) // { arity: 2 }
+                Filter (#0 = true) // { arity: 5 }
+                  Get l12 // { arity: 5 }
+    cte l12 =
+      TopK group_by=[#0..=#2] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
+        Union // { arity: 5 }
+          Project (#3, #4, #1, #7, #8) // { arity: 5 }
+            Map ((#6 + #2), false) // { arity: 9 }
+              Join on=(#0 = #5) type=differential // { arity: 7 }
+                implementation
+                  %0:l3[#0]K » %1:l8[#2]K
+                ArrangeBy keys=[[#0]] // { arity: 3 }
+                  Get l3 // { arity: 3 }
+                ArrangeBy keys=[[#2]] // { arity: 4 }
+                  Project (#0..=#3) // { arity: 4 }
+                    Get l8 // { arity: 5 }
+          Project (#0..=#3, #16) // { arity: 5 }
+            Map ((#4 OR #15)) // { arity: 17 }
+              Join on=(eq(#0, #6, #12) AND eq(#1, #7, #13) AND eq(#2, #8, #14) AND #3 = #9 AND #4 = #10 AND #5 = #11) type=differential // { arity: 16 }
+                implementation
+                  %1:l9[#0..=#5]UKKKKKK » %0:l16[#0..=#5]KKKKKK » %2[#0..=#2]KKK
+                ArrangeBy keys=[[#0..=#5]] // { arity: 6 }
+                  Get l16 // { arity: 6 }
+                ArrangeBy keys=[[#0..=#5]] // { arity: 6 }
+                  Get l9 // { arity: 6 }
+                ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
+                  Union // { arity: 4 }
+                    Map (true) // { arity: 4 }
+                      Get l11 // { arity: 3 }
+                    Project (#0..=#2, #6) // { arity: 4 }
+                      Map (false) // { arity: 7 }
+                        Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                          implementation
+                            %1:l10[#0..=#2]UKKK » %0[#0..=#2]KKK
+                          ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                            Union // { arity: 3 }
+                              Negate // { arity: 3 }
+                                Get l11 // { arity: 3 }
+                              Get l10 // { arity: 3 }
+                          ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                            Get l10 // { arity: 3 }
+    cte l11 =
+      Project (#0..=#2) // { arity: 3 }
+        Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+          implementation
+            %1[#0..=#2]UKKKA » %0:l10[#0..=#2]UKKK
+          ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+            Get l10 // { arity: 3 }
+          ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+            Distinct group_by=[#0..=#2] // { arity: 3 }
+              Project (#0..=#2) // { arity: 3 }
+                Get l8 // { arity: 5 }
+    cte l10 =
+      Distinct group_by=[#0..=#2] // { arity: 3 }
+        Project (#0..=#2) // { arity: 3 }
+          Get l9 // { arity: 6 }
+    cte l9 =
+      Distinct group_by=[#0..=#5] // { arity: 6 }
+        Get l16 // { arity: 6 }
+    cte l8 =
+      TopK order_by=[#3 asc nulls_last] limit=1000 // { arity: 5 }
+        Project (#0..=#3, #5) // { arity: 5 }
+          Filter (#4 = false) // { arity: 6 }
+            Get l16 // { arity: 6 }
+    cte l7 =
+      Distinct group_by=[#0, #1] // { arity: 2 }
+        Union // { arity: 2 }
+          Distinct group_by=[#0, #1] // { arity: 2 }
+            Union // { arity: 2 }
+              Project (#1, #0) // { arity: 2 }
+                CrossJoin type=differential // { arity: 2 }
+                  implementation
+                    %0:l4[×] » %1[×]
+                  ArrangeBy keys=[[]] // { arity: 2 }
+                    Get l4 // { arity: 2 }
+                  ArrangeBy keys=[[]] // { arity: 0 }
+                    Union // { arity: 0 }
+                      Negate // { arity: 0 }
+                        Get l6 // { arity: 0 }
+                      Constant // { arity: 0 }
+                        - ()
+              Project (#1, #0) // { arity: 2 }
+                Map (true, -1) // { arity: 2 }
+                  Get l6 // { arity: 0 }
+          Constant // { arity: 2 }
+            - (15393162796819, false)
+            - (1450, true)
+    cte l6 =
+      Distinct // { arity: 0 }
+        Project () // { arity: 0 }
+          Join on=(#0 = #1) type=differential // { arity: 2 }
+            implementation
+              %0:l5[#0]Kf » %1:l5[#0]Kf
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter #1 // { arity: 2 }
+                  Get l5 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter NOT(#1) // { arity: 2 }
+                  Get l5 // { arity: 2 }
+    cte l5 =
+      Union // { arity: 2 }
+        Project (#1, #0) // { arity: 2 }
+          Get l4 // { arity: 2 }
+        Get l7 // { arity: 2 }
+    cte l4 =
+      Project (#1, #3) // { arity: 2 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %0:l7[#0]K » %1:l3[#0]K
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Get l7 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Get l3 // { arity: 3 }
+    cte l3 =
+      Project (#0, #1, #3) // { arity: 3 }
+        Map ((10 / bigint_to_double((coalesce(#2, 0) + 10)))) // { arity: 4 }
+          Union // { arity: 3 }
+            Project (#1..=#3) // { arity: 3 }
+              Get l2 // { arity: 4 }
+            Project (#1, #2, #6) // { arity: 3 }
+              Map (null) // { arity: 7 }
+                Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                  implementation
+                    %0[#0..=#2]KKK » %1:person_knows_person[#0..=#2]KKK
+                  ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                    Union // { arity: 3 }
+                      Negate // { arity: 3 }
+                        Distinct group_by=[#0..=#2] // { arity: 3 }
+                          Project (#0..=#2) // { arity: 3 }
+                            Get l2 // { arity: 4 }
+                      Distinct group_by=[#0..=#2] // { arity: 3 }
+                        Get materialize.public.person_knows_person // { arity: 3 }
+                  ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                    Get materialize.public.person_knows_person // { arity: 3 }
+    cte l2 =
+      Project (#0..=#2, #5) // { arity: 4 }
+        Join on=(#3 = least(#1, #2) AND #4 = greatest(#1, #2)) type=differential // { arity: 6 }
+          implementation
+            %1[#1, #0]UKK » %0:person_knows_person[greatest(#1, #2), least(#1, #2)]KK
+          ArrangeBy keys=[[greatest(#1, #2), least(#1, #2)]] // { arity: 3 }
+            Get materialize.public.person_knows_person // { arity: 3 }
+          ArrangeBy keys=[[#1, #0]] // { arity: 3 }
+            Reduce group_by=[least(#0, #1), greatest(#0, #1)] aggregates=[sum(case when (#2) IS NULL then 10 else 5 end)] // { arity: 3 }
+              Project (#0..=#2) // { arity: 3 }
+                Join on=(eq(#3, #4, #5)) type=delta // { arity: 6 }
+                  implementation
+                    %0:l1 » %1[#0]UKA » %2[#0]UKA
+                    %1 » %2[#0]UKA » %0:l1[#3]KA
+                    %2 » %1[#0]UKA » %0:l1[#3]KA
+                  ArrangeBy keys=[[#3]] // { arity: 4 }
+                    Get l1 // { arity: 4 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#3) // { arity: 1 }
+                        Filter (#3) IS NOT NULL // { arity: 4 }
+                          Get l1 // { arity: 4 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#1) // { arity: 1 }
+                        Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
+                          Get materialize.public.forum // { arity: 4 }
+    cte l1 =
+      Project (#0, #1, #3, #4) // { arity: 4 }
+        Join on=(eq(#2, #5, #6)) type=delta // { arity: 7 }
+          implementation
+            %0:l0 » %1[#0]UKA » %2[#0]UKA
+            %1 » %2[#0]UKA » %0:l0[#2]KA
+            %2 » %1[#0]UKA » %0:l0[#2]KA
+          ArrangeBy keys=[[#2]] // { arity: 5 }
+            Get l0 // { arity: 5 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Project (#2) // { arity: 1 }
+                Filter (#2) IS NOT NULL // { arity: 5 }
+                  Get l0 // { arity: 5 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Project (#1) // { arity: 1 }
+                Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
+                  Get materialize.public.forum // { arity: 4 }
+    cte l0 =
+      Project (#1, #2, #13, #15, #26) // { arity: 5 }
+        Filter (#4) IS NOT NULL // { arity: 29 }
+          Join on=(#1 = #12 AND #2 = #25 AND #4 = #28) type=differential // { arity: 29 }
+            implementation
+              %1:message[#1]KA » %2:message[#12]KA » %0:person_knows_person[#1, #2]KKA
+            ArrangeBy keys=[[#1, #2]] // { arity: 3 }
+              Get materialize.public.person_knows_person // { arity: 3 }
+            ArrangeBy keys=[[#1]] // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#12]] // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.forum_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***, differential join)
+  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_parentmessageid (differential join)
+
+EOF
+
+
+######################################################################
+# QUERY 16
+######################################################################
+
+# \set tagA '\'Diosdado_Macapagal\''
+# \set dateA '\'2012-10-07\''::timestamp
+# \set tagB '\'Thailand_Noriega\''
+# \set dateB '\'2012-12-14\''::timestamp
+# \set maxKnowsLimit '5'
+
+# TODO(mgree) predicate push down anomaly on Tag.name
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+  subgraphA AS (
+    SELECT DISTINCT Person.id AS PersonId, Message.MessageId AS MessageId
+    FROM Person
+    JOIN Message
+      ON Message.CreatorPersonId = Person.id
+     AND Message.creationDate::date = '2012-10-07'::TIMESTAMP
+    JOIN Message_hasTag_Tag
+      ON Message_hasTag_Tag.MessageId = Message.MessageId
+    JOIN Tag
+      ON Tag.id = Message_hasTag_Tag.TagId
+     AND Tag.name = 'Diosdado_Macapagal'
+  ),
+  personA AS (
+    SELECT
+        subgraphA1.PersonId,
+        count(DISTINCT subgraphA1.MessageId) AS cm,
+        count(DISTINCT Person_knows_Person.Person2Id) AS cp2
+    FROM subgraphA subgraphA1
+    LEFT JOIN Person_knows_Person
+    ON Person_knows_Person.Person1Id = subgraphA1.PersonId
+    AND Person_knows_Person.Person2Id IN (SELECT PersonId FROM subgraphA)
+    GROUP BY subgraphA1.PersonId
+    HAVING count(DISTINCT Person_knows_Person.Person2Id) <= 5
+    ORDER BY subgraphA1.PersonId ASC
+  ),
+  subgraphB AS (
+    SELECT DISTINCT Person.id AS PersonId, Message.MessageId AS MessageId
+    FROM Person
+    JOIN Message
+      ON Message.CreatorPersonId = Person.id
+     AND Message.creationDate::date = '2012-12-14'::TIMESTAMP
+    JOIN Message_hasTag_Tag
+      ON Message_hasTag_Tag.MessageId = Message.MessageId
+    JOIN Tag
+      ON Tag.id = Message_hasTag_Tag.TagId
+     AND Tag.name = 'Thailand_Noriega'
+  ),
+  personB AS (
+    SELECT
+        subgraphB1.PersonId,
+        count(DISTINCT subgraphB1.MessageId) AS cm,
+        count(DISTINCT Person_knows_Person.Person2Id) AS cp2
+    FROM subgraphB subgraphB1
+    LEFT JOIN Person_knows_Person
+    ON Person_knows_Person.Person1Id = subgraphB1.PersonId
+    AND Person_knows_Person.Person2Id IN (SELECT PersonId FROM subgraphB)
+    GROUP BY subgraphB1.PersonId
+    HAVING count(DISTINCT Person_knows_Person.Person2Id) <= 5
+    ORDER BY subgraphB1.PersonId ASC
+  )
+SELECT
+    personA.PersonId AS PersonId,
+    personA.cm AS messageCountA,
+    personB.cm AS messageCountB
+FROM personA
+JOIN personB
+  ON personB.PersonId = personA.PersonId
+ORDER BY personA.cm + personB.cm DESC, PersonId ASC
+LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#6 desc nulls_first, #0 asc nulls_last] limit=20 output=[#0, #1, #4]
+    Return // { arity: 7 }
+      Project (#0..=#2, #0, #4..=#6) // { arity: 7 }
+        Filter (#2 <= 5) AND (#5 <= 5) // { arity: 7 }
+          Map ((#1 + #4)) // { arity: 7 }
+            Join on=(#0 = #3) type=differential // { arity: 6 }
+              implementation
+                %0[#0]UKAif » %1[#0]UKAiif
+              ArrangeBy keys=[[#0]] // { arity: 3 }
+                Reduce group_by=[#0] aggregates=[count(distinct #1), count(distinct #2)] // { arity: 3 }
+                  Union // { arity: 3 }
+                    Get l5 // { arity: 3 }
+                    Map (null) // { arity: 3 }
+                      Union // { arity: 2 }
+                        Negate // { arity: 2 }
+                          Distinct group_by=[#0, #1] // { arity: 2 }
+                            Project (#0, #1) // { arity: 2 }
+                              Get l5 // { arity: 3 }
+                        Get l3 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 3 }
+                Reduce group_by=[#0] aggregates=[count(distinct #1), count(distinct #2)] // { arity: 3 }
+                  Union // { arity: 3 }
+                    Get l7 // { arity: 3 }
+                    Map (null) // { arity: 3 }
+                      Union // { arity: 2 }
+                        Negate // { arity: 2 }
+                          Distinct group_by=[#0, #1] // { arity: 2 }
+                            Project (#0, #1) // { arity: 2 }
+                              Get l7 // { arity: 3 }
+                        Get l6 // { arity: 2 }
+    With
+      cte l7 =
+        Project (#0, #1, #3) // { arity: 3 }
+          Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 5 }
+            implementation
+              %2[#0]UKA » %1:l4[#1]K » %0:l6[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l6 // { arity: 2 }
+            Get l4 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l6 // { arity: 2 }
+      cte l6 =
+        Project (#0, #2) // { arity: 2 }
+          Join on=(#0 = #1 AND #2 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l0[#0]UKA » %1[#0]K » %2[#0]UKA
+            Get l0 // { arity: 1 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Distinct group_by=[#1, #0] // { arity: 2 }
+                Project (#1, #9) // { arity: 2 }
+                  Filter (2012-12-14 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0))) // { arity: 13 }
+                    Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#1) IS NOT NULL // { arity: 7 }
+                    Join on=(#1 = #2) type=differential // { arity: 7 }
+                      implementation
+                        %1:tag[#0]KAe » %0:l1[#1]Ke
+                      Get l1 // { arity: 2 }
+                      ArrangeBy keys=[[#0]] // { arity: 5 }
+                        ReadExistingIndex materialize.public.tag lookup_value=("Thailand_Noriega") // { arity: 5 }
+      cte l5 =
+        Project (#0, #1, #3) // { arity: 3 }
+          Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 5 }
+            implementation
+              %2[#0]UKA » %1:l4[#1]K » %0:l3[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l3 // { arity: 2 }
+            Get l4 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Get l3 // { arity: 2 }
+      cte l4 =
+        ArrangeBy keys=[[#1]] // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
+            Get materialize.public.person_knows_person // { arity: 3 }
+      cte l3 =
+        Project (#0, #2) // { arity: 2 }
+          Join on=(#0 = #1 AND #2 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l0[#0]UKA » %1[#0]K » %2[#0]UKA
+            Get l0 // { arity: 1 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Distinct group_by=[#1, #0] // { arity: 2 }
+                Project (#1, #9) // { arity: 2 }
+                  Filter (2012-10-07 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0))) // { arity: 13 }
+                    Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#1) IS NOT NULL // { arity: 7 }
+                    Join on=(#1 = #2) type=differential // { arity: 7 }
+                      implementation
+                        %1:tag[#0]KAe » %0:l1[#1]Ke
+                      Get l1 // { arity: 2 }
+                      ArrangeBy keys=[[#0]] // { arity: 5 }
+                        ReadExistingIndex materialize.public.tag lookup_value=("Diosdado_Macapagal") // { arity: 5 }
+      cte l2 =
+        ArrangeBy keys=[[#1]] // { arity: 4 }
+          Get materialize.public.tag // { arity: 4 }
+      cte l1 =
+        ArrangeBy keys=[[#1]] // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
+            Get materialize.public.message_hastag_tag // { arity: 3 }
+      cte l0 =
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Distinct group_by=[#0] // { arity: 1 }
+            Project (#1) // { arity: 1 }
+              Filter (#1) IS NOT NULL // { arity: 11 }
+                Get materialize.public.person // { arity: 11 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+  - materialize.public.message_messageid (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 17
+######################################################################
+
+# \set tag '\'Cosmic_Egg\''
+# \set delta '12'
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH MyMessage as (
+    SELECT *
+    FROM Message
+-- (tag)<-[:HAS_TAG]-(message)
+    WHERE MessageId in (SELECT MessageId FROM Message_hasTag_Tag WHERE TagId IN (SELECT id FROM Tag WHERE Tag.name = 'Cosmic_Egg'))
+)
+-- (message1)-[:HAS_CREATOR]->(person1)
+SELECT Message1.CreatorPersonId AS "person1.id", count(DISTINCT Message2.MessageId) AS messageCount
+FROM MyMessage Message1
+-- (message2 <date filtering>})
+JOIN MyMessage Message2
+ ON (Message1.creationDate + (12 || ' hour')::interval) < Message2.creationDate
+JOIN MyMessage Comment
+ ON Comment.ParentMessageId = Message2.MessageId
+-- (forum1)-[:Has_MEMBER]->(person2)
+JOIN Forum_hasMember_Person Forum_hasMember_Person2
+  ON Forum_hasMember_Person2.ForumId = Message1.ContainerForumId -- forum1
+ AND Forum_hasMember_Person2.PersonId = Comment.CreatorPersonId -- person2
+-- (forum1)-[:Has_MEMBER]->(person3)
+JOIN Forum_hasMember_Person Forum_hasMember_Person3
+  ON Forum_hasMember_Person3.ForumId = Message1.ContainerForumId -- forum1
+ AND Forum_hasMember_Person3.PersonId = Message2.CreatorPersonId -- person3
+WHERE Message1.ContainerForumId <> Message2.ContainerForumId
+  -- person2 <> person3
+  AND Forum_hasMember_Person2.PersonId <> Forum_hasMember_Person3.PersonId
+  -- NOT (forum2)-[:HAS_MEMBER]->(person1)
+  AND NOT EXISTS (SELECT 1
+                  FROM Forum_hasMember_Person Forum_hasMember_Person1
+                  WHERE Forum_hasMember_Person1.ForumId = Message2.ContainerForumId -- forum2
+                    AND Forum_hasMember_Person1.PersonId = Message1.CreatorPersonId -- person1
+                 )
+GROUP BY Message1.CreatorPersonId
+ORDER BY messageCount DESC, Message1.CreatorPersonId ASC
+LIMIT 10
+----
+Explained Query:
+  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=10 output=[#0, #1]
+    Return // { arity: 2 }
+      Reduce group_by=[#0] aggregates=[count(distinct #1)] // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0 = #3 AND #2 = #4) type=differential // { arity: 5 }
+            implementation
+              %0:l2[#0, #2]KK » %1[#0, #1]KK
+            ArrangeBy keys=[[#0, #2]] // { arity: 3 }
+              Get l2 // { arity: 3 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Union // { arity: 2 }
+                Negate // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+                      implementation
+                        %0:l3[#0, #1]UKKA » %1[#0, #1]UKKA
+                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                        Get l3 // { arity: 2 }
+                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                        Distinct group_by=[#1, #0] // { arity: 2 }
+                          Get l1 // { arity: 2 }
+                Get l3 // { arity: 2 }
+    With
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Project (#0, #2) // { arity: 2 }
+            Get l2 // { arity: 3 }
+      cte l2 =
+        Project (#1, #4, #6) // { arity: 3 }
+          Filter (#2 != #6) AND (#5 != #7) AND ((#0 + 12:00:00) < #3) // { arity: 13 }
+            Join on=(eq(#2, #9, #11) AND #4 = #8 AND #5 = #12 AND #7 = #10) type=differential // { arity: 13 }
+              implementation
+                %0:l0[#2]K » %3:l1[#0]K » %2:l0[#0]K » %1:l0[#1]K » %4:l1[#0, #1]KK
+              ArrangeBy keys=[[#2]] // { arity: 3 }
+                Project (#0, #2, #3) // { arity: 3 }
+                  Filter (#3) IS NOT NULL // { arity: 5 }
+                    Get l0 // { arity: 5 }
+              ArrangeBy keys=[[#1]] // { arity: 4 }
+                Project (#0..=#3) // { arity: 4 }
+                  Get l0 // { arity: 5 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#2, #4) // { arity: 2 }
+                  Filter (#4) IS NOT NULL // { arity: 5 }
+                    Get l0 // { arity: 5 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Get l1 // { arity: 2 }
+              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                Get l1 // { arity: 2 }
+      cte l1 =
+        Project (#1, #2) // { arity: 2 }
+          Get materialize.public.forum_hasmember_person // { arity: 3 }
+      cte l0 =
+        Project (#0, #1, #9, #10, #12) // { arity: 5 }
+          Join on=(#1 = #13) type=differential // { arity: 14 }
+            implementation
+              %1[#0]UKA » %0:message[#1]KA
+            ArrangeBy keys=[[#1]] // { arity: 13 }
+              Get materialize.public.message // { arity: 13 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Join on=(#1 = #2) type=differential // { arity: 3 }
+                    implementation
+                      %1[#0]UKA » %0:message_hastag_tag[#1]K
+                    ArrangeBy keys=[[#1]] // { arity: 2 }
+                      Project (#1, #2) // { arity: 2 }
+                        Get materialize.public.message_hastag_tag // { arity: 3 }
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Filter (#0) IS NOT NULL // { arity: 5 }
+                            ReadExistingIndex materialize.public.tag lookup_value=("Cosmic_Egg") // { arity: 5 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.message_messageid (differential join)
+
+EOF
+
+######################################################################
+# QUERY 18
+######################################################################
+
+# \set tag '\'Fyodor_Dostoyevsky\''
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+PersonWithInterest AS (
+SELECT pt.PersonId AS PersonId
+FROM Person_hasInterest_Tag pt, Tag t
+WHERE t.name = 'Fyodor_Dostoyevsky' AND pt.TagId = t.id
+),
+FriendsOfInterested AS (
+SELECT k.Person1Id AS InterestedId, k.Person2Id AS FriendId
+FROM PersonWithInterest p, Person_knows_Person k
+WHERE p.PersonId = k.Person1Id
+)
+SELECT k1.InterestedId AS "person1.id", k2.InterestedId AS "person2.id", count(k1.FriendId) AS mutualFriendCount
+FROM FriendsOfInterested k1
+JOIN FriendsOfInterested k2
+  ON k1.FriendId = k2.FriendId -- pattern: mutualFriend
+ -- negative edge
+WHERE k1.InterestedId != k2.InterestedId
+  AND NOT EXISTS (SELECT 1
+         FROM Person_knows_Person k3
+        WHERE k3.Person1Id = k2.InterestedId -- pattern: person2
+          AND k3.Person2Id = k1.InterestedId -- pattern: person1
+      )
+GROUP BY k1.InterestedId, k2.InterestedId
+ORDER BY mutualFriendCount DESC, k1.InterestedId ASC, k2.InterestedId ASC
+LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#2 desc nulls_first, #0 asc nulls_last, #1 asc nulls_last] limit=20 output=[#0..=#2]
+    Return // { arity: 3 }
+      Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+            implementation
+              %0:l2[#0, #1]KK » %1[#0, #1]KK
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Get l2 // { arity: 2 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+              Union // { arity: 2 }
+                Negate // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+                      implementation
+                        %0:l3[#0, #1]UKKA » %1[#0, #1]UKKA
+                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                        Get l3 // { arity: 2 }
+                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                        Distinct group_by=[#1, #0] // { arity: 2 }
+                          Get l0 // { arity: 2 }
+                Get l3 // { arity: 2 }
+    With
+      cte l3 =
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Get l2 // { arity: 2 }
+      cte l2 =
+        Project (#0, #2) // { arity: 2 }
+          Filter (#0 != #2) // { arity: 4 }
+            Join on=(#1 = #3) type=differential // { arity: 4 }
+              implementation
+                %0:l1[#1]K » %1:l1[#1]K
+              Get l1 // { arity: 2 }
+              Get l1 // { arity: 2 }
+      cte l1 =
+        ArrangeBy keys=[[#1]] // { arity: 2 }
+          Project (#0, #8) // { arity: 2 }
+            Filter (#1) IS NOT NULL // { arity: 9 }
+              Join on=(#0 = #7 AND #1 = #2) type=differential // { arity: 9 }
+                implementation
+                  %1:tag[#0]KAe » %0:person_hasinterest_tag[#1]Ke » %2:l0[#0]Ke
+                ArrangeBy keys=[[#1]] // { arity: 2 }
+                  Project (#1, #2) // { arity: 2 }
+                    Get materialize.public.person_hasinterest_tag // { arity: 3 }
+                ArrangeBy keys=[[#0]] // { arity: 5 }
+                  ReadExistingIndex materialize.public.tag lookup_value=("Fyodor_Dostoyevsky") // { arity: 5 }
+                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  Get l0 // { arity: 2 }
+      cte l0 =
+        Project (#1, #2) // { arity: 2 }
+          Get materialize.public.person_knows_person // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.tag_name (lookup)
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+EOF
+
+######################################################################
+# QUERY 19
+######################################################################
+
+# \set city1Id 655::bigint
+# \set city2Id 1138::bigint
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
+WITH
+  -- asymmetrize...
+  knows_asymmetric AS (
+    SELECT person1id, person2id
+      FROM Person_knows_person
+     WHERE person1id < person2id
+  ),
+  -- compute interaction scores (no interactions means we ignore that 'knows' relationship)
+  weights(src, dst, w) AS (
+    SELECT
+        person1id AS src,
+        person2id AS dst,
+        greatest(round(40 - sqrt(count(*)))::bigint, 1) AS w
+    FROM knows_asymmetric pp,
+         Message m1,
+         Message m2
+    WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid)
+      AND pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid)
+      AND m1.parentmessageid = m2.messageid
+      AND m1.creatorpersonid <> m2.creatorpersonid
+ GROUP BY src, dst
+)
+-- resymmetrize
+SELECT src, dst, w FROM weights
+UNION ALL
+SELECT dst, src, w FROM weights;
+
+statement ok
+CREATE INDEX PathQ19_src ON PathQ19 (src);
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH
+  srcs AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
+  dsts AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
+  completed_paths AS (
+    WITH MUTUALLY RECURSIVE
+      paths (src bigint, dst bigint, w double precision) AS (
+          SELECT id AS src,
+                 id AS dst,
+                 0::double precision AS w
+                 FROM srcs
+          UNION
+          SELECT paths1.src AS src,
+                 paths2.dst AS dst,
+                 paths1.w + paths2.w AS w
+            FROM minimal_paths paths1
+            JOIN PathQ19 paths2 -- step-transitive closure
+              ON paths1.dst = paths2.src
+      ),
+      minimal_paths (src bigint, dst bigint, w double precision) AS (
+        SELECT src, dst, min(w)
+          FROM paths
+      GROUP BY src, dst
+      )
+    SELECT src, dst, w
+      FROM minimal_paths
+     WHERE dst = ANY (SELECT id FROM dsts)
+  )
+SELECT src, dst, w
+  FROM completed_paths
+ WHERE w = (SELECT min(w) FROM completed_paths)
+----
+Explained Query:
+  Return // { arity: 3 }
+    Return // { arity: 3 }
+      Project (#0..=#2) // { arity: 3 }
+        Join on=(#2 = #3) type=differential // { arity: 4 }
+          implementation
+            %1[#0]UK » %0:l1[#2]K
+          ArrangeBy keys=[[#2]] // { arity: 3 }
+            Filter (#2) IS NOT NULL // { arity: 3 }
+              Get l1 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              Reduce aggregates=[min(#0)] // { arity: 1 }
+                Project (#2) // { arity: 1 }
+                  Get l1 // { arity: 3 }
+    With
+      cte l1 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(eq(#1, #3, #4)) type=delta // { arity: 5 }
+            implementation
+              %0:l0 » %1[#0]UKA » %2[#0]UKA
+              %1 » %2[#0]UKA » %0:l0[#1]KA
+              %2 » %1[#0]UKA » %0:l0[#1]KA
+            ArrangeBy keys=[[#1]] // { arity: 3 }
+              Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Filter (#1) IS NOT NULL // { arity: 3 }
+                    Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[#0] // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Filter (#8 = 1138) AND (#1) IS NOT NULL // { arity: 11 }
+                    Get materialize.public.person // { arity: 11 }
+  With Mutually Recursive
+    cte l0 =
+      Reduce group_by=[#0, #1] aggregates=[min(#2)] // { arity: 3 }
+        Distinct group_by=[#0..=#2] // { arity: 3 }
+          Union // { arity: 3 }
+            Project (#1, #1, #11) // { arity: 3 }
+              Filter (#8 = 655) // { arity: 12 }
+                Map (0) // { arity: 12 }
+                  Get materialize.public.person // { arity: 11 }
+            Project (#0, #4, #6) // { arity: 3 }
+              Map ((#2 + bigint_to_double(#5))) // { arity: 7 }
+                Join on=(#1 = #3) type=differential // { arity: 6 }
+                  implementation
+                    %1:pathq19[#0]KA » %0:l0[#1]K
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Filter (#1) IS NOT NULL // { arity: 3 }
+                      Get l0 // { arity: 3 }
+                  ArrangeBy keys=[[#0]] // { arity: 3 }
+                    Get materialize.public.pathq19 // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.pathq19_src (differential join)
+
+EOF
+
+# q19 (frank's version)
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH MUTUALLY RECURSIVE
+  -- Source and destination identifiers, which do not evolve recursively.
+  srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
+  dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
+
+  -- Only work off of nodes not more than half a viable path.
+  active_forward(src bigint, dst bigint, w double precision) AS (
+    SELECT * FROM forward WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
+  ),
+  forward (src bigint, dst bigint, w double precision) AS (
+    SELECT DISTINCT ON (src, dst) src, dst, w
+    FROM (
+      SELECT f as src, f as dst, 0.0 as w FROM srcs
+      UNION ALL
+      SELECT f.src, p.dst, f.w + p.w
+      FROM active_forward f, PathQ19 p
+      WHERE f.dst = p.src
+    )
+    ORDER BY src, dst, w
+  ),
+
+  -- Only work off of nodes not more than half a viable path.
+  active_reverse(src bigint, dst bigint, w double precision) AS (
+    SELECT * FROM reverse WHERE coalesce (w < (SELECT w/2 FROM shortest), true)
+  ),
+  reverse (src bigint, dst bigint, w double precision) AS (
+    SELECT DISTINCT ON (src, dst) src, dst, w
+    FROM (
+      SELECT t as src, t as dst, 0.0 as w FROM dsts
+      UNION ALL
+      SELECT r.src, p.dst, r.w + p.w
+      FROM active_reverse r, PathQ19 p
+      WHERE r.dst = p.src
+    )
+    ORDER BY src, dst, w
+  ),
+
+  -- Once we find a path from `f` to `t` it appears here.
+  paths (f bigint, t bigint, w double precision) AS (
+    SELECT l.src as f, r.src as t, min(l.w + r.w) AS w
+    FROM forward l, reverse r
+    WHERE l.dst = r.dst
+    GROUP BY l.src, r.src
+  ),
+
+  shortest (w double precision) AS (
+    SELECT min(w) FROM paths
+  )
+
+SELECT *
+FROM paths
+WHERE w = (SELECT MIN(w) FROM paths)
+----
+Explained Query:
+  Return // { arity: 3 }
+    Project (#0..=#2) // { arity: 3 }
+      Join on=(#2 = #3) type=differential // { arity: 4 }
+        implementation
+          %1[#0]UK » %0:l4[#2]K
+        ArrangeBy keys=[[#2]] // { arity: 3 }
+          Filter (#2) IS NOT NULL // { arity: 3 }
+            Get l4 // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Filter (#0) IS NOT NULL // { arity: 1 }
+            Reduce aggregates=[min(#0)] // { arity: 1 }
+              Project (#2) // { arity: 1 }
+                Get l4 // { arity: 3 }
+  With Mutually Recursive
+    cte l6 =
+      Union // { arity: 1 }
+        Get l5 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Project () // { arity: 0 }
+                Get l5 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+    cte l5 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Get l4 // { arity: 3 }
+    cte l4 =
+      Reduce group_by=[#0, #2] aggregates=[min((#1 + #3))] // { arity: 3 }
+        Project (#0, #2, #3, #5) // { arity: 4 }
+          Join on=(#1 = #4) type=differential // { arity: 6 }
+            implementation
+              %0:l1[#1]K » %1:l3[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 3 }
+              Filter (#1) IS NOT NULL // { arity: 3 }
+                Get l1 // { arity: 3 }
+            ArrangeBy keys=[[#1]] // { arity: 3 }
+              Filter (#1) IS NOT NULL // { arity: 3 }
+                Get l3 // { arity: 3 }
+    cte l3 =
+      TopK group_by=[#0, #1] order_by=[#2 asc nulls_last] limit=1 // { arity: 3 }
+        Union // { arity: 3 }
+          Project (#1, #1, #11) // { arity: 3 }
+            Filter (#8 = 1138) // { arity: 12 }
+              Map (0) // { arity: 12 }
+                Get materialize.public.person // { arity: 11 }
+          Project (#0, #5, #7) // { arity: 3 }
+            Filter coalesce((#2 < #3), true) // { arity: 8 }
+              Map ((#2 + bigint_to_double(#6))) // { arity: 8 }
+                Join on=(#1 = #4) type=differential // { arity: 7 }
+                  implementation
+                    %2:pathq19[#0]KA » %0:l3[#1]K » %1[×]
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Filter (#1) IS NOT NULL // { arity: 3 }
+                      Get l3 // { arity: 3 }
+                  ArrangeBy keys=[[]] // { arity: 1 }
+                    Union // { arity: 1 }
+                      Get l2 // { arity: 1 }
+                      Map (null) // { arity: 1 }
+                        Union // { arity: 0 }
+                          Negate // { arity: 0 }
+                            Distinct // { arity: 0 }
+                              Project () // { arity: 0 }
+                                Get l2 // { arity: 1 }
+                          Constant // { arity: 0 }
+                            - ()
+                  ArrangeBy keys=[[#0]] // { arity: 3 }
+                    Get materialize.public.pathq19 // { arity: 3 }
+    cte l2 =
+      Union // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map ((#0 / 2)) // { arity: 2 }
+            Get l6 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l6 // { arity: 1 }
+    cte l1 =
+      TopK group_by=[#0, #1] order_by=[#2 asc nulls_last] limit=1 // { arity: 3 }
+        Union // { arity: 3 }
+          Project (#1, #1, #11) // { arity: 3 }
+            Filter (#8 = 655) // { arity: 12 }
+              Map (0) // { arity: 12 }
+                Get materialize.public.person // { arity: 11 }
+          Project (#0, #5, #7) // { arity: 3 }
+            Filter coalesce((#2 < #3), true) // { arity: 8 }
+              Map ((#2 + bigint_to_double(#6))) // { arity: 8 }
+                Join on=(#1 = #4) type=differential // { arity: 7 }
+                  implementation
+                    %2:pathq19[#0]KA » %0:l1[#1]K » %1[×]
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Filter (#1) IS NOT NULL // { arity: 3 }
+                      Get l1 // { arity: 3 }
+                  ArrangeBy keys=[[]] // { arity: 1 }
+                    Union // { arity: 1 }
+                      Get l0 // { arity: 1 }
+                      Map (null) // { arity: 1 }
+                        Union // { arity: 0 }
+                          Negate // { arity: 0 }
+                            Distinct // { arity: 0 }
+                              Project () // { arity: 0 }
+                                Get l0 // { arity: 1 }
+                          Constant // { arity: 0 }
+                            - ()
+                  ArrangeBy keys=[[#0]] // { arity: 3 }
+                    Get materialize.public.pathq19 // { arity: 3 }
+    cte l0 =
+      Union // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map ((#0 / 2)) // { arity: 2 }
+            Get l6 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l6 // { arity: 1 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.pathq19_src (differential join)
+
+EOF
+
+# original query, w/cross joins
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH MUTUALLY RECURSIVE
+  srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
+  dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
+  shorts (dir bool, gsrc bigint, dst bigint, w double precision, dead bool, iter bigint) AS (
+      (
+          SELECT false, f, f, 0::double precision, false, 0 FROM srcs
+          UNION ALL
+          SELECT true, t, t, 0::double precision, false, 0 FROM dsts
+      )
+      UNION
+      (
+          WITH
+          ss AS (SELECT * FROM shorts),
+          toExplore AS (SELECT * FROM ss WHERE dead = false ORDER BY w LIMIT 1000),
+          -- assumes graph is undirected
+          newPoints(dir, gsrc, dst, w, dead) AS (
+              SELECT e.dir, e.gsrc AS gsrc, p.dst AS dst, e.w + p.w AS w, false AS dead
+              FROM PathQ19 p JOIN toExplore e ON (e.dst = p.src)
+              UNION
+              SELECT dir, gsrc, dst, w, dead OR EXISTS (SELECT * FROM toExplore e WHERE e.dir = o.dir AND e.gsrc = o.gsrc AND e.dst = o.dst) FROM ss o
+          ),
+          fullTable AS (
+              SELECT DISTINCT ON(dir, gsrc, dst) dir, gsrc, dst, w, dead
+              FROM newPoints
+              ORDER BY dir, gsrc, dst, w, dead DESC
+          ),
+          found AS (
+              SELECT min(l.w + r.w) AS w
+              FROM fullTable l, fullTable r
+              WHERE l.dir = false AND r.dir = true AND l.dst = r.dst
+          )
+          SELECT dir,
+                 gsrc,
+                 dst,
+                 w,
+                 dead or (coalesce(t.w > (SELECT f.w/2 FROM found f), false)),
+                 e.iter + 1 AS iter
+          FROM fullTable t, (SELECT iter FROM toExplore LIMIT 1) e
+      )
+  ),
+  ss (dir bool, gsrc bigint, dst bigint, w double precision, iter bigint) AS (
+      SELECT dir, gsrc, dst, w, iter FROM shorts WHERE iter = (SELECT max(iter) FROM shorts)
+  ),
+  results (f bigint, t bigint, w double precision) AS (
+      SELECT l.gsrc, r.gsrc, min(l.w + r.w)
+      FROM ss l, ss r
+      WHERE l.dir = false AND r.dir = true AND l.dst = r.dst
+      GROUP BY l.gsrc, r.gsrc
+  )
+SELECT * FROM results WHERE w = (SELECT min(w) FROM results) ORDER BY f, t
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
+    Return // { arity: 3 }
+      Return // { arity: 3 }
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#2 = #3) type=differential // { arity: 4 }
+            implementation
+              %1[#0]UK » %0:l9[#2]K
+            ArrangeBy keys=[[#2]] // { arity: 3 }
+              Filter (#2) IS NOT NULL // { arity: 3 }
+                Get l9 // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Filter (#0) IS NOT NULL // { arity: 1 }
+                Reduce aggregates=[min(#0)] // { arity: 1 }
+                  Project (#2) // { arity: 1 }
+                    Get l9 // { arity: 3 }
+      With
+        cte l9 =
+          Reduce group_by=[#0, #2] aggregates=[min((#1 + #3))] // { arity: 3 }
+            Project (#0, #2, #3, #5) // { arity: 4 }
+              Join on=(#1 = #4) type=differential // { arity: 6 }
+                implementation
+                  %0:l8[#1]Kef » %1:l8[#1]Kef
+                ArrangeBy keys=[[#1]] // { arity: 3 }
+                  Project (#1..=#3) // { arity: 3 }
+                    Filter (#0 = false) // { arity: 4 }
+                      Get l8 // { arity: 4 }
+                ArrangeBy keys=[[#1]] // { arity: 3 }
+                  Project (#1..=#3) // { arity: 3 }
+                    Filter (#0 = true) // { arity: 4 }
+                      Get l8 // { arity: 4 }
+        cte l8 =
+          Project (#0..=#3) // { arity: 4 }
+            Join on=(#4 = #5) type=differential // { arity: 6 }
+              implementation
+                %1[#0]UK » %0:l7[#4]K
+              ArrangeBy keys=[[#4]] // { arity: 5 }
+                Project (#0..=#3, #5) // { arity: 5 }
+                  Filter (#2) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
+                    Get l7 // { arity: 6 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Filter (#0) IS NOT NULL // { arity: 1 }
+                  Reduce aggregates=[max(#0)] // { arity: 1 }
+                    Project (#5) // { arity: 1 }
+                      Get l7 // { arity: 6 }
+    With Mutually Recursive
+      cte l7 =
+        Distinct group_by=[#0..=#5] // { arity: 6 }
+          Union // { arity: 6 }
+            Map (0) // { arity: 6 }
+              Union // { arity: 5 }
+                Project (#11, #1, #1, #12, #11) // { arity: 5 }
+                  Filter (#8 = 655) // { arity: 13 }
+                    Map (false, 0) // { arity: 13 }
+                      Get materialize.public.person // { arity: 11 }
+                Project (#11, #1, #1, #12, #13) // { arity: 5 }
+                  Filter (#8 = 1138) // { arity: 14 }
+                    Map (true, 0, false) // { arity: 14 }
+                      Get materialize.public.person // { arity: 11 }
+            Project (#0..=#3, #7, #8) // { arity: 6 }
+              Map ((#4 OR coalesce((#3 > #6), false)), (#5 + 1)) // { arity: 9 }
+                CrossJoin type=delta // { arity: 7 }
+                  implementation
+                    %0:l4 » %1[×]UA » %2[×]UA
+                    %1 » %2[×]UA » %0:l4[×]A
+                    %2 » %1[×]UA » %0:l4[×]A
+                  ArrangeBy keys=[[]] // { arity: 5 }
+                    Get l4 // { arity: 5 }
+                  ArrangeBy keys=[[]] // { arity: 1 }
+                    TopK limit=1 // { arity: 1 }
+                      Project (#4) // { arity: 1 }
+                        Get l0 // { arity: 5 }
+                  ArrangeBy keys=[[]] // { arity: 1 }
+                    Union // { arity: 1 }
+                      Get l6 // { arity: 1 }
+                      Map (null) // { arity: 1 }
+                        Union // { arity: 0 }
+                          Negate // { arity: 0 }
+                            Project () // { arity: 0 }
+                              Get l6 // { arity: 1 }
+                          Constant // { arity: 0 }
+                            - ()
+      cte l6 =
+        Project (#1) // { arity: 1 }
+          Map ((#0 / 2)) // { arity: 2 }
+            Union // { arity: 1 }
+              Get l5 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l5 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
+      cte l5 =
+        Reduce aggregates=[min((#0 + #1))] // { arity: 1 }
+          Project (#1, #3) // { arity: 2 }
+            Join on=(#0 = #2) type=differential // { arity: 4 }
+              implementation
+                %0:l4[#0]Kef » %1:l4[#0]Kef
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#2, #3) // { arity: 2 }
+                  Filter (#0 = false) AND (#2) IS NOT NULL // { arity: 5 }
+                    Get l4 // { arity: 5 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#2, #3) // { arity: 2 }
+                  Filter (#0 = true) AND (#2) IS NOT NULL // { arity: 5 }
+                    Get l4 // { arity: 5 }
+      cte l4 =
+        TopK group_by=[#0..=#2] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
+          Distinct group_by=[#0..=#4] // { arity: 5 }
+            Union // { arity: 5 }
+              Project (#3, #4, #1, #7, #8) // { arity: 5 }
+                Map ((#6 + bigint_to_double(#2)), false) // { arity: 9 }
+                  Join on=(#0 = #5) type=differential // { arity: 7 }
+                    implementation
+                      %0:pathq19[#0]KA » %1:l0[#2]K
+                    ArrangeBy keys=[[#0]] // { arity: 3 }
+                      Get materialize.public.pathq19 // { arity: 3 }
+                    ArrangeBy keys=[[#2]] // { arity: 4 }
+                      Project (#0..=#3) // { arity: 4 }
+                        Filter (#2) IS NOT NULL // { arity: 5 }
+                          Get l0 // { arity: 5 }
+              Project (#0..=#3, #16) // { arity: 5 }
+                Map ((#4 OR #15)) // { arity: 17 }
+                  Join on=(eq(#0, #6, #12) AND eq(#1, #7, #13) AND eq(#2, #8, #14) AND #3 = #9 AND #4 = #10 AND #5 = #11) type=differential // { arity: 16 }
+                    implementation
+                      %1:l1[#0..=#5]UKKKKKK » %0:l7[#0..=#5]KKKKKK » %2[#0..=#2]KKK
+                    ArrangeBy keys=[[#0..=#5]] // { arity: 6 }
+                      Get l7 // { arity: 6 }
+                    ArrangeBy keys=[[#0..=#5]] // { arity: 6 }
+                      Get l1 // { arity: 6 }
+                    ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
+                      Union // { arity: 4 }
+                        Map (true) // { arity: 4 }
+                          Get l3 // { arity: 3 }
+                        Project (#0..=#2, #6) // { arity: 4 }
+                          Map (false) // { arity: 7 }
+                            Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                              implementation
+                                %1:l2[#0..=#2]UKKK » %0[#0..=#2]KKK
+                              ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                                Union // { arity: 3 }
+                                  Negate // { arity: 3 }
+                                    Get l3 // { arity: 3 }
+                                  Get l2 // { arity: 3 }
+                              ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                                Get l2 // { arity: 3 }
+      cte l3 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+            implementation
+              %1[#0..=#2]UKKKA » %0:l2[#0..=#2]UKKK
+            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+              Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
+                Get l2 // { arity: 3 }
+            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+              Distinct group_by=[#0..=#2] // { arity: 3 }
+                Project (#0..=#2) // { arity: 3 }
+                  Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
+                    Get l0 // { arity: 5 }
+      cte l2 =
+        Distinct group_by=[#0..=#2] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Get l1 // { arity: 6 }
+      cte l1 =
+        Distinct group_by=[#0..=#5] // { arity: 6 }
+          Get l7 // { arity: 6 }
+      cte l0 =
+        TopK order_by=[#3 asc nulls_last] limit=1000 // { arity: 5 }
+          Project (#0..=#3, #5) // { arity: 5 }
+            Filter (#4 = false) // { arity: 6 }
+              Get l7 // { arity: 6 }
+
+Used Indexes:
+  - materialize.public.person_id (*** full scan ***)
+  - materialize.public.pathq19_src (differential join)
+
+EOF
+
+######################################################################
+# QUERY 20
+######################################################################
+
+# \set company '\'Balkh_Airlines\''
+# \set person2Id 10995116285979::bigint
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW PathQ20 AS
+  SELECT p1.personid AS src, p2.personid AS dst, min(abs(p1.classYear - p2.classYear)) + 1 AS w
+  FROM Person_knows_person pp, Person_studyAt_University p1, Person_studyAt_University p2
+  WHERE pp.person1id = p1.personid
+    AND pp.person2id = p2.personid
+    AND p1.universityid = p2.universityid
+  GROUP BY p1.personid, p2.personid;
+
+statement ok
+CREATE INDEX PathQ20_src ON PathQ20 (src);
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH minimal_paths AS (
+  WITH MUTUALLY RECURSIVE
+    paths (src bigint, dst bigint, w bigint) AS (
+      SELECT 10995116285979::bigint AS src, 10995116285979::bigint AS dst, 0 AS w
+      UNION
+      SELECT paths1.src, paths2.dst, paths1.w + paths2.w
+        FROM minimal_paths paths1
+        JOIN PathQ20 paths2 -- step-transitive closure
+          ON paths1.dst = paths2.src
+    ),
+    minimal_paths (src bigint, dst bigint, w bigint) AS (
+      SELECT src, dst, min(w)
+        FROM paths
+    GROUP BY src, dst
+    )
+  SELECT src, dst, w FROM minimal_paths),
+  dsts AS (
+    SELECT personid
+      FROM Person_workat_company pwc, Company c
+     WHERE pwc.companyid = c.id AND c.name='Balkh_Airlines'
+  ),
+  completed_paths AS (
+    SELECT dst, w
+      FROM minimal_paths
+     WHERE dst IN (SELECT * FROM dsts)
+  ),
+  results AS (
+    SELECT dst, w
+      FROM completed_paths
+     WHERE w IN (SELECT min(w) FROM completed_paths)
+  )
+SELECT dst, w FROM results ORDER BY dst LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=20 output=[#0, #1]
+    Return // { arity: 2 }
+      Return // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Filter (#1 = #3) // { arity: 4 }
+            Join on=(#1 = #2) type=differential // { arity: 4 }
+              implementation
+                %1[#0]UKAf » %0:l1[#1]Kf
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Get l1 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+                  CrossJoin type=differential // { arity: 2 }
+                    implementation
+                      %0[×] » %1:l2[×]
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Get l2 // { arity: 1 }
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Get l2 // { arity: 1 }
+      With
+        cte l2 =
+          Project (#1) // { arity: 1 }
+            Get l1 // { arity: 2 }
+        cte l1 =
+          Project (#0, #1) // { arity: 2 }
+            Join on=(#0 = #2) type=differential // { arity: 3 }
+              implementation
+                %1[#0]UKA » %0:l0[#0]UK
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get l0 // { arity: 3 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Distinct group_by=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#3 = "Balkh_Airlines") AND (#1) IS NOT NULL // { arity: 6 }
+                      Join on=(#1 = #2) type=differential // { arity: 6 }
+                        implementation
+                          %1:company[#0]KAef » %0:person_workat_company[#1]Kef
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Project (#1, #2) // { arity: 2 }
+                            Get materialize.public.person_workat_company // { arity: 4 }
+                        ArrangeBy keys=[[#0]] // { arity: 4 }
+                          Get materialize.public.company // { arity: 4 }
+    With Mutually Recursive
+      cte l0 =
+        Project (#2, #0, #1) // { arity: 3 }
+          Map (10995116285979) // { arity: 3 }
+            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              Distinct group_by=[#0, #1] // { arity: 2 }
+                Union // { arity: 2 }
+                  Project (#3, #5) // { arity: 2 }
+                    Map ((#1 + integer_to_bigint(#4))) // { arity: 6 }
+                      Join on=(#0 = #2) type=differential // { arity: 5 }
+                        implementation
+                          %1:pathq20[#0]KA » %0:l0[#0]K
+                        ArrangeBy keys=[[#0]] // { arity: 2 }
+                          Project (#1, #2) // { arity: 2 }
+                            Get l0 // { arity: 3 }
+                        ArrangeBy keys=[[#0]] // { arity: 3 }
+                          Get materialize.public.pathq20 // { arity: 3 }
+                  Constant // { arity: 2 }
+                    - (10995116285979, 0)
+
+Used Indexes:
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
+
+EOF
+
+# without the unused src
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH minimal_paths AS (
+  WITH MUTUALLY RECURSIVE
+    paths (dst bigint, w bigint) AS (
+      SELECT 10995116285979::bigint AS dst, 0 AS w
+      UNION
+      SELECT paths2.dst, paths1.w + paths2.w
+        FROM minimal_paths paths1
+        JOIN PathQ20 paths2 -- step-transitive closure
+          ON paths1.dst = paths2.src
+    ),
+    minimal_paths (dst bigint, w bigint) AS (
+      SELECT dst, min(w)
+        FROM paths
+    GROUP BY dst
+    )
+  SELECT dst, w FROM minimal_paths),
+  dsts AS (
+    SELECT personid
+      FROM Person_workat_company pwc, Company c
+     WHERE pwc.companyid = c.id AND c.name='Balkh_Airlines'
+  ),
+  completed_paths AS (
+    SELECT dst, w
+      FROM minimal_paths
+     WHERE dst IN (SELECT * FROM dsts)
+  ),
+  results AS (
+    SELECT dst, w
+      FROM completed_paths
+     WHERE w IN (SELECT min(w) FROM completed_paths)
+  )
+SELECT dst, w FROM results ORDER BY dst LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=20 output=[#0, #1]
+    Return // { arity: 2 }
+      Return // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Filter (#1 = #3) // { arity: 4 }
+            Join on=(#1 = #2) type=differential // { arity: 4 }
+              implementation
+                %1[#0]UKAf » %0:l1[#1]Kf
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Get l1 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+                  CrossJoin type=differential // { arity: 2 }
+                    implementation
+                      %0[×] » %1:l2[×]
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Get l2 // { arity: 1 }
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Get l2 // { arity: 1 }
+      With
+        cte l2 =
+          Project (#1) // { arity: 1 }
+            Get l1 // { arity: 2 }
+        cte l1 =
+          Project (#0, #1) // { arity: 2 }
+            Join on=(#0 = #2) type=differential // { arity: 3 }
+              implementation
+                %1[#0]UKA » %0:l0[#0]UK
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Get l0 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Distinct group_by=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#3 = "Balkh_Airlines") AND (#1) IS NOT NULL // { arity: 6 }
+                      Join on=(#1 = #2) type=differential // { arity: 6 }
+                        implementation
+                          %1:company[#0]KAef » %0:person_workat_company[#1]Kef
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Project (#1, #2) // { arity: 2 }
+                            Get materialize.public.person_workat_company // { arity: 4 }
+                        ArrangeBy keys=[[#0]] // { arity: 4 }
+                          Get materialize.public.company // { arity: 4 }
+    With Mutually Recursive
+      cte l0 =
+        Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+          Distinct group_by=[#0, #1] // { arity: 2 }
+            Union // { arity: 2 }
+              Project (#3, #5) // { arity: 2 }
+                Map ((#1 + integer_to_bigint(#4))) // { arity: 6 }
+                  Join on=(#0 = #2) type=differential // { arity: 5 }
+                    implementation
+                      %1:pathq20[#0]KA » %0:l0[#0]K
+                    ArrangeBy keys=[[#0]] // { arity: 2 }
+                      Get l0 // { arity: 2 }
+                    ArrangeBy keys=[[#0]] // { arity: 3 }
+                      Get materialize.public.pathq20 // { arity: 3 }
+              Constant // { arity: 2 }
+                - (10995116285979, 0)
+
+Used Indexes:
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
+
+EOF
+
+# tracking hops
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH minimal_paths AS (
+  WITH MUTUALLY RECURSIVE
+    paths (src bigint, dst bigint, w bigint, hops bigint) AS (
+      SELECT 10995116285979::bigint AS src, 10995116285979::bigint AS dst, 0 AS w, 0 AS hops
+      UNION
+      SELECT paths1.src, paths2.dst, paths1.w + paths2.w, paths1.hops + 1
+        FROM minimal_paths paths1
+        JOIN PathQ20 paths2 -- step-transitive closure
+          ON paths1.dst = paths2.src
+    ),
+    minimal_weights (src bigint, dst bigint, w bigint, hops bigint) AS (
+      SELECT src, dst, min(w), hops
+        FROM paths
+    GROUP BY src, dst, hops
+    ),
+    minimal_paths (src bigint, dst bigint, w bigint, hops bigint) AS (
+      SELECT src, dst, w, min(hops)
+        FROM minimal_weights
+    GROUP BY src, dst, w
+    )
+  SELECT src, dst, w, hops FROM minimal_paths),
+  dsts AS (
+    SELECT personid
+      FROM Person_workat_company pwc, Company c
+     WHERE pwc.companyid = c.id AND c.name='Balkh_Airlines'
+  ),
+  completed_paths AS (
+    SELECT dst, w, hops
+      FROM minimal_paths
+     WHERE dst IN (SELECT * FROM dsts)
+  ),
+  results AS (
+    SELECT dst, w, hops
+      FROM completed_paths
+     WHERE w IN (SELECT min(w) FROM completed_paths)
+  )
+SELECT dst, w, hops FROM results ORDER BY dst LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=20 output=[#0..=#2]
+    Return // { arity: 3 }
+      Return // { arity: 3 }
+        Project (#0..=#2) // { arity: 3 }
+          Filter (#1 = #4) // { arity: 5 }
+            Join on=(#1 = #3) type=differential // { arity: 5 }
+              implementation
+                %1[#0]UKAf » %0:l1[#1]Kf
+              ArrangeBy keys=[[#1]] // { arity: 3 }
+                Get l1 // { arity: 3 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+                  CrossJoin type=differential // { arity: 2 }
+                    implementation
+                      %0[×] » %1:l2[×]
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Get l2 // { arity: 1 }
+                    ArrangeBy keys=[[]] // { arity: 1 }
+                      Get l2 // { arity: 1 }
+      With
+        cte l2 =
+          Project (#1) // { arity: 1 }
+            Get l1 // { arity: 3 }
+        cte l1 =
+          Project (#0..=#2) // { arity: 3 }
+            Join on=(#0 = #3) type=differential // { arity: 4 }
+              implementation
+                %1[#0]UKA » %0:l0[#0]K
+              ArrangeBy keys=[[#0]] // { arity: 3 }
+                Project (#1..=#3) // { arity: 3 }
+                  Get l0 // { arity: 4 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Distinct group_by=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#3 = "Balkh_Airlines") AND (#1) IS NOT NULL // { arity: 6 }
+                      Join on=(#1 = #2) type=differential // { arity: 6 }
+                        implementation
+                          %1:company[#0]KAef » %0:person_workat_company[#1]Kef
+                        ArrangeBy keys=[[#1]] // { arity: 2 }
+                          Project (#1, #2) // { arity: 2 }
+                            Get materialize.public.person_workat_company // { arity: 4 }
+                        ArrangeBy keys=[[#0]] // { arity: 4 }
+                          Get materialize.public.company // { arity: 4 }
+    With Mutually Recursive
+      cte l0 =
+        Project (#3, #0..=#2) // { arity: 4 }
+          Map (10995116285979) // { arity: 4 }
+            Reduce group_by=[#0, #2] aggregates=[min(#1)] // { arity: 3 }
+              Reduce group_by=[#0, #2] aggregates=[min(#1)] // { arity: 3 }
+                Distinct group_by=[#0..=#2] // { arity: 3 }
+                  Union // { arity: 3 }
+                    Project (#4, #6, #7) // { arity: 3 }
+                      Map ((#1 + integer_to_bigint(#5)), (#2 + 1)) // { arity: 8 }
+                        Join on=(#0 = #3) type=differential // { arity: 6 }
+                          implementation
+                            %1:pathq20[#0]KA » %0:l0[#0]K
+                          ArrangeBy keys=[[#0]] // { arity: 3 }
+                            Project (#1..=#3) // { arity: 3 }
+                              Get l0 // { arity: 4 }
+                          ArrangeBy keys=[[#0]] // { arity: 3 }
+                            Get materialize.public.pathq20 // { arity: 3 }
+                    Constant // { arity: 3 }
+                      - (10995116285979, 0, 0)
+
+Used Indexes:
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
+
+EOF
+
+# original query, w/extra crossjoins
+query T multiline
+EXPLAIN WITH(arity, join_impls) WITH MUTUALLY RECURSIVE
+  srcs(f bigint) AS (SELECT 10995116285979::bigint),
+  dsts(t bigint) AS (
+      SELECT personid
+      FROM Person_workat_company pwc, Company c
+      WHERE pwc.companyid = c.id AND c.name='Balkh_Airlines'
+  ),
+  -- Try to find any path with a faster two way BFS
+
+  -- visited nodes plus (on each iteration) nodes in PathQ20 we haven't yet seen
+  anyPath (pos bigint) AS (
+      SELECT f FROM srcs
+      UNION
+      (
+          WITH
+            ss AS (SELECT pos FROM anyPath)
+          SELECT dst
+          FROM ss, PathQ20
+          WHERE pos = src AND NOT EXISTS (SELECT 1 FROM ss, dsts WHERE ss.pos = dsts.t)
+      )
+  ),
+
+  -- are we there yet? at first, no (unless src is a dst)
+  pathexists (exists bool) AS (
+      SELECT true WHERE EXISTS (SELECT 1 FROM anyPath ss, dsts WHERE ss.pos = dsts.t)
+  ),
+
+
+  shorts (dir bool, gsrc bigint, dst bigint, w bigint, dead bool, iter bigint) AS (
+      (
+          SELECT false, f, f, 0, false, 0 FROM srcs WHERE EXISTS (SELECT 1 FROM pathexists)
+          UNION
+          SELECT true, t, t, 0, false, 0 FROM dsts WHERE EXISTS (SELECT 1 FROM pathexists)
+      )
+      UNION
+      (
+          WITH ss AS (SELECT * FROM shorts),
+               toExplore AS (SELECT * FROM ss WHERE dead = false ORDER BY w limit 1000),
+               -- assumes graph is undirected
+               newPoints(dir, gsrc, dst, w, dead) AS (
+                   SELECT e.dir, e.gsrc AS gsrc, p.dst AS dst, e.w + p.w AS w, false AS dead
+                   FROM PathQ20 p JOIN toExplore e ON (e.dst = p.src)
+                   UNION ALL
+                   SELECT dir, gsrc, dst, w, dead OR EXISTS (SELECT * FROM toExplore e WHERE e.dir = o.dir AND e.gsrc = o.gsrc AND e.dst = o.dst) FROM ss o
+               ),
+               fullTable AS (
+                   SELECT distinct ON(dir, gsrc, dst) dir, gsrc, dst, w, dead
+                   FROM newPoints
+                   ORDER BY dir, gsrc, dst, w, dead DESC
+               ),
+               found AS (
+                   SELECT min(l.w + r.w) AS w
+                   FROM fullTable l, fullTable r
+                   WHERE l.dir = false AND r.dir = true AND l.dst = r.dst
+               )
+          SELECT dir,
+                 gsrc,
+                 dst,
+                 w,
+                 dead or (coalesce(t.w > (SELECT f.w/2 FROM found f), false)),
+                 e.iter + 1 AS iter
+          FROM fullTable t, (SELECT iter FROM toExplore limit 1) e
+      )
+  ),
+  ss (dir bool, gsrc bigint, dst bigint, w bigint, iter bigint) AS (
+      SELECT dir, gsrc, dst, w, iter FROM shorts WHERE iter = (SELECT max(iter) FROM shorts)
+  ),
+  results(f bigint, t bigint, w bigint) AS (
+      SELECT l.gsrc, r.gsrc, min(l.w + r.w)
+      FROM ss l, ss r
+      WHERE l.dir = false AND r.dir = true AND l.dst = r.dst
+      GROUP BY l.gsrc, r.gsrc
+  )
+SELECT t, w FROM results WHERE w = (SELECT min(w) FROM results) ORDER BY t LIMIT 20
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=20 output=[#0, #1]
+    Return // { arity: 2 }
+      Return // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Join on=(#1 = #2) type=differential // { arity: 3 }
+            implementation
+              %1[#0]UK » %0:l13[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Filter (#1) IS NOT NULL // { arity: 2 }
+                Get l13 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Filter (#0) IS NOT NULL // { arity: 1 }
+                Reduce aggregates=[min(#0)] // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Get l13 // { arity: 2 }
+      With
+        cte l13 =
+          Project (#1, #2) // { arity: 2 }
+            Reduce group_by=[#0, #2] aggregates=[min((#1 + #3))] // { arity: 3 }
+              Project (#0, #2, #3, #5) // { arity: 4 }
+                Join on=(#1 = #4) type=differential // { arity: 6 }
+                  implementation
+                    %0:l12[#1]Kef » %1:l12[#1]Kef
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Project (#1..=#3) // { arity: 3 }
+                      Filter (#0 = false) // { arity: 4 }
+                        Get l12 // { arity: 4 }
+                  ArrangeBy keys=[[#1]] // { arity: 3 }
+                    Project (#1..=#3) // { arity: 3 }
+                      Filter (#0 = true) // { arity: 4 }
+                        Get l12 // { arity: 4 }
+        cte l12 =
+          Project (#0..=#3) // { arity: 4 }
+            Join on=(#4 = #5) type=differential // { arity: 6 }
+              implementation
+                %1[#0]UK » %0:l11[#4]K
+              ArrangeBy keys=[[#4]] // { arity: 5 }
+                Project (#0..=#3, #5) // { arity: 5 }
+                  Filter (#5) IS NOT NULL // { arity: 6 }
+                    Get l11 // { arity: 6 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Filter (#0) IS NOT NULL // { arity: 1 }
+                  Reduce aggregates=[max(#0)] // { arity: 1 }
+                    Project (#5) // { arity: 1 }
+                      Get l11 // { arity: 6 }
+    With Mutually Recursive
+      cte l11 =
+        Distinct group_by=[#0..=#5] // { arity: 6 }
+          Union // { arity: 6 }
+            Project (#0..=#2, #4, #3, #5) // { arity: 6 }
+              Map (false, 0, 0) // { arity: 6 }
+                Distinct group_by=[#0..=#2] // { arity: 3 }
+                  Union // { arity: 3 }
+                    Project (#1, #0, #0) // { arity: 3 }
+                      Map (10995116285979, false) // { arity: 2 }
+                        Get l10 // { arity: 0 }
+                    Project (#1, #0, #0) // { arity: 3 }
+                      Map (true) // { arity: 2 }
+                        CrossJoin type=differential // { arity: 1 }
+                          implementation
+                            %1:l10[×]U » %0:l0[×]
+                          ArrangeBy keys=[[]] // { arity: 1 }
+                            Get l0 // { arity: 1 }
+                          ArrangeBy keys=[[]] // { arity: 0 }
+                            Get l10 // { arity: 0 }
+            Project (#0..=#3, #7, #8) // { arity: 6 }
+              Map ((#4 OR coalesce((#3 > #6), false)), (#5 + 1)) // { arity: 9 }
+                CrossJoin type=delta // { arity: 7 }
+                  implementation
+                    %0:l7 » %1[×]UA » %2[×]UA
+                    %1 » %2[×]UA » %0:l7[×]A
+                    %2 » %1[×]UA » %0:l7[×]A
+                  ArrangeBy keys=[[]] // { arity: 5 }
+                    Get l7 // { arity: 5 }
+                  ArrangeBy keys=[[]] // { arity: 1 }
+                    TopK limit=1 // { arity: 1 }
+                      Project (#4) // { arity: 1 }
+                        Get l3 // { arity: 5 }
+                  ArrangeBy keys=[[]] // { arity: 1 }
+                    Union // { arity: 1 }
+                      Get l9 // { arity: 1 }
+                      Map (null) // { arity: 1 }
+                        Union // { arity: 0 }
+                          Negate // { arity: 0 }
+                            Project () // { arity: 0 }
+                              Get l9 // { arity: 1 }
+                          Constant // { arity: 0 }
+                            - ()
+      cte l10 =
+        Distinct // { arity: 0 }
+          Project () // { arity: 0 }
+            Join on=(#0 = #1) type=differential // { arity: 2 }
+              implementation
+                %0:l2[#0]UK » %1:l0[#0]K
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Get l2 // { arity: 1 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Get l0 // { arity: 1 }
+      cte l9 =
+        Project (#1) // { arity: 1 }
+          Map ((#0 / 2)) // { arity: 2 }
+            Union // { arity: 1 }
+              Get l8 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l8 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
+      cte l8 =
+        Reduce aggregates=[min((#0 + #1))] // { arity: 1 }
+          Project (#1, #3) // { arity: 2 }
+            Join on=(#0 = #2) type=differential // { arity: 4 }
+              implementation
+                %0:l7[#0]Kef » %1:l7[#0]Kef
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#2, #3) // { arity: 2 }
+                  Filter (#0 = false) // { arity: 5 }
+                    Get l7 // { arity: 5 }
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Project (#2, #3) // { arity: 2 }
+                  Filter (#0 = true) // { arity: 5 }
+                    Get l7 // { arity: 5 }
+      cte l7 =
+        TopK group_by=[#0..=#2] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
+          Union // { arity: 5 }
+            Project (#3, #4, #1, #7, #8) // { arity: 5 }
+              Map ((#6 + integer_to_bigint(#2)), false) // { arity: 9 }
+                Join on=(#0 = #5) type=differential // { arity: 7 }
+                  implementation
+                    %0:pathq20[#0]KA » %1:l3[#2]K
+                  ArrangeBy keys=[[#0]] // { arity: 3 }
+                    Get materialize.public.pathq20 // { arity: 3 }
+                  ArrangeBy keys=[[#2]] // { arity: 4 }
+                    Project (#0..=#3) // { arity: 4 }
+                      Get l3 // { arity: 5 }
+            Project (#0..=#3, #16) // { arity: 5 }
+              Map ((#4 OR #15)) // { arity: 17 }
+                Join on=(eq(#0, #6, #12) AND eq(#1, #7, #13) AND eq(#2, #8, #14) AND #3 = #9 AND #4 = #10 AND #5 = #11) type=differential // { arity: 16 }
+                  implementation
+                    %1:l4[#0..=#5]UKKKKKK » %0:l11[#0..=#5]KKKKKK » %2[#0..=#2]KKK
+                  ArrangeBy keys=[[#0..=#5]] // { arity: 6 }
+                    Get l11 // { arity: 6 }
+                  ArrangeBy keys=[[#0..=#5]] // { arity: 6 }
+                    Get l4 // { arity: 6 }
+                  ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
+                    Union // { arity: 4 }
+                      Map (true) // { arity: 4 }
+                        Get l6 // { arity: 3 }
+                      Project (#0..=#2, #6) // { arity: 4 }
+                        Map (false) // { arity: 7 }
+                          Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                            implementation
+                              %1:l5[#0..=#2]UKKK » %0[#0..=#2]KKK
+                            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                              Union // { arity: 3 }
+                                Negate // { arity: 3 }
+                                  Get l6 // { arity: 3 }
+                                Get l5 // { arity: 3 }
+                            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                              Get l5 // { arity: 3 }
+      cte l6 =
+        Project (#0..=#2) // { arity: 3 }
+          Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+            implementation
+              %1[#0..=#2]UKKKA » %0:l5[#0..=#2]UKKK
+            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+              Get l5 // { arity: 3 }
+            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+              Distinct group_by=[#0..=#2] // { arity: 3 }
+                Project (#0..=#2) // { arity: 3 }
+                  Get l3 // { arity: 5 }
+      cte l5 =
+        Distinct group_by=[#0..=#2] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Get l4 // { arity: 6 }
+      cte l4 =
+        Distinct group_by=[#0..=#5] // { arity: 6 }
+          Get l11 // { arity: 6 }
+      cte l3 =
+        TopK order_by=[#3 asc nulls_last] limit=1000 // { arity: 5 }
+          Project (#0..=#3, #5) // { arity: 5 }
+            Filter (#4 = false) // { arity: 6 }
+              Get l11 // { arity: 6 }
+      cte l2 =
+        Distinct group_by=[#0] // { arity: 1 }
+          Union // { arity: 1 }
+            Project (#2) // { arity: 1 }
+              Join on=(#0 = #1) type=differential // { arity: 4 }
+                implementation
+                  %1:pathq20[#0]KA » %0:l1[#0]K » %2[×]
+                Get l1 // { arity: 1 }
+                ArrangeBy keys=[[#0]] // { arity: 3 }
+                  Get materialize.public.pathq20 // { arity: 3 }
+                ArrangeBy keys=[[]] // { arity: 0 }
+                  Union // { arity: 0 }
+                    Negate // { arity: 0 }
+                      Distinct // { arity: 0 }
+                        Project () // { arity: 0 }
+                          Join on=(#0 = #1) type=differential // { arity: 2 }
+                            implementation
+                              %0:l1[#0]K » %1:l0[#0]K
+                            Get l1 // { arity: 1 }
+                            ArrangeBy keys=[[#0]] // { arity: 1 }
+                              Get l0 // { arity: 1 }
+                    Constant // { arity: 0 }
+                      - ()
+            Constant // { arity: 1 }
+              - (10995116285979)
+      cte l1 =
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l2 // { arity: 1 }
+      cte l0 =
+        Project (#0) // { arity: 1 }
+          Filter (#3 = "Balkh_Airlines") AND (#1) IS NOT NULL // { arity: 6 }
+            Join on=(#1 = #2) type=differential // { arity: 6 }
+              implementation
+                %1:company[#0]KAef » %0:person_workat_company[#1]Kef
+              ArrangeBy keys=[[#1]] // { arity: 2 }
+                Project (#1, #2) // { arity: 2 }
+                  Get materialize.public.person_workat_company // { arity: 4 }
+              ArrangeBy keys=[[#0]] // { arity: 4 }
+                Get materialize.public.company // { arity: 4 }
+
+Used Indexes:
+  - materialize.public.company_id (differential join)
+  - materialize.public.pathq20_src (differential join)
+
+EOF

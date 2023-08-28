@@ -43,8 +43,13 @@
 
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
+use pin_project::pin_project;
 use prometheus::core::{
     Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, Desc, GenericCounter, GenericCounterVec,
     GenericGauge, GenericGaugeVec,
@@ -403,5 +408,474 @@ pub type ComputedIntGauge = ComputedGenericGauge<AtomicI64>;
 /// A [`ComputedGenericGauge`] for 64-bit unsigned integers.
 pub type ComputedUIntGauge = ComputedGenericGauge<AtomicU64>;
 
+/// Exposes combinators that report metrics related to the execution of a [`Future`] to prometheus.
+pub trait MetricsFutureExt<F> {
+    /// Records the number of seconds it takes a [`Future`] to complete according to "the clock on
+    /// the wall".
+    ///
+    /// More specifically, it records the instant at which the `Future` was first polled, and the
+    /// instant at which the `Future` completes. Then reports the duration between those two
+    /// instances to the provided metric.
+    ///
+    /// # Wall Time vs Execution Time
+    ///
+    /// There is also [`MetricsFutureExt::exec_time`], which measures how long a [`Future`] spent
+    /// executing, instead of how long it took to complete. For example, a network request may have
+    /// a wall time of 1 second, meanwhile it's execution time may have only been 50ms. The 950ms
+    /// delta would be how long the [`Future`] waited for a response from the network.
+    ///
+    /// # Uses
+    ///
+    /// Recording the wall time can be useful for monitoring latency, for example the latency of a
+    /// SQL request.
+    ///
+    /// Note: You must call either [`observe`] to record the execution time to a [`Histogram`] or
+    /// [`inc_by`] to record to a [`Counter`]. The following will not compile:
+    ///
+    /// ```compile_fail
+    /// use mz_ore::metrics::MetricsFutureExt;
+    ///
+    /// # let _ = async {
+    /// async { Ok(()) }
+    ///     .wall_time()
+    ///     .await;
+    /// # };
+    /// ```
+    ///
+    /// [`observe`]: WallTimeFuture::observe
+    /// [`inc_by`]: WallTimeFuture::inc_by
+    fn wall_time(self) -> WallTimeFuture<F, UnspecifiedMetric>;
+
+    /// Records the total number of seconds for which a [`Future`] was executing.
+    ///
+    /// More specifically, every time the `Future` is polled it records how long that individual
+    /// call took, and maintains a running sum until the `Future` completes. Then we report that
+    /// duration to the provided metric.
+    ///
+    /// # Wall Time vs Execution Time
+    ///
+    /// There is also [`MetricsFutureExt::wall_time`], which measures how long a [`Future`] took to
+    /// complete, instead of how long it spent executing. For example, a network request may have
+    /// a wall time of 1 second, meanwhile it's execution time may have only been 50ms. The 950ms
+    /// delta would be how long the [`Future`] waited for a response from the network.
+    ///
+    /// # Uses
+    ///
+    /// Recording execution time can be useful if you want to monitor [`Future`]s that could be
+    /// sensitive to CPU usage. For example, if you have a single logical control thread you'll
+    /// want to make sure that thread never spends too long running a single `Future`. Reporting
+    /// the execution time of `Future`s running on this thread can help ensure there is no
+    /// unexpected blocking.
+    ///
+    /// Note: You must call either [`observe`] to record the execution time to a [`Histogram`] or
+    /// [`inc_by`] to record to a [`Counter`]. The following will not compile:
+    ///
+    /// ```compile_fail
+    /// use mz_ore::metrics::MetricsFutureExt;
+    ///
+    /// # let _ = async {
+    /// async { Ok(()) }
+    ///     .exec_time()
+    ///     .await;
+    /// # };
+    /// ```
+    ///
+    /// [`observe`]: ExecTimeFuture::observe
+    /// [`inc_by`]: ExecTimeFuture::inc_by
+    fn exec_time(self) -> ExecTimeFuture<F, UnspecifiedMetric>;
+}
+
+impl<F: Future> MetricsFutureExt<F> for F {
+    fn wall_time(self) -> WallTimeFuture<F, UnspecifiedMetric> {
+        WallTimeFuture {
+            fut: self,
+            metric: UnspecifiedMetric(()),
+            start: None,
+            filter: None,
+        }
+    }
+
+    fn exec_time(self) -> ExecTimeFuture<F, UnspecifiedMetric> {
+        ExecTimeFuture {
+            fut: self,
+            metric: UnspecifiedMetric(()),
+            running_duration: Duration::from_millis(0),
+            filter: None,
+        }
+    }
+}
+
+/// Future returned by [`MetricsFutureExt::wall_time`].
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+#[pin_project]
+pub struct WallTimeFuture<F, Metric> {
+    /// The inner [`Future`] that we're recording the wall time for.
+    #[pin]
+    fut: F,
+    /// Prometheus metric that we'll report to.
+    metric: Metric,
+    /// [`Instant`] at which the [`Future`] was first polled.
+    start: Option<Instant>,
+    /// Optional filter that determines if we observe the wall time of this [`Future`].
+    filter: Option<Box<dyn FnMut(Duration) -> bool>>,
+}
+
+impl<F: Debug, M: Debug> fmt::Debug for WallTimeFuture<F, M> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WallTimeFuture")
+            .field("fut", &self.fut)
+            .field("metric", &self.metric)
+            .field("start", &self.start)
+            .field("filter", &self.filter.is_some())
+            .finish()
+    }
+}
+
+impl<F> WallTimeFuture<F, UnspecifiedMetric> {
+    /// Sets the recored metric to be a [`prometheus::Histogram`].
+    ///
+    /// ```text
+    /// my_future
+    ///     .wall_time()
+    ///     .observe(metrics.slow_queries_hist.with_label_values(&["select"]))
+    /// ```
+    pub fn observe(
+        self,
+        histogram: prometheus::Histogram,
+    ) -> WallTimeFuture<F, prometheus::Histogram> {
+        WallTimeFuture {
+            fut: self.fut,
+            metric: histogram,
+            start: self.start,
+            filter: self.filter,
+        }
+    }
+
+    /// Sets the recored metric to be a [`prometheus::Counter`].
+    ///
+    /// ```text
+    /// my_future
+    ///     .wall_time()
+    ///     .inc_by(metrics.slow_queries.with_label_values(&["select"]))
+    /// ```
+    pub fn inc_by(self, counter: prometheus::Counter) -> WallTimeFuture<F, prometheus::Counter> {
+        WallTimeFuture {
+            fut: self.fut,
+            metric: counter,
+            start: self.start,
+            filter: self.filter,
+        }
+    }
+}
+
+impl<F, M> WallTimeFuture<F, M> {
+    /// Specifies a filter which much return `true` for the wall time to be recorded.
+    ///
+    /// This can be particularly useful if you have a high volume `Future` and you only want to
+    /// record ones that take a long time to complete.
+    pub fn with_filter(mut self, filter: impl FnMut(Duration) -> bool + 'static) -> Self {
+        self.filter = Some(Box::new(filter));
+        self
+    }
+}
+
+impl<F: Future, M: DurationMetric> Future for WallTimeFuture<F, M> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
+        if this.start.is_none() {
+            *this.start = Some(Instant::now());
+        }
+
+        let result = match this.fut.poll(cx) {
+            Poll::Ready(r) => r,
+            Poll::Pending => return Poll::Pending,
+        };
+        let duration = Instant::now().duration_since(this.start.expect("timer to be started"));
+
+        let pass = this
+            .filter
+            .as_mut()
+            .map(|filter| filter(duration))
+            .unwrap_or(true);
+        if pass {
+            this.metric.record(duration.as_secs_f64())
+        }
+
+        Poll::Ready(result)
+    }
+}
+
+/// Future returned by [`MetricsFutureExt::exec_time`].
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+#[pin_project]
+pub struct ExecTimeFuture<F, Metric> {
+    /// The inner [`Future`] that we're recording the wall time for.
+    #[pin]
+    fut: F,
+    /// Prometheus metric that we'll report to.
+    metric: Metric,
+    /// Total [`Duration`] for which this [`Future`] has been executing.
+    running_duration: Duration,
+    /// Optional filter that determines if we observe the execution time of this [`Future`].
+    filter: Option<Box<dyn FnMut(Duration) -> bool>>,
+}
+
+impl<F: Debug, M: Debug> fmt::Debug for ExecTimeFuture<F, M> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecTimeFuture")
+            .field("fut", &self.fut)
+            .field("metric", &self.metric)
+            .field("running_duration", &self.running_duration)
+            .field("filter", &self.filter.is_some())
+            .finish()
+    }
+}
+
+impl<F> ExecTimeFuture<F, UnspecifiedMetric> {
+    /// Sets the recored metric to be a [`prometheus::Histogram`].
+    ///
+    /// ```text
+    /// my_future
+    ///     .exec_time()
+    ///     .observe(metrics.slow_queries_hist.with_label_values(&["select"]))
+    /// ```
+    pub fn observe(
+        self,
+        histogram: prometheus::Histogram,
+    ) -> ExecTimeFuture<F, prometheus::Histogram> {
+        ExecTimeFuture {
+            fut: self.fut,
+            metric: histogram,
+            running_duration: self.running_duration,
+            filter: self.filter,
+        }
+    }
+
+    /// Sets the recored metric to be a [`prometheus::Counter`].
+    ///
+    /// ```text
+    /// my_future
+    ///     .exec_time()
+    ///     .inc_by(metrics.slow_queries.with_label_values(&["select"]))
+    /// ```
+    pub fn inc_by(self, counter: prometheus::Counter) -> ExecTimeFuture<F, prometheus::Counter> {
+        ExecTimeFuture {
+            fut: self.fut,
+            metric: counter,
+            running_duration: self.running_duration,
+            filter: self.filter,
+        }
+    }
+}
+
+impl<F, M> ExecTimeFuture<F, M> {
+    /// Specifies a filter which much return `true` for the execution time to be recorded.
+    pub fn with_filter(mut self, filter: impl FnMut(Duration) -> bool + 'static) -> Self {
+        self.filter = Some(Box::new(filter));
+        self
+    }
+}
+
+impl<F: Future, M: DurationMetric> Future for ExecTimeFuture<F, M> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
+        let start = Instant::now();
+        let result = this.fut.poll(cx);
+        let duration = Instant::now().duration_since(start);
+
+        *this.running_duration = this.running_duration.saturating_add(duration);
+
+        let result = match result {
+            Poll::Ready(result) => result,
+            Poll::Pending => return Poll::Pending,
+        };
+
+        let duration = *this.running_duration;
+        let pass = this
+            .filter
+            .as_mut()
+            .map(|filter| filter(duration))
+            .unwrap_or(true);
+        if pass {
+            this.metric.record(duration.as_secs_f64());
+        }
+
+        Poll::Ready(result)
+    }
+}
+
+/// A type level flag used to ensure callers specify the kind of metric to record for
+/// [`MetricsFutureExt`].
+///
+/// For example, `WallTimeFuture<F, M>` only implements [`Future`] for `M` that implements
+/// `DurationMetric` which [`UnspecifiedMetric`] does not. This forces users at build time to
+/// call [`WallTimeFuture::observe`] or [`WallTimeFuture::inc_by`].
+#[derive(Debug)]
+pub struct UnspecifiedMetric(());
+
+/// A trait makes recording a duration generic over different prometheus metrics. This allows us to
+/// de-dupe the implemenation of [`Future`] for our wrapper Futures like [`WallTimeFuture`] and
+/// [`ExecTimeFuture`] over different kinds of prometheus metrics.
+trait DurationMetric {
+    fn record(&self, seconds: f64);
+}
+
+impl DurationMetric for prometheus::Histogram {
+    fn record(&self, seconds: f64) {
+        self.observe(seconds)
+    }
+}
+
+impl DurationMetric for prometheus::Counter {
+    fn record(&self, seconds: f64) {
+        self.inc_by(seconds)
+    }
+}
+
 #[cfg(test)]
-mod tests;
+mod tests {
+    use std::time::Duration;
+
+    use prometheus::{CounterVec, HistogramVec};
+
+    use crate::stats::histogram_seconds_buckets;
+
+    use super::{MetricsFutureExt, MetricsRegistry};
+
+    struct Metrics {
+        pub wall_time_hist: HistogramVec,
+        pub wall_time_cnt: CounterVec,
+        pub exec_time_hist: HistogramVec,
+        pub exec_time_cnt: CounterVec,
+    }
+
+    impl Metrics {
+        pub fn register_into(registry: &MetricsRegistry) -> Self {
+            Self {
+                wall_time_hist: registry.register(metric!(
+                    name: "wall_time_hist",
+                    help: "help",
+                    var_labels: ["action"],
+                    buckets: histogram_seconds_buckets(0.000_128, 8.0),
+                )),
+                wall_time_cnt: registry.register(metric!(
+                    name: "wall_time_cnt",
+                    help: "help",
+                    var_labels: ["action"],
+                )),
+                exec_time_hist: registry.register(metric!(
+                    name: "exec_time_hist",
+                    help: "help",
+                    var_labels: ["action"],
+                    buckets: histogram_seconds_buckets(0.000_128, 8.0),
+                )),
+                exec_time_cnt: registry.register(metric!(
+                    name: "exec_time_cnt",
+                    help: "help",
+                    var_labels: ["action"],
+                )),
+            }
+        }
+    }
+
+    #[mz_test_macro::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
+    fn smoke_test_metrics_future_ext() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("failed to start runtime");
+        let registry = MetricsRegistry::new();
+        let metrics = Metrics::register_into(&registry);
+
+        // Record the walltime and execution time of an async sleep.
+        let async_sleep_future = async {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        };
+        runtime.block_on(
+            async_sleep_future
+                .wall_time()
+                .observe(metrics.wall_time_hist.with_label_values(&["async_sleep_w"]))
+                .exec_time()
+                .observe(metrics.exec_time_hist.with_label_values(&["async_sleep_e"])),
+        );
+
+        let reports = registry.gather();
+
+        let exec_family = reports
+            .iter()
+            .find(|m| m.get_name() == "exec_time_hist")
+            .expect("metric not found");
+        let exec_metric = exec_family.get_metric();
+        assert_eq!(exec_metric.len(), 1);
+        assert_eq!(exec_metric[0].get_label()[0].get_value(), "async_sleep_e");
+
+        let exec_histogram = exec_metric[0].get_histogram();
+        assert_eq!(exec_histogram.get_sample_count(), 1);
+        // The 4th bucket is 1ms, which we should complete faster than, but is still much quicker
+        // than the 1 second we slept for.
+        assert_eq!(exec_histogram.get_bucket()[3].get_cumulative_count(), 1);
+
+        let wall_family = reports
+            .iter()
+            .find(|m| m.get_name() == "wall_time_hist")
+            .expect("metric not found");
+        let wall_metric = wall_family.get_metric();
+        assert_eq!(wall_metric.len(), 1);
+        assert_eq!(wall_metric[0].get_label()[0].get_value(), "async_sleep_w");
+
+        let wall_histogram = wall_metric[0].get_histogram();
+        assert_eq!(wall_histogram.get_sample_count(), 1);
+        // The 13th bucket is 512ms, which the wall time should be longer than, but is also much
+        // faster than the actual execution time of the async sleep.
+        assert_eq!(wall_histogram.get_bucket()[12].get_cumulative_count(), 0);
+
+        // Reset the registery to make collecting metrics easier.
+        let registry = MetricsRegistry::new();
+        let metrics = Metrics::register_into(&registry);
+
+        // Record the walltime and execution time of a thread sleep.
+        let thread_sleep_future = async {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        };
+        runtime.block_on(
+            thread_sleep_future
+                .wall_time()
+                .with_filter(|duration| duration < Duration::from_millis(10))
+                .inc_by(metrics.wall_time_cnt.with_label_values(&["thread_sleep_w"]))
+                .exec_time()
+                .inc_by(metrics.exec_time_cnt.with_label_values(&["thread_sleep_e"])),
+        );
+
+        let reports = registry.gather();
+
+        let exec_family = reports
+            .iter()
+            .find(|m| m.get_name() == "exec_time_cnt")
+            .expect("metric not found");
+        let exec_metric = exec_family.get_metric();
+        assert_eq!(exec_metric.len(), 1);
+        assert_eq!(exec_metric[0].get_label()[0].get_value(), "thread_sleep_e");
+
+        let exec_counter = exec_metric[0].get_counter();
+        // Since we're synchronously sleeping the execution time will be long.
+        assert!(exec_counter.get_value() >= 1.0);
+
+        let wall_family = reports
+            .iter()
+            .find(|m| m.get_name() == "wall_time_cnt")
+            .expect("metric not found");
+        let wall_metric = wall_family.get_metric();
+        assert_eq!(wall_metric.len(), 1);
+
+        let wall_counter = wall_metric[0].get_counter();
+        // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
+        assert_eq!(wall_counter.get_value(), 0.0);
+    }
+}

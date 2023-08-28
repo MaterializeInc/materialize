@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
@@ -21,13 +20,13 @@ class StoragedStart(Action):
     """Starts a storaged clusterd instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
         c.up("storaged")
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [StoragedRunning()]
 
 
@@ -35,7 +34,7 @@ class StoragedRestart(Action):
     """Restarts the entire storaged clusterd instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning}
 
     def run(self, c: Composition) -> None:
@@ -45,11 +44,11 @@ class StoragedRestart(Action):
 
 class StoragedKill(Action):
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning}
 
     def run(self, c: Composition) -> None:
         c.kill("storaged")
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {StoragedRunning}

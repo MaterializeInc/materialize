@@ -9,7 +9,7 @@
 
 from random import Random
 from textwrap import dedent
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, CheckDisabled
@@ -57,7 +57,7 @@ class PgCdcBase:
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -258,7 +258,7 @@ class PgCdcMzNow(Check):
                 > CREATE SOURCE postgres_mz_now_source
                   FROM POSTGRES CONNECTION postgres_mz_now_conn
                   (PUBLICATION 'postgres_mz_now_publication')
-                  FOR ALL TABLES;
+                  FOR TABLES (postgres_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
@@ -268,7 +268,7 @@ class PgCdcMzNow(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

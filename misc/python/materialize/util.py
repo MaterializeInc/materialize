@@ -18,11 +18,11 @@ from pathlib import Path
 try:
     from semver.version import Version
 except ImportError:
-    from semver import VersionInfo as Version
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize.mzcompose import Composition
 
-ROOT = Path(os.environ["MZ_ROOT"])
+MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 
 def nonce(digits: int) -> str:

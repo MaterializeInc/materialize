@@ -9,7 +9,7 @@
 
 import re
 import time
-from typing import Callable, List, Optional, Union
+from typing import Callable, Optional, Union
 
 from materialize.feature_benchmark.executor import Executor
 
@@ -23,7 +23,7 @@ class MeasurementSource:
     def run(
         self,
         executor: Optional[Executor] = None,
-    ) -> Union[None, Timestamp, List[Timestamp]]:
+    ) -> Union[None, Timestamp, list[Timestamp]]:
         assert False
 
 
@@ -48,7 +48,7 @@ class Td(MeasurementSource):
     def run(
         self,
         executor: Optional[Executor] = None,
-    ) -> List[Timestamp]:
+    ) -> list[Timestamp]:
         assert not (executor is not None and self._executor is not None)
         executor = executor or self._executor
         assert executor
@@ -71,7 +71,7 @@ class Td(MeasurementSource):
         return timestamps
 
     def _get_time_for_marker(
-        self, lines: List[str], marker: str
+        self, lines: list[str], marker: str
     ) -> Union[None, Timestamp]:
         matched_line_id = None
         for id, line in enumerate(lines):
