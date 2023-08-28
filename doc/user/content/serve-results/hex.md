@@ -29,13 +29,11 @@ This guide walks you through the steps required to use the collaborative data no
     Authentication type | Choose the **Password** option.
     Username            | Materialize user.
     Password            | App-specific password.
-    Cluster             | Your preferred cluster.
 
     <!-- PENDING TO CHECK  -->
     <!-- IF YES EXPLAIN WHAT SQLFLUFF IS -->
-    If you wish to use SQLFluff to format your SQL code, Materialize provides a configuration here.
+    <!-- If you wish to use SQLFluff to format your SQL code, Materialize provides a configuration here. -->
 6. Click the **Create connection** button.
-7. After a successful test, in the popup dialog, you can either select an existing project or create a new one to continue.
 
 ## Step 2. Execute and visualize a query
 
@@ -60,7 +58,7 @@ This guide walks you through the steps required to use the collaborative data no
     ```
 
     This query generates a series of 1000 numbers squared and assigns row numbers to each.
-3. Click the **Run** button.
+3. Click the {{% icons/hex_run %}} **Run** button.
 
 4. Inside the cell, click the **Chart** button and configure as follows:
    1. In the **X Axis** options, select the **row_num** column.
