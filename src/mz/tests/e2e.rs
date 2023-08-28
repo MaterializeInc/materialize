@@ -338,7 +338,7 @@ mod tests {
             .failure();
 
             let output = String::from_utf8_lossy(&binding.get_output().stderr).to_string();
-            assert!(output.contains(&format!("The profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes.")));
+            assert!(output.contains("The profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes."));
         });
     }
 
