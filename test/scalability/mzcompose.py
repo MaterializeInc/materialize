@@ -18,6 +18,7 @@ from typing import Any, Optional
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
+from psycopg import OperationalError
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized, Postgres  # noqa: F401
@@ -53,6 +54,20 @@ def execute_operation(
         "workload": type(workload).__name__,
     }
 
+def open_cursor(endpoint: Endpoint, connect_sqls: list[str]):
+    conn = None
+    while conn == None:
+        try:
+            conn = endpoint.sql_connection()
+        except OperationalError as e:
+            print(f"error opening connection, retrying: {e}")
+
+    conn.autocommit = True
+    cursor = conn.cursor()
+    for connect_sql in connect_sqls:
+        cursor.execute(connect_sql.encode("utf8"))
+    return cursor
+
 
 def run_with_concurrency(
     c: Composition,
@@ -80,11 +95,7 @@ def run_with_concurrency(
     )
     cursor_pool = []
     for i in range(concurrency):
-        conn = endpoint.sql_connection()
-        conn.autocommit = True
-        cursor = conn.cursor()
-        for connect_sql in connect_sqls:
-            cursor.execute(connect_sql.encode("utf8"))
+        cursor = open_cursor(endpoint, connect_sqls)
         cursor_pool.append(cursor)
 
     print(f"Benchmarking workload {type(workload)} at concurrency {concurrency} ...")
