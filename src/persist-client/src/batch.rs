@@ -177,12 +177,14 @@ where
     /// dropped, the data that it represents will have leaked. The caller is
     /// responsible for turning this back into a [`Batch`] using
     /// [`WriteHandle::batch_from_transmittable_batch`](crate::write::WriteHandle::batch_from_transmittable_batch).
-    pub fn into_transmittable_batch(self) -> ProtoBatch {
-        ProtoBatch {
+    pub fn into_transmittable_batch(mut self) -> ProtoBatch {
+        let ret = ProtoBatch {
             shard_id: self.shard_id.into_proto(),
             version: self.version.to_string(),
             batch: Some(self.batch.into_proto()),
-        }
+        };
+        self.mark_consumed();
+        ret
     }
 }
 
