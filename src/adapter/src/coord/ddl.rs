@@ -923,7 +923,7 @@ impl Coordinator {
                         new_clusters += 1;
                     }
                 }
-                Op::CreateClusterProfile { .. } => {}
+                Op::CreateReplicaSet { .. } => {}
                 Op::CreateClusterReplica {
                     cluster_id, config, ..
                 } => {
@@ -981,7 +981,7 @@ impl Coordinator {
                     ObjectId::ClusterItem((cluster_id, replica_id)) => {
                         let item = self.catalog().get_cluster_item(*cluster_id, *replica_id);
                         match &item.item {
-                            ClusterItem::Profile(_) => {}
+                            ClusterItem::ReplicaSet(_) => {}
                             ClusterItem::Replica(replica) => {
                                 *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
                                 if let ReplicaLocation::Managed(location) = &replica.config.location
@@ -1063,7 +1063,7 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateClusterProfileConfig { .. }
+                | Op::UpdateReplicaSetConfig { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }

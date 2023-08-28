@@ -30,14 +30,14 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterProfileAction, AlterClusterProfileStatement, AlterClusterStatement,
-    AlterRoleStatement, AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement,
-    AlterSourceAction, AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName,
-    AlterSourceStatement, AlterSystemResetAllStatement, AlterSystemResetStatement,
-    AlterSystemSetStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DropOwnedStatement, SshConnectionOption, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AlterClusterStatement, AlterReplicaSetAction, AlterReplicaSetStatement, AlterRoleStatement,
+    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -65,8 +65,8 @@ use crate::ast::{
     self, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
     AlterObjectRenameStatement, AlterSecretStatement, AvroSchema, AvroSchemaOption,
     AvroSchemaOptionName, AwsConnectionOption, AwsConnectionOptionName,
-    AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName, ClusterProfileOption,
-    ClusterProfileOptionName, ColumnOption, CreateClusterReplicaStatement, CreateClusterStatement,
+    AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName, ClusterOption,
+    ClusterOptionName, ColumnOption, CreateClusterReplicaStatement, CreateClusterStatement,
     CreateConnection, CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
@@ -107,10 +107,10 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterItemRenamePlan, AlterClusterPlan,
-    AlterClusterProfilePlan, AlterClusterRenamePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
-    AlterRolePlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    AlterClusterRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterReplicaSetPlan, AlterRolePlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
@@ -2810,7 +2810,7 @@ pub fn describe_create_cluster(
 }
 
 generate_extracted_config!(
-    ClusterProfileOption,
+    ClusterOption,
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
     (IdleArrangementMergeEffort, u32),
@@ -2826,7 +2826,20 @@ pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let ClusterProfileOptionExtracted {
+    let variant = plan_replica_set_config_inner(scx, options, ObjectType::Cluster)?;
+
+    Ok(Plan::CreateCluster(CreateClusterPlan {
+        name: normalize::ident(name),
+        variant,
+    }))
+}
+
+fn plan_replica_set_config_inner(
+    scx: &StatementContext,
+    options: Vec<ClusterOption<Aug>>,
+    object_type: ObjectType,
+) -> Result<CreateClusterVariant, PlanError> {
+    let ClusterOptionExtracted {
         availability_zones,
         idle_arrangement_merge_effort,
         introspection_debugging,
@@ -2837,41 +2850,8 @@ pub fn plan_create_cluster(
         seen: _,
         size,
         disk,
-    }: ClusterProfileOptionExtracted = options.try_into()?;
+    }: ClusterOptionExtracted = options.try_into()?;
 
-    let variant = plan_profile_config(
-        scx,
-        availability_zones,
-        idle_arrangement_merge_effort,
-        introspection_debugging,
-        introspection_interval,
-        managed,
-        replicas,
-        replication_factor,
-        size,
-        disk,
-        ObjectType::Cluster,
-    )?;
-
-    Ok(Plan::CreateCluster(CreateClusterPlan {
-        name: normalize::ident(name),
-        variant,
-    }))
-}
-
-fn plan_profile_config(
-    scx: &StatementContext,
-    availability_zones: Option<Vec<String>>,
-    idle_arrangement_merge_effort: Option<u32>,
-    introspection_debugging: Option<bool>,
-    introspection_interval: Option<OptionalInterval>,
-    managed: Option<bool>,
-    replicas: Option<Vec<ReplicaDefinition<Aug>>>,
-    replication_factor: Option<u32>,
-    size: Option<String>,
-    disk: Option<bool>,
-    object_type: ObjectType,
-) -> Result<CreateClusterVariant, PlanError> {
     let managed = managed.unwrap_or_else(|| replicas.is_none());
 
     if managed {
@@ -2950,36 +2930,11 @@ const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
     days: 0,
 };
 
-fn plan_cluster_profile_config(
+fn plan_replica_set_config(
     scx: &StatementContext,
-    options: Vec<ClusterProfileOption<Aug>>,
+    options: Vec<ClusterOption<Aug>>,
 ) -> Result<plan::CreateClusterVariant, PlanError> {
-    let ClusterProfileOptionExtracted {
-        size,
-        availability_zones,
-        introspection_interval,
-        introspection_debugging,
-        idle_arrangement_merge_effort,
-        disk,
-        managed,
-        replicas,
-        replication_factor,
-        ..
-    }: ClusterProfileOptionExtracted = options.try_into()?;
-
-    plan_profile_config(
-        scx,
-        availability_zones,
-        idle_arrangement_merge_effort,
-        introspection_debugging,
-        introspection_interval,
-        managed,
-        replicas,
-        replication_factor,
-        size,
-        disk,
-        ObjectType::ClusterProfile,
-    )
+    plan_replica_set_config_inner(scx, options, ObjectType::ReplicaSet)
 }
 
 generate_extracted_config!(
@@ -3143,21 +3098,21 @@ fn plan_compute_replica_config(
     Ok(compute)
 }
 
-pub fn describe_create_cluster_profile(
+pub fn describe_create_replica_set(
     _: &StatementContext,
-    _: ast::CreateClusterProfileStatement<Aug>,
+    _: ast::CreateReplicaSetStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_cluster_profile(
+pub fn plan_create_replica_set(
     scx: &StatementContext,
-    ast::CreateClusterProfileStatement {
-        definition: ast::ProfileDefinition { name, options },
+    ast::CreateReplicaSetStatement {
+        definition: ast::ReplicaSetDefinition { name, options },
         of_cluster,
-    }: ast::CreateClusterProfileStatement<Aug>,
+    }: ast::CreateReplicaSetStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_CLUSTER_PROFILES)?;
+    scx.require_feature_flag(&vars::ENABLE_REPLICA_SETS)?;
 
     let cluster = scx
         .catalog
@@ -3170,10 +3125,10 @@ pub fn plan_create_cluster_profile(
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
-    Ok(Plan::CreateClusterProfile(plan::CreateClusterProfilePlan {
+    Ok(Plan::CreateReplicaSet(plan::CreateReplicaSetPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
-        variant: plan_cluster_profile_config(scx, options)?,
+        variant: plan_replica_set_config(scx, options)?,
     }))
 }
 
@@ -3189,17 +3144,17 @@ pub fn plan_create_cluster_replica(
     CreateClusterReplicaStatement {
         definition: ReplicaDefinition { name, options },
         of_cluster,
-        of_profile,
+        of_replica_set,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    let profile_id = if let Some(of_profile) = of_profile {
-        scx.require_feature_flag(&vars::ENABLE_CLUSTER_PROFILES)?;
+    let replica_set_id = if let Some(of_replica_set) = of_replica_set {
+        scx.require_feature_flag(&vars::ENABLE_REPLICA_SETS)?;
 
-        let item = cluster.resolve_item(&normalize::ident(of_profile))?;
-        item.profile()?;
+        let item = cluster.resolve_item(&normalize::ident(of_replica_set))?;
+        item.replica_set()?;
         Some(item.item_id())
     } else {
         None
@@ -3213,12 +3168,12 @@ pub fn plan_create_cluster_replica(
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
-    ensure_cluster_is_not_managed(scx, cluster.id(), profile_id)?;
+    ensure_cluster_is_not_managed(scx, cluster.id(), replica_set_id)?;
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
         config: plan_replica_config(scx, options)?,
-        profile_id,
+        replica_set_id,
     }))
 }
 
@@ -3945,9 +3900,9 @@ fn plan_drop_cluster_item(
         ensure_cluster_is_not_linked(scx, cluster.id())?;
         let item = cluster.item(*item_id);
         match (item.item_type(), object_type) {
-            (ClusterItemType::Profile, ObjectType::ClusterProfile)
+            (ClusterItemType::ReplicaSet, ObjectType::ReplicaSet)
             | (ClusterItemType::Replica, ObjectType::ClusterReplica) => {}
-            (expected @ ClusterItemType::Profile, object_type)
+            (expected @ ClusterItemType::ReplicaSet, object_type)
             | (expected @ ClusterItemType::Replica, object_type) => {
                 return Err(PlanError::InvalidObjectType {
                     expected_type: SystemObjectType::Object(expected.into()),
@@ -3957,7 +3912,7 @@ fn plan_drop_cluster_item(
             }
         }
         if let Some(replica) = cluster.item(*item_id).replica().ok() {
-            ensure_cluster_is_not_managed(scx, cluster.id(), replica.profile_id())?;
+            ensure_cluster_is_not_managed(scx, cluster.id(), replica.replica_set_id())?;
         }
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
@@ -4442,9 +4397,9 @@ pub fn describe_alter_cluster_set_options(
     Ok(StatementDesc::new(None))
 }
 
-pub fn describe_alter_cluster_profile_set_options(
+pub fn describe_alter_replica_set_set_options(
     _: &StatementContext,
-    _: AlterClusterProfileStatement<Aug>,
+    _: AlterReplicaSetStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
@@ -4476,18 +4431,18 @@ pub fn plan_alter_cluster(
     Ok(Plan::AlterCluster(AlterClusterPlan { id, name, options }))
 }
 
-pub fn plan_alter_cluster_profile(
+pub fn plan_alter_replica_set(
     scx: &mut StatementContext,
-    AlterClusterProfileStatement {
+    AlterReplicaSetStatement {
         name,
         action,
         if_exists,
-    }: AlterClusterProfileStatement<Aug>,
+    }: AlterReplicaSetStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_CLUSTER_PROFILES)?;
+    scx.require_feature_flag(&vars::ENABLE_REPLICA_SETS)?;
 
     let (cluster, item_id) =
-        match resolve_cluster_item(scx, &name, if_exists, Some(ClusterItemType::Profile))? {
+        match resolve_cluster_item(scx, &name, if_exists, Some(ClusterItemType::ReplicaSet))? {
             Some((entry, item_id)) => (entry, item_id),
             None => {
                 scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -4500,12 +4455,11 @@ pub fn plan_alter_cluster_profile(
                 }));
             }
         };
-    let options =
-        plan_alter_cluster_profile_inner(scx, cluster, action, ObjectType::ClusterProfile)?;
+    let options = plan_alter_cluster_profile_inner(scx, cluster, action, ObjectType::ReplicaSet)?;
 
-    Ok(Plan::AlterClusterProfile(AlterClusterProfilePlan {
+    Ok(Plan::AlterReplicaSet(AlterReplicaSetPlan {
         id: cluster.id(),
-        profile_id: item_id,
+        replica_set_id: item_id,
         name: cluster.name().to_string(),
         options,
     }))
@@ -4514,7 +4468,7 @@ pub fn plan_alter_cluster_profile(
 pub fn plan_alter_cluster_profile_inner(
     scx: &StatementContext,
     cluster: &dyn CatalogCluster,
-    action: AlterClusterProfileAction<Aug>,
+    action: AlterReplicaSetAction<Aug>,
     object_type: ObjectType,
 ) -> Result<PlanClusterOption, PlanError> {
     // Prevent changes to linked clusters.
@@ -4523,8 +4477,8 @@ pub fn plan_alter_cluster_profile_inner(
     let mut options: PlanClusterOption = Default::default();
 
     match action {
-        AlterClusterProfileAction::SetOptions(set_options) => {
-            let ClusterProfileOptionExtracted {
+        AlterReplicaSetAction::SetOptions(set_options) => {
+            let ClusterOptionExtracted {
                 availability_zones,
                 idle_arrangement_merge_effort,
                 introspection_debugging,
@@ -4535,7 +4489,7 @@ pub fn plan_alter_cluster_profile_inner(
                 seen: _,
                 size,
                 disk,
-            }: ClusterProfileOptionExtracted = set_options.try_into()?;
+            }: ClusterOptionExtracted = set_options.try_into()?;
 
             match managed.unwrap_or_else(|| cluster.is_managed()) {
                 true => {
@@ -4623,9 +4577,9 @@ pub fn plan_alter_cluster_profile_inner(
                 options.replicas = AlterOptionParameter::Set(replicas);
             }
         }
-        AlterClusterProfileAction::ResetOptions(reset_options) => {
+        AlterReplicaSetAction::ResetOptions(reset_options) => {
             use AlterOptionParameter::Reset;
-            use ClusterProfileOptionName::*;
+            use ClusterOptionName::*;
             for option in reset_options {
                 match option {
                     AvailabilityZones => options.availability_zones = Reset,
@@ -4752,7 +4706,7 @@ pub fn plan_alter_object_rename(
             plan_alter_cluster_rename(scx, object_type, name, to_item_name, if_exists)
         }
         (
-            ObjectType::ClusterProfile | ObjectType::ClusterReplica,
+            ObjectType::ReplicaSet | ObjectType::ClusterReplica,
             UnresolvedObjectName::ClusterItem(name),
         ) => plan_alter_cluster_item_rename(scx, object_type, name, to_item_name, if_exists),
         (object_type, name) => {
@@ -4845,7 +4799,7 @@ pub fn plan_alter_cluster_item_rename(
     match resolve_cluster_item(scx, &name, if_exists, None)? {
         Some((cluster, item_id)) => {
             if let Ok(replica) = cluster.item(item_id).replica() {
-                ensure_cluster_is_not_managed(scx, cluster.id(), replica.profile_id())?;
+                ensure_cluster_is_not_managed(scx, cluster.id(), replica.replica_set_id())?;
             }
             Ok(Plan::AlterClusterItemRename(AlterClusterItemRenamePlan {
                 cluster_id: cluster.id(),
@@ -5257,8 +5211,8 @@ pub(crate) fn resolve_cluster_item<'a>(
             Ok(item) => {
                 match typ {
                     None => {}
-                    Some(ClusterItemType::Profile) => {
-                        item.profile()?;
+                    Some(ClusterItemType::ReplicaSet) => {
+                        item.replica_set()?;
                     }
                     Some(ClusterItemType::Replica) => {
                         item.replica()?;
@@ -5336,16 +5290,16 @@ pub(crate) fn ensure_cluster_is_not_linked(
 fn ensure_cluster_is_not_managed(
     scx: &StatementContext,
     cluster_id: ClusterId,
-    profile_id: Option<ReplicaId>,
+    replica_set_id: Option<ReplicaId>,
 ) -> Result<(), PlanError> {
     let cluster = scx.catalog.get_cluster(cluster_id);
-    if let Some(profile_id) = profile_id {
-        let item = cluster.item(profile_id);
-        let profile = item.profile()?;
-        if profile.is_managed() {
-            Err(PlanError::ManagedProfile {
+    if let Some(replica_set_id) = replica_set_id {
+        let item = cluster.item(replica_set_id);
+        let replica_set = item.replica_set()?;
+        if replica_set.is_managed() {
+            Err(PlanError::ManagedReplicaSet {
                 cluster_name: cluster.name().to_string(),
-                profile_name: item.name().to_string(),
+                replica_set_name: item.name().to_string(),
             })
         } else {
             Ok(())

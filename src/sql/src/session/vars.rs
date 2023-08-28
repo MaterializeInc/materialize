@@ -1513,7 +1513,7 @@ feature_flags!(
         statement_logging_use_reproducible_rng,
         "statement logging with reproducible RNG"
     ),
-    (enable_cluster_profiles, "cluster profiles"),
+    (enable_replica_sets, "replica set"),
 );
 
 /// Represents the input to a variable.

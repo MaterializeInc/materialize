@@ -1692,7 +1692,7 @@ where
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::CreatedCluster { .. }
-            | ExecuteResponse::CreatedClusterProfile { .. }
+            | ExecuteResponse::CreatedReplicaSet { .. }
             | ExecuteResponse::CreatedClusterReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }

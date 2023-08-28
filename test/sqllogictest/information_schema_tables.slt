@@ -109,10 +109,6 @@ mz_base_types
 BASE TABLE
 materialize
 mz_catalog
-mz_cluster_profiles
-BASE TABLE
-materialize
-mz_catalog
 mz_cluster_replicas
 BASE TABLE
 materialize
@@ -187,6 +183,10 @@ materialize
 mz_catalog
 mz_relations
 VIEW
+materialize
+mz_catalog
+mz_replica_sets
+BASE TABLE
 materialize
 mz_catalog
 mz_role_members
@@ -589,10 +589,6 @@ mz_show_cluster_privileges
 VIEW
 materialize
 mz_internal
-mz_show_cluster_profiles
-VIEW
-materialize
-mz_internal
 mz_show_cluster_replicas
 VIEW
 materialize
@@ -642,6 +638,10 @@ VIEW
 materialize
 mz_internal
 mz_show_object_privileges
+VIEW
+materialize
+mz_internal
+mz_show_replica_sets
 VIEW
 materialize
 mz_internal

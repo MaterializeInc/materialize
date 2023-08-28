@@ -1042,7 +1042,7 @@ impl Coordinator {
                             config: replica.config.clone(),
                         });
                     }
-                    ClusterItem::Profile(_) => {}
+                    ClusterItem::ReplicaSet(_) => {}
                 }
             }
         }

@@ -145,18 +145,18 @@ ALTER CLUSTER IF EXISTS foo OWNER TO joe
 AlterOwner(AlterOwnerStatement { object_type: Cluster, if_exists: true, name: Cluster(Ident("foo")), new_owner: Ident("joe") })
 
 parse-statement
-ALTER CLUSTER PROFILE c.foo OWNER TO moe
+ALTER REPLICA SET c.foo OWNER TO moe
 ----
-ALTER CLUSTER PROFILE c.foo OWNER TO moe
+ALTER REPLICA SET c.foo OWNER TO moe
 =>
-AlterOwner(AlterOwnerStatement { object_type: ClusterProfile, if_exists: false, name: ClusterItem(QualifiedClusterItem { cluster: Ident("c"), item: Ident("foo") }), new_owner: Ident("moe") })
+AlterOwner(AlterOwnerStatement { object_type: ReplicaSet, if_exists: false, name: ClusterItem(QualifiedClusterItem { cluster: Ident("c"), item: Ident("foo") }), new_owner: Ident("moe") })
 
 parse-statement
-ALTER CLUSTER PROFILE IF EXISTS c.foo OWNER TO moe
+ALTER REPLICA SET IF EXISTS c.foo OWNER TO moe
 ----
-ALTER CLUSTER PROFILE IF EXISTS c.foo OWNER TO moe
+ALTER REPLICA SET IF EXISTS c.foo OWNER TO moe
 =>
-AlterOwner(AlterOwnerStatement { object_type: ClusterProfile, if_exists: true, name: ClusterItem(QualifiedClusterItem { cluster: Ident("c"), item: Ident("foo") }), new_owner: Ident("moe") })
+AlterOwner(AlterOwnerStatement { object_type: ReplicaSet, if_exists: true, name: ClusterItem(QualifiedClusterItem { cluster: Ident("c"), item: Ident("foo") }), new_owner: Ident("moe") })
 
 parse-statement
 ALTER CLUSTER REPLICA c.foo OWNER TO joe

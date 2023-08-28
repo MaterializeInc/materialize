@@ -52,10 +52,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterItem, CatalogClusterProfile, CatalogClusterReplica,
-    CatalogConfig, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogType, CatalogTypeDetails, ClusterItemType, DefaultPrivilegeAclItem,
+    CatalogCluster, CatalogClusterItem, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogReplicaSet, CatalogRole,
+    CatalogSchema, CatalogType, CatalogTypeDetails, ClusterItemType, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, RoleAttributes,
     SessionCatalog, SystemObjectType, TypeReference,
 };
@@ -383,21 +383,23 @@ impl CatalogState {
             for item_id in cluster.bound_objects() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
-            // Add all replicas without associated profiles.
+            // Add all replicas without associated replica sets.
             for replica_id in cluster
                 .iter_replicas()
-                .filter(|replica| replica.replica().profile_id.is_none())
+                .filter(|replica| replica.replica().replica_set_id.is_none())
                 .map(|entry| entry.item_id())
             {
                 dependents.extend_from_slice(
                     &self.cluster_replica_dependents(cluster_id, replica_id, seen),
                 );
             }
-            // Add profiles and their replicas
-            for profile_id in cluster.iter_profiles().map(|entry| entry.item_id()) {
-                dependents.extend_from_slice(
-                    &self.cluster_replica_dependents(cluster_id, profile_id, seen),
-                );
+            // Add replica sets and their replicas
+            for replica_set_id in cluster.iter_replica_sets().map(|entry| entry.item_id()) {
+                dependents.extend_from_slice(&self.cluster_replica_dependents(
+                    cluster_id,
+                    replica_set_id,
+                    seen,
+                ));
             }
             dependents.push(object_id);
         }
@@ -421,10 +423,10 @@ impl CatalogState {
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
             match self.get_cluster_item(cluster_id, replica_id).item {
-                ClusterItem::Profile(_) => {
+                ClusterItem::ReplicaSet(_) => {
                     dependents.extend(
                         self.get_cluster(cluster_id)
-                            .iter_replicas_in_profile(Some(replica_id))
+                            .iter_replicas_in_replica_set(Some(replica_id))
                             .map(|replica| ObjectId::ClusterItem((cluster_id, replica.item_id()))),
                     );
                 }
@@ -1096,7 +1098,7 @@ impl CatalogState {
         assert!(cluster.entries_by_id.insert(item_id, entry).is_none());
     }
 
-    fn insert_cluster_profile(
+    fn insert_replica_set(
         &mut self,
         cluster_id: ClusterId,
         item_id: ReplicaId,
@@ -1104,7 +1106,7 @@ impl CatalogState {
         owner_id: RoleId,
         replica_config: ClusterConfig,
     ) {
-        let item = ClusterItem::Profile(ClusterProfile { replica_config });
+        let item = ClusterItem::ReplicaSet(ReplicaSet { replica_config });
         self.insert_cluster_item(cluster_id, item_name, item_id, owner_id, item)
     }
 
@@ -1115,10 +1117,10 @@ impl CatalogState {
         item_id: ReplicaId,
         config: ReplicaConfig,
         owner_id: RoleId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) {
         let item = ClusterItem::Replica(ClusterReplica {
-            profile_id,
+            replica_set_id,
             process_status: (0..config.location.num_processes())
                 .map(|process_id| {
                     let status = ClusterReplicaProcessStatus {
@@ -2045,25 +2047,25 @@ impl Cluster {
         self.entries_by_id.iter()
     }
 
-    pub fn iter_profiles_by_id(&self) -> impl Iterator<Item = (&ReplicaId, &ClusterEntry)> {
+    pub fn iter_replica_sets_by_id(&self) -> impl Iterator<Item = (&ReplicaId, &ClusterEntry)> {
         self.entries_by_id
             .iter()
-            .filter(|(_id, entry)| matches!(entry.item, ClusterItem::Profile(_)))
+            .filter(|(_id, entry)| matches!(entry.item, ClusterItem::ReplicaSet(_)))
     }
 
-    pub fn iter_profiles(&self) -> impl Iterator<Item = &ClusterEntry> {
-        self.iter_profiles_by_id().map(|(_id, entry)| entry)
+    pub fn iter_replica_sets(&self) -> impl Iterator<Item = &ClusterEntry> {
+        self.iter_replica_sets_by_id().map(|(_id, entry)| entry)
     }
 
-    pub fn iter_replicas_in_profile(
+    pub fn iter_replicas_in_replica_set(
         &self,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) -> impl Iterator<Item = &ClusterEntry> {
         self.entries_by_id.values().filter(move |entry| {
             entry
                 .try_replica()
                 .ok()
-                .filter(|entry| entry.profile_id == profile_id)
+                .filter(|entry| entry.replica_set_id == replica_set_id)
                 .is_some()
         })
     }
@@ -2097,21 +2099,21 @@ impl Cluster {
             .unwrap_or_else(|| panic!("unknown cluster item {id}.{item_id}"))
     }
 
-    pub fn try_get_profile(&self, profile_id: ReplicaId) -> Option<&ClusterProfile> {
-        let entry = self.entries_by_id.get(&profile_id)?;
-        if let ClusterItem::Profile(profile) = &entry.item {
-            Some(profile)
+    pub fn try_get_replica_set(&self, replica_set_id: ReplicaId) -> Option<&ReplicaSet> {
+        let entry = self.entries_by_id.get(&replica_set_id)?;
+        if let ClusterItem::ReplicaSet(replica_set) = &entry.item {
+            Some(replica_set)
         } else {
             None
         }
     }
 
-    pub fn get_profile(&self, profile_id: ReplicaId) -> &ClusterProfile {
-        self.get_item(profile_id).profile()
+    pub fn get_replica_set(&self, replica_set_id: ReplicaId) -> &ReplicaSet {
+        self.get_item(replica_set_id).replica_set()
     }
 
-    pub fn get_profile_mut(&mut self, profile_id: ReplicaId) -> &mut ClusterProfile {
-        self.get_item_mut(profile_id).profile_mut()
+    pub fn get_replica_set_mut(&mut self, replica_set_id: ReplicaId) -> &mut ReplicaSet {
+        self.get_item_mut(replica_set_id).replica_set_mut()
     }
 
     pub fn try_get_replica(&self, replica_id: ReplicaId) -> Option<&ClusterReplica> {
@@ -2146,39 +2148,34 @@ impl ClusterEntry {
         self.item.item_type()
     }
 
-    pub fn try_profile(&self) -> Result<&ClusterProfile, SqlCatalogError> {
+    pub fn try_replica_set(&self) -> Result<&ReplicaSet, SqlCatalogError> {
         match &self.item {
-            ClusterItem::Profile(profile) => Ok(profile),
+            ClusterItem::ReplicaSet(replica_set) => Ok(replica_set),
             item => Err(SqlCatalogError::UnexpectedClusterItemType {
                 name: self.name.clone(),
                 actual_type: item.item_type(),
-                expected_type: ClusterItemType::Profile,
+                expected_type: ClusterItemType::ReplicaSet,
             }),
         }
     }
 
-    pub fn try_profile_mut(&mut self) -> Result<&mut ClusterProfile, SqlCatalogError> {
+    pub fn try_replica_set_mut(&mut self) -> Result<&mut ReplicaSet, SqlCatalogError> {
         match &mut self.item {
-            ClusterItem::Profile(profile) => Ok(profile),
+            ClusterItem::ReplicaSet(replica_set) => Ok(replica_set),
             item => Err(SqlCatalogError::UnexpectedClusterItemType {
                 name: self.name.clone(),
                 actual_type: item.item_type(),
-                expected_type: ClusterItemType::Profile,
+                expected_type: ClusterItemType::ReplicaSet,
             }),
         }
     }
 
-    pub fn profile(&self) -> &ClusterProfile {
-        self.try_profile().unwrap_or_else(|e| {
-            panic!(
-                "Not a profile {}.{} ({}): {e}",
-                self.cluster_id, self.item_id, self.name
-            )
-        })
+    pub fn replica_set(&self) -> &ReplicaSet {
+        self.try_replica_set().unwrap_or_else(|e| panic!("{e}"))
     }
 
-    pub fn profile_mut(&mut self) -> &mut ClusterProfile {
-        self.try_profile_mut().unwrap_or_else(|e| panic!("{e}"))
+    pub fn replica_set_mut(&mut self) -> &mut ReplicaSet {
+        self.try_replica_set_mut().unwrap_or_else(|e| panic!("{e}"))
     }
 
     pub fn try_replica(&self) -> Result<&ClusterReplica, SqlCatalogError> {
@@ -2222,7 +2219,7 @@ impl ClusterEntry {
 
 #[derive(Debug, Serialize, Clone)]
 pub enum ClusterItem {
-    Profile(ClusterProfile),
+    ReplicaSet(ReplicaSet),
     Replica(ClusterReplica),
 }
 
@@ -2230,18 +2227,18 @@ impl ClusterItem {
     #[inline]
     pub fn item_type(&self) -> ClusterItemType {
         match self {
-            ClusterItem::Profile(_) => ClusterItemType::Profile,
+            ClusterItem::ReplicaSet(_) => ClusterItemType::ReplicaSet,
             ClusterItem::Replica(_) => ClusterItemType::Replica,
         }
     }
 }
 
 #[derive(Debug, Serialize, Clone)]
-pub struct ClusterProfile {
+pub struct ReplicaSet {
     pub replica_config: ClusterConfig,
 }
 
-impl CatalogClusterProfile<'_> for ClusterProfile {
+impl CatalogReplicaSet<'_> for ReplicaSet {
     fn is_managed(&self) -> bool {
         matches!(self.replica_config.variant, ClusterVariant::Managed { .. })
     }
@@ -2252,7 +2249,7 @@ pub struct ClusterReplica {
     pub config: ReplicaConfig,
     #[serde(skip)]
     pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
-    pub profile_id: Option<ReplicaId>,
+    pub replica_set_id: Option<ReplicaId>,
 }
 
 impl ClusterReplica {
@@ -2279,8 +2276,8 @@ impl ClusterReplica {
 }
 
 impl CatalogClusterReplica<'_> for ClusterReplica {
-    fn profile_id(&self) -> Option<ReplicaId> {
-        self.profile_id
+    fn replica_set_id(&self) -> Option<ReplicaId> {
+        self.replica_set_id
     }
 }
 
@@ -3971,25 +3968,25 @@ impl Catalog {
         } in replicas
         {
             match item {
-                storage::ClusterItemVariant::Profile(profile) => {
+                storage::ClusterItemVariant::ReplicaSet(replica_set) => {
                     catalog
                         .storage()
                         .await
-                        .set_cluster_profile_config(
+                        .set_replica_set_config(
                             replica_id,
                             cluster_id,
                             name.clone(),
                             owner_id,
-                            profile.replica_config.clone(),
+                            replica_set.replica_config.clone(),
                         )
                         .await?;
 
-                    catalog.state.insert_cluster_profile(
+                    catalog.state.insert_replica_set(
                         cluster_id,
                         replica_id,
                         name,
                         owner_id,
-                        profile.replica_config,
+                        replica_set.replica_config,
                     );
                 }
                 storage::ClusterItemVariant::Replica(replica) => {
@@ -4020,7 +4017,7 @@ impl Catalog {
                             name.clone(),
                             &config,
                             owner_id,
-                            replica.profile_id,
+                            replica.replica_set_id,
                         )
                         .await?;
 
@@ -4030,7 +4027,7 @@ impl Catalog {
                         replica_id,
                         config,
                         owner_id,
-                        replica.profile_id,
+                        replica.replica_set_id,
                     );
                 }
             }
@@ -6392,7 +6389,7 @@ impl Catalog {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
                 }
-                Op::CreateClusterProfile {
+                Op::CreateReplicaSet {
                     cluster_id,
                     id,
                     name,
@@ -6405,8 +6402,8 @@ impl Catalog {
                         )));
                     }
 
-                    tx.insert_cluster_profile(cluster_id, id, &name, owner_id, config.clone())?;
-                    state.insert_cluster_profile(cluster_id, id, name.clone(), owner_id, config);
+                    tx.insert_replica_set(cluster_id, id, &name, owner_id, config.clone())?;
+                    state.insert_replica_set(cluster_id, id, name.clone(), owner_id, config);
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -6414,15 +6411,14 @@ impl Catalog {
                         builtin_table_updates,
                         audit_events,
                         EventType::Create,
-                        ObjectType::ClusterProfile,
+                        ObjectType::ReplicaSet,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                             id: id.to_string(),
                             name: name.clone(),
                         }),
                     )?;
-                    builtin_table_updates
-                        .push(state.pack_cluster_profile_update(cluster_id, id, 1));
-                    info!("create cluster profile {}", name);
+                    builtin_table_updates.push(state.pack_replica_set_update(cluster_id, id, 1));
+                    info!("create replica set {}", name);
                 }
                 Op::CreateClusterReplica {
                     cluster_id,
@@ -6430,7 +6426,7 @@ impl Catalog {
                     name,
                     config,
                     owner_id,
-                    profile_id,
+                    replica_set_id,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
@@ -6453,7 +6449,7 @@ impl Catalog {
                         &name,
                         owner_id,
                         config.clone().into(),
-                        profile_id,
+                        replica_set_id,
                     )?;
                     if let ReplicaLocation::Managed(ManagedReplicaLocation { size, disk, .. }) =
                         &config.location
@@ -6486,7 +6482,7 @@ impl Catalog {
                         id,
                         config,
                         owner_id,
-                        profile_id,
+                        replica_set_id,
                     );
                     builtin_table_updates
                         .push(state.pack_cluster_replica_update(cluster_id, id, 1));
@@ -6809,9 +6805,9 @@ impl Catalog {
                         tx.remove_cluster_item(replica_id)?;
 
                         match &replica.item {
-                            ClusterItem::Profile(_) => {
+                            ClusterItem::ReplicaSet(_) => {
                                 builtin_table_updates.push(
-                                    state.pack_cluster_profile_update(cluster_id, replica_id, -1),
+                                    state.pack_replica_set_update(cluster_id, replica_id, -1),
                                 );
                             }
                             ClusterItem::Replica(replica) => {
@@ -7502,24 +7498,30 @@ impl Catalog {
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     info!("update cluster {}", name);
                 }
-                Op::UpdateClusterProfileConfig {
+                Op::UpdateReplicaSetConfig {
                     id,
-                    profile_id,
+                    replica_set_id,
                     name,
                     config,
                 } => {
-                    builtin_table_updates
-                        .push(state.pack_cluster_profile_update(id, profile_id, -1));
+                    builtin_table_updates.push(state.pack_replica_set_update(
+                        id,
+                        replica_set_id,
+                        -1,
+                    ));
                     let cluster = state.get_cluster_mut(id);
-                    let entry = cluster.get_item_mut(profile_id);
-                    assert_eq!(entry.item_type(), ClusterItemType::Profile);
-                    entry.item = ClusterItem::Profile(ClusterProfile {
+                    let entry = cluster.get_item_mut(replica_set_id);
+                    assert_eq!(entry.item_type(), ClusterItemType::ReplicaSet);
+                    entry.item = ClusterItem::ReplicaSet(ReplicaSet {
                         replica_config: config,
                     });
-                    tx.update_cluster_item(id, profile_id, entry)?;
-                    builtin_table_updates
-                        .push(state.pack_cluster_profile_update(id, profile_id, 1));
-                    info!("update cluster {}", name);
+                    tx.update_cluster_item(id, replica_set_id, entry)?;
+                    builtin_table_updates.push(state.pack_replica_set_update(
+                        id,
+                        replica_set_id,
+                        1,
+                    ));
+                    info!("update replica set {}", name);
                 }
                 Op::UpdateClusterReplicaStatus { event } => {
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
@@ -8269,7 +8271,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Type => ObjectType::Type,
             mz_sql::catalog::ObjectType::Role => ObjectType::Role,
             mz_sql::catalog::ObjectType::Cluster => ObjectType::Cluster,
-            mz_sql::catalog::ObjectType::ClusterProfile => ObjectType::ClusterProfile,
+            mz_sql::catalog::ObjectType::ReplicaSet => ObjectType::ReplicaSet,
             mz_sql::catalog::ObjectType::ClusterReplica => ObjectType::ClusterReplica,
             mz_sql::catalog::ObjectType::Secret => ObjectType::Secret,
             mz_sql::catalog::ObjectType::Connection => ObjectType::Connection,
@@ -8349,7 +8351,7 @@ pub enum Op {
         owner_id: RoleId,
         config: ClusterConfig,
     },
-    CreateClusterProfile {
+    CreateReplicaSet {
         cluster_id: ClusterId,
         id: ReplicaId,
         name: String,
@@ -8362,7 +8364,7 @@ pub enum Op {
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     },
     CreateItem {
         id: GlobalId,
@@ -8418,9 +8420,9 @@ pub enum Op {
         name: String,
         config: ClusterConfig,
     },
-    UpdateClusterProfileConfig {
+    UpdateReplicaSetConfig {
         id: ClusterId,
-        profile_id: ReplicaId,
+        replica_set_id: ReplicaId,
         name: String,
         config: ClusterConfig,
     },
@@ -9256,8 +9258,8 @@ impl mz_sql::catalog::CatalogClusterItem<'_> for ClusterEntry {
         self.item.item_type()
     }
 
-    fn profile(&self) -> Result<&dyn CatalogClusterProfile, SqlCatalogError> {
-        Ok(self.try_profile()?)
+    fn replica_set(&self) -> Result<&dyn CatalogReplicaSet, SqlCatalogError> {
+        Ok(self.try_replica_set()?)
     }
 
     fn replica(&self) -> Result<&dyn CatalogClusterReplica, SqlCatalogError> {

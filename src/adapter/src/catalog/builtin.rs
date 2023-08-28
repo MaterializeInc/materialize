@@ -1936,13 +1936,13 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true))
-        // `NULL` for replicas that aren't part of a profile.
-        .with_column("profile_id", ScalarType::String.nullable(true)),
+        // `NULL` for replicas that aren't part of a replica set.
+        .with_column("replica_set_id", ScalarType::String.nullable(true)),
     is_retained_metrics_object: true,
 });
 
-pub static MZ_CLUSTER_PROFILES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_profiles",
+pub static MZ_REPLICA_SETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_replica_sets",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
@@ -4273,16 +4273,16 @@ FROM
 };
 
 pub const MZ_SHOW_CLUSTER_PROFILES: BuiltinView = BuiltinView {
-    name: "mz_show_cluster_profiles",
+    name: "mz_show_replica_sets",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_profiles
+    sql: r#"CREATE VIEW mz_internal.mz_show_replica_sets
 AS SELECT
-    mz_catalog.mz_clusters.name AS cluster,
-    mz_catalog.mz_cluster_profiles.name AS profile
+    mc.name AS cluster,
+    mrs.name AS replica_set
 FROM
-    mz_catalog.mz_cluster_profiles
-        JOIN mz_catalog.mz_clusters
-            ON mz_catalog.mz_cluster_profiles.cluster_id = mz_catalog.mz_clusters.id
+    mz_catalog.mz_replica_sets mrs
+        JOIN mz_catalog.mz_clusters mc
+            ON mrs.cluster_id = mc.id
 ORDER BY 1, 2"#,
 };
 
@@ -5096,7 +5096,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
-        Builtin::Table(&MZ_CLUSTER_PROFILES),
+        Builtin::Table(&MZ_REPLICA_SETS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),

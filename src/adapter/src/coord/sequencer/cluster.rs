@@ -22,10 +22,10 @@ use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{
-    AlterClusterItemRenamePlan, AlterClusterPlan, AlterClusterProfilePlan, AlterClusterRenamePlan,
-    AlterOptionParameter, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterProfilePlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
+    AlterClusterItemRenamePlan, AlterClusterPlan, AlterClusterRenamePlan, AlterOptionParameter,
+    AlterReplicaSetPlan, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    CreateReplicaSetPlan, PlanClusterOption,
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
@@ -112,7 +112,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_managed_cluster");
 
-        self.sequence_create_managed_profile(
+        self.sequence_create_managed_replica_set(
             session,
             availability_zones,
             &compute,
@@ -132,7 +132,7 @@ impl Coordinator {
         Ok(ExecuteResponse::CreatedCluster)
     }
 
-    async fn sequence_create_managed_profile(
+    async fn sequence_create_managed_replica_set(
         &mut self,
         session: &Session,
         availability_zones: Vec<String>,
@@ -141,7 +141,7 @@ impl Coordinator {
         size: &String,
         disk: bool,
         cluster_id: ClusterId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
         ops: &mut Vec<Op>,
     ) -> Result<(), AdapterError> {
         self.ensure_valid_azs(availability_zones.iter())?;
@@ -166,7 +166,7 @@ impl Coordinator {
         )?;
 
         for replica_name in
-            (0..replication_factor).map(|index| managed_cluster_replica_name(index, profile_id))
+            (0..replication_factor).map(|index| managed_cluster_replica_name(index, replica_set_id))
         {
             let id = self.catalog_mut().allocate_user_replica_id().await?;
             self.create_managed_cluster_replica_op(
@@ -183,7 +183,7 @@ impl Coordinator {
                 },
                 disk,
                 *session.current_role_id(),
-                profile_id,
+                replica_set_id,
             )?;
         }
         Ok(())
@@ -200,7 +200,7 @@ impl Coordinator {
         azs: Option<&[String]>,
         disk: bool,
         owner_id: RoleId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) -> Result<(), AdapterError> {
         let location = SerializedReplicaLocation::Managed {
             size: size.clone(),
@@ -238,7 +238,7 @@ impl Coordinator {
             name,
             config,
             owner_id,
-            profile_id,
+            replica_set_id,
         });
         Ok(())
     }
@@ -269,7 +269,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_unmanaged_cluster");
 
-        self.sequence_create_unmanaged_profile(
+        self.sequence_create_unmanaged_replica_set(
             id,
             *session.current_role_id(),
             None,
@@ -285,11 +285,11 @@ impl Coordinator {
         Ok(ExecuteResponse::CreatedCluster)
     }
 
-    async fn sequence_create_unmanaged_profile(
+    async fn sequence_create_unmanaged_replica_set(
         &mut self,
         cluster_id: ClusterId,
         owner_id: RoleId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
         replicas: Vec<(String, mz_sql::plan::ReplicaConfig)>,
         ops: &mut Vec<Op>,
     ) -> Result<(), AdapterError> {
@@ -383,17 +383,13 @@ impl Coordinator {
                 name: replica_name.clone(),
                 config,
                 owner_id,
-                profile_id,
+                replica_set_id,
             });
         }
         Ok(())
     }
 
-    async fn create_cluster_profile(
-        &mut self,
-        cluster_id: ClusterId,
-        profile_id: Option<ReplicaId>,
-    ) {
+    async fn create_replica_set(&mut self, cluster_id: ClusterId, replica_set: Option<ReplicaId>) {
         let cluster = self.catalog.get_cluster(cluster_id);
         let cluster_id = cluster.id;
         let introspection_source_ids: Vec<_> =
@@ -401,7 +397,7 @@ impl Coordinator {
 
         let replicas: Vec<_> = cluster
             .iter_replicas()
-            .filter(|entry| entry.replica().profile_id == profile_id)
+            .filter(|entry| entry.replica().replica_set_id == replica_set)
             .map(|r| (cluster_id, r.item_id))
             .collect();
         self.create_cluster_replicas(&replicas).await;
@@ -453,14 +449,14 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn sequence_create_cluster_profile(
+    pub(super) async fn sequence_create_replica_set(
         &mut self,
         session: &Session,
-        CreateClusterProfilePlan {
+        CreateReplicaSetPlan {
             name,
             cluster_id,
             variant,
-        }: CreateClusterProfilePlan,
+        }: CreateReplicaSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let id = self.catalog_mut().allocate_user_replica_id().await?;
         // Replicas have the same owner as their cluster.
@@ -489,7 +485,7 @@ impl Coordinator {
         let config = ClusterConfig {
             variant: cluster_variant,
         };
-        let mut ops = vec![catalog::Op::CreateClusterProfile {
+        let mut ops = vec![catalog::Op::CreateReplicaSet {
             cluster_id,
             id,
             name: name.clone(),
@@ -505,7 +501,7 @@ impl Coordinator {
                 compute,
                 disk,
             }) => {
-                self.sequence_create_managed_profile(
+                self.sequence_create_managed_replica_set(
                     session,
                     availability_zones,
                     &compute,
@@ -519,7 +515,7 @@ impl Coordinator {
                 .await?;
             }
             CreateClusterVariant::Unmanaged(plan) => {
-                self.sequence_create_unmanaged_profile(
+                self.sequence_create_unmanaged_replica_set(
                     cluster_id,
                     *session.current_role_id(),
                     Some(id),
@@ -532,9 +528,9 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        self.create_cluster_profile(cluster_id, Some(id)).await;
+        self.create_replica_set(cluster_id, Some(id)).await;
 
-        Ok(ExecuteResponse::CreatedClusterProfile)
+        Ok(ExecuteResponse::CreatedReplicaSet)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -545,7 +541,7 @@ impl Coordinator {
             name,
             cluster_id,
             config,
-            profile_id,
+            replica_set_id,
         }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Choose default AZ if necessary
@@ -624,7 +620,7 @@ impl Coordinator {
             name: name.clone(),
             config,
             owner_id,
-            profile_id,
+            replica_set_id,
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
@@ -677,26 +673,29 @@ impl Coordinator {
         .await
     }
 
-    pub(super) async fn sequence_alter_cluster_profile(
+    pub(super) async fn sequence_alter_replica_set(
         &mut self,
         session: &Session,
-        AlterClusterProfilePlan {
+        AlterReplicaSetPlan {
             id: cluster_id,
-            profile_id,
+            replica_set_id,
             name: _,
             options,
-        }: AlterClusterProfilePlan,
+        }: AlterReplicaSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
-        let config = cluster.get_profile(profile_id).replica_config.clone();
+        let config = cluster
+            .get_replica_set(replica_set_id)
+            .replica_config
+            .clone();
 
         self.sequence_alter_cluster_profile_inner(
             session,
             cluster_id,
-            Some(profile_id),
+            Some(replica_set_id),
             options,
             config,
-            ObjectType::ClusterProfile,
+            ObjectType::ReplicaSet,
         )
         .await
     }
@@ -705,7 +704,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
         options: PlanClusterOption,
         config: ClusterConfig,
         object_type: ObjectType,
@@ -839,25 +838,37 @@ impl Coordinator {
         match (&config.variant, new_config.variant) {
             (Managed(config), Managed(new_config)) => {
                 self.sequence_alter_cluster_managed_to_managed(
-                    session, cluster_id, profile_id, config, new_config,
+                    session,
+                    cluster_id,
+                    replica_set_id,
+                    config,
+                    new_config,
                 )
                 .await?;
             }
             (Unmanaged, Managed(new_config)) => {
                 self.sequence_alter_cluster_unmanaged_to_managed(
-                    session, cluster_id, new_config, options, profile_id,
+                    session,
+                    cluster_id,
+                    new_config,
+                    options,
+                    replica_set_id,
                 )
                 .await?;
             }
             (Managed(_), Unmanaged) => {
-                self.sequence_alter_cluster_managed_to_unmanaged(session, cluster_id, profile_id)
-                    .await?;
+                self.sequence_alter_cluster_managed_to_unmanaged(
+                    session,
+                    cluster_id,
+                    replica_set_id,
+                )
+                .await?;
             }
             (Unmanaged, Unmanaged) => {
                 self.sequence_alter_cluster_unmanaged_to_unmanaged(
                     session,
                     cluster_id,
-                    profile_id,
+                    replica_set_id,
                     options.replicas,
                     object_type,
                 )?;
@@ -871,7 +882,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
         config: &ClusterVariantManaged,
         new_config: ClusterVariantManaged,
     ) -> Result<(), AdapterError> {
@@ -942,7 +953,7 @@ impl Coordinator {
 
             // tear down all replicas, create new ones
             for name in (0..*replication_factor)
-                .map(|index| managed_cluster_replica_name(index, profile_id))
+                .map(|index| managed_cluster_replica_name(index, replica_set_id))
             {
                 let replica = cluster.resolve_item(&name);
                 if let Ok(replica) = replica {
@@ -954,7 +965,7 @@ impl Coordinator {
                 }
             }
             for name in (0..*new_replication_factor)
-                .map(|index| managed_cluster_replica_name(index, profile_id))
+                .map(|index| managed_cluster_replica_name(index, replica_set_id))
             {
                 let id = self.catalog_mut().allocate_user_replica_id().await?;
                 self.create_managed_cluster_replica_op(
@@ -967,14 +978,14 @@ impl Coordinator {
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
-                    profile_id,
+                    replica_set_id,
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
         } else if new_replication_factor < replication_factor {
             // Adjust size down
             for name in (*new_replication_factor..*replication_factor)
-                .map(|index| managed_cluster_replica_name(index, profile_id))
+                .map(|index| managed_cluster_replica_name(index, replica_set_id))
             {
                 let item = cluster.resolve_item(&name);
                 if let Ok(item) = item {
@@ -988,7 +999,7 @@ impl Coordinator {
         } else if new_replication_factor > replication_factor {
             // Adjust size up
             for name in (*replication_factor..*new_replication_factor)
-                .map(|index| managed_cluster_replica_name(index, profile_id))
+                .map(|index| managed_cluster_replica_name(index, replica_set_id))
             {
                 let id = self.catalog_mut().allocate_user_replica_id().await?;
                 self.create_managed_cluster_replica_op(
@@ -1003,14 +1014,14 @@ impl Coordinator {
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
-                    profile_id,
+                    replica_set_id,
                 )?;
                 create_cluster_replicas.push((cluster_id, id))
             }
         }
 
         let variant = ClusterVariant::Managed(new_config);
-        match profile_id {
+        match replica_set_id {
             None => {
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
@@ -1018,10 +1029,10 @@ impl Coordinator {
                     config: ClusterConfig { variant },
                 });
             }
-            Some(profile_id) => {
-                ops.push(catalog::Op::UpdateClusterProfileConfig {
+            Some(replica_set_id) => {
+                ops.push(catalog::Op::UpdateReplicaSetConfig {
                     id: cluster_id,
-                    profile_id,
+                    replica_set_id,
                     name,
                     config: ClusterConfig { variant },
                 });
@@ -1039,7 +1050,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         mut new_config: ClusterVariantManaged,
         options: PlanClusterOption,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let cluster_name = cluster.name().to_string();
@@ -1054,7 +1065,7 @@ impl Coordinator {
         } = &mut new_config;
 
         // Validate replication factor parameter
-        let current_replica_count = cluster.iter_replicas_in_profile(profile_id).count();
+        let current_replica_count = cluster.iter_replicas_in_replica_set(replica_set_id).count();
         match options.replication_factor {
             AlterOptionParameter::Set(_) => {
                 // Validate that the replication factor matches the current length only if specified.
@@ -1074,7 +1085,7 @@ impl Coordinator {
         self.ensure_valid_azs(new_availability_zones.iter())?;
 
         // Validate per-replica configuration
-        for item in cluster.iter_replicas_in_profile(profile_id) {
+        for item in cluster.iter_replicas_in_replica_set(replica_set_id) {
             names.insert(item.name.clone());
             let replica = item.try_replica()?;
             match &replica.config.location {
@@ -1102,7 +1113,7 @@ impl Coordinator {
         if sizes.is_empty() {
             assert!(
                 cluster
-                    .iter_replicas_in_profile(profile_id)
+                    .iter_replicas_in_replica_set(replica_set_id)
                     .next()
                     .is_none(),
                 "Cluster should not have replicas"
@@ -1134,7 +1145,7 @@ impl Coordinator {
         }
 
         for i in 0..*new_replication_factor {
-            let name = managed_cluster_replica_name(i, profile_id);
+            let name = managed_cluster_replica_name(i, replica_set_id);
             names.remove(&name);
         }
         if !names.is_empty() {
@@ -1167,7 +1178,7 @@ impl Coordinator {
         let mut ops = vec![];
 
         let variant = ClusterVariant::Managed(new_config);
-        match profile_id {
+        match replica_set_id {
             None => {
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
@@ -1175,10 +1186,10 @@ impl Coordinator {
                     config: ClusterConfig { variant },
                 });
             }
-            Some(profile_id) => {
-                ops.push(catalog::Op::UpdateClusterProfileConfig {
+            Some(replica_set_id) => {
+                ops.push(catalog::Op::UpdateReplicaSetConfig {
                     id: cluster_id,
-                    profile_id,
+                    replica_set_id,
                     name: cluster_name,
                     config: ClusterConfig { variant },
                 });
@@ -1193,14 +1204,14 @@ impl Coordinator {
         &mut self,
         session: &Session,
         cluster_id: ClusterId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog().get_cluster(cluster_id);
         let mut ops = vec![];
 
         let variant = ClusterVariant::Unmanaged;
         let name = cluster.name().to_string();
-        match profile_id {
+        match replica_set_id {
             None => {
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
@@ -1208,10 +1219,10 @@ impl Coordinator {
                     config: ClusterConfig { variant },
                 });
             }
-            Some(profile_id) => {
-                ops.push(catalog::Op::UpdateClusterProfileConfig {
+            Some(replica_set_id) => {
+                ops.push(catalog::Op::UpdateReplicaSetConfig {
                     id: cluster_id,
-                    profile_id,
+                    replica_set_id,
                     name,
                     config: ClusterConfig { variant },
                 });
@@ -1226,7 +1237,7 @@ impl Coordinator {
         &self,
         _session: &Session,
         _cluster_id: ClusterId,
-        _profile_id: Option<ReplicaId>,
+        _replica_set_id: Option<ReplicaId>,
         _replicas: AlterOptionParameter<Vec<(String, mz_sql::plan::ReplicaConfig)>>,
         object_type: ObjectType,
     ) -> Result<(), AdapterError> {
@@ -1280,10 +1291,10 @@ impl Coordinator {
     }
 }
 
-fn managed_cluster_replica_name(index: u32, profile_id: Option<ReplicaId>) -> String {
-    if let Some(profile_id) = profile_id {
+fn managed_cluster_replica_name(index: u32, replica_set_id: Option<ReplicaId>) -> String {
+    if let Some(replica_set_id) = replica_set_id {
         // TODO: This encodes the profile ID and not a human-readable name.
-        format!("p{}_r{}", profile_id, index + 1)
+        format!("p{}_r{}", replica_set_id, index + 1)
     } else {
         format!("r{}", index + 1)
     }

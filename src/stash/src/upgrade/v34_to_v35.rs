@@ -43,7 +43,7 @@ async fn migrate_cluster_replicas(tx: &mut Transaction<'_>) -> Result<(), StashE
             cluster_id: value.cluster_id.as_ref().map(WireCompatible::convert),
             item: Some(v35::cluster_item_value::Item::Replica(
                 v35::ClusterReplicaConfig {
-                    profile_id: None,
+                    replica_set_id: None,
                     replica_config: value.config.as_ref().map(WireCompatible::convert),
                 },
             )),
@@ -164,7 +164,7 @@ mod tests {
                         owner_id: None,
                         item: Some(v35::cluster_item_value::Item::Replica(
                             v35::ClusterReplicaConfig {
-                                profile_id: None,
+                                replica_set_id: None,
                                 replica_config: Some(v35::ReplicaConfig {
                                     logging: None,
                                     idle_arrangement_merge_effort: Some(v35::ReplicaMergeEffort {
@@ -190,7 +190,7 @@ mod tests {
                         owner_id: None,
                         item: Some(v35::cluster_item_value::Item::Replica(
                             v35::ClusterReplicaConfig {
-                                profile_id: None,
+                                replica_set_id: None,
                                 replica_config: Some(v35::ReplicaConfig {
                                     logging: None,
                                     idle_arrangement_merge_effort: Some(v35::ReplicaMergeEffort {

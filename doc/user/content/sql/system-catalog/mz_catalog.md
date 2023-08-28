@@ -62,17 +62,17 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | The ID of the type.
 
-### `mz_cluster_profiles`
+### `mz_replica_sets`
 
-The `mz_cluster_profiles` table contains a row for each cluster profile in the system.
+The `mz_replica_sets` table contains a row for each replica set in the system.
 
-<!-- RELATION_SPEC mz_catalog.mz_cluster_profiles -->
+<!-- RELATION_SPEC mz_catalog.mz_replica_sets -->
 Field               | Type      | Meaning
 --------------------|-----------|--------
-`id`                | [`text`]  | Materialize's unique ID for the cluster profile.
-`name`              | [`text`]  | The name of the cluster profile.
-`cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
-`owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`id`                | [`text`]  | Materialize's unique ID for the replica set.
+`name`              | [`text`]  | The name of the replica set.
+`cluster_id`        | [`text`]  | The ID of the cluster to which the replica set belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`owner_id`          | [`text`]  | The role ID of the owner of the replica set. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_cluster_replicas`
 
@@ -88,7 +88,7 @@ Field               | Type        | Meaning
 `availability_zone` | [`text`]    | The availability zone in which the cluster is running.
 `owner_id`          | [`text`]    | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `disk`              | [`boolean`] | If the replica has a local disk.
-`profile_id`        | [`text`]    | The profile ID this replica belongs to, or `NULL`.
+`replica_set_id`    | [`text`]    | The replica set ID this replica belongs to, or `NULL`.
 
 ### `mz_clusters`
 

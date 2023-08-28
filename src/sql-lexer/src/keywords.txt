@@ -272,8 +272,6 @@ Prepare
 Primary
 Privatelink
 Privileges
-Profile
-Profiles
 Progress
 Protobuf
 Publication
@@ -328,6 +326,7 @@ Serializable
 Service
 Session
 Set
+Sets
 Shard
 Show
 Sink

@@ -68,7 +68,7 @@ pub fn plan_alter_owner(
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
         (
-            ObjectType::ClusterProfile | ObjectType::ClusterReplica,
+            ObjectType::ReplicaSet | ObjectType::ClusterReplica,
             UnresolvedObjectName::ClusterItem(_),
         ) => {
             bail_never_supported!("altering the owner of a cluster item");
@@ -616,7 +616,7 @@ pub fn plan_alter_default_privileges(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
         ),
         ObjectType::Sink
-        | ObjectType::ClusterProfile
+        | ObjectType::ReplicaSet
         | ObjectType::ClusterReplica
         | ObjectType::Role
         | ObjectType::Func => {

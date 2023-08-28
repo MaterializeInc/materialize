@@ -1817,9 +1817,6 @@ impl<'a> Parser<'a> {
             if self.peek_keyword(REPLICA) {
                 self.parse_create_cluster_replica()
                     .map_parser_err(StatementKind::CreateClusterReplica)
-            } else if self.peek_keyword(PROFILE) {
-                self.parse_create_cluster_profile()
-                    .map_parser_err(StatementKind::CreateClusterProfile)
             } else {
                 self.parse_create_cluster()
                     .map_parser_err(StatementKind::CreateCluster)
@@ -1827,6 +1824,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
                 .map_parser_err(StatementKind::CreateIndex)
+        } else if self.peek_keyword(REPLICA) {
+            self.parse_create_replica_set()
+                .map_parser_err(StatementKind::CreateReplicaSet)
         } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
                 .map_parser_err(StatementKind::CreateSource)
@@ -3448,7 +3448,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_cluster_option_name(&mut self) -> Result<ClusterProfileOptionName, ParserError> {
+    fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
             AVAILABILITY,
             DISK,
@@ -3462,42 +3462,42 @@ impl<'a> Parser<'a> {
         let name = match option {
             AVAILABILITY => {
                 self.expect_keyword(ZONES)?;
-                ClusterProfileOptionName::AvailabilityZones
+                ClusterOptionName::AvailabilityZones
             }
-            DISK => ClusterProfileOptionName::Disk,
+            DISK => ClusterOptionName::Disk,
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
-                ClusterProfileOptionName::IdleArrangementMergeEffort
+                ClusterOptionName::IdleArrangementMergeEffort
             }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
-                DEBUGGING => ClusterProfileOptionName::IntrospectionDebugging,
-                INTERVAL => ClusterProfileOptionName::IntrospectionInterval,
+                DEBUGGING => ClusterOptionName::IntrospectionDebugging,
+                INTERVAL => ClusterOptionName::IntrospectionInterval,
                 _ => unreachable!(),
             },
-            MANAGED => ClusterProfileOptionName::Managed,
-            REPLICAS => ClusterProfileOptionName::Replicas,
+            MANAGED => ClusterOptionName::Managed,
+            REPLICAS => ClusterOptionName::Replicas,
             REPLICATION => {
                 self.expect_keyword(FACTOR)?;
-                ClusterProfileOptionName::ReplicationFactor
+                ClusterOptionName::ReplicationFactor
             }
-            SIZE => ClusterProfileOptionName::Size,
+            SIZE => ClusterOptionName::Size,
             _ => unreachable!(),
         };
         Ok(name)
     }
 
-    fn parse_cluster_option(&mut self) -> Result<ClusterProfileOption<Raw>, ParserError> {
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         let name = self.parse_cluster_option_name()?;
 
-        if name == ClusterProfileOptionName::Replicas {
+        if name == ClusterOptionName::Replicas {
             return self.parse_cluster_option_replicas();
         }
 
         let value = self.parse_optional_option_value()?;
-        Ok(ClusterProfileOption { name, value })
+        Ok(ClusterOption { name, value })
     }
 
-    fn parse_cluster_option_replicas(&mut self) -> Result<ClusterProfileOption<Raw>, ParserError> {
+    fn parse_cluster_option_replicas(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let replicas = if self.consume_token(&Token::RParen) {
             vec![]
@@ -3512,25 +3512,23 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             replicas
         };
-        Ok(ClusterProfileOption {
-            name: ClusterProfileOptionName::Replicas,
+        Ok(ClusterOption {
+            name: ClusterOptionName::Replicas,
             value: Some(WithOptionValue::ClusterReplicas(replicas)),
         })
     }
 
-    fn parse_create_cluster_profile(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.next_token();
+    fn parse_create_replica_set(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[REPLICA, SET])?;
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
 
         let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
-        Ok(Statement::CreateClusterProfile(
-            CreateClusterProfileStatement {
-                of_cluster,
-                definition: ProfileDefinition { name, options },
-            },
-        ))
+        Ok(Statement::CreateReplicaSet(CreateReplicaSetStatement {
+            of_cluster,
+            definition: ReplicaSetDefinition { name, options },
+        }))
     }
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
@@ -3590,20 +3588,20 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
 
-        let of_profile = self.maybe_parse_in_profile()?;
+        let of_replica_set = self.maybe_parse_in_replica_set()?;
 
         let options = self.parse_comma_separated(Parser::parse_replica_option)?;
         Ok(Statement::CreateClusterReplica(
             CreateClusterReplicaStatement {
                 of_cluster,
-                of_profile,
+                of_replica_set,
                 definition: ReplicaDefinition { name, options },
             },
         ))
     }
 
-    fn maybe_parse_in_profile(&mut self) -> Result<Option<Ident>, ParserError> {
-        if self.parse_keywords(&[IN, PROFILE]) {
+    fn maybe_parse_in_replica_set(&mut self) -> Result<Option<Ident>, ParserError> {
+        if self.parse_keywords(&[IN, REPLICA, SET]) {
             Ok(Some(self.parse_identifier()?))
         } else {
             Ok(None)
@@ -3719,7 +3717,7 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
-            ObjectType::ClusterProfile | ObjectType::ClusterReplica => {
+            ObjectType::ReplicaSet | ObjectType::ClusterReplica => {
                 self.parse_drop_cluster_items(if_exists, object_type)
             }
             ObjectType::Table
@@ -4121,7 +4119,7 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Cluster => self.parse_alter_cluster(object_type),
-            ObjectType::ClusterProfile => {
+            ObjectType::ReplicaSet => {
                 let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
                 let name = self
                     .parse_cluster_item_name()
@@ -4158,35 +4156,31 @@ impl<'a> Parser<'a> {
                     }
                     RESET => {
                         self.expect_token(&Token::LParen)
-                            .map_parser_err(StatementKind::AlterClusterProfile)?;
+                            .map_parser_err(StatementKind::AlterReplicaSet)?;
                         let names = self
                             .parse_comma_separated(Parser::parse_cluster_option_name)
-                            .map_parser_err(StatementKind::AlterClusterProfile)?;
+                            .map_parser_err(StatementKind::AlterReplicaSet)?;
                         self.expect_token(&Token::RParen)
-                            .map_parser_err(StatementKind::AlterClusterProfile)?;
-                        Ok(Statement::AlterClusterProfile(
-                            AlterClusterProfileStatement {
-                                if_exists,
-                                name,
-                                action: AlterClusterProfileAction::ResetOptions(names),
-                            },
-                        ))
+                            .map_parser_err(StatementKind::AlterReplicaSet)?;
+                        Ok(Statement::AlterReplicaSet(AlterReplicaSetStatement {
+                            if_exists,
+                            name,
+                            action: AlterReplicaSetAction::ResetOptions(names),
+                        }))
                     }
                     SET => {
                         self.expect_token(&Token::LParen)
-                            .map_parser_err(StatementKind::AlterClusterProfile)?;
+                            .map_parser_err(StatementKind::AlterReplicaSet)?;
                         let options = self
                             .parse_comma_separated(Parser::parse_cluster_option)
-                            .map_parser_err(StatementKind::AlterClusterProfile)?;
+                            .map_parser_err(StatementKind::AlterReplicaSet)?;
                         self.expect_token(&Token::RParen)
-                            .map_parser_err(StatementKind::AlterClusterProfile)?;
-                        Ok(Statement::AlterClusterProfile(
-                            AlterClusterProfileStatement {
-                                if_exists,
-                                name,
-                                action: AlterClusterProfileAction::SetOptions(options),
-                            },
-                        ))
+                            .map_parser_err(StatementKind::AlterReplicaSet)?;
+                        Ok(Statement::AlterReplicaSet(AlterReplicaSetStatement {
+                            if_exists,
+                            name,
+                            action: AlterReplicaSetAction::SetOptions(options),
+                        }))
                     }
                     _ => unreachable!(),
                 }
@@ -4325,7 +4319,7 @@ impl<'a> Parser<'a> {
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterProfileAction::ResetOptions(names),
+                    action: AlterReplicaSetAction::ResetOptions(names),
                 }))
             }
             SET => {
@@ -4339,7 +4333,7 @@ impl<'a> Parser<'a> {
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterProfileAction::SetOptions(options),
+                    action: AlterReplicaSetAction::SetOptions(options),
                 }))
             }
             _ => unreachable!(),
@@ -5419,7 +5413,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
-            ObjectType::ClusterProfile | ObjectType::ClusterReplica => {
+            ObjectType::ReplicaSet | ObjectType::ClusterReplica => {
                 UnresolvedObjectName::ClusterItem(self.parse_cluster_item_name()?)
             }
             ObjectType::Database => UnresolvedObjectName::Database(self.parse_database_name()?),
@@ -6122,7 +6116,7 @@ impl<'a> Parser<'a> {
                 ObjectType::Sink => ShowObjectType::Sink,
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
-                ObjectType::ClusterProfile => ShowObjectType::ClusterProfile,
+                ObjectType::ReplicaSet => ShowObjectType::ReplicaSet,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
                 ObjectType::Secret => ShowObjectType::Secret,
                 ObjectType::Connection => ShowObjectType::Connection,
@@ -7245,7 +7239,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Sink
             | ObjectType::Index
-            | ObjectType::ClusterProfile
+            | ObjectType::ReplicaSet
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
@@ -7280,6 +7274,7 @@ impl<'a> Parser<'a> {
                 ROLE,
                 USER,
                 CLUSTER,
+                REPLICA,
                 SECRET,
                 CONNECTION,
                 DATABASE,
@@ -7303,11 +7298,16 @@ impl<'a> Parser<'a> {
                 CLUSTER => {
                     if self.parse_keyword(REPLICA) {
                         ObjectType::ClusterReplica
-                    } else if self.parse_keyword(PROFILE) {
-                        ObjectType::ClusterProfile
                     } else {
                         ObjectType::Cluster
                     }
+                }
+                REPLICA => {
+                    if let Err(e) = self.expect_keyword(SET) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ReplicaSet
                 }
                 SECRET => ObjectType::Secret,
                 CONNECTION => ObjectType::Connection,
@@ -7333,6 +7333,7 @@ impl<'a> Parser<'a> {
                 ROLE,
                 USER,
                 CLUSTER,
+                REPLICA,
                 SECRET,
                 CONNECTION,
                 DATABASE,
@@ -7359,6 +7360,14 @@ impl<'a> Parser<'a> {
                         ObjectType::ClusterReplica
                     } else {
                         ObjectType::Cluster
+                    }
+                }
+                REPLICA => {
+                    if self.parse_keyword(SET) {
+                        ObjectType::ReplicaSet
+                    } else {
+                        self.prev_token();
+                        return None;
                     }
                 }
                 SECRET => ObjectType::Secret,
@@ -7437,6 +7446,7 @@ impl<'a> Parser<'a> {
                 USERS,
                 CLUSTER,
                 CLUSTERS,
+                REPLICA,
                 SECRETS,
                 CONNECTIONS,
                 DATABASES,
@@ -7461,14 +7471,20 @@ impl<'a> Parser<'a> {
                 CLUSTER => {
                     if self.parse_keyword(REPLICAS) {
                         ObjectType::ClusterReplica
-                    } else if self.parse_keyword(PROFILES) {
-                        ObjectType::ClusterProfile
                     } else {
                         self.prev_token();
                         return None;
                     }
                 }
                 CLUSTERS => ObjectType::Cluster,
+                REPLICA => {
+                    if self.parse_keyword(SETS) {
+                        ObjectType::ReplicaSet
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 SECRETS => ObjectType::Secret,
                 CONNECTIONS => ObjectType::Connection,
                 DATABASES => ObjectType::Database,

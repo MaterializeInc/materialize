@@ -553,23 +553,23 @@ pub trait CatalogClusterItem<'a> {
     /// Returns the type of the cluster item.
     fn item_type(&self) -> ClusterItemType;
 
-    /// Returns the profile item. Errors if this is not a replica.
-    fn profile(&self) -> Result<&dyn CatalogClusterProfile, CatalogError>;
+    /// Returns the replica set item. Errors if this is not a replica set.
+    fn replica_set(&self) -> Result<&dyn CatalogReplicaSet, CatalogError>;
 
     /// Returns the replica item. Errors if this is not a replica.
     fn replica(&self) -> Result<&dyn CatalogClusterReplica, CatalogError>;
 }
 
-/// A cluster profile.
-pub trait CatalogClusterProfile<'a> {
-    /// Returns `true` if the profile is a managed profile.
+/// A replica set.
+pub trait CatalogReplicaSet<'a> {
+    /// Returns `true` if the replica set is a managed replica set.
     fn is_managed(&self) -> bool;
 }
 
 /// A cluster replica.
 pub trait CatalogClusterReplica<'a> {
-    /// Returns the profile ID this replica is part of, if any.
-    fn profile_id(&self) -> Option<ReplicaId>;
+    /// Returns the replica set ID this replica is part of, if any.
+    fn replica_set_id(&self) -> Option<ReplicaId>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -752,8 +752,8 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
 /// The type of a cluster item.
 #[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ClusterItemType {
-    /// A profile.
-    Profile,
+    /// A replica set.
+    ReplicaSet,
     /// A replica.
     Replica,
 }
@@ -761,7 +761,7 @@ pub enum ClusterItemType {
 impl fmt::Display for ClusterItemType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Profile => f.write_str("profile"),
+            Self::ReplicaSet => f.write_str("replica set"),
             Self::Replica => f.write_str("replica"),
         }
     }
@@ -770,7 +770,7 @@ impl fmt::Display for ClusterItemType {
 impl From<ClusterItemType> for ObjectType {
     fn from(value: ClusterItemType) -> Self {
         match value {
-            ClusterItemType::Profile => ObjectType::ClusterProfile,
+            ClusterItemType::ReplicaSet => ObjectType::ReplicaSet,
             ClusterItemType::Replica => ObjectType::ClusterReplica,
         }
     }
@@ -1296,7 +1296,7 @@ pub enum ObjectType {
     Type,
     Role,
     Cluster,
-    ClusterProfile,
+    ReplicaSet,
     ClusterReplica,
     Secret,
     Connection,
@@ -1322,7 +1322,7 @@ impl ObjectType {
             | ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
-            | ObjectType::ClusterProfile
+            | ObjectType::ReplicaSet
             | ObjectType::ClusterReplica
             | ObjectType::Role => false,
         }
@@ -1342,7 +1342,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
             mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
             mz_sql_parser::ast::ObjectType::Cluster => ObjectType::Cluster,
-            mz_sql_parser::ast::ObjectType::ClusterProfile => ObjectType::ClusterProfile,
+            mz_sql_parser::ast::ObjectType::ReplicaSet => ObjectType::ReplicaSet,
             mz_sql_parser::ast::ObjectType::ClusterReplica => ObjectType::ClusterReplica,
             mz_sql_parser::ast::ObjectType::Secret => ObjectType::Secret,
             mz_sql_parser::ast::ObjectType::Connection => ObjectType::Connection,
@@ -1365,7 +1365,7 @@ impl Display for ObjectType {
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
             ObjectType::Cluster => "CLUSTER",
-            ObjectType::ClusterProfile => "CLUSTER PROFILE",
+            ObjectType::ReplicaSet => "REPLICA SET",
             ObjectType::ClusterReplica => "CLUSTER REPLICA",
             ObjectType::Secret => "SECRET",
             ObjectType::Connection => "CONNECTION",
@@ -1388,7 +1388,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Type => proto::ObjectType::Type,
             ObjectType::Role => proto::ObjectType::Role,
             ObjectType::Cluster => proto::ObjectType::Cluster,
-            ObjectType::ClusterProfile => proto::ObjectType::ClusterProfile,
+            ObjectType::ReplicaSet => proto::ObjectType::ReplicaSet,
             ObjectType::ClusterReplica => proto::ObjectType::ClusterReplica,
             ObjectType::Secret => proto::ObjectType::Secret,
             ObjectType::Connection => proto::ObjectType::Connection,
@@ -1409,7 +1409,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Type => Ok(ObjectType::Type),
             proto::ObjectType::Role => Ok(ObjectType::Role),
             proto::ObjectType::Cluster => Ok(ObjectType::Cluster),
-            proto::ObjectType::ClusterProfile => Ok(ObjectType::ClusterProfile),
+            proto::ObjectType::ReplicaSet => Ok(ObjectType::ReplicaSet),
             proto::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
             proto::ObjectType::Secret => Ok(ObjectType::Secret),
             proto::ObjectType::Connection => Ok(ObjectType::Connection),

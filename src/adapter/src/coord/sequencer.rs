@@ -154,10 +154,8 @@ impl Coordinator {
                 let result = self.sequence_create_cluster(ctx.session(), plan).await;
                 ctx.retire(result);
             }
-            Plan::CreateClusterProfile(plan) => {
-                let result = self
-                    .sequence_create_cluster_profile(ctx.session(), plan)
-                    .await;
+            Plan::CreateReplicaSet(plan) => {
+                let result = self.sequence_create_replica_set(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::CreateClusterReplica(plan) => {
@@ -325,10 +323,8 @@ impl Coordinator {
                 let result = self.sequence_alter_cluster(ctx.session(), plan).await;
                 ctx.retire(result);
             }
-            Plan::AlterClusterProfile(plan) => {
-                let result = self
-                    .sequence_alter_cluster_profile(ctx.session(), plan)
-                    .await;
+            Plan::AlterReplicaSet(plan) => {
+                let result = self.sequence_alter_replica_set(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::AlterClusterRename(plan) => {

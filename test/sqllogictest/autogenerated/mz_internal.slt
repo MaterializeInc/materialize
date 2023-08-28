@@ -648,7 +648,6 @@ mz_sessions
 mz_show_all_my_privileges
 mz_show_all_privileges
 mz_show_cluster_privileges
-mz_show_cluster_profiles
 mz_show_cluster_replicas
 mz_show_database_privileges
 mz_show_default_privileges
@@ -662,6 +661,7 @@ mz_show_my_role_members
 mz_show_my_schema_privileges
 mz_show_my_system_privileges
 mz_show_object_privileges
+mz_show_replica_sets
 mz_show_role_members
 mz_show_schema_privileges
 mz_show_system_privileges

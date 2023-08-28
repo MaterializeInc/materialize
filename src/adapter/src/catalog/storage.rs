@@ -737,7 +737,7 @@ impl Connection {
 
     /// Set the configuration of a profile.
     /// This accepts only one item, as we currently use this only for the default cluster
-    pub async fn set_cluster_profile_config(
+    pub async fn set_replica_set_config(
         &mut self,
         replica_id: ReplicaId,
         cluster_id: ClusterId,
@@ -745,7 +745,7 @@ impl Connection {
         owner_id: RoleId,
         replica_config: ClusterConfig,
     ) -> Result<(), Error> {
-        let item = ClusterItemVariant::Profile(ClusterProfile { replica_config });
+        let item = ClusterItemVariant::ReplicaSet(ReplicaSet { replica_config });
         self.set_cluster_item_config(replica_id, cluster_id, name, owner_id, item)
             .await
     }
@@ -759,10 +759,10 @@ impl Connection {
         name: String,
         config: &ReplicaConfig,
         owner_id: RoleId,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) -> Result<(), Error> {
         let item = ClusterItemVariant::Replica(ClusterReplica {
-            profile_id,
+            replica_set_id,
             replica_config: config.clone().into(),
         });
         self.set_cluster_item_config(replica_id, cluster_id, name, owner_id, item)
@@ -1355,7 +1355,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Insert a cluster profile. Returns an error if the item already exists.
-    pub(crate) fn insert_cluster_profile(
+    pub(crate) fn insert_replica_set(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -1368,7 +1368,7 @@ impl<'a> Transaction<'a> {
             replica_id,
             name,
             owner_id,
-            ClusterItemVariant::Profile(ClusterProfile { replica_config }),
+            ClusterItemVariant::ReplicaSet(ReplicaSet { replica_config }),
         )
     }
 
@@ -1380,7 +1380,7 @@ impl<'a> Transaction<'a> {
         replica_name: &str,
         owner_id: RoleId,
         replica_config: SerializedReplicaConfig,
-        profile_id: Option<ReplicaId>,
+        replica_set_id: Option<ReplicaId>,
     ) -> Result<(), Error> {
         self.insert_cluster_item(
             cluster_id,
@@ -1388,7 +1388,7 @@ impl<'a> Transaction<'a> {
             replica_name,
             owner_id,
             ClusterItemVariant::Replica(ClusterReplica {
-                profile_id,
+                replica_set_id,
                 replica_config,
             }),
         )
@@ -1744,14 +1744,14 @@ impl<'a> Transaction<'a> {
                     name: entry.name.clone(),
                     owner_id: entry.owner_id,
                     item: match &entry.item {
-                        catalog::ClusterItem::Profile(profile) => {
-                            ClusterItemVariant::Profile(ClusterProfile {
+                        catalog::ClusterItem::ReplicaSet(profile) => {
+                            ClusterItemVariant::ReplicaSet(ReplicaSet {
                                 replica_config: profile.replica_config.clone(),
                             })
                         }
                         catalog::ClusterItem::Replica(replica) => {
                             ClusterItemVariant::Replica(ClusterReplica {
-                                profile_id: replica.profile_id,
+                                replica_set_id: replica.replica_set_id,
                                 replica_config: replica.config.clone().into(),
                             })
                         }
@@ -2164,18 +2164,18 @@ pub struct ClusterItem {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub enum ClusterItemVariant {
-    Profile(ClusterProfile),
+    ReplicaSet(ReplicaSet),
     Replica(ClusterReplica),
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct ClusterProfile {
+pub struct ReplicaSet {
     pub replica_config: ClusterConfig,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplica {
-    pub profile_id: Option<ReplicaId>,
+    pub replica_set_id: Option<ReplicaId>,
     pub replica_config: SerializedReplicaConfig,
 }
 

@@ -156,7 +156,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedSchema
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedCluster
-            | ExecuteResponse::CreatedClusterProfile
+            | ExecuteResponse::CreatedReplicaSet
             | ExecuteResponse::CreatedClusterReplica
             | ExecuteResponse::CreatedIndex
             | ExecuteResponse::CreatedSecret

@@ -988,7 +988,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedSchema { .. }
         | ExecuteResponse::CreatedRole
         | ExecuteResponse::CreatedCluster { .. }
-        | ExecuteResponse::CreatedClusterProfile { .. }
+        | ExecuteResponse::CreatedReplicaSet { .. }
         | ExecuteResponse::CreatedClusterReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }

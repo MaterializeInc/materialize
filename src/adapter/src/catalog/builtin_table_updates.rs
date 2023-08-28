@@ -41,15 +41,15 @@ use mz_storage_client::types::sources::{
 
 use crate::catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
-    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_PROFILES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
-    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMPUTE_DEPENDENCIES, MZ_CONNECTIONS, MZ_DATABASES,
-    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
+    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
+    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
+    MZ_COMPUTE_DEPENDENCIES, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLICA_SETS, MZ_ROLES, MZ_ROLE_MEMBERS,
+    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
+    MZ_TYPE_PG_METADATA, MZ_VIEWS,
 };
 use crate::catalog::builtin::{
     MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
@@ -240,13 +240,13 @@ impl CatalogState {
         let cluster = &self.clusters_by_id[&cluster_id];
         let entry = &cluster.entries_by_id[&item_id];
         match entry.item_type() {
-            ClusterItemType::Profile => self.pack_cluster_profile_update(cluster_id, item_id, diff),
+            ClusterItemType::ReplicaSet => self.pack_replica_set_update(cluster_id, item_id, diff),
             ClusterItemType::Replica => self.pack_cluster_replica_update(cluster_id, item_id, diff),
         }
     }
 
     /// Pack a cluster profile update.
-    pub(super) fn pack_cluster_profile_update(
+    pub(super) fn pack_replica_set_update(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -256,7 +256,7 @@ impl CatalogState {
         let entry = &cluster.entries_by_id[&replica_id];
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_PROFILES),
+            id: self.resolve_builtin_table(&MZ_REPLICA_SETS),
             row: Row::pack_slice(&[
                 Datum::String(&replica_id.to_string()),
                 Datum::String(&entry.name),
@@ -308,7 +308,7 @@ impl CatalogState {
                 Datum::from(disk),
                 Datum::from(
                     replica
-                        .profile_id
+                        .replica_set_id
                         .as_ref()
                         .map(ToString::to_string)
                         .as_deref(),

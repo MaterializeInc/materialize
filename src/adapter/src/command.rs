@@ -477,8 +477,8 @@ pub enum ExecuteResponse {
     CreatedRole,
     /// The requested cluster was created.
     CreatedCluster,
-    /// The requested cluster profile was created.
-    CreatedClusterProfile,
+    /// The requested replica set was created.
+    CreatedReplicaSet,
     /// The requested cluster replica was created.
     CreatedClusterReplica,
     /// The requested index was created.
@@ -657,9 +657,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedClusterReplica => {
                 Ok(ExecuteResponse::CreatedClusterReplica)
             }
-            ExecuteResponseKind::CreatedClusterProfile => {
-                Ok(ExecuteResponse::CreatedClusterProfile)
-            }
+            ExecuteResponseKind::CreatedReplicaSet => Ok(ExecuteResponse::CreatedReplicaSet),
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
@@ -720,7 +718,7 @@ impl ExecuteResponse {
             CreatedSchema { .. } => Some("CREATE SCHEMA".into()),
             CreatedRole => Some("CREATE ROLE".into()),
             CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
-            CreatedClusterProfile { .. } => Some("CREATE CLUSTER PROFILE".into()),
+            CreatedReplicaSet { .. } => Some("CREATE REPLICA SET".into()),
             CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
@@ -781,7 +779,7 @@ impl ExecuteResponse {
             AbortTransaction => vec![TransactionRolledBack],
             AlterClusterRename
             | AlterCluster
-            | AlterClusterProfile
+            | AlterReplicaSet
             | AlterClusterItemRename
             | AlterOwner
             | AlterItemRename
@@ -810,7 +808,7 @@ impl ExecuteResponse {
             CreateSchema => vec![CreatedSchema],
             CreateRole => vec![CreatedRole],
             CreateCluster => vec![CreatedCluster],
-            CreateClusterProfile => vec![CreatedClusterProfile],
+            CreateReplicaSet => vec![CreatedReplicaSet],
             CreateClusterReplica => vec![CreatedClusterReplica],
             CreateSource | CreateSources => vec![CreatedSource],
             CreateSecret => vec![CreatedSecret],

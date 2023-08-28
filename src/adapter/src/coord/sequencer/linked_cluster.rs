@@ -115,8 +115,8 @@ impl Coordinator {
                 },
             },
             owner_id,
-            // We do not support profiles for linked clusters.
-            profile_id: None,
+            // We do not support replica sets for linked clusters.
+            replica_set_id: None,
         });
         Ok(())
     }

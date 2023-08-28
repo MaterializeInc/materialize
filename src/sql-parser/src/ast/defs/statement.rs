@@ -60,11 +60,11 @@ pub enum Statement<T: AstInfo> {
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
-    CreateClusterProfile(CreateClusterProfileStatement<T>),
+    CreateReplicaSet(CreateReplicaSetStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
-    AlterClusterProfile(AlterClusterProfileStatement<T>),
+    AlterReplicaSet(AlterReplicaSetStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
@@ -129,10 +129,10 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
-            Statement::CreateClusterProfile(stmt) => f.write_node(stmt),
+            Statement::CreateReplicaSet(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
-            Statement::AlterClusterProfile(stmt) => f.write_node(stmt),
+            Statement::AlterReplicaSet(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
@@ -199,11 +199,11 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateType => "create_type",
         StatementKind::CreateRole => "create_role",
         StatementKind::CreateCluster => "create_cluster",
-        StatementKind::CreateClusterProfile => "create_cluster_profile",
+        StatementKind::CreateReplicaSet => "create_replica_set",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterCluster => "alter_cluster",
-        StatementKind::AlterClusterProfile => "alter_cluster_profile",
+        StatementKind::AlterReplicaSet => "alter_replica_set",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
@@ -1474,7 +1474,7 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
 impl_display_t!(CreateTypeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ClusterProfileOptionName {
+pub enum ClusterOptionName {
     /// The `AVAILABILITY ZONES [[=] '[' <values> ']' ]` option.
     AvailabilityZones,
     /// The `DISK` option.
@@ -1495,36 +1495,32 @@ pub enum ClusterProfileOptionName {
     Size,
 }
 
-impl AstDisplay for ClusterProfileOptionName {
+impl AstDisplay for ClusterOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterProfileOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
-            ClusterProfileOptionName::Disk => f.write_str("DISK"),
-            ClusterProfileOptionName::IdleArrangementMergeEffort => {
+            ClusterOptionName::AvailabilityZones => f.write_str("AVAILABILITY ZONES"),
+            ClusterOptionName::Disk => f.write_str("DISK"),
+            ClusterOptionName::IdleArrangementMergeEffort => {
                 f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
             }
-            ClusterProfileOptionName::IntrospectionDebugging => {
-                f.write_str("INTROSPECTION DEBUGGING")
-            }
-            ClusterProfileOptionName::IntrospectionInterval => {
-                f.write_str("INTROSPECTION INTERVAL")
-            }
-            ClusterProfileOptionName::Managed => f.write_str("MANAGED"),
-            ClusterProfileOptionName::Replicas => f.write_str("REPLICAS"),
-            ClusterProfileOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
-            ClusterProfileOptionName::Size => f.write_str("SIZE"),
+            ClusterOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
+            ClusterOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
+            ClusterOptionName::Managed => f.write_str("MANAGED"),
+            ClusterOptionName::Replicas => f.write_str("REPLICAS"),
+            ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
+            ClusterOptionName::Size => f.write_str("SIZE"),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CLUSTER [PROFILE]?` statement.
-pub struct ClusterProfileOption<T: AstInfo> {
-    pub name: ClusterProfileOptionName,
+/// An option in a `CREATE CLUSTER` or `CREATE REPLICA SET` statement.
+pub struct ClusterOption<T: AstInfo> {
+    pub name: ClusterOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for ClusterProfileOption<T> {
+impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         if let Some(v) = &self.value {
@@ -1540,7 +1536,7 @@ pub struct CreateClusterStatement<T: AstInfo> {
     /// Name of the created cluster.
     pub name: Ident,
     /// The comma-separated options.
-    pub options: Vec<ClusterProfileOption<T>>,
+    pub options: Vec<ClusterOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
@@ -1576,16 +1572,16 @@ impl<T: AstInfo> AstDisplay for ReplicaDefinition<T> {
 impl_display_t!(ReplicaDefinition);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ProfileDefinition<T: AstInfo> {
+pub struct ReplicaSetDefinition<T: AstInfo> {
     /// Name of the created replica.
     pub name: Ident,
     /// The comma-separated options.
-    pub options: Vec<ClusterProfileOption<T>>,
+    pub options: Vec<ClusterOption<T>>,
 }
 
 // Note that this display is meant for replicas defined inline when creating
 // clusters.
-impl<T: AstInfo> AstDisplay for ProfileDefinition<T> {
+impl<T: AstInfo> AstDisplay for ReplicaSetDefinition<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         f.write_str(" (");
@@ -1593,12 +1589,12 @@ impl<T: AstInfo> AstDisplay for ProfileDefinition<T> {
         f.write_str(")");
     }
 }
-impl_display_t!(ProfileDefinition);
+impl_display_t!(ReplicaSetDefinition);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AlterClusterProfileAction<T: AstInfo> {
-    SetOptions(Vec<ClusterProfileOption<T>>),
-    ResetOptions(Vec<ClusterProfileOptionName>),
+pub enum AlterReplicaSetAction<T: AstInfo> {
+    SetOptions(Vec<ClusterOption<T>>),
+    ResetOptions(Vec<ClusterOptionName>),
 }
 
 /// `ALTER CLUSTER .. SET ...`
@@ -1609,7 +1605,7 @@ pub struct AlterClusterStatement<T: AstInfo> {
     /// Name of the altered cluster.
     pub name: Ident,
     /// The action.
-    pub action: AlterClusterProfileAction<T>,
+    pub action: AlterReplicaSetAction<T>,
 }
 
 impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
@@ -1621,12 +1617,12 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         match &self.action {
-            AlterClusterProfileAction::SetOptions(options) => {
+            AlterReplicaSetAction::SetOptions(options) => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            AlterClusterProfileAction::ResetOptions(options) => {
+            AlterReplicaSetAction::ResetOptions(options) => {
                 f.write_str("RESET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
@@ -1636,32 +1632,32 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
 }
 impl_display_t!(AlterClusterStatement);
 
-/// `ALTER CLUSTER PROFILE .. SET ...`
+/// `ALTER REPLICA SET .. SET ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterClusterProfileStatement<T: AstInfo> {
+pub struct AlterReplicaSetStatement<T: AstInfo> {
     /// The `IF EXISTS` option.
     pub if_exists: bool,
     /// Name of the altered cluster.
     pub name: QualifiedClusterItem,
     /// The action.
-    pub action: AlterClusterProfileAction<T>,
+    pub action: AlterReplicaSetAction<T>,
 }
 
-impl<T: AstInfo> AstDisplay for AlterClusterProfileStatement<T> {
+impl<T: AstInfo> AstDisplay for AlterReplicaSetStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER CLUSTER PROFILE ");
+        f.write_str("ALTER REPLICA SET ");
         if self.if_exists {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&self.name);
         f.write_str(" ");
         match &self.action {
-            AlterClusterProfileAction::SetOptions(options) => {
+            AlterReplicaSetAction::SetOptions(options) => {
                 f.write_str("SET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            AlterClusterProfileAction::ResetOptions(options) => {
+            AlterReplicaSetAction::ResetOptions(options) => {
                 f.write_str("RESET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
@@ -1669,20 +1665,20 @@ impl<T: AstInfo> AstDisplay for AlterClusterProfileStatement<T> {
         }
     }
 }
-impl_display_t!(AlterClusterProfileStatement);
+impl_display_t!(AlterReplicaSetStatement);
 
-/// `CREATE CLUSTER PROFILE ..`
+/// `CREATE REPLICA SET ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateClusterProfileStatement<T: AstInfo> {
-    /// Name of the profile's cluster.
+pub struct CreateReplicaSetStatement<T: AstInfo> {
+    /// Name of the cluster.
     pub of_cluster: Ident,
-    /// The profile's definition.
-    pub definition: ProfileDefinition<T>,
+    /// The replica set's definition.
+    pub definition: ReplicaSetDefinition<T>,
 }
 
-impl<T: AstInfo> AstDisplay for CreateClusterProfileStatement<T> {
+impl<T: AstInfo> AstDisplay for CreateReplicaSetStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE CLUSTER PROFILE ");
+        f.write_str("CREATE REPLICA SET ");
         f.write_node(&self.of_cluster);
         f.write_str(".");
         f.write_node(&self.definition.name);
@@ -1690,7 +1686,7 @@ impl<T: AstInfo> AstDisplay for CreateClusterProfileStatement<T> {
         f.write_node(&display::comma_separated(&self.definition.options));
     }
 }
-impl_display_t!(CreateClusterProfileStatement);
+impl_display_t!(CreateReplicaSetStatement);
 
 /// `CREATE CLUSTER REPLICA ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1698,7 +1694,7 @@ pub struct CreateClusterReplicaStatement<T: AstInfo> {
     /// Name of the replica's cluster.
     pub of_cluster: Ident,
     /// Name of the replica's profile.
-    pub of_profile: Option<Ident>,
+    pub of_replica_set: Option<Ident>,
     /// The replica's definition.
     pub definition: ReplicaDefinition<T>,
 }
@@ -1710,8 +1706,8 @@ impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
         f.write_str(".");
         f.write_node(&self.definition.name);
         f.write_str(" ");
-        if let Some(profile) = &self.of_profile {
-            f.write_str("IN PROFILE ");
+        if let Some(profile) = &self.of_replica_set {
+            f.write_str("IN REPLICA SET ");
             f.write_node(profile);
             f.write_str(" ");
         }
@@ -2358,7 +2354,7 @@ pub enum ShowObjectType<T: AstInfo> {
     Type,
     Role,
     Cluster,
-    ClusterProfile,
+    ReplicaSet,
     ClusterReplica,
     Object,
     Secret,
@@ -2398,7 +2394,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Type => "TYPES",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
-            ShowObjectType::ClusterProfile => "CLUSTER PROFILES",
+            ShowObjectType::ReplicaSet => "REPLICA SETS",
             ShowObjectType::ClusterReplica => "CLUSTER REPLICAS",
             ShowObjectType::Object => "OBJECTS",
             ShowObjectType::Secret => "SECRETS",
@@ -2800,7 +2796,7 @@ pub enum ObjectType {
     Type,
     Role,
     Cluster,
-    ClusterProfile,
+    ReplicaSet,
     ClusterReplica,
     Secret,
     Connection,
@@ -2827,7 +2823,7 @@ impl ObjectType {
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
-            | ObjectType::ClusterProfile
+            | ObjectType::ReplicaSet
             | ObjectType::ClusterReplica
             | ObjectType::Role => false,
         }
@@ -2846,7 +2842,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
             ObjectType::Cluster => "CLUSTER",
-            ObjectType::ClusterProfile => "CLUSTER PROFILE",
+            ObjectType::ReplicaSet => "REPLICA SET",
             ObjectType::ClusterReplica => "CLUSTER REPLICA",
             ObjectType::Secret => "SECRET",
             ObjectType::Connection => "CONNECTION",

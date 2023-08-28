@@ -254,7 +254,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or REPLICA or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION, found identifier
 
 > SHOW OBJECTS
 name        type
@@ -470,9 +470,8 @@ mz_array_types
 mz_audit_events
 mz_aws_privatelink_connections
 mz_base_types
-mz_clusters
-mz_cluster_profiles
 mz_cluster_replicas
+mz_clusters
 mz_columns
 mz_connections
 mz_databases
@@ -488,6 +487,7 @@ mz_map_types
 mz_materialized_views
 mz_operators
 mz_pseudo_types
+mz_replica_sets
 mz_roles
 mz_role_members
 mz_schemas
@@ -626,7 +626,6 @@ mz_show_database_privileges
 mz_show_default_privileges
 mz_show_all_my_privileges
 mz_show_my_cluster_privileges
-mz_show_cluster_profiles
 mz_show_cluster_replicas
 mz_show_my_database_privileges
 mz_show_my_default_privileges
@@ -637,6 +636,7 @@ mz_show_my_role_members
 mz_show_my_schema_privileges
 mz_show_my_system_privileges
 mz_show_object_privileges
+mz_show_replica_sets
 mz_show_role_members
 mz_show_schema_privileges
 mz_show_system_privileges
