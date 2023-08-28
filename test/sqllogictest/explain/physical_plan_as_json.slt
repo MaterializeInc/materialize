@@ -137,9 +137,9 @@ EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
               [
                 {
                   "data": [
-                    39,
+                    42,
                     1,
-                    39,
+                    42,
                     2
                   ]
                 },
@@ -149,9 +149,9 @@ EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
               [
                 {
                   "data": [
-                    39,
+                    42,
                     3,
-                    39,
+                    42,
                     4
                   ]
                 },
@@ -305,7 +305,7 @@ SELECT a + b, 1 FROM t
                       {
                         "Ok": {
                           "data": [
-                            39,
+                            42,
                             1
                           ]
                         }
@@ -390,7 +390,7 @@ SELECT c + d, 1 FROM u
               {
                 "Ok": {
                   "data": [
-                    39,
+                    42,
                     1
                   ]
                 }
@@ -934,7 +934,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     {
                                       "Ok": {
                                         "data": [
-                                          39,
+                                          42,
                                           1
                                         ]
                                       }
@@ -1000,7 +1000,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     {
                                       "Ok": {
                                         "data": [
-                                          39,
+                                          42,
                                           1
                                         ]
                                       }
@@ -1108,7 +1108,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           [
                                             {
                                               "data": [
-                                                39,
+                                                42,
                                                 5
                                               ]
                                             },
@@ -1272,7 +1272,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                   {
                     "Ok": {
                       "data": [
-                        39,
+                        42,
                         25
                       ]
                     }
@@ -1321,7 +1321,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          39,
+                          42,
                           5
                         ]
                       }
@@ -1399,7 +1399,7 @@ SELECT generate_series(a, b) from t
                 {
                   "Ok": {
                     "data": [
-                      39,
+                      42,
                       1
                     ]
                   }
@@ -1897,8 +1897,7 @@ FROM t
                             {
                               "Ok": {
                                 "data": [
-                                  42,
-                                  0
+                                  46
                                 ]
                               }
                             },
@@ -5130,8 +5129,7 @@ MATERIALIZED VIEW collated_global_mv
                             {
                               "Ok": {
                                 "data": [
-                                  42,
-                                  0
+                                  46
                                 ]
                               }
                             },
@@ -5862,8 +5860,7 @@ SELECT * FROM collated_global
                             {
                               "Ok": {
                                 "data": [
-                                  42,
-                                  0
+                                  46
                                 ]
                               }
                             },
@@ -6215,7 +6212,7 @@ WHERE a = c AND d = e AND b + d > 42
                                     {
                                       "Ok": {
                                         "data": [
-                                          39,
+                                          42,
                                           42
                                         ]
                                       }

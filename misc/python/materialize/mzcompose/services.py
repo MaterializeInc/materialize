@@ -58,6 +58,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_disk_cluster_replicas": "true",
     "statement_logging_max_sample_rate": "1.0",
     "statement_logging_default_sample_rate": "1.0",
+    "variable_length_row_encoding": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
