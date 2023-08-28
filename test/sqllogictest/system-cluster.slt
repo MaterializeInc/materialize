@@ -101,7 +101,7 @@ Explained Query:
             Get mz_catalog.mz_clusters
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind (lookup)
+  - mz_internal.mz_show_sources_ind (*** full scan ***, lookup)
   - mz_internal.mz_clusters_ind (differential join)
 
 EOF
