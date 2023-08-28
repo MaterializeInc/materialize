@@ -84,10 +84,8 @@ mod tests {
     use super::ApiTokenResponse;
     use crate::Client;
 
-    const UNUSED_PORT: u16 = 48557;
-    const ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), UNUSED_PORT);
-
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     async fn response_retries() {
         let count = Arc::new(AtomicUsize::new(0));
         let count_ = Arc::clone(&count);
@@ -98,6 +96,7 @@ mod tests {
             post(
                 |axum::extract::Path(code): axum::extract::Path<u16>| async move {
                     let cnt = count_.fetch_add(1, Ordering::Relaxed);
+                    println!("cnt: {cnt}");
 
                     let resp = ApiTokenResponse {
                         expires: "test".to_string(),
@@ -115,8 +114,14 @@ mod tests {
                 },
             ),
         );
+
+        // Use port 0 to get a dynamically assigned port.
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let tcp = std::net::TcpListener::bind(addr).expect("able to bind");
+        let addr = tcp.local_addr().expect("valid addr");
         mz_ore::task::spawn(|| "test-server", async move {
-            axum::Server::bind(&ADDR)
+            axum::Server::from_tcp(tcp)
+                .expect("able to start")
                 .serve(app.into_make_service())
                 .await
                 .unwrap();
@@ -125,6 +130,7 @@ mod tests {
         let client = Client::default();
         async fn test_case(
             client: &Client,
+            addr: &SocketAddr,
             count: &Arc<AtomicUsize>,
             code: u16,
             should_retry: bool,
@@ -133,7 +139,7 @@ mod tests {
                 .exchange_client_secret_for_token(
                     Uuid::new_v4(),
                     Uuid::new_v4(),
-                    &format!("http://{ADDR}/{code}"),
+                    &format!("http://{addr}/{code}"),
                 )
                 .await
                 .map(|_| ())
@@ -143,7 +149,7 @@ mod tests {
             assert_eq!(prev_count, expected_count);
 
             let refresh_result = client
-                .refresh_token(&format!("http://{ADDR}/{code}"), "test")
+                .refresh_token(&format!("http://{addr}/{code}"), "test")
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());
@@ -156,13 +162,13 @@ mod tests {
         }
 
         // Should get retried which results in eventual success.
-        assert!(test_case(&client, &count, 500, true).await.is_ok());
-        assert!(test_case(&client, &count, 502, true).await.is_ok());
-        assert!(test_case(&client, &count, 429, true).await.is_ok());
-        assert!(test_case(&client, &count, 408, true).await.is_ok());
+        assert!(test_case(&client, &addr, &count, 500, true).await.is_ok());
+        assert!(test_case(&client, &addr, &count, 502, true).await.is_ok());
+        assert!(test_case(&client, &addr, &count, 429, true).await.is_ok());
+        assert!(test_case(&client, &addr, &count, 408, true).await.is_ok());
 
         // Should not get retried, and thus return an error.
-        assert!(test_case(&client, &count, 404, false).await.is_err());
-        assert!(test_case(&client, &count, 400, false).await.is_err());
+        assert!(test_case(&client, &addr, &count, 404, false).await.is_err());
+        assert!(test_case(&client, &addr, &count, 400, false).await.is_err());
     }
 }
