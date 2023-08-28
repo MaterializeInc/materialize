@@ -285,7 +285,7 @@ fn test_to_from_sql_roundtrip() {
 
     // Test infinity, which is a valid value in aggregations over numeric
     let mut cx = numeric::cx_datum();
-    let v = vec![
+    let v = [
         cx.parse("-999999999999999999999999999999999999999")
             .unwrap(),
         cx.parse("-999999999999999999999999999999999999999")

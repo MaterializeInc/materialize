@@ -608,10 +608,18 @@ impl DatumKnowledge {
         // + + + + : Any { false }
         // + + + + : Any { true }
         else {
-            let Lit { value: s_val, typ: s_typ} = self else {
+            let Lit {
+                value: s_val,
+                typ: s_typ,
+            } = self
+            else {
                 unreachable!();
             };
-            let Lit { value: o_val, typ: o_typ} = other else {
+            let Lit {
+                value: o_val,
+                typ: o_typ,
+            } = other
+            else {
                 unreachable!();
             };
 
@@ -700,10 +708,18 @@ impl DatumKnowledge {
         // + + + + : Any { false }
         // + + + + : Any { true }
         else {
-            let Lit { value: s_val, typ: s_typ} = self else {
+            let Lit {
+                value: s_val,
+                typ: s_typ,
+            } = self
+            else {
                 unreachable!();
             };
-            let Lit { value: o_val, typ: o_typ} = other else {
+            let Lit {
+                value: o_val,
+                typ: o_typ,
+            } = other
+            else {
                 unreachable!();
             };
 

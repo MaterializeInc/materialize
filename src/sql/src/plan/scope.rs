@@ -416,11 +416,7 @@ impl Scope {
             }
         }
         Ok(Scope {
-            items: self
-                .items
-                .into_iter()
-                .chain(right.items.into_iter())
-                .collect(),
+            items: self.items.into_iter().chain(right.items).collect(),
             lateral_barrier: false,
         })
     }

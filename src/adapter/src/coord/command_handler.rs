@@ -808,7 +808,10 @@ impl Coordinator {
                 schema: Some(schema),
                 item: name,
             };
-            let Ok(entry) = coord.catalog().resolve_entry(None, &vec![], &name, &conn_id) else {
+            let Ok(entry) = coord
+                .catalog()
+                .resolve_entry(None, &vec![], &name, &conn_id)
+            else {
                 return Err(name);
             };
 

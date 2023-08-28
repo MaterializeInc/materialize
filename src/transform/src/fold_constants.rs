@@ -502,8 +502,7 @@ impl FoldConstants {
                                 agg.func.eval(
                                     vals.iter()
                                         .map(|val| val[i].unpack_first())
-                                        .collect::<BTreeSet<_>>()
-                                        .into_iter(),
+                                        .collect::<BTreeSet<_>>(),
                                     &temp_storage,
                                 )
                             } else {

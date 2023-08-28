@@ -717,7 +717,9 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Update the allocation size for an arrangement.
     fn handle_arrangement_heap_size(&mut self, operator_id: usize, size: isize) {
         let ts = self.ts();
-        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {return};
+        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
+            return;
+        };
 
         let datum = ArrangementHeapDatum { operator_id };
         self.output
@@ -730,7 +732,9 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Update the allocation capacity for an arrangement.
     fn handle_arrangement_heap_capacity(&mut self, operator_id: usize, capacity: isize) {
         let ts = self.ts();
-        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {return};
+        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
+            return;
+        };
 
         let datum = ArrangementHeapDatum { operator_id };
         self.output
@@ -743,7 +747,9 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Update the allocation count for an arrangement.
     fn handle_arrangement_heap_allocations(&mut self, operator_id: usize, count: isize) {
         let ts = self.ts();
-        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {return};
+        let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
+            return;
+        };
 
         let datum = ArrangementHeapDatum { operator_id };
         self.output

@@ -1677,7 +1677,7 @@ fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> D
             temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         (Datum::List(list_a), b) => {
-            let elems = list_a.iter().chain(Some(b).into_iter());
+            let elems = list_a.iter().chain(Some(b));
             temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         (a, Datum::List(list_b)) => {
@@ -7210,7 +7210,7 @@ fn array_fill<'a>(
     } else {
         dimensions
             .into_iter()
-            .zip_eq(lower_bounds.into_iter())
+            .zip_eq(lower_bounds)
             .map(|(length, lower_bound)| ArrayDimension {
                 lower_bound,
                 length,
@@ -7470,11 +7470,7 @@ impl VariadicFunc {
                 .nullable(true),
             ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(in_nullable),
             RecordCreate { field_names } => ScalarType::Record {
-                fields: field_names
-                    .clone()
-                    .into_iter()
-                    .zip(input_types.into_iter())
-                    .collect(),
+                fields: field_names.clone().into_iter().zip(input_types).collect(),
                 custom_id: None,
             }
             .nullable(false),
