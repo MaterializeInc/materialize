@@ -80,7 +80,9 @@ message ProtoHandleDebugState {
 
 message ProtoInlinedDiffs {
     ProtoU64Description description = 1;
-    repeated bytes diffs = 2;
+
+    repeated uint64 seqnos = 2;
+    repeated bytes diffs = 3;
 }
 
 message ProtoRollup {

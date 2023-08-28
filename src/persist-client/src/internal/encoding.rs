@@ -574,7 +574,7 @@ where
 /// A decoded version of [ProtoRollup::state] for which we have not yet checked
 /// that codecs match the ones in durable state.
 #[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct UntypedState<T> {
     pub(crate) key_codec: String,
     pub(crate) val_codec: String,
@@ -720,21 +720,24 @@ impl<T: Timestamp + Lattice + Codec64> Rollup<T> {
         }
         assert_eq!(verify_seqno, state.seqno());
 
-        let diffs = InlinedDiffs::from(diffs);
-        // and doublecheck that we've written our Description correctly
-        if let Some(diffs) = &diffs {
-            assert_eq!(latest_rollup_seqno.next(), diffs.lower());
-            assert_eq!(verify_seqno.next(), diffs.upper());
-        }
+        let diffs = Some(InlinedDiffs::from(
+            latest_rollup_seqno.next(),
+            state.seqno().next(),
+            diffs,
+        ));
 
         Self { state, diffs }
+    }
+
+    pub(crate) fn from_state_without_diffs(state: UntypedState<T>) -> Self {
+        Self { state, diffs: None }
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct InlinedDiffs {
-    description: Description<SeqNo>,
-    diffs: Vec<VersionedData>,
+    pub(crate) description: Description<SeqNo>,
+    pub(crate) diffs: Vec<VersionedData>,
 }
 
 impl InlinedDiffs {
@@ -746,18 +749,19 @@ impl InlinedDiffs {
         *self.description.upper().first().expect("seqno")
     }
 
-    fn from(diffs: Vec<VersionedData>) -> Option<Self> {
-        if diffs.is_empty() {
-            return None;
+    fn from(lower: SeqNo, upper: SeqNo, diffs: Vec<VersionedData>) -> Self {
+        for diff in &diffs {
+            assert!(diff.seqno >= lower);
+            assert!(diff.seqno < upper);
         }
-        Some(Self {
+        Self {
             description: Description::new(
-                Antichain::from_elem(diffs.first().expect("not empty").seqno),
-                Antichain::from_elem(diffs.last().expect("not empty").seqno.next()),
+                Antichain::from_elem(lower),
+                Antichain::from_elem(upper),
                 Antichain::from_elem(SeqNo::minimum()),
             ),
             diffs,
-        })
+        }
     }
 }
 
@@ -765,6 +769,11 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
     fn into_proto(&self) -> ProtoInlinedDiffs {
         ProtoInlinedDiffs {
             description: Some(self.description.into_proto()),
+            seqnos: self
+                .diffs
+                .iter()
+                .map(|x| x.seqno.into_proto())
+                .collect::<Vec<_>>(),
             diffs: self
                 .diffs
                 .iter()
@@ -776,24 +785,17 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
 
     fn from_proto(proto: ProtoInlinedDiffs) -> Result<Self, TryFromProtoError> {
         let description: Description<SeqNo> = proto.description.into_rust_if_some("description")?;
-        let mut seqno = description.lower().first().expect("lower seqno").clone();
 
-        let mut diffs = Vec::with_capacity(proto.diffs.len());
-        for data in proto.diffs {
-            let data = Bytes::from(data);
-
-            debug_assert_eq!(
-                ProtoStateDiff::decode(data.clone())
-                    .expect("decodable state diff")
-                    .seqno_to,
-                seqno.0
-            );
-
-            diffs.push(VersionedData { seqno, data });
-            seqno = seqno.next();
-        }
-
-        assert_eq!(seqno, *description.upper().first().expect("upper seqno"));
+        assert_eq!(proto.seqnos.len(), proto.diffs.len());
+        let diffs = proto
+            .seqnos
+            .iter()
+            .zip(proto.diffs.into_iter())
+            .map(|(seqno, data)| VersionedData {
+                seqno: SeqNo(*seqno),
+                data: Bytes::from(data),
+            })
+            .collect();
 
         Ok(Self { description, diffs })
     }
@@ -1288,8 +1290,9 @@ mod tests {
         // Code version v2 evaluates and writes out some State.
         let shard_id = ShardId::new();
         let state = TypedState::<(), (), u64, i64>::new(v2.clone(), shard_id, "".to_owned(), 0);
+        let rollup = Rollup::from_state_without_diffs(state.clone_for_rollup().into()).into_proto();
         let mut buf = Vec::new();
-        state.encode(&mut buf);
+        rollup.encode(&mut buf);
         let bytes = Bytes::from(buf);
 
         // We can read it back using persist code v2 and v3.
@@ -1447,12 +1450,13 @@ mod tests {
             0,
         );
         state.state.collections.rollups.insert(SeqNo(2), r2.clone());
-        let mut proto = state.into_proto();
+        let mut proto = Rollup::from_state_without_diffs(state.into()).into_proto();
 
         // Manually add the old rollup encoding.
         proto.deprecated_rollups.insert(1, r1.key.0.clone());
 
-        let state = UntypedState::<u64>::from_proto(proto).unwrap();
+        let state: Rollup<u64> = proto.into_rust().unwrap();
+        let state = state.state;
         let state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
         let expected = vec![(SeqNo(1), r1), (SeqNo(2), r2)];
         assert_eq!(
@@ -1536,11 +1540,12 @@ mod tests {
             0,
         );
         state.state.seqno = SeqNo(4);
-        let mut state_proto = state.into_proto();
-        state_proto
+        let mut rollup = Rollup::from_state_without_diffs(state.into()).into_proto();
+        rollup
             .deprecated_rollups
             .insert(3, r3_rollup.key.into_proto());
-        let state = UntypedState::<u64>::from_proto(state_proto).unwrap();
+        let state: Rollup<u64> = rollup.into_rust().unwrap();
+        let state = state.state;
         let mut state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
         let cache = new_test_client_cache();
         let encoded_diff = VersionedData {
@@ -1570,8 +1575,9 @@ mod tests {
                 diff_codec: <i64 as Codec64>::codec_name(),
                 state,
             };
-            let proto = before.into_proto();
-            let after = proto.into_rust().unwrap();
+            let proto = Rollup::from_state_without_diffs(before.clone()).into_proto();
+            let after: Rollup<T> = proto.into_rust().unwrap();
+            let after = after.state;
             assert_eq!(before, after);
         }
 

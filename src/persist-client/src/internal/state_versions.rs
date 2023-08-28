@@ -19,6 +19,7 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{
     Atomicity, Blob, CaSResult, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
@@ -110,6 +111,7 @@ pub struct EncodedRollup {
     pub(crate) shard_id: ShardId,
     pub(crate) seqno: SeqNo,
     pub(crate) key: PartialRollupKey,
+    pub(crate) _desc: Description<SeqNo>,
     buf: Bytes,
 }
 
@@ -729,9 +731,17 @@ impl StateVersions {
             verify_seqno = diff.seqno;
         }
         assert_eq!(verify_seqno, state.seqno);
+
+        let rollup = Rollup::from(UntypedState::<T>::from(state), diffs);
+        let desc = rollup
+            .diffs
+            .as_ref()
+            .expect("inlined diffs")
+            .description
+            .clone();
+
         let buf = self.metrics.codecs.state.encode(|| {
             let mut buf = Vec::new();
-            let rollup = Rollup::from(UntypedState::<T>::from(state), diffs);
             rollup
                 .into_proto()
                 .encode(&mut buf)
@@ -746,6 +756,7 @@ impl StateVersions {
             seqno: rollup_seqno,
             key,
             buf,
+            _desc: desc,
         }
     }
 
