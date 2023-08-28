@@ -558,7 +558,8 @@ impl Coordinator {
                     | Statement::RevokePrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
-                    | Statement::ValidateConnection(_) => {
+                    | Statement::ValidateConnection(_)
+                    | Statement::Comment(_) => {
                         // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
                         if !txn.is_implicit() {

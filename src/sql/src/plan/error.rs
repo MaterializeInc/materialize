@@ -210,6 +210,10 @@ pub enum PlanError {
     WebhookValidationNonDeterministic,
     PgSourceUserSpecifiedDetails,
     InternalFunctionCall,
+    CommentTooLong {
+        length: usize,
+        max_size: usize,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -567,6 +571,9 @@ impl fmt::Display for PlanError {
                 "must not specify DETAILS option in CREATE SOURCE"
             ),
             Self::InternalFunctionCall => f.write_str("cannot call function with arguments of type internal"),
+            Self::CommentTooLong { length, max_size } => {
+                write!(f, "provided comment was {length} bytes long, max size is {max_size} bytes")
+            }
         }
     }
 }
