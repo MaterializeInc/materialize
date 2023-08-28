@@ -1811,6 +1811,18 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub(crate) fn drop_comments(
+        &mut self,
+        object_id: CommentObjectId,
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+        let deleted = self.comments.delete(|k, _v| k.object_id == object_id);
+        let deleted = deleted
+            .into_iter()
+            .map(|(k, v)| (k.object_id, k.sub_component, v.comment))
+            .collect();
+        Ok(deleted)
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub(crate) fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {

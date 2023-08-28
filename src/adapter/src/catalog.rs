@@ -3002,6 +3002,24 @@ impl CommentsMap {
         prev
     }
 
+    /// Remove all comments for `object_id` from the map.
+    ///
+    /// Generally there is one comment for a given [`CommentObjectId`], but in the case of
+    /// relations you can also have comments on the individual columns. Dropping the comments for a
+    /// relation will also drop all of the comments on any columns.
+    pub fn drop_comments(
+        &mut self,
+        object_id: CommentObjectId,
+    ) -> Vec<(CommentObjectId, Option<usize>, String)> {
+        match self.map.remove(&object_id) {
+            None => Vec::new(),
+            Some(comments) => comments
+                .into_iter()
+                .map(|(sub_comp, comment)| (object_id, sub_comp, comment))
+                .collect(),
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (CommentObjectId, Option<usize>, &str)> {
         self.map
             .iter()
@@ -6636,6 +6654,7 @@ impl Catalog {
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
+                        let entry_type = entry.item_type();
                         if id.is_system() {
                             let name = entry.name();
                             let full_name = state
@@ -6668,6 +6687,27 @@ impl Catalog {
                             )?;
                         }
                         state.drop_item(id);
+
+                        // Drop any associated comments.
+                        let object_id = match entry_type {
+                            CatalogItemType::Table => Some(CommentObjectId::Table(id)),
+                            CatalogItemType::View => Some(CommentObjectId::View(id)),
+                            _ => None,
+                        };
+                        if let Some(object_id) = object_id {
+                            let deleted = tx.drop_comments(object_id)?;
+                            let dropped = state.comments.drop_comments(object_id);
+                            mz_ore::soft_assert_eq!(
+                                deleted,
+                                dropped,
+                                "transaction and state out of sync"
+                            );
+
+                            let updates = dropped.into_iter().map(|(id, col_pos, comment)| {
+                                state.pack_comment_update(id, col_pos, &comment, -1)
+                            });
+                            builtin_table_updates.extend(updates);
+                        }
                     }
                 },
                 Op::DropTimeline(timeline) => {
