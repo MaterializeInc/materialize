@@ -162,7 +162,7 @@ def await_environment_pod(context: str, namespace: str, pod_name: str) -> None:
         resource_type="pod",
         resource_name=pod_name,
         # Especially on dev stacks, this can take a little while
-        max_attempts=180,
+        max_attempts=360,
     )
     kubectl.wait(
         namespace=namespace,
