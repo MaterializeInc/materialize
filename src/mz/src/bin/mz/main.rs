@@ -188,7 +188,7 @@ async fn main() -> Result<(), Error> {
     // Check if we need to update the version.
     // The UpgradeChecker, in case of failure,
     // shouldn't block the command execution or panic.
-    let upgrade_checker = UpgradeChecker::default();
+    let upgrade_checker = UpgradeChecker::new(args.no_color);
     let check = upgrade_checker.check_version();
 
     let cx = Context::load(ContextLoadArgs {

@@ -14,7 +14,7 @@ use hyper::{
     header::{ACCEPT, USER_AGENT},
     HeaderMap,
 };
-use mz::{error::Error, VERSION};
+use mz::{error::Error, ui::OutputFormatter, VERSION};
 use mz_build_info::build_info;
 use serde::Deserialize;
 
@@ -35,15 +35,15 @@ const SECONDS_IN_A_WEEK: u64 = 7 * 24 * 60 * 60;
 const TEMP_FILE_NAME: &str = ".mz.ver";
 const MZ_V_PREFIX: &str = "mz-v";
 
-pub struct UpgradeChecker;
-
-impl Default for UpgradeChecker {
-    fn default() -> Self {
-        UpgradeChecker
-    }
+pub struct UpgradeChecker {
+    no_color: bool,
 }
 
 impl UpgradeChecker {
+    pub fn new(no_color: bool) -> Self {
+        UpgradeChecker { no_color }
+    }
+
     /// Writes the current timestmap in the temp file.
     fn update_temp_file(&self, (major, minor, patch): (u64, u64, u64)) -> Result<(), Error> {
         let mut temp_path: PathBuf = env::temp_dir();
@@ -119,7 +119,10 @@ impl UpgradeChecker {
         let mut reg_version = String::new();
         reader.read_line(&mut reg_version)?;
 
-        let stored_timestamp: u64 = timestamp.trim().parse().map_err(|_| Error::ParsingTimestampU64Error)?;
+        let stored_timestamp: u64 = timestamp
+            .trim()
+            .parse()
+            .map_err(|_| Error::ParsingTimestampU64Error)?;
 
         Ok(Some((stored_timestamp, reg_version)))
     }
@@ -226,7 +229,8 @@ impl UpgradeChecker {
         match check_result {
             Ok(check) => {
                 if check {
-                    println!("\n{}", self.format_version_update_message());
+                    let of = OutputFormatter::new(mz::ui::OutputFormat::Text, self.no_color);
+                    let _ = of.output_warning(&self.format_version_update_message());
                 }
             }
             _ => {}

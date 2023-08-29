@@ -70,7 +70,7 @@ impl OutputFormatter {
         if self.no_color {
             println!("** Warning ** {}", msg);
         } else {
-            println!("** \x1b[93mWarning\x1b[0m ** {}", msg);
+            println!("\x1b[93m* Warning * \x1b[0m {}", msg);
         }
 
         Ok(())

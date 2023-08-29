@@ -52,6 +52,7 @@ pub struct ContextLoadArgs {
 }
 
 /// Context for a basic command.
+#[derive(Clone)]
 pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
