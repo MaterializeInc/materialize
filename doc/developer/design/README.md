@@ -28,7 +28,8 @@ nor are they meant to act as a review body. The intention of this
 process is not to design by committee. Instead, the author is
 responsible for driving the process to a conclusion that is satisfactory
 to the relevant stakeholders. Not every design document will result
-in complete consensus.
+in complete consensus. Outcomes from the meeting are recorded as a comment
+on the respective PR.
 
 Examples (some "in spirit", because the design doc template changed over time):
 * [External Introspection](./20230227_external_introspection.md)
@@ -125,7 +126,8 @@ short.
    and answer the questions on your PR. Continue to iterate.
 7. Drive the design document meeting and attempt to gather explicit
    approvals from your stakeholders, the set of people that you
-   identified in Step 3.
+   identified in Step 3. Record relevant outcomes from the meeting as
+   a PR comment.
 8. If you do not get explicit approvals in the meeting, keep iterating
    until you do. You can do this asynchronously or synchronously.
    If you’ve gone through multiple iterations and are struggling to get
