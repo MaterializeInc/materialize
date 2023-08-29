@@ -2196,7 +2196,6 @@ pub enum LoadGenerator {
         count_orders: i64,
         count_clerk: i64,
     },
-    Clock,
 }
 
 impl LoadGenerator {
@@ -2230,9 +2229,6 @@ impl LoadGenerator {
             ),
             LoadGenerator::Marketing => DataEncodingInner::RowCodec(RelationDesc::empty()),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
-            LoadGenerator::Clock => DataEncodingInner::RowCodec(
-                RelationDesc::empty().with_column("time_ms", ScalarType::Int64.nullable(false)),
-            ),
         }
     }
 
@@ -2455,7 +2451,6 @@ impl LoadGenerator {
                     ),
                 ]
             }
-            LoadGenerator::Clock => Vec::new(),
         }
     }
 
@@ -2469,7 +2464,6 @@ impl LoadGenerator {
             LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
-            LoadGenerator::Clock => false,
         }
     }
 }
@@ -2514,7 +2508,6 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk: *count_clerk,
                 }),
                 LoadGenerator::Datums => ProtoGenerator::Datums(()),
-                LoadGenerator::Clock => ProtoGenerator::Clock(()),
             }),
             tick_micros: self.tick_micros,
         }
@@ -2545,7 +2538,6 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk,
                 },
                 ProtoGenerator::Datums(()) => LoadGenerator::Datums,
-                ProtoGenerator::Clock(()) => LoadGenerator::Clock,
             },
             tick_micros: proto.tick_micros,
         })
