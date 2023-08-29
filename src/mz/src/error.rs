@@ -16,6 +16,7 @@
 //! [`Error`](`enum@Error`) is a custom error type containing multiple variants
 //! for erros produced by the self crate, internal crates and external crates.
 
+use hyper::header::InvalidHeaderValue;
 use thiserror::Error;
 use url::ParseError;
 
@@ -108,4 +109,18 @@ pub enum Error {
     /// Error that raises when fetching from the GitHub API.
     #[error("Error fetching from the GitHub API. Description: {0}")]
     GitHubFetchError(reqwest::Error),
+    /// Error that raises checking a version upgrade.
+    /// A user should never see this error.
+    #[error("Error during the version upgrade check")]
+    UpgradeCheckError,
+    /// Error that raises when trying to get the current
+    /// timestamp using `SystemTime::now().duration_since(UNIX_EPOCH)`
+    #[error("Error retrieving the current timestamp.")]
+    TimestampConversionError,
+    /// Error parsing a header for a request.
+    #[error("Error parsing header value: {0}")]
+    HeaderParseError(InvalidHeaderValue),
+    /// Error parsing a timestamp value as u64.
+    #[error("Error parsing timestamp as u64.")]
+    ParsingTimestampU64Error,
 }

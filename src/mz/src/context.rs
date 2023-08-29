@@ -26,7 +26,6 @@ use crate::config_file::ConfigFile;
 use crate::error::Error;
 use crate::sql_client::{Client as SqlClient, ClientConfig as SqlClientConfig};
 use crate::ui::{OutputFormat, OutputFormatter};
-use crate::upgrader::warn_version_if_necessary;
 use mz_cloud_api::client::cloud_provider::CloudProvider;
 use mz_cloud_api::client::region::{Region, RegionInfo};
 use mz_cloud_api::client::Client as CloudClient;
@@ -57,28 +56,6 @@ pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
     region: Option<String>,
-    exit_message: Result<Option<String>, Error>,
-}
-
-/// Implements Drop for the context.
-/// Before the `mz` command ends its life,
-/// is the same time the context ends (`src/bin/mz/main.rs`),
-/// it checks if there is any exit message to print,
-/// like a version upgrade.
-///
-/// TODO: This approach doesn't work if there is an error.
-/// The context is dropped before exiting and the error is print later.
-impl Drop for Context {
-    fn drop(&mut self) {
-        match &self.exit_message {
-            Ok(msg) => {
-                if let Some(msg) = msg {
-                    println!("\n{}", msg);
-                }
-            }
-            Err(_) => {}
-        }
-    }
 }
 
 impl Context {
@@ -91,9 +68,6 @@ impl Context {
             region,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
-        // Check if we need to update the version.
-        let exit_message = warn_version_if_necessary().await;
-
         let config_file_path = match config_file_path {
             None => ConfigFile::default_path()?,
             Some(path) => path,
@@ -103,7 +77,6 @@ impl Context {
             config_file,
             output_formatter: OutputFormatter::new(output_format, no_color),
             region,
-            exit_message,
         })
     }
 
