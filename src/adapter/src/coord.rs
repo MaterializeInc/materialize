@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -2052,7 +2052,7 @@ pub async fn serve(
                 .system_config()
                 .variable_length_row_encoding_DANGEROUS();
             mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-                .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
+                .store(variable_length_row_encoding, atomic::Ordering::SeqCst::Ordering::SeqCst);
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
