@@ -711,6 +711,7 @@ where
             let reduced_capacity =
                 self.merge_scratch.capacity() / self.shrink_upsert_unused_buffers_by_ratio;
             if reduced_capacity > batch_size {
+                // These vectors have already been cleared above and should be empty here
                 self.merge_scratch.shrink_to(reduced_capacity);
                 self.merge_upsert_scratch.shrink_to(reduced_capacity);
                 self.multi_get_scratch.shrink_to(reduced_capacity);
