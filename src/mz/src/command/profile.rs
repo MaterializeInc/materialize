@@ -40,6 +40,22 @@ use crate::{
     server::server,
 };
 
+/// Strips the `.api` from the login endpoint.
+/// The `.api` prefix will cause a failure during login
+/// in the browser.
+fn strip_api_from_endpoint(endpoint: Url) -> Url {
+    if let Some(domain) = endpoint.domain() {
+        if let Some(corrected_domain) = domain.strip_prefix("api.") {
+            let mut new_endpoint = endpoint.clone();
+            let _ = new_endpoint.set_host(Some(corrected_domain));
+
+            return new_endpoint;
+        }
+    };
+
+    endpoint
+}
+
 /// Opens the default web browser in the host machine
 /// and awaits a single request containing the profile's app password.
 pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
@@ -48,7 +64,9 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     let (server, port) = server(tx);
 
     // Build the login URL
-    let mut url = cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone());
+    let mut url =
+        strip_api_from_endpoint(cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone()));
+
     url.path_segments_mut()
         .expect("constructor validated URL can be a base")
         .extend(&["account", "login"]);
