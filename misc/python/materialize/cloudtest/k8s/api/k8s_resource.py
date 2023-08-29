@@ -23,7 +23,7 @@ class K8sResource:
     def __init__(self, namespace: str):
         self.selected_namespace = namespace
 
-    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
+    def kubectl(self, *args: str, input: Optional[str] = None) -> None:
         try:
             cmd = [
                 "kubectl",
@@ -34,9 +34,7 @@ class K8sResource:
                 *args,
             ]
 
-            return subprocess.run(
-                cmd, text=True, input=input, check=True, stdout=subprocess.PIPE
-            ).stdout
+            subprocess.run(cmd, text=True, input=input, check=True)
         except subprocess.CalledProcessError as e:
             print(
                 dedent(
