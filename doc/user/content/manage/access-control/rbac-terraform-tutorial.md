@@ -136,28 +136,14 @@ In this example, let's say your `dev_role` needs the following permissions:
 * All available privileges on the database
 * Usage and create privileges on the cluster
 
-1. We will add the following resources to our Terraform project.
+1. We will add the grant resources to our Terraform project.
 
     ```hcl
-    resource "materialize_table_grant" "dev_role_table_grant_select" {
-      role_name     = materialize_role.dev_role.name
-      privilege     = "SELECT"
-      database_name = materialize_table.table.database_name
-      schema_name   = materialize_table.table.schema_name
-      table_name    = materialize_table.table.name
-    }
+    resource "materialize_table_grant" "dev_role_table_grant" {
+      for_each = toset(["SELECT", "INSERT", "UPDATE"])
 
-    resource "materialize_table_grant" "dev_role_table_grant_insert" {
       role_name     = materialize_role.dev_role.name
-      privilege     = "INSERT"
-      database_name = materialize_table.table.database_name
-      schema_name   = materialize_table.table.schema_name
-      table_name    = materialize_table.table.name
-    }
-
-    resource "materialize_table_grant" "dev_role_table_grant_update" {
-      role_name     = materialize_role.dev_role.name
-      privilege     = "UPDATE"
+      privilege     = each.value
       database_name = materialize_table.table.database_name
       schema_name   = materialize_table.table.schema_name
       table_name    = materialize_table.table.name
@@ -165,7 +151,7 @@ In this example, let's say your `dev_role` needs the following permissions:
     ```
 
     {{< note >}}
-  All of the grant resources are a 1:1 between a specific role, object and privilege. So adding three privileges to the `dev_role` will require three Terraform resources.
+  All of the grant resources are a 1:1 between a specific role, object and privilege. So adding three privileges to the `dev_role` will require three Terraform resources which can can be accomplished with the `for_each` meta-argument.
     {{</ note >}}
 
 2. We will run Terraform to grant these privileges on the `dev_table` table.
@@ -190,33 +176,25 @@ In this example, let's say your `dev_role` needs the following permissions:
 
     ```hcl
     resource "materialize_schema_grant" "dev_role_schema_grant_usage" {
-    role_name     = materialize_role.dev_role.name
+      role_name     = materialize_role.dev_role.name
       privilege     = "USAGE"
       database_name = materialize_schema.schema.database_name
       schema_name   = materialize_schema.schema.name
     }
 
-    resource "materialize_database_grant" "dev_role_database_grant_usage" {
+    resource "materialize_database_grant" "dev_role_database_grant" {
+      for_each = toset(["USAGE", "CREATE"])
+
       role_name     = materialize_role.dev_role.name
-      privilege     = "USAGE"
+      privilege     = each.value
       database_name = materialize_database.database.name
     }
 
-    resource "materialize_database_grant" "dev_role_database_grant_create" {
-      role_name     = materialize_role.dev_role.name
-      privilege     = "CREATE"
-      database_name = materialize_database.database.name
-    }
+    resource "materialize_cluster_grant" "dev_role_cluster_grant" {
+      for_each = toset(["USAGE", "CREATE"])
 
-    resource "materialize_cluster_grant" "dev_role_cluster_grant_usage" {
       role_name    = materialize_role.dev_role.name
-      privilege    = "USAGE"
-      cluster_name = materialize_cluster.cluster.name
-    }
-
-    resource "materialize_cluster_grant" "dev_role_cluster_grant_create" {
-      role_name    = materialize_role.dev_role.name
-      privilege    = "CREATE"
+      privilege    = each.value
       cluster_name = materialize_cluster.cluster.name
     }
     ```
@@ -294,15 +272,11 @@ Next, you will create a new role with different privileges to other objects. The
 4. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
 
     ```hcl
-    resource "materialize_database_grant" "qa_role_database_grant_usage" {
-      role_name     = materialize_role.qa_role.name
-      privilege     = "USAGE"
-      database_name = materialize_database.database.name
-    }
+    resource "materialize_database_grant" "qa_role_database_grant" {
+      for_each = toset(["USAGE", "CREATE"])
 
-    resource "materialize_database_grant" "qa_role_database_grant_create" {
       role_name     = materialize_role.qa_role.name
-      privilege     = "CREATE"
+      privilege     = each.value
       database_name = materialize_database.database.name
     }
     ```
