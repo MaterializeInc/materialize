@@ -483,12 +483,9 @@ where
                 }
             }
 
-            let batch_size = events.len();
-
             match state
                 .merge_snapshot_chunk(
                     events.drain(..),
-                    batch_size,
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )
                 .await
