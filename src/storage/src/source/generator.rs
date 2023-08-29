@@ -30,7 +30,6 @@ use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
-pub mod clock;
 mod counter;
 mod datums;
 mod marketing;
@@ -41,7 +40,6 @@ pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
 
-use self::clock::Clock;
 use self::marketing::Marketing;
 
 pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Generator> {
@@ -68,7 +66,6 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
             // completely.
             tick: Duration::from_micros(tick_micros.unwrap_or(0)),
         }),
-        LoadGenerator::Clock => Box::new(Clock),
     }
 }
 
