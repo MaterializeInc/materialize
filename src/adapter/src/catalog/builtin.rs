@@ -4645,7 +4645,7 @@ pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sources_ind
 IN CLUSTER mz_introspection
-ON mz_catalog.mz_sources (schema_id)",
+ON mz_catalog.mz_sources (schema_id, cluster_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4672,7 +4672,7 @@ pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sinks_ind
 IN CLUSTER mz_introspection
-ON mz_catalog.mz_sinks (schema_id)",
+ON mz_catalog.mz_sinks (schema_id, cluster_id)",
     is_retained_metrics_object: false,
 };
 
