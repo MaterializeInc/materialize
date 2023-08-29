@@ -647,6 +647,7 @@ impl SessionClient {
             .send_without_session(|tx| Command::Terminate {
                 conn_id,
                 tx: Some(tx),
+                source: "client terminate",
             })
             .await;
         if let Err(e) = res {
@@ -794,6 +795,7 @@ impl Drop for SessionClient {
                 inner.send(Command::Terminate {
                     conn_id: session.conn_id().clone(),
                     tx: None,
+                    source: "SessionClient drop",
                 })
             }
         }

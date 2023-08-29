@@ -122,6 +122,7 @@ pub enum Command {
     Terminate {
         conn_id: ConnectionId,
         tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
+        source: &'static str,
     },
 
     /// Performs any cleanup and logging actions necessary for

@@ -155,8 +155,12 @@ impl Coordinator {
                 let _ = tx.send(result);
             }
 
-            Command::Terminate { conn_id, tx } => {
-                self.handle_terminate(conn_id).await;
+            Command::Terminate {
+                conn_id,
+                tx,
+                source,
+            } => {
+                self.handle_terminate(conn_id, source).await;
                 // Note: We purposefully do not use a ClientTransmitter here because we're already
                 // terminating the provided session.
                 if let Some(tx) = tx {
@@ -278,7 +282,7 @@ impl Coordinator {
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
                     // normally.
-                    self.handle_terminate(conn_id).await;
+                    self.handle_terminate(conn_id, "handle_startup").await;
                 }
             }
             Err(_) => {
@@ -747,13 +751,17 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, conn_id: ConnectionId) {
+    async fn handle_terminate(&mut self, conn_id: ConnectionId, source: &'static str) {
+        tracing::info!("handle_terminate: {}: {source}", conn_id.unhandled());
         if self.active_conns.get(&conn_id).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
             // debug. This panic is very infrequent so we want as much information as possible.
             // See https://github.com/MaterializeInc/materialize/issues/18996.
-            panic!("unknown connection: {conn_id:?}\n\n{self:?}")
+            panic!(
+                "unknown connection: {conn_id:?}; source: {source}, active conns:\n{:?}",
+                self.active_conns
+            )
         }
 
         // We do not need to call clear_transaction here because there are no side effects to run
