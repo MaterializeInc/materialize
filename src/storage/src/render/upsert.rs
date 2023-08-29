@@ -515,10 +515,8 @@ where
             source_config.worker_id,
             source_config.id
         );
-
         source_metrics
                 .set_rehydration_latency_seconds(rehydration_started.elapsed().as_secs());
-        source_metrics.mark_rehydration_finished();
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
