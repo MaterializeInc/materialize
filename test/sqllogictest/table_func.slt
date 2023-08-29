@@ -108,10 +108,10 @@ EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2, 
 Explained Query (fast path):
   Constant
     - (0)
+    - (-1)
     - (1)
     - (2)
     - (-2)
-    - (-1)
 
 EOF
 

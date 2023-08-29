@@ -2728,10 +2728,12 @@ impl<'a> ScalarType {
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
+                //
+                // TODO[btv]: Add more datums around
+                // boundaries in VLE (e.g. negatives) if `test_smoketest_all_builtins` is
+                // fixed to be faster.
                 Datum::Int16(127),
                 Datum::Int16(128),
-                Datum::Int16(-128),
-                Datum::Int16(-129),
             ])
         });
         static INT32: Lazy<Row> = Lazy::new(|| {
@@ -2745,14 +2747,8 @@ impl<'a> ScalarType {
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::Int32(127),
-                Datum::Int32(128),
-                Datum::Int32(-128),
-                Datum::Int32(-129),
                 Datum::Int32(32767),
                 Datum::Int32(32768),
-                Datum::Int32(-32768),
-                Datum::Int32(-32769),
             ])
         });
         static INT64: Lazy<Row> = Lazy::new(|| {
@@ -2766,18 +2762,8 @@ impl<'a> ScalarType {
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::Int64(127),
-                Datum::Int64(128),
-                Datum::Int64(-128),
-                Datum::Int64(-129),
-                Datum::Int64(32767),
-                Datum::Int64(32768),
-                Datum::Int64(-32768),
-                Datum::Int64(-32769),
                 Datum::Int64(2147483647),
                 Datum::Int64(2147483648),
-                Datum::Int64(-2147483648),
-                Datum::Int64(-2147483649),
             ])
         });
         static UINT16: Lazy<Row> = Lazy::new(|| {
