@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::{Arc, Mutex, atomic};
+use std::sync::{atomic, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
