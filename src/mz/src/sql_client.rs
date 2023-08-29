@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    env,
+    env, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -22,6 +23,14 @@ use crate::error::Error;
 /// The [application_name](https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
 /// which gets reported to the Postgres server we're connecting to.
 const PG_APPLICATION_NAME: &str = "mz_psql";
+
+/// Default filename for the custom .psqlrc file.
+const PG_PSQLRC_MZ_FILENAME: &str = ".psqlrc-mz";
+
+// Default content for the .psqlrc-mz file.
+// It enables timing and includes all the configuration from
+// the main `.psqlrc` file.
+const PG_PSQLRC_MZ_DEFAULT_CONTENT: &str = "\\timing\n\\include ~/.psqlrc";
 
 /// Configures the required parameters of a [`Client`].
 pub struct ClientConfig {
@@ -70,6 +79,38 @@ impl Client {
         url
     }
 
+    /// This function configures an own .psqlrc-mz file
+    /// to include the '\timing' function every time
+    /// the user executes the `mz sql` command.
+    pub fn configure_psqlrc(&self) -> Result<(), Error> {
+        // Look for the '.psqlrc' file in the home dir.
+        let Some(mut path) = dirs::home_dir() else {
+            return Err(Error::HomeDirNotFoundError);
+        };
+        path.push(PG_PSQLRC_MZ_FILENAME);
+
+        // Check if the file doesn't exists yet
+        // and create it.
+        if !Path::new(&path).exists() {
+            match fs::File::create(&path) {
+                Ok(mut file) => file.write_all(PG_PSQLRC_MZ_DEFAULT_CONTENT.as_bytes())?,
+                Err(err) => return Err(Error::IOError(err)),
+            }
+        }
+
+        path.pop();
+        path.push(".psqlrc");
+
+        // Check if '.psqlrc' exists, if it doesn't, create one.
+        // Otherwise the '\include ~/.psqlrc' line
+        // will throw an error message in every execution.
+        if !Path::new(&path).exists() {
+            let _ = fs::File::create(&path);
+        }
+
+        Ok(())
+    }
+
     /// Returns a sql shell command associated with this context
     pub fn shell(
         &self,
@@ -77,11 +118,17 @@ impl Client {
         email: String,
         cluster: Option<String>,
     ) -> Command {
+        // Feels ok to avoid stopping the executing if
+        // we can't configure the file.
+        // Worst case scenario timing will not be enabled.
+        let _ = self.configure_psqlrc();
+
         let mut command = Command::new("psql");
         command
             .arg(self.build_psql_url(region_info, email, cluster).as_str())
             .env("PGPASSWORD", &self.app_password.to_string())
-            .env("PGAPPNAME", PG_APPLICATION_NAME);
+            .env("PGAPPNAME", PG_APPLICATION_NAME)
+            .env("PSQLRC", "~/.psqlrc-mz");
 
         command
     }

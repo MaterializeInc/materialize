@@ -75,7 +75,7 @@
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{fs, io::Read, path::Path, time::Duration};
 
     use assert_cmd::{assert::Assert, Command};
     use mz::{config_file::ConfigFile, ui::OptionalStr};
@@ -574,6 +574,24 @@ mod tests {
             .arg("\"SELECT 1\"")
             .assert()
             .success();
+
+        // Look for the '.psqlrc' file in the home dir.
+        let mut path = dirs::home_dir().expect("Error retrieving the home dir.");
+        path.push(".psqlrc-mz");
+
+        // Verify the content is ok
+        if Path::new(&path).exists() {
+            let mut file = fs::File::open(&path).expect("Error opening the '.psqlrc-mz' file.");
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .expect("Error reading the '.psqlrc-mz' file.");
+
+            if content != "\\timing\n\\include ~/.psqlrc" {
+                panic!("Incorrect content in the '.psqlrc-mz' file.")
+            }
+        } else {
+            panic!("The configuration file '.psqlrc-mz', does not exists.")
+        }
 
         // TODO: Remove an app-password. Breaks the CLI config. The same if the app-password is invalid.
         // TODO: Add more tests for config_set and config_remove when you implement the actual commands.
