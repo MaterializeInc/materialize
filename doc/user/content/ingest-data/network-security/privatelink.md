@@ -11,18 +11,18 @@ menu:
 ---
 
 Materialize can connect to a Kafka broker, a Confluent Schema Registry server or
-a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
-service. In this guide, we'll cover how to create `AWS PRIVATELINK` connections
+a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/) service.
+
+In this guide, we'll cover how to create `AWS PRIVATELINK` connections
 and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 ## Create an AWS PrivateLink connection
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS MSK">}}
+{{< tab "Kafka on AWS">}}
 
 {{< note >}}
-Materialize provides a [Terraform module](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
-that can be used to create the target groups for each Kafka broker (step 1), the network load balancer (step 2),
+Materialize provides Terraform modules for both [MSK cluster](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) which can be used to create the target groups for each Kafka broker (step 1), the network load balancer (step 2),
 the TCP listeners (step 3) and the VPC endpoint service (step 5).
 {{< /note >}}
 
@@ -35,16 +35,16 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
     c. Port as **9092**, or the port that you are using in case it is not 9092 (e.g. 9094 for TLS or 9096 for SASL).
 
-    d. Make sure that the target group is in the same VPC as the MSK cluster.
+    d. Make sure that the target group is in the same VPC as the Kafka cluster.
 
-    e. Click next, and register the respective MSK broker to each target group using its IP address.
+    e. Click next, and register the respective Kafka broker to each target group using its IP address.
 
 1. #### Create a Network Load Balancer (NLB)
-    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the MSK brokers are in.
+    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the Kafka brokers are in.
 
 1. #### Create TCP listeners
 
-    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html) for every MSK broker that forwards to the corresponding target group you created (e.g. `b-1`, `b-2`, `b-3`).
+    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html) for every Kafka broker that forwards to the corresponding target group you created (e.g. `b-1`, `b-2`, `b-3`).
 
     The listener port needs to be unique, and will be used later on in the `CREATE CONNECTION` statement.
 
@@ -60,7 +60,7 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
     Once the TCP listeners have been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) for each target group are passing and that the targets are reported as healthy.
 
-    If you have set up a security group for your MSK cluster, you must ensure that it allows traffic on both the listener port and the health check port.
+    If you have set up a security group for your Kafka cluster, you must ensure that it allows traffic on both the listener port and the health check port.
 
     **Remarks**:
 
@@ -171,7 +171,7 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS MSK">}}
+{{< tab "Kafka on AWS">}}
 ```sql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
@@ -180,7 +180,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
         'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003, AVAILABILITY ZONE 'use1-az3')
     ),
     -- Authentication details
-    -- Depending on the authentication method the MSK cluster is using
+    -- Depending on the authentication method the Kafka cluster is using
     SASL MECHANISMS = 'SCRAM-SHA-512',
     SASL USERNAME = 'foo',
     SASL PASSWORD = SECRET kafka_password
