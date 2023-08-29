@@ -18,7 +18,9 @@ use bytesize::ByteSize;
 use differential_dataflow::trace::TraceReader;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
-use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, Peek};
+use mz_compute_client::protocol::command::{
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek,
+};
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_client::types::dataflows::DataflowDescription;
@@ -172,10 +174,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
-            CreateInstance {
-                logging_config,
-                variable_length_row_encoding,
-            } => self.handle_create_instance(logging_config, variable_length_row_encoding),
+            CreateInstance(instance_config) => self.handle_create_instance(instance_config),
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(params),
             CreateDataflow(dataflow) => self.handle_create_dataflow(dataflow),
@@ -190,12 +189,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_create_instance(
         &mut self,
-        logging: LoggingConfig,
-        variable_length_row_encoding: bool,
+        InstanceConfig {
+            logging_config,
+            variable_length_row_encoding,
+        }: InstanceConfig,
     ) {
         mz_repr::VARIABLE_LENGTH_ROW_ENCODING
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
-        self.initialize_logging(&logging);
+        self.initialize_logging(&logging_config);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {

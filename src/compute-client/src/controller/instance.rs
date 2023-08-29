@@ -34,7 +34,7 @@ use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -307,10 +307,10 @@ where
         });
 
         let dummy_logging_config = Default::default();
-        instance.send(ComputeCommand::CreateInstance {
+        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
             logging_config: dummy_logging_config,
             variable_length_row_encoding,
-        });
+        }));
 
         instance
     }

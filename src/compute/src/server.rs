@@ -503,11 +503,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let mut old_frontiers = BTreeMap::default();
             for command in compute_state.command_history.iter() {
                 match command {
-                    ComputeCommand::CreateInstance {
-                        logging_config,
-                        variable_length_row_encoding,
-                    } => {
-                        old_instance_config = Some((logging_config, variable_length_row_encoding));
+                    ComputeCommand::CreateInstance(config) => {
+                        old_instance_config = Some(config);
                     }
                     ComputeCommand::CreateDataflow(dataflow) => {
                         let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
@@ -575,17 +572,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));
                         }
                     }
-                    ComputeCommand::CreateInstance {
-                        logging_config,
-                        variable_length_row_encoding,
-                    } => {
+                    ComputeCommand::CreateInstance(config) => {
                         // Cluster creation should not be performed again!
-                        if Some((logging_config, variable_length_row_encoding))
-                            != old_instance_config
-                        {
+                        if Some(config) != old_instance_config {
                             halt!(
                                 "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
-                                (logging_config, variable_length_row_encoding),
+                                config,
                                 old_instance_config,
                             );
                         }

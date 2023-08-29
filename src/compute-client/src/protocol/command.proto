@@ -33,14 +33,14 @@ message ProtoComputeCommand {
         mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
     }
 
-    message ProtoCreateInstance {
+    message ProtoInstanceConfig {
         logging.ProtoLoggingConfig logging_config = 1;
         bool variable_length_row_encoding = 2;
     }
 
     oneof kind {
         ProtoCreateTimely create_timely = 1;
-        ProtoCreateInstance create_instance = 2;
+        ProtoInstanceConfig create_instance = 2;
         types.dataflows.ProtoDataflowDescription create_dataflow = 3;
         mz_storage_client.client.ProtoCompaction allow_compaction = 4;
         ProtoPeek peek = 5;

@@ -71,7 +71,7 @@ use std::fmt::Debug;
 use std::ops::RangeBounds;
 use std::str::FromStr;
 use std::string::ToString;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -2492,9 +2492,6 @@ impl SystemVars {
                 .lock()
                 .expect("lock poisoned")
                 .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
-        } else if name == VARIABLE_LENGTH_ROW_ENCODING.name {
-            let value = *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING);
-            mz_repr::VARIABLE_LENGTH_ROW_ENCODING.store(value, atomic::Ordering::SeqCst);
         }
     }
 

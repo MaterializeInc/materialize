@@ -35,6 +35,15 @@ include!(concat!(
     "/mz_compute_client.protocol.command.rs"
 ));
 
+/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
+/// if the controller attempt to reconcile them with different values
+/// for anything in this struct.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InstanceConfig {
+    pub logging_config: LoggingConfig,
+    pub variable_length_row_encoding: bool,
+}
+
 /// Compute protocol commands, sent by the compute controller to replicas.
 ///
 /// Command sequences sent by the compute controller must be valid according to the [Protocol
@@ -73,10 +82,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// dataflows according to the given [`LoggingConfig`].
     ///
     /// [Creation Stage]: super#creation-stage
-    CreateInstance {
-        logging_config: LoggingConfig,
-        variable_length_row_encoding: bool,
-    },
+    CreateInstance(InstanceConfig),
 
     /// `InitializationComplete` informs the replica about the end of the [Initialization Stage].
     /// Upon receiving this command, the replica should perform a reconciliation process, to ensure
@@ -234,10 +240,10 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     config: Some(config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
-                ComputeCommand::CreateInstance {
+                ComputeCommand::CreateInstance(InstanceConfig {
                     logging_config,
                     variable_length_row_encoding,
-                } => CreateInstance(ProtoCreateInstance {
+                }) => CreateInstance(ProtoInstanceConfig {
                     logging_config: Some(logging_config.into_proto()),
                     variable_length_row_encoding: *variable_length_row_encoding,
                 }),
@@ -268,14 +274,14 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
                 })
             }
-            Some(CreateInstance(ProtoCreateInstance {
+            Some(CreateInstance(ProtoInstanceConfig {
                 logging_config,
                 variable_length_row_encoding,
-            })) => Ok(ComputeCommand::CreateInstance {
+            })) => Ok(ComputeCommand::CreateInstance(InstanceConfig {
                 logging_config: logging_config
                     .into_rust_if_some("ProtoCreateInstance::logging_config")?,
                 variable_length_row_encoding,
-            }),
+            })),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
@@ -308,10 +314,10 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
         Union::new(vec![
             (any::<LoggingConfig>(), any::<bool>())
                 .prop_map(|(logging_config, variable_length_row_encoding)| {
-                    ComputeCommand::CreateInstance {
+                    ComputeCommand::CreateInstance(InstanceConfig {
                         logging_config,
                         variable_length_row_encoding,
-                    }
+                    })
                 })
                 .boxed(),
             any::<ComputeParameters>()
