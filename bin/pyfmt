@@ -18,5 +18,6 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 try bin/pyactivate -m black . "$@"
-try bin/pyactivate -m ruff --fix .
+try bin/pyactivate -m ruff --fix --extend-exclude=misc/dbt-materialize .
+try bin/pyactivate -m ruff --target-version=py38 --fix misc/dbt-materialize
 try_finish

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Type
+from typing import Optional, Type
 
 from dbt.adapters.postgres import PostgresRelation
 from dbt.dataclass_schema import StrEnum
@@ -39,7 +39,7 @@ class MaterializeRelationType(StrEnum):
 
 @dataclass(frozen=True, eq=False, repr=False)
 class MaterializeRelation(PostgresRelation):
-    type: MaterializeRelationType | None = None
+    type: Optional[MaterializeRelationType] = None
 
     # Materialize does not have a 63-character limit for relation names, unlike
     # PostgreSQL (see dbt-core #2727). Instead, we set 255 as the maximum

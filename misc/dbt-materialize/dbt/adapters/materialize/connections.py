@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Optional
 
 import psycopg2
 
@@ -31,7 +32,7 @@ logger = AdapterLogger("Materialize")
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: str | None = "default"
+    cluster: Optional[str] = "default"
 
     @property
     def type(self):

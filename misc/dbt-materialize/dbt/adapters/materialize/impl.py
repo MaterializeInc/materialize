@@ -15,11 +15,11 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
-from dbt.adapters.materialize import MaterializeConnectionManager
+from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
@@ -30,10 +30,10 @@ from dbt.dataclass_schema import ValidationError, dbtClassMixin
 # types in ./misc/dbt-materialize need to import generic types from typing
 @dataclass
 class MaterializeIndexConfig(dbtClassMixin):
-    columns: list[str] | None = None
-    default: bool | None = False
-    name: str | None = None
-    cluster: str | None = None
+    columns: Optional[List[str]] = None
+    default: Optional[bool] = False
+    name: Optional[str] = None
+    cluster: Optional[str] = None
 
     @classmethod
     def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:
@@ -55,7 +55,7 @@ class MaterializeIndexConfig(dbtClassMixin):
 
 @dataclass
 class MaterializeConfig(AdapterConfig):
-    cluster: str | None = None
+    cluster: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter):
@@ -91,12 +91,12 @@ class MaterializeAdapter(PostgresAdapter):
     def verify_database(self, database):
         pass
 
-    def parse_index(self, raw_index: Any) -> MaterializeIndexConfig | None:
+    def parse_index(self, raw_index: Any) -> Optional[MaterializeIndexConfig]:
         return MaterializeIndexConfig.parse(raw_index)
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
-    ) -> list[MaterializeRelation]:
+    ) -> List[MaterializeRelation]:
         kwargs = {"schema_relation": schema_relation}
         results = self.execute_macro(LIST_RELATIONS_MACRO_NAME, kwargs=kwargs)
 
