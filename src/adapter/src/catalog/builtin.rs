@@ -4215,6 +4215,24 @@ WHERE false
     ",
 };
 
+pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
+    name: "mz_show_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_show_sources
+AS SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id,
+FROM mz_catalog.mz_sources AS sources
+LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id",
+};
+
+pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
+    name: "mz_show_sinks",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql:"CREATE VIEW mz_internal.mz_show_sinks
+AS SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id,
+FROM mz_catalog.mz_sinks AS sinks
+LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
+};
+
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4645,7 +4663,7 @@ pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sources_ind
 IN CLUSTER mz_introspection
-ON mz_catalog.mz_sources (schema_id)",
+ON mz_internal.mz_show_sources (schema_id, cluster_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4672,7 +4690,7 @@ pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sinks_ind
 IN CLUSTER mz_introspection
-ON mz_catalog.mz_sinks (schema_id)",
+ON mz_internal.mz_show_sinks (schema_id, cluster_id)",
     is_retained_metrics_object: false,
 };
 

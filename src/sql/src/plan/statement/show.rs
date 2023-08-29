@@ -384,12 +384,10 @@ fn show_sources<'a>(
     }
 
     let query = format!(
-        "SELECT sources.name, sources.type, sources.size, clusters.name as cluster
-        FROM mz_catalog.mz_sources AS sources
-        LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id
+        "SELECT name, type, size, cluster
+        FROM mz_internal.mz_show_sources
         WHERE {where_clause}"
     );
-
     ShowSelect::new(
         scx,
         query,
@@ -501,10 +499,9 @@ fn show_sinks<'a>(
     }
 
     let query = format!(
-        "SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster
-         FROM mz_catalog.mz_sinks AS sinks
-         JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id
-         WHERE {where_clause}",
+        "SELECT name, type, size, cluster
+        FROM mz_internal.mz_show_sinks
+        WHERE {where_clause}"
     );
     ShowSelect::new(
         scx,
