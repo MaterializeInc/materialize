@@ -93,7 +93,8 @@ WITH MUTUALLY RECURSIVE
     FROM c0, c1
     WHERE c0.key = c1.key
   )
-SELECT * FROM c2;
+SELECT * FROM c2
+ORDER BY 1, 2;
 ----
 2  1
 4  0

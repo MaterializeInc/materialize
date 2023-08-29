@@ -366,9 +366,10 @@ EOF
 query IT
 SELECT * FROM t1
 WHERE a IN (2, a+a)
+ORDER BY 1
 ----
-2  l2
 0  nnn
+2  l2
 
 # A non-trivial expression in a literal constraint
 
@@ -403,7 +404,7 @@ WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 ----
 Explained Query (fast path):
   Project (#1)
-    ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(1); (2); (3); (6); (7); (9); (-1)]
+    ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(-1); (1); (2); (3); (6); (7); (9)]
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)

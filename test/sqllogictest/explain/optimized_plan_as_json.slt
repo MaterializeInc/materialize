@@ -94,9 +94,9 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
               [
                 {
                   "data": [
-                    39,
+                    42,
                     1,
-                    39,
+                    42,
                     2
                   ]
                 },
@@ -105,9 +105,9 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
               [
                 {
                   "data": [
-                    39,
+                    42,
                     3,
-                    39,
+                    42,
                     4
                   ]
                 },
@@ -170,7 +170,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          39,
+                          42,
                           1
                         ]
                       }
@@ -196,8 +196,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                           {
                             "Ok": {
                               "data": [
-                                39,
-                                0
+                                41
                               ]
                             }
                           },
@@ -223,8 +222,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                           {
                             "Ok": {
                               "data": [
-                                39,
-                                0
+                                41
                               ]
                             }
                           },
@@ -250,8 +248,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                           {
                             "Ok": {
                               "data": [
-                                39,
-                                0
+                                41
                               ]
                             }
                           },
@@ -334,7 +331,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              39,
+                              42,
                               1
                             ]
                           }
@@ -360,8 +357,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              39,
-                              0
+                              41
                             ]
                           }
                         },
@@ -384,8 +380,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              39,
-                              0
+                              41
                             ]
                           }
                         },
@@ -408,8 +403,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              39,
-                              0
+                              41
                             ]
                           }
                         },
@@ -451,8 +445,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          39,
-                          0
+                          41
                         ]
                       }
                     },
@@ -478,8 +471,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          39,
-                          0
+                          41
                         ]
                       }
                     },
@@ -513,8 +505,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          39,
-                          0
+                          41
                         ]
                       }
                     },
@@ -587,7 +578,7 @@ SELECT generate_series(a, b) from t
                     {
                       "Ok": {
                         "data": [
-                          39,
+                          42,
                           1
                         ]
                       }
