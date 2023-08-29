@@ -9,9 +9,9 @@ menu:
 ---
 
 A connection describes how to connect and authenticate to an external system you
-want Materialize to read data from. Once created, a connection is **reusable**
-across multiple [`CREATE SOURCE`](/sql/create-source) and [`CREATE SINK`](/sql/create-sink)
-statements.
+want Materialize to read from or write to. Once created, a connection
+is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) and
+[`CREATE SINK`](/sql/create-sink) statements.
 
 To use credentials that contain sensitive information (like passwords and SSL
 keys) in a connection, you must first [create secrets](/sql/create-secret) to
@@ -37,6 +37,12 @@ Field                                   | Value            | Required | Descript
 `BROKER`                                | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
 `BROKERS`                               | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
 `PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
+
+#### `WITH` options {#kafka-with-options}
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
 
 #### Authentication {#kafka-auth}
 
@@ -252,6 +258,12 @@ Field                       | Value            | Required | Description
 `PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 
+#### `WITH` options {#csr-with-options}
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+
 #### Examples {#csr-example}
 
 ```sql
@@ -346,6 +358,12 @@ Field                       | Value            | Required | Description
 `SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
 `SSL KEY`                   | secret           |          | Client SSL key in PEM format.
+
+#### `WITH` options {#postgres-with-options}
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
 
 #### Example {#postgres-example}
 
@@ -566,34 +584,12 @@ SELECT * FROM mz_ssh_tunnel_connections;
  ...   | ssh-ed25519 AAAA...76RH materialize   | ssh-ed25519 AAAA...hLYV materialize
 ```
 
-## Privileges
-
-The privileges required to execute this statement are:
-
-- `CREATE` privileges on the containing schema.
-- `USAGE` privileges on all connections and secrets used in the connection definition.
-- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
-
 ## Connection validation {#connection-validation}
 
-For the connection types that don't require additional setup steps Materialize
-will validate their connection and authentication parameters on creation to
-ensure that it can connect to the external system. If this validation step
-fails, the creation of the connection will also fail and the validation error
-will be returned.
+Materialize automatically validates the connection and authentication parameters
+for most connection types on connection creation:
 
-For connection types that do require additional setup steps after creation
-Materialize does not run validation on creation. To validate these connection
-types once the setup steps are completed you can use the [`VALIDATE
-CONNECTION`](/sql/validate-connection) command to check if everything is set up
-correctly.
-
-### Default validation behavior
-
-The following table summarizes the connection types for which Materialize will
-automatically validate their parameters on creation:
-
-Connection Type             | Validates by default |
+Connection type             | Validated by default |
 ----------------------------|----------------------|
 PostgreSQL                  | ✓                    |
 Kafka                       | ✓                    |
@@ -601,19 +597,24 @@ Confluent Schema Registry   | ✓                    |
 SSH Tunnel                  |                      |
 AWS PrivateLink             |                      |
 
-Regardless of the default behavior, all connection types allow you to change
-whether validation happens on creation by using the `VALIDATE` [with
-option](#with-options). This can be useful in situation where the parameters
-are known to be correct but the external system is unavailable at the time of
-creation.
+For connection types that are validated by default, if the validation step
+fails, the creation of the connection will also fail and a validation error is
+returned. You can disable connection validation by setting the `VALIDATE`
+option to `false`. This is useful, for example, when the parameters are known
+to be correct but the external system is unavailable at the time of creation.
 
-## `WITH` options {#with-options}
+Connection types that require additional setup steps after creation, like SSH
+tunnel and AWS PrivateLink connections, can be **manually validated** using the
+[`VALIDATE CONNECTION`](/sql/validate-connection) syntax once all setup steps
+are completed.
 
-All connection types support the following `WITH` options:
+## Privileges
 
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be perfomed as part of this creation statement.
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all connections and secrets used in the connection definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
 
 ## Related pages
 
