@@ -171,37 +171,34 @@ impl Client {
         let uuid = session.uuid();
         let application_name = session.application_name().into();
         let notice_tx = session.retain_notice_transmitter();
+
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::Startup {
+            cancel_tx: Arc::clone(&cancel_tx),
+            tx,
+            set_setting_keys,
+            user,
+            conn_id,
+            secret_key,
+            uuid,
+            application_name,
+            notice_tx,
+        });
+
+        // When startup fails, no need to call terminate (handle_startup does this). Delay creating
+        // the client until after startup to sidestep the panic in its `Drop` implementation.
+        let response = rx.await.expect("sender dropped")?;
+
+        // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
+        // handle termination.
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
-            cancel_tx: Arc::clone(&cancel_tx),
+            cancel_tx,
             cancel_rx,
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
-        };
-        let response = client
-            .send_without_session(|tx| Command::Startup {
-                cancel_tx,
-                tx,
-                set_setting_keys,
-                user,
-                conn_id,
-                secret_key,
-                uuid,
-                application_name,
-                notice_tx,
-            })
-            .await;
-        let response = match response {
-            Ok(response) => response,
-            Err(e) => {
-                // When startup fails, no need to call terminate. Remove the
-                // session from the client to sidestep the panic in the `Drop`
-                // implementation.
-                client.session.take();
-                return Err(e);
-            }
         };
 
         let StartupResponse {
