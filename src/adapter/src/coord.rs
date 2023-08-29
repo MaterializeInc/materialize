@@ -2052,7 +2052,7 @@ pub async fn serve(
                 .system_config()
                 .variable_length_row_encoding_DANGEROUS();
             mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-                .store(variable_length_row_encoding, atomic::Ordering::SeqCst::Ordering::SeqCst);
+                .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
