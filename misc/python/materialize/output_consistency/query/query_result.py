@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from typing import Any, Sequence
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,
@@ -33,10 +33,10 @@ class QueryExecution:
         )
         self.query_id = query_id
         self.query_template = query_template
-        self.outcomes: List[QueryOutcome] = []
-        self.durations: List[float] = []
+        self.outcomes: list[QueryOutcome] = []
+        self.durations: list[float] = []
 
-    def get_outcome_by_strategy_key(self) -> Dict[EvaluationStrategyKey, QueryOutcome]:
+    def get_outcome_by_strategy_key(self) -> dict[EvaluationStrategyKey, QueryOutcome]:
         return {outcome.strategy.identifier: outcome for outcome in self.outcomes}
 
     def __str__(self) -> str:

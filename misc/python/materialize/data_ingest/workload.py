@@ -9,7 +9,7 @@
 
 import random
 import time
-from typing import Any, Dict, Iterator, List
+from typing import Any, Iterator
 
 import pg8000
 
@@ -40,9 +40,9 @@ from materialize.mzcompose import Composition
 
 
 class Workload:
-    cycle: List[TransactionDef]
+    cycle: list[TransactionDef]
 
-    def generate(self, fields: List[Field]) -> Iterator[Transaction]:
+    def generate(self, fields: list[Field]) -> Iterator[Transaction]:
         while True:
             for transaction_def in self.cycle:
                 for transaction in transaction_def.generate(fields):
@@ -137,15 +137,15 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
 #    def __init__(self) -> None:
-#        self.cycle: List[Definition] = [
+#        self.cycle: list[Definition] = [
 #        ]
 
 
 def execute_workload(
-    executor_classes: List[Any],
+    executor_classes: list[Any],
     workload: Workload,
     num: int,
-    ports: Dict[str, int],
+    ports: dict[str, int],
     runtime: int,
     verbose: bool,
 ) -> None:
@@ -214,4 +214,4 @@ def execute_workload(
             time.sleep(sleep_time)
             sleep_time *= 2
         else:
-            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")
+            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")  # type: ignore

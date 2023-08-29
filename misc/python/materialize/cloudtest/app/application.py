@@ -9,7 +9,7 @@
 
 import subprocess
 from textwrap import dedent
-from typing import List, Optional
+from typing import Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
@@ -17,8 +17,8 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
 
 class Application:
-    resources: List[K8sResource]
-    images: List[str]
+    resources: list[K8sResource]
+    images: list[str]
     release_mode: bool
     aws_region: Optional[str]
 

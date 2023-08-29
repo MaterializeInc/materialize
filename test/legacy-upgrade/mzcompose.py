@@ -12,7 +12,6 @@ operational after an upgrade.
 """
 
 import random
-from typing import Dict, List, Tuple
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
@@ -31,7 +30,7 @@ from materialize.version_list import VersionsFromDocs
 version_list = VersionsFromDocs()
 all_versions = version_list.all_versions()
 
-mz_options: Dict[MzVersion, str] = {}
+mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),
@@ -108,7 +107,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def test_upgrade_from_version(
     c: Composition,
     from_version: str,
-    priors: List[MzVersion],
+    priors: list[MzVersion],
     filter: str,
     style: str = "",
 ) -> None:
@@ -191,7 +190,7 @@ def test_upgrade_from_version(
         )
 
 
-def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
+def ssl_services() -> tuple[Kafka, SchemaRegistry, Testdrive]:
     """sets"""
 
     kafka = Kafka(

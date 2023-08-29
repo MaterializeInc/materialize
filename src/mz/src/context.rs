@@ -36,6 +36,7 @@ use mz_frontegg_client::client::{Authentication, Client as AdminClient};
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
 };
+use url::{ParseError, Url};
 
 /// Arguments for [`Context::load`].
 pub struct ContextLoadArgs {
@@ -81,6 +82,64 @@ impl Context {
         })
     }
 
+    /// Retrieves the admin endpoint from the configuration file.
+    ///
+    /// - If an admin-endpoint is provided, it uses its value.
+    /// - If only a cloud-endpoint is provided, it constructs the admin endpoint based on it.
+    /// - If neither an admin-endpoint nor a cloud-endpoint is provided, default values are used.
+    pub fn get_admin_endpoint(
+        &self,
+        cloud_endpoint: Option<Url>,
+        admin_endpoint: Option<&str>,
+    ) -> Result<Option<Url>, ParseError> {
+        if let Some(admin_endpoint) = admin_endpoint {
+            return Ok(Some(admin_endpoint.parse()?));
+        } else if let Some(cloud_endpoint) = cloud_endpoint {
+            let mut admin_endpoint_url = cloud_endpoint;
+
+            if let Some(host) = admin_endpoint_url.host_str().as_mut() {
+                if let Some(host) = host.strip_prefix("api.") {
+                    admin_endpoint_url.set_host(Some(&format!("admin.{}", host)))?;
+                }
+                return Ok(Some(admin_endpoint_url));
+            }
+        }
+
+        Ok(None)
+    }
+
+    // Prints a warning comment about the cloud endpoint
+    /// TODO: Remove after releasing version 0.1.6 and give anyone using `mz` time to apply the fix.
+    pub fn print_warning_comment(&self) {
+        println!("⚠️ \t Warning\t ⚠️ \nStarting from version 0.1.3, it is a must to include the 'api.' subdomain in the cloud endpoint.");
+        println!("\nWrong: cloud-endpoint = \"https://staging.cloud.materialize.com\"");
+        println!("Right: cloud-endpoint = \"https://api.staging.cloud.materialize.com\"");
+        println!("\nPlease address this in your config before upcoming releases.");
+        println!("Config path: ~/.config/materialize/mz.toml.\n");
+    }
+
+    /// Verifies the cloud endpoint is ok.
+    /// Otherwise raises a warning message.
+    /// This function is temporal.
+    /// TODO: Remove after version 0.1.6 and give anyone using `mz` time to apply the fix.
+    pub fn verify_and_return_cloud_endpoint_url(
+        &self,
+        cloud_endpoint: Option<&str>,
+    ) -> Result<Option<Url>, ParseError> {
+        if let Some(endpoint) = cloud_endpoint {
+            let mut endpoint_url = endpoint.parse::<Url>()?;
+            if let Some(host) = endpoint_url.host_str().as_mut() {
+                if !host.starts_with("api.") {
+                    self.print_warning_comment();
+                    endpoint_url.set_host(Some(&format!("api.{}", host)))?;
+                }
+                return Ok(Some(endpoint_url));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
@@ -89,11 +148,15 @@ impl Context {
         let config_file = self.config_file.clone();
         let profile = config_file.load_profile(&profile_name)?;
 
+        let cloud_endpoint = self.verify_and_return_cloud_endpoint_url(profile.cloud_endpoint())?;
+
         // Build clients
         let mut admin_client_builder = AdminClientBuilder::default();
 
-        if let Some(admin_endpoint) = profile.admin_endpoint() {
-            admin_client_builder = admin_client_builder.endpoint(admin_endpoint.parse()?);
+        if let Ok(Some(admin_endpoint)) =
+            self.get_admin_endpoint(cloud_endpoint.clone(), profile.admin_endpoint())
+        {
+            admin_client_builder = admin_client_builder.endpoint(admin_endpoint);
         }
 
         let admin_client: Arc<AdminClient> = Arc::new(
@@ -109,8 +172,8 @@ impl Context {
 
         let mut cloud_client_builder = CloudClientBuilder::default();
 
-        if let Some(cloud_endpoint) = profile.cloud_endpoint() {
-            cloud_client_builder = cloud_client_builder.endpoint(cloud_endpoint.parse()?);
+        if let Some(cloud_endpoint) = cloud_endpoint {
+            cloud_client_builder = cloud_client_builder.endpoint(cloud_endpoint);
         }
 
         let cloud_client = cloud_client_builder.build(CloudClientConfig {

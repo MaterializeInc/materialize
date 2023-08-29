@@ -9,7 +9,6 @@
 
 
 from math import ceil, floor
-from typing import List
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -39,7 +38,7 @@ class FastPathFilterNoIndex(FastPath):
     SCALE = 7
     FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -70,7 +69,7 @@ class MFPPushdown(Scenario):
     SCALE = 7
     FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -96,7 +95,7 @@ true
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -140,7 +139,7 @@ true
 class FastPathOrderByLimit(FastPath):
     """Benchmark the case SELECT * FROM materialized_view ORDER BY <key> LIMIT <i>"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -245,7 +244,7 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -375,7 +374,7 @@ true
 
 
 class CountDistinct(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -403,7 +402,7 @@ true
 
 
 class MinMax(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -434,7 +433,7 @@ class MinMaxMaintained(Dataflow):
     """Benchmark MinMax as an indexed view, which renders a dataflow for incremental
     maintenance, in contrast with one-shot SELECT processing"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -465,7 +464,7 @@ true
 
 
 class GroupBy(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -496,7 +495,7 @@ class GroupByMaintained(Dataflow):
     """Benchmark GroupBy as an indexed view, which renders a dataflow for incremental
     maintenance, in contrast with one-shot SELECT processing"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -585,7 +584,7 @@ class CreateIndex(Dataflow):
     it takes for a SELECT query that would use the index to return rows.
     """
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -620,7 +619,7 @@ class CreateIndex(Dataflow):
 
 
 class DeltaJoin(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -650,7 +649,7 @@ class DeltaJoinMaintained(Dataflow):
     empty frontier is not emitted, in contrast with one-shot SELECT processing based on data
     initialized as a constant view"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -679,7 +678,7 @@ class DeltaJoinMaintained(Dataflow):
 
 
 class DifferentialJoin(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -750,7 +749,7 @@ class Finish(Scenario):
 class FinishOrderByLimit(Finish):
     """Benchmark ORDER BY + LIMIT without the benefit of an index"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -963,7 +962,7 @@ class KafkaRestartBig(ScenarioBig):
 
     SCALE = 8
 
-    def shared(self) -> List[Action]:
+    def shared(self) -> list[Action]:
         return [
             TdAction("$ kafka-create-topic topic=kafka-recovery-big partitions=8"),
             # Ingest 10 ** SCALE records
@@ -1035,7 +1034,7 @@ class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
     source but rather just a non-memory-consuming view on top of it.
     """
 
-    def shared(self) -> List[Action]:
+    def shared(self) -> list[Action]:
         return [
             TdAction(
                 """

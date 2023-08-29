@@ -9,7 +9,7 @@
 
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Sequence, Set, Type, TypeVar, Union
+from typing import Optional, Sequence, TypeVar, Union
 
 from materialize.mzcompose import Composition
 
@@ -29,7 +29,7 @@ class Capability:
 
 
 T = TypeVar("T", bound=Capability)
-ActionOrFactory = Union[Type["Action"], "ActionFactory"]
+ActionOrFactory = Union[type["Action"], "ActionFactory"]
 
 
 class Capabilities:
@@ -52,20 +52,20 @@ class Capabilities:
             cap for cap in self._capabilities if not cap == capability
         ]
 
-    def _remove(self, capabilities: Set[Type[T]]) -> None:
+    def _remove(self, capabilities: set[type[T]]) -> None:
         """Remove all existing capabilities of the specified types."""
 
         self._capabilities = [
             cap for cap in self._capabilities if type(cap) not in capabilities
         ]
 
-    def provides(self, capability: Type[T]) -> bool:
+    def provides(self, capability: type[T]) -> bool:
         """Report whether any capability of the specified type exists."""
         return len(self.get(capability)) > 0
 
-    def get(self, capability: Type[T]) -> List[T]:
+    def get(self, capability: type[T]) -> list[T]:
         """Get all capabilities of the specified type."""
-        matches: List[T] = [
+        matches: list[T] = [
             # NOTE: unfortunately pyright can't handle this
             cap
             for cap in self._capabilities
@@ -74,7 +74,7 @@ class Capabilities:
         return matches
 
     def get_free_capability_name(
-        self, capability: Type[T], max_objects: int
+        self, capability: type[T], max_objects: int
     ) -> Optional[str]:
         all_object_names = [
             capability.format_str().format(i) for i in range(0, max_objects)
@@ -101,15 +101,15 @@ class Action:
         pass
 
     @classmethod
-    def requires(cls) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
+    def requires(cls) -> Union[set[type[Capability]], list[set[type[Capability]]]]:
         """Compute the capability classes that this action requires."""
         return set()
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         """Compute the capability classes that this action will make unavailable."""
         return set()
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         """Compute the capabilities that this action will make available."""
         return []
 
@@ -129,20 +129,20 @@ class Action:
 class ActionFactory:
     """Base class for Action Factories that return parameterized Actions to execute."""
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         assert False
 
     @classmethod
-    def requires(cls) -> Union[Set[Type[Capability]], List[Set[Type[Capability]]]]:
+    def requires(cls) -> Union[set[type[Capability]], list[set[type[Capability]]]]:
         """Compute the capability classes that this Action Factory requires."""
         return set()
 
 
 class Scenario:
-    def bootstrap(self) -> List[ActionOrFactory]:
+    def bootstrap(self) -> list[ActionOrFactory]:
         return []
 
-    def config(self) -> Dict[ActionOrFactory, float]:
+    def config(self) -> dict[ActionOrFactory, float]:
         assert False
 
 
@@ -159,7 +159,7 @@ class Test:
             actions: The number of actions to generate.
         """
         self._scenario = scenario
-        self._actions: List[Action] = []
+        self._actions: list[Action] = []
         self._capabilities = Capabilities()
         self._config = self._scenario.config()
         self._max_execution_time = max_execution_time
@@ -201,7 +201,7 @@ class Test:
 
     def _pick_action_or_factory(self) -> ActionOrFactory:
         """Select the next Action to run in the Test"""
-        actions_or_factories: List[ActionOrFactory] = []
+        actions_or_factories: list[ActionOrFactory] = []
         class_weights = []
 
         for action_or_factory in self._config.keys():
@@ -209,7 +209,7 @@ class Test:
 
             # We do not drill down if it is an ActionFactory
             # If it is an Action, drill down for any children
-            subclasses: List[ActionOrFactory] = (
+            subclasses: list[ActionOrFactory] = (
                 [action_or_factory]
                 if isinstance(action_or_factory, ActionFactory)
                 else self._all_subclasses(action_or_factory)
@@ -235,7 +235,7 @@ class Test:
     def _can_run(self, action: ActionOrFactory) -> bool:
         requires = action.requires()
 
-        if isinstance(requires, Set):
+        if isinstance(requires, set):
             return all(self._capabilities.provides(req) for req in requires)
         else:
             for one_alternative in requires:
@@ -243,7 +243,7 @@ class Test:
                     return True
             return False
 
-    def _all_subclasses(self, cls: Type[Action]) -> List[ActionOrFactory]:
+    def _all_subclasses(self, cls: type[Action]) -> list[ActionOrFactory]:
         """Return all Actions that are a subclass of the given cls."""
         children = [c for c in cls.__subclasses__() if not c.require_explicit_mention()]
         if len(children) == 0:

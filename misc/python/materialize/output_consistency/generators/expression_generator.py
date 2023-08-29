@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
@@ -44,7 +44,7 @@ FIRST_ARG_INDEX = 0
 
 class ArgContext:
     def __init__(self) -> None:
-        self.args: List[Expression] = []
+        self.args: list[Expression] = []
         self.contains_aggregation = False
 
     def append(self, arg: Expression) -> None:
@@ -72,14 +72,14 @@ class ExpressionGenerator:
         self.config = config
         self.randomized_picker = randomized_picker
         self.input_data = input_data
-        self.selectable_operations: List[DbOperationOrFunction] = []
-        self.operation_weights: List[float] = []
-        self.operation_weights_no_aggregates: List[float] = []
-        self.operations_by_return_type_category: Dict[
-            DataTypeCategory, List[DbOperationOrFunction]
+        self.selectable_operations: list[DbOperationOrFunction] = []
+        self.operation_weights: list[float] = []
+        self.operation_weights_no_aggregates: list[float] = []
+        self.operations_by_return_type_category: dict[
+            DataTypeCategory, list[DbOperationOrFunction]
         ] = dict()
-        self.types_with_values_by_category: Dict[
-            DataTypeCategory, List[DataTypeWithValues]
+        self.types_with_values_by_category: dict[
+            DataTypeCategory, list[DataTypeWithValues]
         ] = dict()
         self._initialize_operations()
         self._initialize_types()
@@ -203,7 +203,7 @@ class ExpressionGenerator:
 
         return ValueStorageLayout.VERTICAL
 
-    def _contains_aggregate_arg(self, args: List[Expression]) -> bool:
+    def _contains_aggregate_arg(self, args: list[Expression]) -> bool:
         for arg in args:
             if arg.is_aggregate:
                 return True
@@ -216,7 +216,7 @@ class ExpressionGenerator:
         storage_layout: ValueStorageLayout,
         nesting_level: int,
         try_number: int = 1,
-    ) -> List[Expression]:
+    ) -> list[Expression]:
         number_of_args = self.randomized_picker.random_number(
             operation.min_param_count, operation.max_param_count
         )
@@ -394,7 +394,7 @@ class ExpressionGenerator:
 
     def _get_data_type_values_of_category(
         self, param: OperationParam, arg_context: ArgContext
-    ) -> List[DataTypeWithValues]:
+    ) -> list[DataTypeWithValues]:
         category = param.resolve_type_category(arg_context.args)
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
@@ -425,7 +425,7 @@ class ExpressionGenerator:
         arg_context: ArgContext,
         must_use_aggregation: bool,
         allow_aggregation: bool,
-    ) -> List[DbOperationOrFunction]:
+    ) -> list[DbOperationOrFunction]:
         category = param.resolve_type_category(arg_context.args)
         suitable_operations = self._get_all_operations_of_category(param, category)
         if must_use_aggregation:
@@ -437,7 +437,7 @@ class ExpressionGenerator:
 
     def _get_all_operations_of_category(
         self, param: OperationParam, category: DataTypeCategory
-    ) -> List[DbOperationOrFunction]:
+    ) -> list[DbOperationOrFunction]:
         if category == DataTypeCategory.ANY:
             return self.input_data.all_operation_types
 
@@ -446,24 +446,24 @@ class ExpressionGenerator:
         return self.operations_by_return_type_category.get(category, [])
 
     def _get_without_aggregate_operations(
-        self, operations: List[DbOperationOrFunction]
-    ) -> List[DbOperationOrFunction]:
+        self, operations: list[DbOperationOrFunction]
+    ) -> list[DbOperationOrFunction]:
         return self._get_operations_with_filter(
             operations, lambda op: not op.is_aggregation
         )
 
     def _get_only_aggregate_operations(
-        self, operations: List[DbOperationOrFunction]
-    ) -> List[DbOperationOrFunction]:
+        self, operations: list[DbOperationOrFunction]
+    ) -> list[DbOperationOrFunction]:
         return self._get_operations_with_filter(
             operations, lambda op: op.is_aggregation
         )
 
     def _get_operations_with_filter(
         self,
-        operations: List[DbOperationOrFunction],
+        operations: list[DbOperationOrFunction],
         op_filter: Callable[[DbOperationOrFunction], bool],
-    ) -> List[DbOperationOrFunction]:
+    ) -> list[DbOperationOrFunction]:
         matching_operations = []
         for operation in operations:
             if op_filter(operation):
@@ -472,8 +472,8 @@ class ExpressionGenerator:
         return matching_operations
 
     def _get_operation_weights(
-        self, operations: List[DbOperationOrFunction]
-    ) -> List[float]:
+        self, operations: list[DbOperationOrFunction]
+    ) -> list[float]:
         weights = []
 
         for operation in operations:

@@ -16,9 +16,12 @@ necessary to support this repository are implemented.
 """
 
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Optional
 
-import semver
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version  # type: ignore
 import toml
 
 from materialize import git
@@ -54,12 +57,12 @@ class Crate:
         with open(path / "Cargo.toml") as f:
             config = toml.load(f)
         self.name = config["package"]["name"]
-        self.version = semver.VersionInfo.parse(config["package"]["version"])
+        self.version = Version.parse(config["package"]["version"])
         self.features = config.get("features", {})
         self.path = path
-        self.path_build_dependencies: Set[str] = set()
-        self.path_dev_dependencies: Set[str] = set()
-        self.path_dependencies: Set[str] = set()
+        self.path_build_dependencies: set[str] = set()
+        self.path_dev_dependencies: set[str] = set()
+        self.path_dependencies: set[str] = set()
         for (dep_type, field) in [
             ("build-dependencies", self.path_build_dependencies),
             ("dev-dependencies", self.path_dev_dependencies),
@@ -97,7 +100,7 @@ class Crate:
             for p in (path / "examples").glob("*/main.rs"):
                 self.examples.append(p.parent.stem)
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         """Compute the files that can impact the compilation of this crate.
 
         Note that the returned list may have false positives (i.e., include
@@ -144,7 +147,7 @@ class Workspace:
 
         workspace_config = config["workspace"]
 
-        self.crates: Dict[str, Crate] = {}
+        self.crates: dict[str, Crate] = {}
         for path in workspace_config["members"]:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate
@@ -203,7 +206,7 @@ class Workspace:
 
     def transitive_path_dependencies(
         self, crate: Crate, dev: bool = False
-    ) -> Set[Crate]:
+    ) -> set[Crate]:
         """Collects the transitive path dependencies of the requested crate.
 
         Note that only _path_ dependencies are collected. Other types of

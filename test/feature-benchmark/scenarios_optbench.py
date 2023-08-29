@@ -10,7 +10,7 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Any, Optional
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -52,7 +52,7 @@ class OptbenchRun(MeasurementSource):
         self._optbench_scenario = optbench_scenario
         self._query = query
 
-    def run(self, executor: Optional[Executor] = None) -> List[Timestamp]:
+    def run(self, executor: Optional[Executor] = None) -> list[Timestamp]:
         assert not (executor is None and self._executor is None)
         assert not (executor is not None and self._executor is not None)
         e = executor or self._executor
@@ -73,7 +73,9 @@ class OptbenchRun(MeasurementSource):
         return timestamps
 
 
-def name_with_query(cls: Type["OptbenchTPCH"], num: int, params_dict: Dict) -> str:
+def name_with_query(
+    cls: type["OptbenchTPCH"], num: int, params_dict: dict[str, Any]
+) -> str:
     return f"OptbenchTPCHQ{params_dict['QUERY']:02d}"
 
 
@@ -85,7 +87,7 @@ class OptbenchTPCH(Scenario):
 
     QUERY = 1
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [OptbenchInit("tpch")]
 
     def benchmark(self) -> MeasurementSource:

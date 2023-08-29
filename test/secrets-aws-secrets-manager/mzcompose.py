@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 import boto3
 
@@ -143,7 +143,7 @@ def workflow_default(c: Composition) -> None:
         ],
     )
 
-    def list_secrets() -> Dict[str, Dict[str, Any]]:
+    def list_secrets() -> dict[str, dict[str, Any]]:
         return {
             secret["Name"]: secret for secret in sm_client.list_secrets()["SecretList"]
         }

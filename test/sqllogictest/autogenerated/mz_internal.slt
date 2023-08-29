@@ -674,5 +674,6 @@ mz_statement_execution_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys

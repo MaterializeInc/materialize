@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from typing import List, Optional
+from typing import Optional
 
 from materialize import MZ_ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
@@ -34,10 +34,10 @@ class CloudtestApplicationBase(Application):
         self.create_resources()
         self.wait_resource_creation_completed()
 
-    def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
+    def get_resources(self, log_filter: Optional[str]) -> list[K8sResource]:
         raise NotImplementedError
 
-    def get_images(self) -> List[str]:
+    def get_images(self) -> list[str]:
         raise NotImplementedError
 
     def wait_resource_creation_completed(self) -> None:

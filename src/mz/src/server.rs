@@ -11,12 +11,11 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use axum::{
     extract::Query,
-    response::IntoResponse,
+    response::{Html, IntoResponse, Response},
     routing::{get, IntoMakeService},
     Router, Server,
 };
 use mz_frontegg_auth::AppPassword;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
@@ -30,17 +29,35 @@ struct BrowserAPIToken {
     secret: String,
 }
 
+// Please update this link if the logo location changes in the future.
+const LOGO_URL: &str = "https://materialize.com/svgs/brand-guide/materialize-purple-mark.svg";
+
+/// Produces an HTML string formatted
+/// with a message centered in the middle of the page
+/// and Materialize logo on top
+fn format_as_html_message(msg: &str) -> Html<String> {
+    Html(String::from(&format!(" \
+        <body style=\"margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f0f0;\">
+            <div style=\"text-align: center; padding: 100px; background-color: #ffffff; border-radius: 10px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);\"> \
+                <img src=\"{}\"> \
+                <h2 style=\"padding-top: 20px; font-family: Inter, Arial, sans-serif;\">{}</h2> \
+            </div>
+        </body>
+    ", LOGO_URL, msg)))
+}
+
 /// Request handler for the server waiting the browser API token creation
 /// Axum requires the handler be async even though we don't await
 #[allow(clippy::unused_async)]
 async fn request(
     Query(BrowserAPIToken { secret, client_id }): Query<BrowserAPIToken>,
     tx: UnboundedSender<Result<AppPassword, Error>>,
-) -> impl IntoResponse {
+) -> Response {
     if secret.len() == 0 && client_id.len() == 0 {
         tx.send(Err(Error::LoginOperationCanceled))
             .unwrap_or_else(|_| panic!("Error handling login details."));
-        return (StatusCode::OK, "Login canceled. You can now close the tab.");
+        return format_as_html_message("Login canceled. You can now close the tab.")
+            .into_response();
     }
 
     let client_id = client_id.parse::<Uuid>();
@@ -52,14 +69,14 @@ async fn request(
         };
         tx.send(Ok(app_password))
             .unwrap_or_else(|_| panic!("Error handling login details."));
-        (StatusCode::OK, "You can now close the tab.")
+        format_as_html_message("You can now close the tab.").into_response()
     } else {
         tx.send(Err(Error::InvalidAppPassword))
             .unwrap_or_else(|_| panic!("Error handling login details."));
-        (
-            StatusCode::OK,
+        format_as_html_message(
             "Invalid credentials. Please, try again or communicate with support.",
         )
+        .into_response()
     }
 }
 

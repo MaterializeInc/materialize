@@ -19,7 +19,7 @@ threshold = 0.5
 
 
 def main() -> None:
-    conn = pg8000.connect(database="pstoev", password="pstoev", user=None)
+    conn = pg8000.connect(database="pstoev", password="pstoev")
     fitness_func = AllPartsEssential(conn=conn)
 
     for query in sys.stdin:

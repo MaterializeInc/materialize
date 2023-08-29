@@ -302,6 +302,44 @@ mod tests {
 
         let output = output_to_string(binding);
         assert!(output.trim() == expected_command_output.trim());
+
+        let valid_test_names = ["ValidName", "also_valid", "1234"];
+
+        valid_test_names.iter().for_each(|name| {
+            // The test will fail because the profile does not exist.
+            // What we want to corroborate here is that the name is valid.
+            // If `mz` says the profile does not exist, it means that
+            // the validation went okay.
+            let binding = cmd()
+                .arg("profile")
+                .arg("--profile")
+                .arg(name)
+                .arg("config")
+                .arg("list")
+                .assert()
+                .failure();
+
+            let output = output_to_string(binding);
+            assert!(output.contains(&format!(
+                "Error: The profile '{}' is missing in the configuration file.",
+                name
+            )));
+        });
+
+        let invalid_test_names = ["-Invalid", "also invalid", "Valid-Name_123"];
+
+        invalid_test_names.iter().for_each(|name| {
+            let binding = cmd()
+            .arg("profile")
+            .arg(&format!("--profile=\"{}\"", name))
+            .arg("config")
+            .arg("list")
+            .assert()
+            .failure();
+
+            let output = String::from_utf8_lossy(&binding.get_output().stderr).to_string();
+            assert!(output.contains("The profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes."));
+        });
     }
 
     /// TODO: Re-enable after understanding how to get an CI app-password, admin endpoint and cloud endpoint.
@@ -310,16 +348,8 @@ mod tests {
     #[ignore]
     fn test_e2e() {
         init_config_file(false);
-        // Set the admin-endpoint and cloud-endpoint
-        cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("set")
-            .arg("admin-endpoint")
-            .arg(get_admin_endpoint())
-            .assert()
-            .success();
 
+        // Set the cloud-endpoint first, and later the admin-endpoint
         cmd()
             .arg("profile")
             .arg("config")
@@ -341,6 +371,16 @@ mod tests {
         let output = output_to_string(binding);
 
         assert!(output.trim() == "aws/us-east-1");
+
+        // Set the admin-endpoint
+        cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("set")
+            .arg("admin-endpoint")
+            .arg(get_admin_endpoint())
+            .assert()
+            .success();
 
         // Assert `mz profile config set region`
         cmd()

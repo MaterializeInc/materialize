@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
 
 from kubernetes.client import (
     V1Container,
@@ -89,7 +88,7 @@ class PostgresDeployment(K8sDeployment):
 
 def postgres_resources(
     namespace: str = DEFAULT_K8S_NAMESPACE,
-) -> List[K8sResource]:
+) -> list[K8sResource]:
     return [
         PostgresService(namespace),
         PostgresDeployment(namespace),

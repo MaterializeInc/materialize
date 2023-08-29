@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
@@ -21,7 +20,7 @@ class MzStart(Action):
     """Starts a Mz instance (all components are running in the same container)."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -41,7 +40,7 @@ class MzStart(Action):
                 print_statement=False,
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [MzIsRunning()]
 
 
@@ -49,13 +48,13 @@ class MzStop(Action):
     """Stops the entire Mz instance (all components are running in the same container)."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
         c.kill("materialized")
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {MzIsRunning}
 
 
@@ -63,7 +62,7 @@ class MzRestart(Action):
     """Restarts the entire Mz instance (all components are running in the same container)."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -75,7 +74,7 @@ class KillClusterd(Action):
     """Kills the clusterd processes in the environmentd container. The process orchestrator will restart them."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, ViewExists}
 
     def run(self, c: Composition) -> None:

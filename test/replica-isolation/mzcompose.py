@@ -10,7 +10,9 @@
 import time
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
+
+from pg8000 import Cursor  # type: ignore
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -68,7 +70,7 @@ class AllowCompactionCheck:
                 WHERE cluster_id = mz_clusters.id AND mz_clusters.name = '{cluster}'
                 AND mz_cluster_replicas.name = '{replica}'""",
         )
-        return str(cursor.fetchone()[0])
+        return str(get_single_value_from_cursor(cursor))
 
     def cluster_id(self, c: Composition) -> str:
         cursor = c.sql_cursor()
@@ -76,7 +78,7 @@ class AllowCompactionCheck:
         cursor.execute(
             f"SELECT id FROM mz_clusters WHERE mz_clusters.name = '{cluster}'",
         )
-        return str(cursor.fetchone()[0])
+        return str(get_single_value_from_cursor(cursor))
 
     @staticmethod
     def _log_contains_id(log: str, the_id: str) -> bool:
@@ -121,7 +123,7 @@ class MaterializedView(AllowCompactionCheck):
                 WHERE object_id = id AND name = 'v3';
             """
         )
-        self.ids = [self._format_id(cursor.fetchone()[0])]
+        self.ids = [self._format_id(get_single_value_from_cursor(cursor))]
 
     def print_error(self) -> None:
         print(f"!! AllowCompaction not found for materialized view with id {self.ids}")
@@ -463,3 +465,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
         c.rm_volumes("mzdata")
+
+
+def get_single_value_from_cursor(cursor: Cursor) -> Any:
+    result = cursor.fetchone()
+    assert result is not None
+    return result[0]

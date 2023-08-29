@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import itertools
-from typing import List
 
 from materialize.output_consistency.input_data.operations.aggregate_operations_provider import (
     AGGREGATE_OPERATION_TYPES,
@@ -33,7 +32,7 @@ from materialize.output_consistency.input_data.operations.trigonometric_operatio
 )
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
 
-ALL_OPERATION_TYPES: List[DbOperationOrFunction] = list(
+ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
     itertools.chain(
         GENERIC_OPERATION_TYPES,
         AGGREGATE_OPERATION_TYPES,

@@ -1651,3 +1651,9 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_dangerous_functions = true
 ----
 COMPLETE 0
+
+query error function textrecv\(\) does not exist
+SELECT textrecv()
+
+query error cannot call function with arguments of type internal
+SELECT textrecv('abc')

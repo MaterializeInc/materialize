@@ -23,6 +23,8 @@ use crate::{context::RegionContext, error::Error};
 
 /// Represents the structure containing the args to run the SQL shell.
 pub struct RunArgs {
+    /// The cluster name to use in the connection.
+    pub cluster: Option<String>,
     /// Contains all the arguments to pass into the shell.
     /// Take into account that they are added at the end of the statement.
     pub psql_args: Vec<String>,
@@ -30,15 +32,19 @@ pub struct RunArgs {
 
 /// Creates an interactive SQL shell connection to the profile context environment.
 /// The SQL shell command is running `psql` behind the scenes.
-pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Result<(), Error> {
+pub async fn run(
+    cx: &mut RegionContext,
+    RunArgs { cluster, psql_args }: RunArgs,
+) -> Result<(), Error> {
     let sql_client = cx.sql_client();
     let claims = cx.admin_client().claims();
     let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
-    println!("authenticated using profile '{}'", cx.config_file().profile() );
-    // println!("connected to cluster '{}'", cluster);
-    let _error = sql_client.shell(&region_info, email).args(psql_args).exec();
+    let _error = sql_client
+        .shell(&region_info, email, cluster)
+        .args(psql_args)
+        .exec();
 
     Ok(())
 }

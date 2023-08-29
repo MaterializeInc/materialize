@@ -242,7 +242,7 @@ impl Client {
     }
 
     /// Executes a single SQL statement that returns rows as the
-    /// `mz_introspection` user.
+    /// `mz_support` user.
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;

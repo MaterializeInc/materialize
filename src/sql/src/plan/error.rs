@@ -209,6 +209,7 @@ pub enum PlanError {
     WebhookValidationDoesNotUseColumns,
     WebhookValidationNonDeterministic,
     PgSourceUserSpecifiedDetails,
+    InternalFunctionCall,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -263,6 +264,7 @@ impl PlanError {
                     itertools::join(items, ", ")
                 ))
             }
+            Self::InternalFunctionCall => Some("This function is for the internal use of the database system and cannot be called directly.".into()),
             _ => None,
         }
     }
@@ -564,6 +566,7 @@ impl fmt::Display for PlanError {
             Self::PgSourceUserSpecifiedDetails => f.write_str(
                 "must not specify DETAILS option in CREATE SOURCE"
             ),
+            Self::InternalFunctionCall => f.write_str("cannot call function with arguments of type internal"),
         }
     }
 }
