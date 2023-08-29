@@ -105,7 +105,7 @@ use mz_ore::{
     task::{self, RuntimeExt},
 };
 use mz_pgrepr::UInt8;
-use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -688,6 +688,47 @@ fn test_http_sql() {
 
     datadriven::walk("tests/testdata/http", |f| {
         let server = util::start_server(util::Config::default()).unwrap();
+
+        // Grant all privileges to default http user.
+        // TODO(jkosh44) The HTTP endpoint has a special default user while the WS endpoint just
+        //  uses the "materialize" role. This is probably wrong. They should either both user
+        //  materialize, both use the same special default user, each have their own special
+        //  default user.
+        {
+            let mut super_user = server
+                .pg_config_internal()
+                .user(&SYSTEM_USER.name)
+                .connect(postgres::NoTls)
+                .unwrap();
+            super_user
+                .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON CLUSTER default TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+        }
+
         let ws_url = server.ws_addr();
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",

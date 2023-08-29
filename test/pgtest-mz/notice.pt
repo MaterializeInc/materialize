@@ -220,6 +220,10 @@ CommandComplete {"tag":"CREATE DATABASE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for CLUSTER \"default\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"d4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
@@ -280,6 +284,10 @@ CommandComplete {"tag":"CREATE CLUSTER"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for CLUSTER \"default\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for DATABASE \"materialize\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SCHEMA \"materialize.public\""}]}
+NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"01000"},{"typ":"M","value":"no privileges could be revoked for SYSTEM"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"c4\" has been dropped"}]}
 CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}
@@ -301,7 +309,6 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"RBAC is disabled so no role attributes or object ownership will be considered when executing statements"}]}
 CommandComplete {"tag":"CREATE ROLE"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER \"foo\" does not exist, skipping"}]}
