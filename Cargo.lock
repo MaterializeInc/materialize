@@ -3368,7 +3368,6 @@ dependencies = [
  "once_cell",
  "open",
  "openssl-probe",
- "postgres-protocol",
  "reqwest",
  "rpassword",
  "security-framework",
