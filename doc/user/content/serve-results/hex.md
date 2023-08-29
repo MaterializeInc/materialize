@@ -29,10 +29,6 @@ This guide walks you through the steps required to use the collaborative data no
     Authentication type | Choose the **Password** option.
     Username            | Materialize user.
     Password            | App-specific password.
-
-    <!-- PENDING TO CHECK  -->
-    <!-- IF YES EXPLAIN WHAT SQLFLUFF IS -->
-    <!-- If you wish to use SQLFluff to format your SQL code, Materialize provides a configuration here. -->
 6. Click the **Create connection** button.
 
 ## Step 2. Execute and visualize a query
