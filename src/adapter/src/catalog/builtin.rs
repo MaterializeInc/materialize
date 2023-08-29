@@ -5150,6 +5150,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
+        Builtin::View(&MZ_SHOW_SOURCES),
+        Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
