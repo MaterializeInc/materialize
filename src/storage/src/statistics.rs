@@ -35,6 +35,8 @@ pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) bytes_received: IntCounterVec,
     pub(crate) envelope_state_bytes: UIntGaugeVec,
     pub(crate) envelope_state_count: UIntGaugeVec,
+    pub(crate) rehydration_finished: UIntGaugeVec,
+    pub(crate) rehydration_latency_seconds: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricsDefinitions {
@@ -75,6 +77,16 @@ impl SourceStatisticsMetricsDefinitions {
                 help: "The number of records in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
+            rehydration_finished: registry.register(metric!(
+                name: "mz_source_rehydration_finished",
+                help: "Whether or not the worker has finished rehydrating the source envelope state. This will be specific to the envelope in use.",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
+            rehydration_latency_seconds: registry.register(metric!(
+                name: "mz_source_rehydration_latency_seconds",
+                help: "The amount of time in seconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
         }
     }
 }
@@ -89,6 +101,8 @@ pub struct SourceStatisticsMetrics {
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) envelope_state_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rehydration_finished: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rehydration_latency_seconds: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -157,6 +171,24 @@ impl SourceStatisticsMetrics {
             envelope_state_count: metrics
                 .source_statistics
                 .envelope_state_count
+                .get_delete_on_drop_gauge(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard.clone(),
+                ]),
+            rehydration_finished: metrics
+                .source_statistics
+                .rehydration_finished
+                .get_delete_on_drop_gauge(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard.clone(),
+                ]),
+            rehydration_latency_seconds: metrics
+                .source_statistics
+                .rehydration_latency_seconds
                 .get_delete_on_drop_gauge(vec![
                     id.to_string(),
                     worker_id.to_string(),
@@ -302,6 +334,8 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     bytes_received: 0,
                     envelope_state_bytes: 0,
                     envelope_state_count: 0,
+                    rehydration_finished: false,
+                    rehydration_latency_seconds: 0,
                 },
                 SourceStatisticsMetrics::new(id, worker_id, metrics, parent_source_id, shard_id),
             ))),
@@ -423,6 +457,20 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
         };
         cur.1.envelope_state_count = value;
         cur.2.envelope_state_count.set(value);
+    }
+
+    /// Set the `rehydration_finished` stat to true.
+    pub fn mark_rehydration_finished(&self) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.rehydration_finished = true;
+        cur.2.rehydration_finished.set(1);
+    }
+
+    /// Set the `rehydration_latency_seconds` to the given value.
+    pub fn set_rehydration_latency_seconds(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.rehydration_latency_seconds = value;
+        cur.2.rehydration_latency_seconds.set(value);
     }
 }
 

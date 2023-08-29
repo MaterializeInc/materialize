@@ -2249,7 +2249,12 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
-        .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
+        .with_column("envelope_state_count", ScalarType::UInt64.nullable(false))
+        .with_column("rehydration_finished", ScalarType::Bool.nullable(false))
+        .with_column(
+            "rehydration_latency_seconds",
+            ScalarType::UInt64.nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
