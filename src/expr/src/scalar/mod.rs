@@ -1199,7 +1199,11 @@ impl MirScalarExpr {
                             }
                         } else if then == els {
                             *e = then.take();
-                        } else if then.is_literal_ok() && els.is_literal_ok() {
+                        } else if then.is_literal_ok()
+                            && els.is_literal_ok()
+                            && then.typ(column_types).scalar_type == ScalarType::Bool
+                            && els.typ(column_types).scalar_type == ScalarType::Bool
+                        {
                             match (then.as_literal(), els.as_literal()) {
                                 // Note: NULLs from the condition should not be propagated to the result
                                 // of the expression.

@@ -35,9 +35,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
-use mz_sql::session::user::{
-    ExternalUserMetadata, User, INTERNAL_USER_NAMES, INTROSPECTION_USER, SUPPORT_USER,
-};
+use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
@@ -126,7 +124,7 @@ where
             .await;
     }
 
-    let mut user = params.remove("user").unwrap_or_else(String::new);
+    let user = params.remove("user").unwrap_or_else(String::new);
 
     if internal {
         // The internal server can only be used to connect to the internal users.
@@ -231,11 +229,6 @@ where
             }
         }
     } else {
-        // TODO: remove once mz_introspection is no longer used
-        if user == INTROSPECTION_USER.name {
-            adapter_client.metrics().introspection_logins.inc();
-            user = SUPPORT_USER.name.clone();
-        }
         let session = adapter_client.new_session(
             conn.conn_id().clone(),
             User {

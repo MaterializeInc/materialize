@@ -13,7 +13,7 @@ from typing import Any, Generator, Optional
 
 import requests
 
-from materialize.cloudtest.config.environment_config import EnvironmentConfig
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint
 
 
@@ -31,157 +31,152 @@ def verbose_http_errors() -> Generator[None, None, None]:
         raise
 
 
-def get(
-    config: EnvironmentConfig,
-    base_url: str,
-    path: str,
-    timeout: int = 15,
-    use_token: bool = True,
-    client_cert: Optional[tuple[str, str]] = None,
-) -> requests.Response:
-    eprint(f"GET {base_url}{path}")
+class WebRequests:
+    def __init__(
+        self,
+        auth: Optional[AuthConfig],
+        base_url: str,
+        client_cert: Optional[tuple[str, str]] = None,
+    ):
+        self.auth = auth
+        self.base_url = base_url
+        self.client_cert = client_cert
 
-    def try_get() -> requests.Response:
-        with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
-            response = requests.get(
-                f"{base_url}{path}",
-                headers=headers,
-                timeout=timeout,
-                cert=client_cert,
-            )
-            response.raise_for_status()
-            return response
+    def get(
+        self,
+        path: str,
+        timeout: int = 15,
+    ) -> requests.Response:
+        eprint(f"GET {self.base_url}{path}")
 
-    try:
-        response = try_get()
-    except requests.exceptions.HTTPError as e:
-        if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+        def try_get() -> requests.Response:
+            with verbose_http_errors():
+                headers = self._create_headers(self.auth)
+                response = requests.get(
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    timeout=timeout,
+                    cert=self.client_cert,
+                )
+                response.raise_for_status()
+                return response
+
+        try:
             response = try_get()
-        else:
-            raise
+        except requests.exceptions.HTTPError as e:
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
+                response = try_get()
+            else:
+                raise
 
-    return response
+        return response
 
+    def post(
+        self,
+        path: str,
+        json: Any,
+        timeout: int = 15,
+    ) -> requests.Response:
+        eprint(f"POST {self.base_url}{path}")
 
-def post(
-    config: EnvironmentConfig,
-    base_url: str,
-    path: str,
-    json: Any,
-    timeout: int = 15,
-    use_token: bool = True,
-    client_cert: Optional[tuple[str, str]] = None,
-) -> requests.Response:
-    eprint(f"POST {base_url}{path}")
+        def try_post() -> requests.Response:
+            with verbose_http_errors():
+                headers = self._create_headers(self.auth)
+                response = requests.post(
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    json=json,
+                    timeout=timeout,
+                    cert=self.client_cert,
+                )
+                response.raise_for_status()
+                return response
 
-    def try_post() -> requests.Response:
-        with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
-            response = requests.post(
-                f"{base_url}{path}",
-                headers=headers,
-                json=json,
-                timeout=timeout,
-                cert=client_cert,
-            )
-            response.raise_for_status()
-            return response
-
-    try:
-        response = try_post()
-    except requests.exceptions.HTTPError as e:
-        if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+        try:
             response = try_post()
-        else:
-            raise
+        except requests.exceptions.HTTPError as e:
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
+                response = try_post()
+            else:
+                raise
 
-    return response
+        return response
 
+    def patch(
+        self,
+        path: str,
+        json: Any,
+        timeout: int = 15,
+    ) -> requests.Response:
+        eprint(f"PATCH {self.base_url}{path}")
 
-def patch(
-    config: EnvironmentConfig,
-    base_url: str,
-    path: str,
-    json: Any,
-    timeout: int = 15,
-    use_token: bool = True,
-    client_cert: Optional[tuple[str, str]] = None,
-) -> requests.Response:
-    eprint(f"PATCH {base_url}{path}")
+        def try_patch() -> requests.Response:
+            with verbose_http_errors():
+                headers = self._create_headers(self.auth)
+                response = requests.patch(
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    json=json,
+                    timeout=timeout,
+                    cert=self.client_cert,
+                )
+                response.raise_for_status()
+                return response
 
-    def try_patch() -> requests.Response:
-        with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
-            response = requests.patch(
-                f"{base_url}{path}",
-                headers=headers,
-                json=json,
-                timeout=timeout,
-                cert=client_cert,
-            )
-            response.raise_for_status()
-            return response
-
-    try:
-        response = try_patch()
-    except requests.exceptions.HTTPError as e:
-        if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+        try:
             response = try_patch()
-        else:
-            raise
+        except requests.exceptions.HTTPError as e:
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
+                response = try_patch()
+            else:
+                raise
 
-    return response
+        return response
 
+    def delete(
+        self,
+        path: str,
+        params: Any = None,
+        timeout: int = 15,
+    ) -> requests.Response:
+        eprint(f"DELETE {self.base_url}{path}")
 
-def delete(
-    config: EnvironmentConfig,
-    base_url: str,
-    path: str,
-    params: Any = None,
-    timeout: int = 15,
-    use_token: bool = True,
-    client_cert: Optional[tuple[str, str]] = None,
-) -> requests.Response:
-    eprint(f"DELETE {base_url}{path}")
+        def try_delete() -> requests.Response:
+            with verbose_http_errors():
+                headers = self._create_headers(self.auth)
+                response = requests.delete(
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    timeout=timeout,
+                    cert=self.client_cert,
+                    **(
+                        {
+                            "params": params,
+                        }
+                        if params is not None
+                        else {}
+                    ),
+                )
+                response.raise_for_status()
+                return response
 
-    def try_delete() -> requests.Response:
-        with verbose_http_errors():
-            headers = {}
-            if use_token:
-                headers["Authorization"] = f"Bearer {config.auth.token}"
-            response = requests.delete(
-                f"{base_url}{path}",
-                headers=headers,
-                timeout=timeout,
-                cert=client_cert,
-                **(
-                    {
-                        "params": params,
-                    }
-                    if params is not None
-                    else {}
-                ),
-            )
-            response.raise_for_status()
-            return response
-
-    try:
-        response = try_delete()
-    except requests.exceptions.HTTPError as e:
-        if use_token and e.response.status_code == 401:
-            config.refresh_auth()
+        try:
             response = try_delete()
-        else:
-            raise
+        except requests.exceptions.HTTPError as e:
+            if self.auth and e.response.status_code == 401:
+                self.auth.refresh()
+                response = try_delete()
+            else:
+                raise
 
-    return response
+        return response
+
+    def _create_headers(self, auth: Optional[AuthConfig]) -> dict[str, Any]:
+        headers = {}
+        if auth:
+            headers["Authorization"] = f"Bearer {auth.token}"
+
+        return headers
