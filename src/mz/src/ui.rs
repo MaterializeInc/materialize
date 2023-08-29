@@ -65,6 +65,17 @@ impl OutputFormatter {
         }
     }
 
+    /// Outputs a prefix warning.
+    pub fn output_warning(&self, msg: &str) -> Result<(), Error> {
+        if self.no_color {
+            println!("** Warning ** {}", msg);
+        } else {
+            println!("** \x1b[93mWarning\x1b[0m ** {}", msg);
+        }
+
+        Ok(())
+    }
+
     /// Outputs a single value.
     pub fn output_scalar(&self, scalar: Option<&str>) -> Result<(), Error> {
         match self.output_format {

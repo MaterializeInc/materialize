@@ -96,4 +96,4 @@ pub mod error;
 mod server;
 mod sql_client;
 pub mod ui;
-mod versioner;
+mod upgrader;
