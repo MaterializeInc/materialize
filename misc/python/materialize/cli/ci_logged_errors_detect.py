@@ -65,8 +65,8 @@ ERROR_RE = re.compile(
 
 
 class KnownIssue:
-    def __init__(self, regex: str, apply_to: Optional[str], info: Any):
-        self.regex = re.compile(regex)
+    def __init__(self, regex: re.Pattern[Any], apply_to: Optional[str], info: Any):
+        self.regex = regex
         self.apply_to = apply_to
         self.info = info
 
@@ -248,20 +248,21 @@ def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
         matches = CI_RE.findall(issue["body"])
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
         for match in matches:
+            try:
+                regex_pattern = re.compile(match.strip())
+            except:
+                unknown_errors.append(
+                    "[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"
+                )
+                continue
+
             if matches_apply_to:
                 for match_apply_to in matches_apply_to:
-                    try:
-                        known_issues.append(
-                            KnownIssue(
-                                match.strip(), match_apply_to.strip().lower(), issue
-                            )
-                        )
-                    except:
-                        unknown_errors.append(
-                            "[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"
-                        )
+                    known_issues.append(
+                        KnownIssue(regex_pattern, match_apply_to.strip().lower(), issue)
+                    )
             else:
-                known_issues.append(KnownIssue(match.strip(), None, issue))
+                known_issues.append(KnownIssue(regex_pattern, None, issue))
 
     return (known_issues, unknown_errors)
 

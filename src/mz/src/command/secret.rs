@@ -64,7 +64,7 @@ pub async fn create(
     let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
-    let mut client = cx.sql_client().shell(&region_info, email);
+    let mut client = cx.sql_client().shell(&region_info, email, None);
 
     // Build the queries to create the secret.
     let mut commands: Vec<String> = vec![];

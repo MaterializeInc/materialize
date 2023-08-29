@@ -11,7 +11,7 @@
 //!
 //! Every Materialize deployment has a pre-installed [`mz_introspection`] cluster, which
 //! has several indexes to speed up common introspection queries. We also have a special
-//! `mz_introspection` role, which can be used by support teams to diagnose a deployment.
+//! `mz_support` role, which can be used by support teams to diagnose a deployment.
 //! For each of these use cases, we have some special restrictions we want to apply. The
 //! logic around these restrictions is defined here.
 //!
@@ -228,7 +228,7 @@ pub fn check_cluster_restrictions(
     }
 }
 
-/// TODO(jkosh44) This function will verify the privileges for the mz_introspection user.
+/// TODO(jkosh44) This function will verify the privileges for the mz_support user.
 ///  All of the privileges are hard coded into this function. In the future if we ever add
 ///  a more robust privileges framework, then this function should be replaced with that
 ///  framework.
@@ -245,7 +245,7 @@ pub fn user_privilege_hack(
     match plan {
         // **Special Cases**
         //
-        // Generally we want to prevent the mz_introspection user from being able to
+        // Generally we want to prevent the mz_support user from being able to
         // access user objects. But there are a few special cases where we permit
         // limited access, which are:
         //   * SHOW CREATE ... commands, which are very useful for debugging, see

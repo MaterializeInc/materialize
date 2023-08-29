@@ -43,7 +43,12 @@ impl Client {
     }
 
     /// Build the PSQL url to connect into a environment
-    fn build_psql_url(&self, region_info: &RegionInfo, email: String) -> Url {
+    fn build_psql_url(
+        &self,
+        region_info: &RegionInfo,
+        email: String,
+        cluster: Option<String>,
+    ) -> Url {
         let mut url = Url::parse(&format!("postgres://{}", region_info.sql_address))
             .expect("url known to be valid");
         url.set_username(&email).unwrap();
@@ -57,14 +62,24 @@ impl Client {
             url.query_pairs_mut().append_pair("sslmode", "require");
         }
 
+        if let Some(cluster) = cluster {
+            url.query_pairs_mut()
+                .append_pair("options", &format!("--cluster={}", cluster));
+        }
+
         url
     }
 
     /// Returns a sql shell command associated with this context
-    pub fn shell(&self, region_info: &RegionInfo, email: String) -> Command {
+    pub fn shell(
+        &self,
+        region_info: &RegionInfo,
+        email: String,
+        cluster: Option<String>,
+    ) -> Command {
         let mut command = Command::new("psql");
         command
-            .arg(self.build_psql_url(region_info, email).as_str())
+            .arg(self.build_psql_url(region_info, email, cluster).as_str())
             .env("PGPASSWORD", &self.app_password.to_string())
             .env("PGAPPNAME", PG_APPLICATION_NAME);
 
@@ -97,7 +112,7 @@ impl Client {
                 .args(vec![
                     "-q",
                     "-d",
-                    self.build_psql_url(region_info, email).as_str(),
+                    self.build_psql_url(region_info, email, None).as_str(),
                 ])
                 .env("PGPASSWORD", &self.app_password.to_string())
                 .env("PGAPPNAME", PG_APPLICATION_NAME)

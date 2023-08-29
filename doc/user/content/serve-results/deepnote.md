@@ -41,12 +41,18 @@ This guide walks you through the steps required to use the collaborative data no
 
 2. Inside the block, select the new **Materialize** integration and paste the following query:
     ```sql
-    SELECT number, row_num
+    SELECT
+        number,
+        row_num
     FROM (
-      SELECT power(series_number, 2) as number, ROW_NUMBER() OVER
-        (ORDER BY series_number, series_number DESC) as row_num
-      FROM (
-        SELECT generate_series(0, 1000) as series_number
+        SELECT
+            power(series_number, 2) AS number,
+            row_number()
+                OVER
+                (ORDER BY series_number ASC, series_number DESC)
+            AS row_num
+        FROM (
+            SELECT generate_series(0, 1000) AS series_number
         ) AS subquery
     );
     ```

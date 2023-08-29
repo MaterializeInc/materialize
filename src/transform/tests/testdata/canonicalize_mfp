@@ -23,7 +23,7 @@ build apply=CanonicalizeMfp
 (project
     (filter
         (map (get x) [(call_binary add_int64 #1 #2)])
-        [(call_binary add_int64 null #3)])
+        [(call_binary eq (call_binary add_int64 null #3) (5 Int32))])
      [#1])
 ----
 Project (#1)

@@ -14,8 +14,9 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Optional, Union
 
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint, retry
-from materialize.cloudtest.util.docker_env import docker_env
+from materialize.cloudtest.util.web_request import WebRequests
 
 
 @dataclass
@@ -55,6 +56,11 @@ class ControllerDefinition:
             raise RuntimeError("Endpoint not configured")
 
         return self.endpoint.base_url
+
+    def requests(
+        self, auth: Optional[AuthConfig], client_cert: Optional[tuple[str, str]] = None
+    ) -> WebRequests:
+        return WebRequests(auth, self.configured_base_url(), client_cert)
 
 
 def wait_for_connectable(
@@ -102,7 +108,7 @@ def parse_url(s: str) -> urllib.parse.ParseResult:
     return parsed
 
 
-def launch_controllers(controller_names: list[str]) -> None:
+def launch_controllers(controller_names: list[str], docker_env: dict[str, str]) -> None:
     try:
         subprocess.run(
             [
@@ -113,7 +119,7 @@ def launch_controllers(controller_names: list[str]) -> None:
             ],
             capture_output=True,
             check=True,
-            env=docker_env(),
+            env=docker_env,
         )
     except subprocess.CalledProcessError as e:
         eprint(e.returncode, e.stdout, e.stderr)
@@ -126,13 +132,13 @@ def wait_for_controllers(*endpoints: Endpoint) -> None:
         wait_for_connectable(endpoint.host_port)
 
 
-def cleanup_controllers() -> None:
+def cleanup_controllers(docker_env: dict[str, str]) -> None:
     try:
         subprocess.run(
             ["bin/compose", "down", "-v"],
             capture_output=True,
             check=True,
-            env=docker_env(),
+            env=docker_env,
         )
     except subprocess.CalledProcessError as e:
         eprint(e.returncode, e.stdout, e.stderr)

@@ -1600,7 +1600,7 @@ impl<'a> RunnerInner<'a> {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let addr = if matches!(user, Some("mz_system") | Some("mz_introspection")) {
+                    let addr = if matches!(user, Some("mz_system") | Some("mz_support")) {
                         self.internal_server_addr
                     } else {
                         self.server_addr

@@ -253,7 +253,8 @@ impl MirRelationExpr {
                             )
                         })?;
                     } else {
-                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
+                        write!(f, "{}Constant <empty>", ctx.indent)?;
+                        self.fmt_attributes(f, ctx)?;
                     }
                 }
                 Err(err) => {
