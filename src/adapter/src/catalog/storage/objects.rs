@@ -12,7 +12,8 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
 use crate::catalog::storage::{
-    DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey, SystemPrivilegesValue,
+    CommentValue, DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey,
+    SystemPrivilegesValue,
 };
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
@@ -20,12 +21,12 @@ use crate::catalog::{
 
 use super::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, ConfigKey, ConfigValue,
-    DatabaseKey, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, TimestampKey,
-    TimestampValue,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, ConfigKey,
+    ConfigValue, DatabaseKey, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, ItemKey, ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    SerializedReplicaConfig, SerializedReplicaLocation, SerializedReplicaLogging,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey,
+    TimestampKey, TimestampValue,
 };
 
 impl RustType<proto::ConfigKey> for ConfigKey {
@@ -525,6 +526,48 @@ impl RustType<proto::ItemValue> for ItemValue {
                 .into_rust_if_some("ItemValue::definition")?,
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::CommentKey> for CommentKey {
+    fn into_proto(&self) -> proto::CommentKey {
+        let sub_component = match &self.sub_component {
+            Some(pos) => Some(proto::comment_key::SubComponent::ColumnPos(
+                CastFrom::cast_from(*pos),
+            )),
+            None => None,
+        };
+        proto::CommentKey {
+            object: Some(self.object_id.into_proto()),
+            sub_component,
+        }
+    }
+
+    fn from_proto(proto: proto::CommentKey) -> Result<Self, TryFromProtoError> {
+        let sub_component = match proto.sub_component {
+            Some(proto::comment_key::SubComponent::ColumnPos(pos)) => {
+                Some(CastFrom::cast_from(pos))
+            }
+            None => None,
+        };
+        Ok(CommentKey {
+            object_id: proto.object.into_rust_if_some("CommentKey::object")?,
+            sub_component,
+        })
+    }
+}
+
+impl RustType<proto::CommentValue> for CommentValue {
+    fn into_proto(&self) -> proto::CommentValue {
+        proto::CommentValue {
+            comment: self.comment.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::CommentValue) -> Result<Self, TryFromProtoError> {
+        Ok(CommentValue {
+            comment: proto.comment,
         })
     }
 }

@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+# Enable comments.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_comment TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE a ( x int8, y text, z jsonb );
+
+statement ok
+COMMENT ON TABLE a IS 'foo_table';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u1  table  NULL  foo_table
+
+statement ok
+COMMENT ON COLUMN a.y IS 'load_bearing';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u1  table  NULL  foo_table
+u1  table  2  load_bearing
+
+statement ok
+CREATE TABLE b ( ts timestamptz );
+
+statement ok
+COMMENT ON COLUMN b.ts IS 'utc_timestamp';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u1  table  NULL  foo_table
+u1  table  2  load_bearing
+u2  table  1  utc_timestamp
+
+statement ok
+DROP TABLE a;
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u2  table  1  utc_timestamp
+
+statement ok
+COMMENT ON COLUMN b.ts IS NULL
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+
+statement error unknown catalog item 'c'
+COMMENT ON TABLE c IS 'does_not_exist';
+
+statement error column "b.does_not_exist" does not exist
+COMMENT ON COLUMN b.does_not_exist IS 'foo';
+
+statement ok
+CREATE VIEW c (col_1, col_2) AS VALUES ('a', 'b');
+
+statement ok
+COMMENT ON VIEW c IS 'this_is_a_view';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u3  view  NULL  this_is_a_view
+
+# We could support this, but don't right now.
+statement error COMMENT on view not yet supported
+COMMENT ON COLUMN c.col_1 IS 'this_will_work_one_day';

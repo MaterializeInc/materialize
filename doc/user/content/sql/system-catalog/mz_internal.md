@@ -1053,6 +1053,18 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
 
+### `mz_comments`
+
+The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+
+<!-- RELATION_SPEC mz_internal.mz_comments -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
+| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
+| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `comment`      | [`text`]    | The comment itself.                                                                          |
+
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean

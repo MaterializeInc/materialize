@@ -21,7 +21,8 @@ use mz_sql::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
-    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SystemObjectId,
+    CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    SystemObjectId,
 };
 use mz_sql::plan;
 use mz_sql::plan::{MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
@@ -266,6 +267,7 @@ pub fn generate_required_role_membership(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
@@ -380,6 +382,11 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan { replace, .. }) => replace
             .map(|id| vec![ObjectId::Item(id)])
             .unwrap_or_default(),
+        Plan::Comment(plan) => match plan.object_id {
+            CommentObjectId::Table(global_id) | CommentObjectId::View(global_id) => {
+                vec![ObjectId::Item(global_id)]
+            }
+        },
         // Do not need ownership of descendant objects.
         Plan::DropObjects(plan) => plan.referenced_ids.clone(),
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan { id, .. })
@@ -1140,7 +1147,8 @@ fn generate_required_privileges(
             new_role: _,
             reassign_ids: _,
         })
-        | Plan::SideEffectingFunc(_) => Vec::new(),
+        | Plan::SideEffectingFunc(_)
+        | Plan::Comment(_) => Vec::new(),
     }
 }
 

@@ -1176,6 +1176,20 @@ impl Coordinator {
         }
     }
 
+    pub(super) async fn sequence_comment_on(
+        &mut self,
+        session: &Session,
+        plan: plan::CommentPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::Comment {
+            object_id: plan.object_id,
+            sub_component: plan.sub_component,
+            comment: plan.comment,
+        };
+        self.catalog_transact(Some(session), vec![op]).await?;
+        Ok(ExecuteResponse::Comment)
+    }
+
     pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &mut Session,

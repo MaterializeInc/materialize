@@ -71,7 +71,9 @@ Cluster
 Clusters
 Coalesce
 Collate
+Column
 Columns
+Comment
 Commit
 Committed
 Compaction

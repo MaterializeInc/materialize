@@ -61,8 +61,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -115,6 +115,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
+    Comment(CommentPlan),
     DiscardTemp,
     DiscardAll,
     DropObjects(DropObjectsPlan),
@@ -217,6 +218,7 @@ impl Plan {
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
+            StatementKind::Comment => vec![PlanKind::Comment],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
@@ -293,6 +295,7 @@ impl Plan {
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
+            Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
             Plan::DropObjects(plan) => match plan.object_type {
@@ -1080,6 +1083,18 @@ pub struct ReassignOwnedPlan {
     pub new_role: RoleId,
     /// All object IDs to reassign.
     pub reassign_ids: Vec<ObjectId>,
+}
+
+#[derive(Debug)]
+pub struct CommentPlan {
+    /// The object that this comment is associated with.
+    pub object_id: CommentObjectId,
+    /// A sub-component of the object that this comment is associated with, e.g. a column.
+    ///
+    /// TODO(parkmycar): Make this a newtype ColumnPos that accounts for SQL's 1-indexing.
+    pub sub_component: Option<usize>,
+    /// The comment itself. If `None` that indicates we should clear the existing comment.
+    pub comment: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -998,6 +998,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
         | ExecuteResponse::CreatedType
+        | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
         | ExecuteResponse::DiscardedAll

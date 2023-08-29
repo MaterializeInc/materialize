@@ -213,6 +213,8 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("AuditLogKey.event", ATTR)
         .enum_attribute("StorageUsageKey.usage", ATTR)
         .enum_attribute("ResolvedDatabaseSpecifier.value", ATTR)
+        .enum_attribute("CommentKey.object", ATTR)
+        .enum_attribute("CommentKey.sub_component", ATTR)
         // We derive Arbitrary for all protobuf types for wire compatibility testing.
         .message_attribute(".", ARBITRARY_ATTR)
         .enum_attribute(".", ARBITRARY_ATTR)

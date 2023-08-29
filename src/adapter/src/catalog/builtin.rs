@@ -2191,6 +2191,17 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     is_retained_metrics_object: false,
 });
 
+pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_comments",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("sub_id", ScalarType::UInt64.nullable(true))
+        .with_column("comment", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_prepared_statement_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5085,6 +5096,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::Table(&MZ_PREPARED_STATEMENT_HISTORY),
         Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
+        Builtin::Table(&MZ_COMMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),

@@ -457,6 +457,8 @@ pub enum ExecuteResponse {
     Canceled,
     /// The requested cursor was closed.
     ClosedCursor,
+    /// The provided comment was created.
+    Comment,
     CopyTo {
         format: mz_sql::plan::CopyFormat,
         resp: Box<ExecuteResponse>,
@@ -645,6 +647,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             }
             ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
             ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
+            ExecuteResponseKind::Comment => Ok(ExecuteResponse::Comment),
             ExecuteResponseKind::CopyTo => Err(()),
             ExecuteResponseKind::CopyFrom => Err(()),
             ExecuteResponseKind::CreatedConnection => Ok(ExecuteResponse::CreatedConnection),
@@ -708,6 +711,7 @@ impl ExecuteResponse {
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
+            Comment => Some("COMMENT".into()),
             CopyTo { .. } => None,
             CopyFrom { .. } => None,
             CreatedConnection { .. } => Some("CREATE CONNECTION".into()),
@@ -797,6 +801,7 @@ impl ExecuteResponse {
             }
             Close => vec![ClosedCursor],
             PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
+            PlanKind::Comment => vec![ExecuteResponseKind::Comment],
             CommitTransaction => vec![TransactionCommitted, TransactionRolledBack],
             CreateConnection => vec![CreatedConnection],
             CreateDatabase => vec![CreatedDatabase],

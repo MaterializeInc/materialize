@@ -61,9 +61,10 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    Aug, CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
+    PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -92,6 +93,7 @@ use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
+use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
@@ -210,6 +212,7 @@ pub struct CatalogState {
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     default_privileges: DefaultPrivileges,
     system_privileges: PrivilegeMap,
+    comments: CommentsMap,
 }
 
 fn skip_temp_items<S>(
@@ -259,6 +262,7 @@ impl CatalogState {
             aws_privatelink_availability_zones: Default::default(),
             default_privileges: Default::default(),
             system_privileges: Default::default(),
+            comments: Default::default(),
         }
     }
 
@@ -2966,6 +2970,93 @@ struct AllocatedBuiltinSystemIds<T> {
     migrated_builtins: Vec<GlobalId>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct CommentsMap {
+    map: BTreeMap<CommentObjectId, BTreeMap<Option<usize>, String>>,
+}
+
+impl CommentsMap {
+    pub fn update_comment(
+        &mut self,
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
+    ) -> Option<String> {
+        let object_comments = self.map.entry(object_id).or_default();
+
+        // Either replace the existing comment, or remove it if comment is None/NULL.
+        let (empty, prev) = if let Some(comment) = comment {
+            let prev = object_comments.insert(sub_component, comment);
+            (false, prev)
+        } else {
+            let prev = object_comments.remove(&sub_component);
+            (object_comments.is_empty(), prev)
+        };
+
+        // Cleanup entries that are now empty.
+        if empty {
+            self.map.remove(&object_id);
+        }
+
+        // Return the previous comment, if there was one, for easy removal.
+        prev
+    }
+
+    /// Remove all comments for `object_id` from the map.
+    ///
+    /// Generally there is one comment for a given [`CommentObjectId`], but in the case of
+    /// relations you can also have comments on the individual columns. Dropping the comments for a
+    /// relation will also drop all of the comments on any columns.
+    pub fn drop_comments(
+        &mut self,
+        object_id: CommentObjectId,
+    ) -> Vec<(CommentObjectId, Option<usize>, String)> {
+        match self.map.remove(&object_id) {
+            None => Vec::new(),
+            Some(comments) => comments
+                .into_iter()
+                .map(|(sub_comp, comment)| (object_id, sub_comp, comment))
+                .collect(),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (CommentObjectId, Option<usize>, &str)> {
+        self.map
+            .iter()
+            .map(|(id, comments)| {
+                comments
+                    .iter()
+                    .map(|(pos, comment)| (*id, *pos, comment.as_str()))
+            })
+            .flatten()
+    }
+}
+
+impl Serialize for CommentsMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let comment_count = self
+            .map
+            .iter()
+            .map(|(_object_id, comments)| comments.len())
+            .sum();
+
+        let mut seq = serializer.serialize_seq(Some(comment_count))?;
+        for (object_id, sub) in &self.map {
+            for (sub_component, comment) in sub {
+                seq.serialize_element(&(
+                    format!("{object_id:?}"),
+                    format!("{sub_component:?}"),
+                    comment,
+                ))?;
+            }
+        }
+        seq.end()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
 pub struct DefaultPrivileges {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
@@ -3311,6 +3402,7 @@ impl Catalog {
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
+                comments: CommentsMap::default(),
             },
             plans: CatalogPlans {
                 optimized_plan_by_id: Default::default(),
@@ -3435,6 +3527,14 @@ impl Catalog {
                 config.system_parameter_sync_config,
             )
             .await?;
+
+        let comments = catalog.storage().await.load_comments().await?;
+        for (object_id, sub_component, comment) in comments {
+            catalog
+                .state
+                .comments
+                .update_comment(object_id, sub_component, Some(comment));
+        }
 
         // Now that LD is loaded, set the intended stash timeout.
         // TODO: Move this into the stash constructor.
@@ -3876,6 +3976,14 @@ impl Catalog {
                     builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
                 }
             }
+        }
+        for (id, sub_component, comment) in catalog.state.comments.iter() {
+            builtin_table_updates.push(catalog.state.pack_comment_update(
+                id,
+                sub_component,
+                comment,
+                1,
+            ));
         }
         for (_id, role) in &catalog.state.roles_by_id {
             if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
@@ -6284,6 +6392,37 @@ impl Catalog {
                     );
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
+                Op::Comment {
+                    object_id,
+                    sub_component,
+                    comment,
+                } => {
+                    tx.update_comment(object_id, sub_component, comment.clone())?;
+                    let prev_comment =
+                        state
+                            .comments
+                            .update_comment(object_id, sub_component, comment.clone());
+
+                    // If we're replacing or deleting a comment, we need to issue a retraction for
+                    // the previous value.
+                    if let Some(prev) = prev_comment {
+                        builtin_table_updates.push(state.pack_comment_update(
+                            object_id,
+                            sub_component,
+                            &prev,
+                            -1,
+                        ));
+                    }
+
+                    if let Some(new) = comment {
+                        builtin_table_updates.push(state.pack_comment_update(
+                            object_id,
+                            sub_component,
+                            &new,
+                            1,
+                        ));
+                    }
+                }
                 Op::DropObject(id) => match id {
                     ObjectId::Database(id) => {
                         let database = &state.database_by_id[&id];
@@ -6515,6 +6654,7 @@ impl Catalog {
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
+                        let entry_type = entry.item_type();
                         if id.is_system() {
                             let name = entry.name();
                             let full_name = state
@@ -6547,6 +6687,27 @@ impl Catalog {
                             )?;
                         }
                         state.drop_item(id);
+
+                        // Drop any associated comments.
+                        let object_id = match entry_type {
+                            CatalogItemType::Table => Some(CommentObjectId::Table(id)),
+                            CatalogItemType::View => Some(CommentObjectId::View(id)),
+                            _ => None,
+                        };
+                        if let Some(object_id) = object_id {
+                            let deleted = tx.drop_comments(object_id)?;
+                            let dropped = state.comments.drop_comments(object_id);
+                            mz_ore::soft_assert_eq!(
+                                deleted,
+                                dropped,
+                                "transaction and state out of sync"
+                            );
+
+                            let updates = dropped.into_iter().map(|(id, col_pos, comment)| {
+                                state.pack_comment_update(id, col_pos, &comment, -1)
+                            });
+                            builtin_table_updates.extend(updates);
+                        }
                     }
                 },
                 Op::DropTimeline(timeline) => {
@@ -7999,6 +8160,11 @@ pub enum Op {
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
+    },
+    Comment {
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
     },
     DropObject(ObjectId),
     DropTimeline(Timeline),

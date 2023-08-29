@@ -102,6 +102,7 @@ pub enum Statement<T: AstInfo> {
     AlterDefaultPrivileges(AlterDefaultPrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
+    Comment(CommentStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -168,6 +169,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterDefaultPrivileges(stmt) => f.write_node(stmt),
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
             Statement::ValidateConnection(stmt) => f.write_node(stmt),
+            Statement::Comment(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -237,6 +239,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterDefaultPrivileges => "alter_default_privileges",
         StatementKind::ReassignOwned => "reassign_owned",
         StatementKind::ValidateConnection => "validate_connection",
+        StatementKind::Comment => "comment",
     }
 }
 
@@ -3701,3 +3704,69 @@ impl<T: AstInfo> AstDisplay for ReassignOwnedStatement<T> {
     }
 }
 impl_display_t!(ReassignOwnedStatement);
+
+/// `COMMENT ON ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommentStatement {
+    pub object: CommentObjectType,
+    pub comment: Option<String>,
+}
+
+impl AstDisplay for CommentStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("COMMENT ON ");
+        f.write_node(&self.object);
+
+        f.write_str(" IS ");
+        match &self.comment {
+            Some(s) => {
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(s));
+                f.write_str("'");
+            }
+            None => f.write_str("NULL"),
+        }
+    }
+}
+impl_display!(CommentStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CommentObjectType {
+    Table {
+        name: UnresolvedItemName,
+    },
+    View {
+        name: UnresolvedItemName,
+    },
+    Column {
+        relation_name: UnresolvedItemName,
+        column_name: Ident,
+    },
+}
+
+impl AstDisplay for CommentObjectType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        use CommentObjectType::*;
+
+        match self {
+            Table { name } => {
+                f.write_str("TABLE ");
+                f.write_node(name);
+            }
+            View { name } => {
+                f.write_str("VIEW ");
+                f.write_node(name);
+            }
+            Column {
+                relation_name,
+                column_name,
+            } => {
+                f.write_str("COLUMN ");
+                f.write_node(relation_name);
+                f.write_str(".");
+                f.write_node(column_name);
+            }
+        }
+    }
+}
+impl_display!(CommentObjectType);
