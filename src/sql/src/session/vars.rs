@@ -1152,8 +1152,7 @@ static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> 
 
 pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_ld_rbac_checks"),
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: &true,
     description:
         "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
     internal: true,
@@ -1161,8 +1160,7 @@ pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: &true,
     description: "User facing global boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,

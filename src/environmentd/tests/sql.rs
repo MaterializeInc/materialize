@@ -2379,7 +2379,11 @@ fn test_peek_on_dropped_cluster() {
         .unwrap();
 
     // Drop cluster that query is running on, and table that query is selecting from.
-    let mut drop_client = server.connect(postgres::NoTls).unwrap();
+    let mut drop_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
     drop_client.batch_execute("DROP CLUSTER default;").unwrap();
     drop_client.batch_execute("DROP TABLE t;").unwrap();
     handle.join().unwrap();
