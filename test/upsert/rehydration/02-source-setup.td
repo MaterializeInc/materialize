@@ -65,7 +65,7 @@ mammalmore    moose    2
 > SELECT
     SUM(u.envelope_state_bytes) > 0,
     SUM(u.envelope_state_count),
-    bool_and(u.rehydration_latency_seconds IS NOT NULL)
+    bool_and(u.rehydration_latency_ms IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')

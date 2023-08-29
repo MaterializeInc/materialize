@@ -516,7 +516,7 @@ where
             source_config.id
         );
         source_metrics
-                .set_rehydration_latency_seconds(rehydration_started.elapsed().as_secs());
+                .set_rehydration_latency_ms(rehydration_started.elapsed().as_millis().try_into().expect("Rehydration took more than ~584 million years!"));
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.

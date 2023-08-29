@@ -76,10 +76,10 @@ mammalmore    moose   2
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
-# rehydration_latency_seconds should be null for non-UPSERT sources
+# rehydration_latency_ms should be null for non-UPSERT sources
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency_seconds IS NULL)
+  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency_ms IS NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
@@ -94,7 +94,7 @@ metrics_test_source true 2 2 2 true true
 # jitter on when metrics are produced for each sub-source.
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency_seconds IS NULL)
+  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency_ms IS NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
@@ -125,7 +125,7 @@ users          true      false   true  true  false   true
     SUM(u.bytes_received) > 0,
     SUM(u.envelope_state_bytes) > 0,
     SUM(u.envelope_state_count),
-    bool_and(u.rehydration_latency_seconds IS NOT NULL)
+    bool_and(u.rehydration_latency_ms IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
