@@ -61,6 +61,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
                 config.upsert_rocksdb_stats_log_interval_seconds(),
                 config.upsert_rocksdb_stats_persist_interval_seconds(),
                 config.upsert_rocksdb_point_lookup_block_cache_size_mb(),
+                config.upsert_rocksdb_shrink_allocated_buffers_by_ratio(),
             ) {
                 Ok(u) => u,
                 Err(e) => {
@@ -100,6 +101,8 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         grpc_client: grpc_client_config(config),
         delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
+        shrink_upsert_unused_buffers_by_ratio: config
+            .storage_shrink_upsert_unused_buffers_by_ratio(),
     }
 }
 

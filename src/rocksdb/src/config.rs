@@ -62,6 +62,7 @@ pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) 
         stats_log_interval_seconds,
         stats_persist_interval_seconds,
         point_lookup_block_cache_size_mb,
+        shrink_buffers_by_ratio: _,
         dynamic: _,
     } = config;
 

@@ -861,12 +861,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
                 delay_sources_past_rehydration,
+                shrink_upsert_unused_buffers_by_ratio,
             } => self.storage_state.dataflow_parameters.update(
                 pg,
                 rocksdb,
                 auto_spill_config,
                 storage_dataflow_max_inflight_bytes_config,
                 delay_sources_past_rehydration,
+                shrink_upsert_unused_buffers_by_ratio,
             ),
         }
     }
@@ -1183,6 +1185,8 @@ impl StorageState {
                             .storage_dataflow_max_inflight_bytes_config,
                         auto_spill_config: params.upsert_auto_spill_config,
                         delay_sources_past_rehydration: params.delay_sources_past_rehydration,
+                        shrink_upsert_unused_buffers_by_ratio: params
+                            .shrink_upsert_unused_buffers_by_ratio,
                     })
                 }
             }

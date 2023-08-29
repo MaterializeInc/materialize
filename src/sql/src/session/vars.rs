@@ -784,6 +784,16 @@ mod upsert_rocksdb {
                   Only takes effect on source restart (Materialize).",
             internal: true,
         };
+
+    /// The number of times by which allocated buffers will be shrinked in upsert rocksdb.
+    /// If value is 0, then no shrinking will occur.
+    pub static UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_shrink_allocated_buffers_by_ratio"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
+        description:
+            "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -927,6 +937,16 @@ const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerV
     value: &false,
     description: "Whether or not to delay sources producing values in some scenarios \
                   (namely, upsert) till after rehydration is finished",
+    internal: true,
+};
+
+/// Configuration ratio to shrink unusef buffers in upsert by.
+/// For eg: is 2 is set, then the buffers will be reduced by 2 i.e. halved.
+/// Default is 0, which means shrinking is disabled.
+const STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_shrink_upsert_unused_buffers_by_ratio"),
+    value: &0,
+    description: "Configuration ratio to shrink unusef buffers in upsert by",
     internal: true,
 };
 
@@ -2153,6 +2173,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2165,6 +2186,7 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
+            .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2585,6 +2607,10 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
     }
 
+    pub fn upsert_rocksdb_shrink_allocated_buffers_by_ratio(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -2678,6 +2704,11 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
     pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
         *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
+    }
+
+    /// Returns the `storage_shrink_upsert_unused_buffers_by_ratio` configuration parameter.
+    pub fn storage_shrink_upsert_unused_buffers_by_ratio(&self) -> usize {
+        *self.expect_value(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -4311,6 +4342,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
+        || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -4333,6 +4365,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.

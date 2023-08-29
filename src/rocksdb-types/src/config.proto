@@ -44,4 +44,5 @@ message ProtoRocksDbTuningParameters {
     uint32 stats_log_interval_seconds = 10;
     uint32 stats_persist_interval_seconds = 11;
     optional uint32 point_lookup_block_cache_size_mb = 12;
+    uint64 shrink_buffers_by_ratio = 13;
 }
