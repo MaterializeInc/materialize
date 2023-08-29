@@ -143,6 +143,7 @@ enum Action {
     /// non-zero. Can be used on a running environmentd. Operates without
     /// interfering with it or committing any data to that stash.
     UpgradeCheck {
+        /// Map of cluster name to resource specification. Check the README for latest values.
         cluster_replica_sizes: Option<String>,
     },
 }
