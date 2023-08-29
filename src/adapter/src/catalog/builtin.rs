@@ -2012,7 +2012,11 @@ SELECT
     name,
     mz_sources.type,
     occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
+    -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
+    CASE
+        WHEN mz_sources.type = 'webhook' THEN 'running'
+        ELSE coalesce(status, 'created')
+    END status,
     error,
     details
 FROM mz_sources
