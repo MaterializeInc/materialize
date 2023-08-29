@@ -1108,7 +1108,6 @@ pub enum LoadGenerator {
     Auction,
     Datums,
     Tpch,
-    Clock,
 }
 
 impl AstDisplay for LoadGenerator {
@@ -1119,7 +1118,6 @@ impl AstDisplay for LoadGenerator {
             Self::Auction => f.write_str("AUCTION"),
             Self::Datums => f.write_str("DATUMS"),
             Self::Tpch => f.write_str("TPCH"),
-            Self::Clock => f.write_str("CLOCK"),
         }
     }
 }
