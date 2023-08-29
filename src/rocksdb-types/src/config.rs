@@ -526,7 +526,8 @@ pub mod defaults {
 
     /// A reasonable default batch size for gets and puts in RocksDB. Based
     /// on advice here: <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ>.
-    pub const DEFAULT_BATCH_SIZE: usize = 1024;
+    /// Based on our testing we are using 20 times that.
+    pub const DEFAULT_BATCH_SIZE: usize = 20 * 1024;
 
     /// The default max duration for retrying the retry-able errors in rocksdb.
     pub const DEFAULT_RETRY_DURATION: Duration = Duration::from_secs(1);

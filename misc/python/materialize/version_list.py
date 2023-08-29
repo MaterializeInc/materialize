@@ -10,7 +10,6 @@
 
 import os
 from pathlib import Path
-from typing import List
 
 import frontmatter
 
@@ -38,13 +37,13 @@ INVALID_VERSIONS = {
 
 class VersionList:
     def __init__(self) -> None:
-        self.versions: List[MzVersion]
+        self.versions: list[MzVersion]
         assert False
 
-    def all_versions(self) -> List[MzVersion]:
+    def all_versions(self) -> list[MzVersion]:
         return self.versions
 
-    def minor_versions(self) -> List[MzVersion]:
+    def minor_versions(self) -> list[MzVersion]:
         """Return the latest patch version for every minor version."""
         minor_versions = {}
         for version in self.versions:
@@ -53,7 +52,7 @@ class VersionList:
         assert len(minor_versions) > 0
         return sorted(minor_versions.values())
 
-    def patch_versions(self, minor_version: MzVersion) -> List[MzVersion]:
+    def patch_versions(self, minor_version: MzVersion) -> list[MzVersion]:
         """Return all patch versions within the given minor version."""
         patch_versions = []
         for version in self.versions:

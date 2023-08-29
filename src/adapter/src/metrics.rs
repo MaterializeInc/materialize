@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -30,7 +30,6 @@ pub struct Metrics {
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
-    pub introspection_logins: IntCounter,
     pub statement_logging_actual_bytes: IntCounterVec,
     pub slow_message_handling: HistogramVec,
 }
@@ -103,10 +102,6 @@ impl Metrics {
             statement_logging_unsampled_bytes: registry.register(metric!(
                 name: "mz_statement_logging_unsampled_bytes",
                 help: "The total amount of SQL text that would have been logged if statement logging were unsampled.",
-            )),
-            introspection_logins: registry.register(metric!(
-                name: "mz_introspection_logins",
-                help: "Number of times mz_introspection used the psql interface",
             )),
             statement_logging_actual_bytes: registry.register(metric!(
                 name: "mz_statement_logging_actual_bytes",

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional, Set
+from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -38,7 +38,7 @@ class DateTimeOperationParam(OperationParam):
         support_time: bool = True,
         support_timestamp: bool = True,
         support_timestamp_tz: bool = True,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             DataTypeCategory.DATE_TIME,
@@ -58,7 +58,7 @@ class DateTimeOperationParam(OperationParam):
             self.supported_type_identifiers.append(TIMESTAMPTZ_TYPE_IDENTIFIER)
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
@@ -80,7 +80,7 @@ class TimeIntervalOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             DataTypeCategory.DATE_TIME,
@@ -90,7 +90,7 @@ class TimeIntervalOperationParam(OperationParam):
         )
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)

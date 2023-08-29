@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Iterator, List, Optional
+from typing import Callable, Iterator, Optional
 
 from materialize.feature_benchmark.executor import Executor
 
@@ -48,9 +48,9 @@ class LambdaAction(Action):
 
 
 class Kgen(Action):
-    def __init__(self, topic: str, args: List[str]) -> None:
+    def __init__(self, topic: str, args: list[str]) -> None:
         self._topic: str = topic
-        self._args: List[str] = args
+        self._args: list[str] = args
         self._executor: Optional[Executor] = None
 
     def run(

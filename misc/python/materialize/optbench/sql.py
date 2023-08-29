@@ -12,7 +12,7 @@ import re
 import ssl
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Optional, cast
 
 import numpy as np
 import pg8000
@@ -134,26 +134,26 @@ class Database:
         with self.conn.cursor() as cursor:
             cursor.execute(statement)
 
-    def execute_all(self, statements: List[str]) -> None:
+    def execute_all(self, statements: list[str]) -> None:
         with self.conn.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
 
-    def query_one(self, query: str) -> Dict[Any, Any]:
+    def query_one(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
             cursor.execute(query)
-            return cast(Dict[Any, Any], cursor.fetchone())
+            return cast(dict[Any, Any], cursor.fetchone())
 
-    def query_all(self, query: str) -> Dict[Any, Any]:
+    def query_all(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
             cursor.execute(query)
-            return cast(Dict[Any, Any], cursor.fetchall())
+            return cast(dict[Any, Any], cursor.fetchall())
 
 
 # Utility functions
 # -----------------
 
 
-def parse_from_file(path: Path) -> List[str]:
+def parse_from_file(path: Path) -> list[str]:
     """Parses a *.sql file to a list of queries."""
     return sqlparse.split(path.read_text())

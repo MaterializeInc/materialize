@@ -18,7 +18,7 @@ from pathlib import Path
 try:
     from semver.version import Version
 except ImportError:
-    from semver import VersionInfo as Version
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize.mzcompose import Composition
 

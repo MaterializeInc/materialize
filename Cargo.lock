@@ -4039,13 +4039,16 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64 0.13.1",
  "derivative",
  "jsonwebtoken",
  "mz-ore",
- "mz-sql",
  "reqwest",
+ "reqwest-middleware",
+ "reqwest-retry",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
@@ -6697,6 +6700,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "once_cell",
  "percent-encoding",
@@ -6715,10 +6719,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest-middleware"
+version = "0.2.3"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest",
+ "serde",
+ "task-local-extensions",
+ "thiserror",
+]
+
+[[package]]
+name = "reqwest-retry"
+version = "0.2.2"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "http",
+ "hyper",
+ "reqwest",
+ "reqwest-middleware",
+ "retry-policies",
+ "task-local-extensions",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "retain_mut"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4389f1d5789befaf6029ebd9f7dac4af7f7e3d61b69d4f30e2ac02b57e7712b0"
+
+[[package]]
+name = "retry-policies"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e09bbcb5003282bcb688f0bae741b278e9c7e8f378f561522c9806c58e075d9b"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rand",
+]
 
 [[package]]
 name = "ring"
@@ -7673,6 +7721,15 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "task-local-extensions"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba323866e5d033818e3240feeb9f7db2c4296674e4d9e16b97b7bf8f490434e8"
+dependencies = [
+ "pin-utils",
 ]
 
 [[package]]
@@ -8927,6 +8984,7 @@ dependencies = [
  "log",
  "lru",
  "memchr",
+ "mime_guess",
  "native-tls",
  "nix",
  "nom",

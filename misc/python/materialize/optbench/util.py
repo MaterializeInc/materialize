@@ -9,7 +9,7 @@
 
 from pathlib import Path
 from re import match
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -19,7 +19,7 @@ from . import Scenario
 def duration_to_timedelta(duration: str) -> Optional[np.timedelta64]:
     """Converts a duration like `{time}.{frac}{unit}` to a `np.timedelta64`."""
 
-    frac_to_ns: Dict[str, Callable[[str], str]] = {
+    frac_to_ns: dict[str, Callable[[str], str]] = {
         "s": lambda frac: frac.ljust(9, "0")[0:9],
         "ms": lambda frac: frac.ljust(6, "0")[0:6],
         "us": lambda frac: frac.ljust(3, "0")[0:3],

@@ -11,7 +11,7 @@ from itertools import chain
 from os import environ
 from textwrap import dedent
 from time import sleep
-from typing import Any, List, Optional
+from typing import Any, Optional
 from uuid import uuid1
 
 import launchdarkly_api  # type: ignore
@@ -249,7 +249,7 @@ class LaunchDarklyClient:
         self.project_key = project_key
         self.environment_key = environment_key
 
-    def create_flag(self, feature_flag_key: str, tags: List[str] = []) -> Any:
+    def create_flag(self, feature_flag_key: str, tags: list[str] = []) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
             return api.post_feature_flag(
@@ -280,7 +280,7 @@ class LaunchDarklyClient:
         self,
         feature_flag_key: str,
         on: Optional[bool] = None,
-        contextTargets: Optional[List[Any]] = None,
+        contextTargets: Optional[list[Any]] = None,
     ) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)

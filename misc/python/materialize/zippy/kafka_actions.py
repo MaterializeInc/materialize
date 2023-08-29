@@ -11,7 +11,6 @@ import random
 import string
 import threading
 from textwrap import dedent
-from typing import Dict, List, Set, Type
 
 import numpy as np
 
@@ -43,7 +42,7 @@ $ set schema={
 class KafkaStart(Action):
     """Start a Kafka instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [KafkaRunning()]
 
     def run(self, c: Composition) -> None:
@@ -54,10 +53,10 @@ class KafkaStop(Action):
     """Stop the Kafka instance."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {KafkaRunning}
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {KafkaRunning}
 
     def run(self, c: Composition) -> None:
@@ -68,13 +67,13 @@ class CreateTopicParameterized(ActionFactory):
     """Creates a Kafka topic and decides on the envelope that will be used."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, KafkaRunning}
 
     def __init__(
         self,
         max_topics: int = 10,
-        envelopes_with_weights: Dict[Envelope, int] = {
+        envelopes_with_weights: dict[Envelope, int] = {
             Envelope.NONE: 25,
             Envelope.UPSERT: 75,
         },
@@ -82,7 +81,7 @@ class CreateTopicParameterized(ActionFactory):
         self.max_topics = max_topics
         self.envelopes_with_weights = envelopes_with_weights
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_topic_name = capabilities.get_free_capability_name(
             TopicExists, self.max_topics
         )
@@ -110,7 +109,7 @@ class CreateTopic(Action):
         self.topic = topic
         super().__init__(capabilities)
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.topic]
 
     def run(self, c: Composition) -> None:
@@ -130,7 +129,7 @@ class Ingest(Action):
     """Ingests data (inserts, updates or deletions) into a Kafka topic."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

@@ -4279,6 +4279,7 @@ impl Catalog {
             details: CatalogTypeDetails {
                 array_id: builtin.details.array_id,
                 typ,
+                typreceive_oid: builtin.details.typreceive_oid,
             },
         }
     }
@@ -7652,6 +7653,7 @@ impl Catalog {
                 details: CatalogTypeDetails {
                     array_id: None,
                     typ: typ.inner,
+                    typreceive_oid: None,
                 },
                 resolved_ids,
             }),

@@ -31,12 +31,14 @@ class Schema:
         create_index: bool = True,
         transaction_isolation: Optional[TransactionIsolation] = None,
         cluster_name: Optional[str] = None,
+        object_count: int = 1,
     ) -> None:
         self.schema = schema
         self.source = source
         self.create_index = create_index
         self.transaction_isolation = transaction_isolation
         self.cluster_name = cluster_name
+        self.object_count = object_count
 
     def init_sqls(self) -> list[str]:
         init_sqls = self.connect_sqls() + [
@@ -45,15 +47,16 @@ class Schema:
             "DROP TABLE IF EXISTS t1;",
         ]
         if self.source == Source.TABLE:
-            init_sqls.extend(
-                [
-                    "CREATE TABLE t1 (f1 INTEGER DEFAULT 1);",
-                    "INSERT INTO t1 DEFAULT VALUES;",
-                ]
-            )
+            for t in range(1, self.object_count + 1):
+                init_sqls.extend(
+                    [
+                        f"CREATE TABLE t{t} (f1 INTEGER DEFAULT 1);",
+                        f"INSERT INTO t{t} DEFAULT VALUES;",
+                    ]
+                )
 
-        if self.create_index:
-            init_sqls.append("CREATE INDEX i1 ON t1 (f1);")
+                if self.create_index:
+                    init_sqls.append(f"CREATE INDEX i{t} ON t{t} (f1);")
 
         return init_sqls
 

@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
 
 from kubernetes.client import (
     V1Container,
@@ -106,7 +105,7 @@ class DebeziumService(K8sService):
 def debezium_resources(
     debezium_namespace: str = DEFAULT_K8S_NAMESPACE,
     redpanda_namespace: str = DEFAULT_K8S_NAMESPACE,
-) -> List[K8sResource]:
+) -> list[K8sResource]:
     return [
         DebeziumDeployment(debezium_namespace, redpanda_namespace=redpanda_namespace),
         DebeziumService(debezium_namespace),

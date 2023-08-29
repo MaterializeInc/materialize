@@ -1157,6 +1157,7 @@ impl Coordinator {
             details: CatalogTypeDetails {
                 array_id: None,
                 typ: plan.typ.inner,
+                typreceive_oid: None,
             },
             resolved_ids,
         };

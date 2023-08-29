@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import itertools
-from typing import List
 
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
@@ -25,7 +24,7 @@ from materialize.output_consistency.input_data.values.text_values_provider impor
     TEXT_DATA_TYPE_WITH_VALUES,
 )
 
-ALL_DATA_TYPES_WITH_VALUES: List[DataTypeWithValues] = list(
+ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
     itertools.chain(
         list(VALUES_PER_NUMERIC_DATA_TYPE.values()),
         [BOOLEAN_DATA_TYPE_WITH_VALUES],

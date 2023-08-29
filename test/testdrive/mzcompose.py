@@ -106,8 +106,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 port=6877,
             )
 
+        junit_report = ci_util.junit_report_filename(c.name)
+
         try:
-            junit_report = ci_util.junit_report_filename(c.name)
             c.run(
                 "testdrive",
                 f"--junit-report={junit_report}",

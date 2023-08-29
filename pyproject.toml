@@ -23,6 +23,7 @@ extraPaths = ["misc/python"]
 venvPath = "./misc/python"
 venv = "venv"
 exclude = ["./misc/python/venv"]
+stubPath = "./misc/python/stubs"
 
 reportMissingImports = "warning"
 reportMissingModuleSource = "warning"
@@ -30,7 +31,7 @@ reportMissingTypeStubs = "warning"
 reportOptionalMemberAccess = "warning"
 reportUnboundVariable = "warning"
 reportPrivateImportUsage = "warning"
-reportTypedDictNotRequiredAccess = "warning"
+reportTypedDictNotRequiredAccess = "none"
 reportOptionalSubscript = "warning"
 typeCheckingMode = "basic"
 ignore = [

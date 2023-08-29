@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import List, Optional
+from typing import Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
@@ -26,7 +26,7 @@ class Check:
     def initialize(self) -> Testdrive:
         return Testdrive("")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         assert False
 
     def validate(self) -> Testdrive:
@@ -67,7 +67,7 @@ class Check:
 
 
 class CheckDisabled(Check):
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [Testdrive(""), Testdrive("")]
 
     def validate(self) -> Testdrive:

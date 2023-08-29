@@ -9,7 +9,6 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
@@ -20,7 +19,7 @@ from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTab
 class PostgresStart(Action):
     """Start a PostgresInstance instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [PostgresRunning()]
 
     def run(self, c: Composition) -> None:
@@ -31,10 +30,10 @@ class PostgresStop(Action):
     """Stop the Postgres instance."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {PostgresRunning}
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {PostgresRunning}
 
     def run(self, c: Composition) -> None:
@@ -53,7 +52,7 @@ class CreatePostgresTable(Action):
     """Creates a table on the Postgres instance. 50% of the tables have a PK."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, PostgresRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -95,7 +94,7 @@ class CreatePostgresTable(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.postgres_table] if self.new_postgres_table else []
 
 
@@ -106,7 +105,7 @@ class PostgresDML(Action):
     MAX_BATCH_SIZE = 10000
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

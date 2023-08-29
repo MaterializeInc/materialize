@@ -17,7 +17,7 @@ import shlex
 import subprocess
 import sys
 from subprocess import CalledProcessError
-from typing import Dict, List, NamedTuple, Optional, cast
+from typing import NamedTuple, Optional, cast
 
 import boto3
 from botocore.exceptions import ClientError
@@ -43,29 +43,29 @@ SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 say = ui.speaker("scratch> ")
 
 
-def tags(i: Instance) -> Dict[str, str]:
+def tags(i: Instance) -> dict[str, str]:
     if not i.tags:
         return {}
     return {t["Key"]: t["Value"] for t in i.tags}
 
 
-def instance_typedef_tags(i: InstanceTypeDef) -> Dict[str, str]:
+def instance_typedef_tags(i: InstanceTypeDef) -> dict[str, str]:
     return {t["Key"]: t["Value"] for t in i.get("Tags", [])}
 
 
-def name(tags: Dict[str, str]) -> Optional[str]:
+def name(tags: dict[str, str]) -> Optional[str]:
     return tags.get("Name")
 
 
-def launched_by(tags: Dict[str, str]) -> Optional[str]:
+def launched_by(tags: dict[str, str]) -> Optional[str]:
     return tags.get("LaunchedBy")
 
 
-def ami_user(tags: Dict[str, str]) -> Optional[str]:
+def ami_user(tags: dict[str, str]) -> Optional[str]:
     return tags.get("ami-user", "ubuntu")
 
 
-def delete_after(tags: Dict[str, str]) -> Optional[datetime.datetime]:
+def delete_after(tags: dict[str, str]) -> Optional[datetime.datetime]:
     unix = tags.get("scratch-delete-after")
     if not unix:
         return None
@@ -79,7 +79,7 @@ def instance_host(instance: Instance, user: Optional[str] = None) -> str:
     return f"{user}@{instance.id}"
 
 
-def print_instances(ists: List[Instance], format: str) -> None:
+def print_instances(ists: list[Instance], format: str) -> None:
     field_names = [
         "Name",
         "Instance ID",
@@ -120,7 +120,7 @@ def launch(
     instance_type: str,
     ami: str,
     ami_user: str,
-    tags: Dict[str, str],
+    tags: dict[str, str],
     display_name: Optional[str] = None,
     size_gb: int,
     security_group_name: str,
@@ -267,7 +267,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
 
     rev = git.rev_parse(rev)
 
-    cmd: List[str] = [
+    cmd: list[str] = [
         "git",
         "push",
         "--no-verify",
@@ -295,24 +295,24 @@ class MachineDesc(BaseModel):
     launch_script: Optional[str]
     instance_type: str
     ami: str
-    tags: Dict[str, str] = {}
+    tags: dict[str, str] = {}
     size_gb: int
     checkout: bool = True
     ami_user: str = "ubuntu"
 
 
 def launch_cluster(
-    descs: List[MachineDesc],
+    descs: list[MachineDesc],
     *,
     nonce: Optional[str] = None,
     key_name: Optional[str] = None,
     security_group_name: str = DEFAULT_SECURITY_GROUP_NAME,
     instance_profile: Optional[str] = DEFAULT_INSTANCE_PROFILE_NAME,
-    extra_tags: Dict[str, str] = {},
+    extra_tags: dict[str, str] = {},
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
-    extra_env: Dict[str, str] = {},
-) -> List[Instance]:
+    extra_env: dict[str, str] = {},
+) -> list[Instance]:
     """Launch a cluster of instances with a given nonce"""
 
     if not nonce:
@@ -366,7 +366,7 @@ def whoami() -> str:
     return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
 
 
-def get_instances_by_tag(k: str, v: str) -> List[InstanceTypeDef]:
+def get_instances_by_tag(k: str, v: str) -> list[InstanceTypeDef]:
     return [
         i
         for r in boto3.client("ec2").describe_instances()["Reservations"]
@@ -375,7 +375,7 @@ def get_instances_by_tag(k: str, v: str) -> List[InstanceTypeDef]:
     ]
 
 
-def get_old_instances() -> List[InstanceTypeDef]:
+def get_old_instances() -> list[InstanceTypeDef]:
     def exists(i: InstanceTypeDef) -> bool:
         return i["State"]["Name"] != "terminated"
 
@@ -398,7 +398,7 @@ def mssh(
     instance: Instance,
     command: str,
     *,
-    extra_ssh_args: List[str] = [],
+    extra_ssh_args: list[str] = [],
     input: Optional[bytes] = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""

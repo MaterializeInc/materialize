@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from random import Random
 from textwrap import dedent
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from pg8000.converters import literal  # type: ignore
 
@@ -233,7 +233,7 @@ class Identifiers(Check):
 
         return Testdrive(schemas() + cluster() + dedent(cmds))
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         cmds = [
             f"""
             > SET CLUSTER=identifiers;

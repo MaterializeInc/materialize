@@ -27,6 +27,7 @@ from dbt.contracts.graph.nodes import ConstraintType
 from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 
+# types in ./misc/dbt-materialize need to import generic types from typing
 @dataclass
 class MaterializeIndexConfig(dbtClassMixin):
     columns: Optional[List[str]] = None

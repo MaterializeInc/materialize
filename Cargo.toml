@@ -88,10 +88,6 @@ resolver = "2"
 edition = "2021"
 rust-version = "1.71.0"
 
-[profile.dev]
-# TODO(gusywnn|benesch): remove this when incremental ice's are improved
-incremental = false
-
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
 # in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
@@ -174,6 +170,10 @@ kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a
 
 # Waiting on `lru` dep to update to `0.11.0`
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
+
+# Removes dependencies required for WASM support that create duplicated deps.
+reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.

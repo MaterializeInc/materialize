@@ -29,7 +29,7 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import IO, Any, List, Optional, Sequence, Text, Tuple, Union
+from typing import IO, Any, Optional, Sequence, Text, Union
 
 import junit_xml
 from humanize import naturalsize
@@ -42,7 +42,7 @@ RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
 RECOMMENDED_MIN_CPUS = 2
 
 
-def main(argv: List[str]) -> None:
+def main(argv: list[str]) -> None:
     parser = ArgumentParser(
         prog="mzcompose",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -171,7 +171,7 @@ class Command:
     name: str
     """The name of the command."""
 
-    aliases: List[str] = []
+    aliases: list[str] = []
     """Aliases to register for the command."""
 
     help: str
@@ -259,7 +259,7 @@ class ListCompositionsCommand(Command):
     name = "list-compositions"
     help = "list the directories that contain compositions and their summaries"
 
-    def run(cls, args: argparse.Namespace) -> None:
+    def run(self, args: argparse.Namespace) -> None:
         repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
             print(os.path.relpath(path, repo.root))
@@ -470,7 +470,7 @@ class DockerComposeCommand(Command):
             )
 
     def capture(
-        self, args: List[str], stderr: Union[None, int, IO[bytes]] = None
+        self, args: list[str], stderr: Union[None, int, IO[bytes]] = None
     ) -> str:
         try:
             return spawn.capture(args, stderr=stderr)
@@ -676,7 +676,7 @@ class ArgumentParser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[Text]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
+    ) -> tuple[argparse.Namespace, list[str]]:
         namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(namespace, "unknown_args", unknown_args)
         assert namespace is not None
@@ -688,7 +688,7 @@ class ArgumentSubparser(argparse.ArgumentParser):
         self,
         args: Optional[Sequence[Text]] = None,
         namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
+    ) -> tuple[argparse.Namespace, list[str]]:
         new_namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(new_namespace, "unknown_subargs", unknown_args)
         assert new_namespace is not None

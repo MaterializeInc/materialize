@@ -18,7 +18,7 @@ operations provided by the standard [`subprocess`][subprocess] module.
 import subprocess
 import sys
 from pathlib import Path
-from typing import IO, Dict, Optional, Sequence, Union
+from typing import IO, Optional, Sequence, Union
 
 from materialize import ui
 
@@ -32,7 +32,7 @@ def runv(
     args: Sequence[Union[Path, str]],
     *,
     cwd: Optional[Path] = None,
-    env: Optional[Dict[str, str]] = None,
+    env: Optional[dict[str, str]] = None,
     stdin: Union[None, int, IO[bytes], bytes] = None,
     stdout: Union[None, int, IO[bytes]] = None,
     stderr: Union[None, int, IO[bytes]] = None,
@@ -84,7 +84,7 @@ def capture(
     args: Sequence[Union[Path, str]],
     *,
     cwd: Optional[Path] = None,
-    env: Optional[Dict[str, str]] = None,
+    env: Optional[dict[str, str]] = None,
     stdin: Union[None, int, IO[bytes], str] = None,
     stderr: Union[None, int, IO[bytes]] = None,
 ) -> str:

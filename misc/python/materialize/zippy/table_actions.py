@@ -9,7 +9,6 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
@@ -27,10 +26,10 @@ class CreateTableParameterized(ActionFactory):
         self.max_rows_per_action = max_rows_per_action
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_table_name = capabilities.get_free_capability_name(
             TableExists, self.max_tables
         )
@@ -76,7 +75,7 @@ class CreateTable(Action):
             )
         )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.table]
 
 
@@ -84,7 +83,7 @@ class ValidateTable(Action):
     """Validates that a single table contains data that is consistent with the expected min/max watermark."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -106,7 +105,7 @@ class DML(Action):
     """Performs an INSERT, DELETE or UPDATE against a table."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

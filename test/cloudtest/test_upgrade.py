@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
+from typing import Optional
 
 import pytest
 
@@ -31,7 +31,7 @@ class CloudtestUpgrade(Scenario):
     def base_version(self) -> MzVersion:
         return LAST_RELEASED_VERSION
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             Initialize(self),
             Manipulate(self, phase=1),

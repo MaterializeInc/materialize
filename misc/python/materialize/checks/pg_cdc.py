@@ -9,7 +9,7 @@
 
 from random import Random
 from textwrap import dedent
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, CheckDisabled
@@ -57,7 +57,7 @@ class PgCdcBase:
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -268,7 +268,7 @@ class PgCdcMzNow(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
