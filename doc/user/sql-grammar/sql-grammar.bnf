@@ -245,6 +245,7 @@ explain_plan ::=
   'FOR'?
   (
     select_stmt |
+    'INDEX' index_name |
     'MATERIALIZED VIEW' view_name
   )
 explain_timestamp ::=
