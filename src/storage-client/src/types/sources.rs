@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
@@ -47,7 +48,10 @@ use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
 use crate::controller::{CollectionMetadata, StorageError};
-use crate::types::connections::{KafkaConnection, PostgresConnection};
+use crate::types::connections::inline::{
+    ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
+    ReferencedConnection,
+};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
 use crate::types::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
@@ -63,9 +67,9 @@ include!(concat!(
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = ()> {
+pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<C>,
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
@@ -176,6 +180,30 @@ impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
         }
 
         Ok(())
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
+    for IngestionDescription<(), ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IngestionDescription {
+        let IngestionDescription {
+            desc,
+            source_imports,
+            ingestion_metadata,
+            source_exports,
+            instance_id,
+            remap_collection_id,
+        } = self;
+
+        IngestionDescription {
+            desc: desc.into_inline_connection(r),
+            source_imports,
+            ingestion_metadata,
+            source_exports,
+            instance_id,
+            remap_collection_id,
+        }
     }
 }
 
@@ -1399,8 +1427,8 @@ pub trait SourceConnection: Debug + Clone + PartialEq {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSourceConnection {
-    pub connection: KafkaConnection,
+pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
+    pub connection: C::Kafka,
     pub connection_id: GlobalId,
     pub topic: String,
     // Map from partition -> starting offset
@@ -1418,6 +1446,40 @@ pub struct KafkaSourceConnection {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
+    for KafkaSourceConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSourceConnection {
+        let KafkaSourceConnection {
+            connection,
+            connection_id,
+            topic,
+            start_offsets,
+            group_id_prefix,
+            environment_id,
+            include_timestamp,
+            include_partition,
+            include_topic,
+            include_offset,
+            include_headers,
+        } = self;
+
+        KafkaSourceConnection {
+            connection: r.resolve_connection(connection).unwrap_kafka(),
+            connection_id,
+            topic,
+            start_offsets,
+            group_id_prefix,
+            environment_id,
+            include_timestamp,
+            include_partition,
+            include_topic,
+            include_offset,
+            include_headers,
+        }
+    }
+}
+
 pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column(
@@ -1430,7 +1492,7 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("offset", ScalarType::UInt64.nullable(true))
 });
 
-impl KafkaSourceConnection {
+impl<C: ConnectionAccess> KafkaSourceConnection<C> {
     /// Returns the id for the consumer group the configured source will use.
     ///
     /// This has a weird API because `KafkaSourceConnection`'s are created
@@ -1446,7 +1508,7 @@ impl KafkaSourceConnection {
     }
 }
 
-impl SourceConnection for KafkaSourceConnection {
+impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     fn name(&self) -> &'static str {
         "kafka"
     }
@@ -1526,13 +1588,16 @@ impl SourceConnection for KafkaSourceConnection {
     }
 }
 
-impl Arbitrary for KafkaSourceConnection {
+impl<C: ConnectionAccess> Arbitrary for KafkaSourceConnection<C>
+where
+    <<C as ConnectionAccess>::Kafka as Arbitrary>::Strategy: 'static,
+{
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            any::<KafkaConnection>(),
+            any::<C::Kafka>(),
             any::<GlobalId>(),
             any::<String>(),
             proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
@@ -1575,7 +1640,7 @@ impl Arbitrary for KafkaSourceConnection {
     }
 }
 
-impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
+impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConnection> {
     fn into_proto(&self) -> ProtoKafkaSourceConnection {
         ProtoKafkaSourceConnection {
             connection: Some(self.connection.into_proto()),
@@ -1654,12 +1719,34 @@ impl RustType<ProtoCompression> for Compression {
 
 /// An external source of updates for a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceDesc {
-    pub connection: GenericSourceConnection,
-    pub encoding: encoding::SourceDataEncoding,
+pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
+    pub connection: GenericSourceConnection<C>,
+    pub encoding: encoding::SourceDataEncoding<C>,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
     pub timestamp_interval: Duration,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
+    for SourceDesc<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SourceDesc {
+        let SourceDesc {
+            connection,
+            encoding,
+            envelope,
+            metadata_columns,
+            timestamp_interval,
+        } = self;
+
+        SourceDesc {
+            connection: connection.into_inline_connection(&r),
+            encoding: encoding.into_inline_connection(r),
+            envelope,
+            metadata_columns,
+            timestamp_interval,
+        }
+    }
 }
 
 impl Arbitrary for SourceDesc {
@@ -1717,7 +1804,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     }
 }
 
-impl SourceDesc {
+impl<C: ConnectionAccess> SourceDesc<C> {
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1797,38 +1884,57 @@ impl SourceDesc {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum GenericSourceConnection {
-    Kafka(KafkaSourceConnection),
-    Postgres(PostgresSourceConnection),
+pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
+    Kafka(KafkaSourceConnection<C>),
+    Postgres(PostgresSourceConnection<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
     TestScript(TestScriptSourceConnection),
 }
 
-impl From<KafkaSourceConnection> for GenericSourceConnection {
-    fn from(conn: KafkaSourceConnection) -> Self {
+impl<C: ConnectionAccess> From<KafkaSourceConnection<C>> for GenericSourceConnection<C> {
+    fn from(conn: KafkaSourceConnection<C>) -> Self {
         Self::Kafka(conn)
     }
 }
 
-impl From<PostgresSourceConnection> for GenericSourceConnection {
-    fn from(conn: PostgresSourceConnection) -> Self {
+impl<C: ConnectionAccess> From<PostgresSourceConnection<C>> for GenericSourceConnection<C> {
+    fn from(conn: PostgresSourceConnection<C>) -> Self {
         Self::Postgres(conn)
     }
 }
 
-impl From<LoadGeneratorSourceConnection> for GenericSourceConnection {
+impl<C: ConnectionAccess> From<LoadGeneratorSourceConnection> for GenericSourceConnection<C> {
     fn from(conn: LoadGeneratorSourceConnection) -> Self {
         Self::LoadGenerator(conn)
     }
 }
 
-impl From<TestScriptSourceConnection> for GenericSourceConnection {
+impl<C: ConnectionAccess> From<TestScriptSourceConnection> for GenericSourceConnection<C> {
     fn from(conn: TestScriptSourceConnection) -> Self {
         Self::TestScript(conn)
     }
 }
 
-impl SourceConnection for GenericSourceConnection {
+impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
+    for GenericSourceConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> GenericSourceConnection {
+        match self {
+            GenericSourceConnection::Kafka(kafka) => {
+                GenericSourceConnection::Kafka(kafka.into_inline_connection(r))
+            }
+            GenericSourceConnection::Postgres(pg) => {
+                GenericSourceConnection::Postgres(pg.into_inline_connection(r))
+            }
+            GenericSourceConnection::LoadGenerator(lg) => {
+                GenericSourceConnection::LoadGenerator(lg)
+            }
+            GenericSourceConnection::TestScript(ts) => GenericSourceConnection::TestScript(ts),
+        }
+    }
+}
+
+impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
     fn name(&self) -> &'static str {
         match self {
             Self::Kafka(conn) => conn.name(),
@@ -1899,7 +2005,7 @@ impl SourceConnection for GenericSourceConnection {
     }
 }
 
-impl RustType<ProtoSourceConnection> for GenericSourceConnection {
+impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnection> {
     fn into_proto(&self) -> ProtoSourceConnection {
         use proto_source_connection::Kind;
         ProtoSourceConnection {
@@ -1935,9 +2041,9 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PostgresSourceConnection {
+pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
-    pub connection: PostgresConnection,
+    pub connection: C::Pg,
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types, keyed by their position in the source.
     pub table_casts: BTreeMap<usize, Vec<MirScalarExpr>>,
@@ -1945,13 +2051,35 @@ pub struct PostgresSourceConnection {
     pub publication_details: PostgresSourcePublicationDetails,
 }
 
-impl Arbitrary for PostgresSourceConnection {
+impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
+    for PostgresSourceConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> PostgresSourceConnection {
+        let PostgresSourceConnection {
+            connection_id,
+            connection,
+            table_casts,
+            publication,
+            publication_details,
+        } = self;
+
+        PostgresSourceConnection {
+            connection_id,
+            connection: r.resolve_connection(connection).unwrap_pg(),
+            table_casts,
+            publication,
+            publication_details,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> Arbitrary for PostgresSourceConnection<C> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            any::<PostgresConnection>(),
+            any::<C::Pg>(),
             any::<GlobalId>(),
             proptest::collection::btree_map(
                 any::<usize>(),
@@ -1977,7 +2105,7 @@ impl Arbitrary for PostgresSourceConnection {
 pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
     Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
 
-impl SourceConnection for PostgresSourceConnection {
+impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn name(&self) -> &'static str {
         "postgres"
     }
@@ -2197,7 +2325,7 @@ pub enum LoadGenerator {
 }
 
 impl LoadGenerator {
-    fn data_encoding_inner(&self) -> DataEncodingInner {
+    fn data_encoding_inner<C: ConnectionAccess>(&self) -> DataEncodingInner<C> {
         match self {
             LoadGenerator::Auction => DataEncodingInner::RowCodec(RelationDesc::empty()),
             LoadGenerator::Datums => {
@@ -2230,7 +2358,7 @@ impl LoadGenerator {
         }
     }
 
-    pub fn data_encoding(&self) -> SourceDataEncoding {
+    pub fn data_encoding<C: ConnectionAccess>(&self) -> SourceDataEncoding<C> {
         SourceDataEncoding::Single(DataEncoding::new(self.data_encoding_inner()))
     }
 

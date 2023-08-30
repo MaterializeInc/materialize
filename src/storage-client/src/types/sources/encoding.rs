@@ -20,21 +20,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::connections::CsrConnection;
 
+use crate::types::connections::inline::{
+    ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
+    ReferencedConnection,
+};
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_client.types.sources.encoding.rs"
 ));
 
-pub enum SourceDataEncodingInner {
-    Single(DataEncodingInner),
+pub enum SourceDataEncodingInner<C: ConnectionAccess = InlinedConnection> {
+    Single(DataEncodingInner<C>),
     KeyValue {
-        key: DataEncodingInner,
-        value: DataEncodingInner,
+        key: DataEncodingInner<C>,
+        value: DataEncodingInner<C>,
     },
 }
 
-impl SourceDataEncodingInner {
-    pub fn into_source_data_encoding(self, force_nullable_keys: bool) -> SourceDataEncoding {
+impl<R: ConnectionResolver> IntoInlineConnection<SourceDataEncodingInner, R>
+    for SourceDataEncodingInner<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SourceDataEncodingInner {
+        match self {
+            Self::Single(conn) => SourceDataEncodingInner::Single(conn.into_inline_connection(&r)),
+            Self::KeyValue { key, value } => SourceDataEncodingInner::KeyValue {
+                key: key.into_inline_connection(&r),
+                value: value.into_inline_connection(r),
+            },
+        }
+    }
+}
+
+impl<C: ConnectionAccess> SourceDataEncodingInner<C> {
+    pub fn into_source_data_encoding(self, force_nullable_keys: bool) -> SourceDataEncoding<C> {
         match self {
             SourceDataEncodingInner::Single(inner) => SourceDataEncoding::Single(DataEncoding {
                 inner,
@@ -59,12 +78,26 @@ impl SourceDataEncodingInner {
 /// Almost all sources only present values as part of their records, but Kafka allows a key to be
 /// associated with each record, which has a possibly independent encoding.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SourceDataEncoding {
-    Single(DataEncoding),
+pub enum SourceDataEncoding<C: ConnectionAccess = InlinedConnection> {
+    Single(DataEncoding<C>),
     KeyValue {
-        key: DataEncoding,
-        value: DataEncoding,
+        key: DataEncoding<C>,
+        value: DataEncoding<C>,
     },
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<SourceDataEncoding, R>
+    for SourceDataEncoding<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SourceDataEncoding {
+        match self {
+            Self::Single(conn) => SourceDataEncoding::Single(conn.into_inline_connection(r)),
+            Self::KeyValue { key, value } => SourceDataEncoding::KeyValue {
+                key: key.into_inline_connection(&r),
+                value: value.into_inline_connection(r),
+            },
+        }
+    }
 }
 
 impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
@@ -96,8 +129,8 @@ impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
     }
 }
 
-impl SourceDataEncoding {
-    pub fn key_ref(&self) -> Option<&DataEncoding> {
+impl<C: ConnectionAccess> SourceDataEncoding<C> {
+    pub fn key_ref(&self) -> Option<&DataEncoding<C>> {
         match self {
             SourceDataEncoding::Single(_) => None,
             SourceDataEncoding::KeyValue { key, .. } => Some(key),
@@ -105,14 +138,14 @@ impl SourceDataEncoding {
     }
 
     /// Return either the Single encoding if this was a `SourceDataEncoding::Single`, else return the value encoding
-    pub fn value(self) -> DataEncoding {
+    pub fn value(self) -> DataEncoding<C> {
         match self {
             SourceDataEncoding::Single(encoding) => encoding,
             SourceDataEncoding::KeyValue { value, .. } => value,
         }
     }
 
-    pub fn value_ref(&self) -> &DataEncoding {
+    pub fn value_ref(&self) -> &DataEncoding<C> {
         match self {
             SourceDataEncoding::Single(encoding) => encoding,
             SourceDataEncoding::KeyValue { value, .. } => value,
@@ -130,8 +163,8 @@ impl SourceDataEncoding {
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum DataEncodingInner {
-    Avro(AvroEncoding),
+pub enum DataEncodingInner<C: ConnectionAccess = InlinedConnection> {
+    Avro(AvroEncoding<C>),
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
     Regex(RegexEncoding),
@@ -139,6 +172,23 @@ pub enum DataEncodingInner {
     Json,
     Text,
     RowCodec(RelationDesc),
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<DataEncodingInner, R>
+    for DataEncodingInner<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> DataEncodingInner {
+        match self {
+            Self::Avro(conn) => DataEncodingInner::Avro(conn.into_inline_connection(r)),
+            Self::Protobuf(conn) => DataEncodingInner::Protobuf(conn),
+            Self::Csv(conn) => DataEncodingInner::Csv(conn),
+            Self::Regex(conn) => DataEncodingInner::Regex(conn),
+            Self::Bytes => DataEncodingInner::Bytes,
+            Self::Json => DataEncodingInner::Json,
+            Self::Text => DataEncodingInner::Text,
+            Self::RowCodec(conn) => DataEncodingInner::RowCodec(conn),
+        }
+    }
 }
 
 impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
@@ -179,9 +229,24 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataEncoding {
+pub struct DataEncoding<C: ConnectionAccess = InlinedConnection> {
     pub force_nullable_columns: bool,
-    pub inner: DataEncodingInner,
+    pub inner: DataEncodingInner<C>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<DataEncoding, R>
+    for DataEncoding<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> DataEncoding {
+        let DataEncoding {
+            force_nullable_columns,
+            inner,
+        } = self;
+        DataEncoding {
+            force_nullable_columns,
+            inner: inner.into_inline_connection(r),
+        }
+    }
 }
 
 impl RustType<ProtoDataEncoding> for DataEncoding {
@@ -208,8 +273,8 @@ pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> Relati
     desc
 }
 
-impl DataEncoding {
-    pub fn new(inner: DataEncodingInner) -> DataEncoding {
+impl<C: ConnectionAccess> DataEncoding<C> {
+    pub fn new(inner: DataEncodingInner<C>) -> DataEncoding<C> {
         DataEncoding {
             inner,
             force_nullable_columns: false,
@@ -302,10 +367,27 @@ impl DataEncoding {
 
 /// Encoding in Avro format.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct AvroEncoding {
+pub struct AvroEncoding<C: ConnectionAccess = InlinedConnection> {
     pub schema: String,
-    pub csr_connection: Option<CsrConnection>,
+    pub csr_connection: Option<CsrConnection<C>>,
     pub confluent_wire_format: bool,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
+    for AvroEncoding<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> AvroEncoding {
+        let AvroEncoding {
+            schema,
+            csr_connection,
+            confluent_wire_format,
+        } = self;
+        AvroEncoding {
+            schema,
+            csr_connection: csr_connection.map(|csr| csr.into_inline_connection(r)),
+            confluent_wire_format,
+        }
+    }
 }
 
 impl RustType<ProtoAvroEncoding> for AvroEncoding {

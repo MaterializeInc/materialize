@@ -24,6 +24,11 @@ use timely::PartialOrder;
 use crate::controller::CollectionMetadata;
 use crate::types::connections::{CsrConnection, KafkaConnection};
 
+use crate::types::connections::inline::{
+    ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
+    ReferencedConnection,
+};
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_client.types.sinks.rs"
@@ -234,11 +239,21 @@ impl RustType<proto::SinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum StorageSinkConnection {
-    Kafka(KafkaSinkConnection),
+pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
+    Kafka(KafkaSinkConnection<C>),
 }
 
-impl StorageSinkConnection {
+impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
+    for StorageSinkConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> StorageSinkConnection {
+        match self {
+            Self::Kafka(conn) => StorageSinkConnection::Kafka(conn.into_inline_connection(r)),
+        }
+    }
+}
+
+impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
     pub fn connection_id(&self) -> Option<GlobalId> {
         use StorageSinkConnection::*;
@@ -293,9 +308,9 @@ impl RustType<ProtoKafkaSinkProgressConnection> for KafkaSinkProgressConnection 
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnection {
-    pub connection: KafkaConnection,
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
+    pub connection: KafkaConnection<C>,
     pub connection_id: GlobalId,
     pub topic: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -308,19 +323,11 @@ pub struct KafkaSinkConnection {
     pub fuel: usize,
 }
 
-proptest::prop_compose! {
-    fn any_kafka_sink_connection()(
-        connection in any::<KafkaConnection>(),
-        connection_id in any::<GlobalId>(),
-        topic in any::<String>(),
-        key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
-        relation_key_indices in any::<Option<Vec<usize>>>(),
-        value_desc in any::<RelationDesc>(),
-        published_schema_info in any::<Option<PublishedSchemaInfo>>(),
-        progress in any::<KafkaSinkProgressConnection>(),
-        fuel in any::<usize>(),
-    ) -> KafkaSinkConnection {
-        KafkaSinkConnection {
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
+    for KafkaSinkConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSinkConnection {
+        let KafkaSinkConnection {
             connection,
             connection_id,
             topic,
@@ -330,16 +337,19 @@ proptest::prop_compose! {
             published_schema_info,
             progress,
             fuel,
+        } = self;
+
+        KafkaSinkConnection {
+            connection: connection.into_inline_connection(r),
+            connection_id,
+            topic,
+            key_desc_and_indices,
+            relation_key_indices,
+            value_desc,
+            published_schema_info,
+            progress,
+            fuel,
         }
-    }
-}
-
-impl Arbitrary for KafkaSinkConnection {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_kafka_sink_connection().boxed()
     }
 }
 
@@ -439,11 +449,23 @@ impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum StorageSinkConnectionBuilder {
-    Kafka(KafkaSinkConnectionBuilder),
+pub enum StorageSinkConnectionBuilder<C: ConnectionAccess = InlinedConnection> {
+    Kafka(KafkaSinkConnectionBuilder<C>),
 }
 
-impl StorageSinkConnectionBuilder {
+impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnectionBuilder, R>
+    for StorageSinkConnectionBuilder<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> StorageSinkConnectionBuilder {
+        match self {
+            Self::Kafka(conn) => {
+                StorageSinkConnectionBuilder::Kafka(conn.into_inline_connection(r))
+            }
+        }
+    }
+}
+
+impl<C: ConnectionAccess> StorageSinkConnectionBuilder<C> {
     /// returns an option to not constrain ourselves in the future
     pub fn connection_id(&self) -> Option<GlobalId> {
         use StorageSinkConnectionBuilder::*;
@@ -467,10 +489,10 @@ pub enum KafkaConsistencyConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnectionBuilder {
+pub struct KafkaSinkConnectionBuilder<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
-    pub connection: KafkaConnection,
-    pub format: KafkaSinkFormat,
+    pub connection: KafkaConnection<C>,
+    pub format: KafkaSinkFormat<C>,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
@@ -484,6 +506,41 @@ pub struct KafkaSinkConnectionBuilder {
     pub retention: KafkaSinkConnectionRetention,
 }
 
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnectionBuilder, R>
+    for KafkaSinkConnectionBuilder<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSinkConnectionBuilder {
+        let KafkaSinkConnectionBuilder {
+            connection_id,
+            connection,
+            format,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            topic_name,
+            consistency_config,
+            partition_count,
+            replication_factor,
+            fuel,
+            retention,
+        } = self;
+        KafkaSinkConnectionBuilder {
+            connection_id,
+            connection: connection.into_inline_connection(&r),
+            format: format.into_inline_connection(r),
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            topic_name,
+            consistency_config,
+            partition_count,
+            replication_factor,
+            fuel,
+            retention,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionRetention {
     pub duration: Option<i64>,
@@ -491,11 +548,30 @@ pub struct KafkaSinkConnectionRetention {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkFormat {
+pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
     Avro {
         key_schema: Option<String>,
         value_schema: String,
-        csr_connection: CsrConnection,
+        csr_connection: CsrConnection<C>,
     },
     Json,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
+    for KafkaSinkFormat<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSinkFormat {
+        match self {
+            Self::Avro {
+                key_schema,
+                value_schema,
+                csr_connection,
+            } => KafkaSinkFormat::Avro {
+                key_schema,
+                value_schema,
+                csr_connection: csr_connection.into_inline_connection(r),
+            },
+            Self::Json => KafkaSinkFormat::Json,
+        }
+    }
 }
