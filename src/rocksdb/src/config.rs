@@ -39,7 +39,8 @@ impl RocksDBDynamicConfig {
 
 /// Configurable options for a `RocksDBInstance`. Some can be updated
 /// dynamically, as cloned instances of this object will shared dynamic values.
-#[derive(Clone, Debug)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct RocksDBConfig {
     pub compaction_style: CompactionStyle,
     pub optimize_compaction_memtable_budget: usize,
@@ -59,6 +60,7 @@ pub struct RocksDBConfig {
     pub write_buffer_manager_config: RocksDbWriteBufferManagerConfig,
     /// Shared write buffer manager instance,
     /// can only be instantiated once via `get_or_init_handle`
+    #[derivative(Debug = "ignore")]
     pub shared_write_buffer_manager: SharedWriteBufferManager,
 }
 
@@ -171,27 +173,13 @@ impl RocksDBConfig {
     }
 }
 
-#[derive(Clone, Default, Derivative)]
-#[derivative(Debug)]
+#[derive(Clone, Default)]
 pub struct SharedWriteBufferManager {
     /// Keeping a Weak pointer to [WriteBufferManager] here behind an Arc and a Mutex.
     /// The strong pointers will be owned by each `RocksDBInstance`.
     /// When the rocksdb instances are cleaned up, the [WriteBufferManager] here will
     /// be cleaned up as well.
-    #[derivative(Debug(format_with = "fmt_shared_write_buffer_manager"))]
     shared: Arc<Mutex<Weak<WriteBufferManager>>>,
-}
-
-fn fmt_shared_write_buffer_manager(
-    buf: &Arc<Mutex<Weak<WriteBufferManager>>>,
-    fmt: &mut std::fmt::Formatter,
-) -> Result<(), std::fmt::Error> {
-    fmt.debug_struct("Weak<WriteBufferManager>")
-        .field(
-            "strong_count",
-            &buf.lock().expect("lock poisoned").strong_count(),
-        )
-        .finish()
 }
 
 #[derive(Derivative)]
