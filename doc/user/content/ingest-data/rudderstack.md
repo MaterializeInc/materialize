@@ -96,7 +96,7 @@ On the Connection Settings page:
 - **Headers**: These headers get added to the RudderStack request sent to your webhook. For this setup, ensure that the following headers are added:
 
     - `Content-Type`: `application/json`
-    - `Authorization`: [Your Secret Value] (the same value used in Step 2)
+    - `Authorization`: [Your Secret Value] (the same value used in [Step 2](#Step2))
 
 ## Step 5. Monitor Incoming Data
 
