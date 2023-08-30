@@ -318,6 +318,7 @@ pub struct SourceStatisticsUpdate {
     pub bytes_received: u64,
     pub envelope_state_bytes: u64,
     pub envelope_state_count: u64,
+    pub rehydration_latency_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -348,6 +349,7 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.bytes_received));
         packer.push(Datum::from(self.envelope_state_bytes));
         packer.push(Datum::from(self.envelope_state_count));
+        packer.push(Datum::from(self.rehydration_latency_ms));
     }
 }
 impl PackableStats for SinkStatisticsUpdate {
@@ -404,6 +406,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                                 bytes_received: update.bytes_received,
                                 envelope_state_bytes: update.envelope_state_bytes,
                                 envelope_state_count: update.envelope_state_count,
+                                rehydration_latency_ms: update.rehydration_latency_ms,
                             })
                             .collect(),
                         sink_updates: sink_stats
@@ -450,6 +453,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             bytes_received: update.bytes_received,
                             envelope_state_bytes: update.envelope_state_bytes,
                             envelope_state_count: update.envelope_state_count,
+                            rehydration_latency_ms: update.rehydration_latency_ms,
                         })
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
