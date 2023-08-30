@@ -686,11 +686,10 @@ where
     pub async fn merge_snapshot_chunk<M>(
         &mut self,
         merges: M,
-        batch_size: usize,
         completed: bool,
     ) -> Result<(), anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
+        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
     {
         fail::fail_point!("fail_merge_snapshot_chunk", |_| {
             Err(anyhow::anyhow!("Error merging snapshot values"))
@@ -700,6 +699,7 @@ where
             panic!("attempted completion of already completed upsert snapshot")
         }
         let now = Instant::now();
+        let batch_size = merges.len();
         let mut merges = merges.into_iter().peekable();
 
         self.merge_scratch.clear();
