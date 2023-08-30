@@ -219,16 +219,16 @@ impl SharedWriteBufferManager {
     /// with given `init_value`.
     /// A strong reference is returned for the shared buffer manager.
     pub(crate) fn get_or_init<F>(&self, initializer: F) -> Arc<WriteBufferManager>
-    	where
-    	    F: FnOnce() -> WriteBufferManager> 
+    where
+        F: FnOnce() -> WriteBufferManager,
     {
         let mut lock = self.shared.lock().expect("lock poisoned");
 
         match lock.upgrade() {
             Some(wbm) => wbm,
             None => {
-                let new_wbm: Arc<WriteBufferManager> = Arc::new(init_value);
-                lock.clone_from(&Arc::downgrade(&new_wbm));
+                let new_wbm: Arc<WriteBufferManager> = Arc::new(initializer());
+                *lock = Arc::downgrade(&new_wbm);
                 new_wbm
             }
         }

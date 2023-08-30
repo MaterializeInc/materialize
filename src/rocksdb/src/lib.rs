@@ -331,7 +331,7 @@ where
             .map(|write_buffer_manager| {
                 let buffer_manager = tuning_config
                     .shared_write_buffer_manager
-                    .get_or_init(write_buffer_manager);
+                    .get_or_init(|| write_buffer_manager);
                 WriteBufferManagerHandle {
                     inner: buffer_manager,
                 }
