@@ -247,6 +247,7 @@ where
                     ),
                     Arc::clone(&persist_clients),
                     Arc::new(TracingHandle::disabled()),
+                    Default::default(),
                 )
             };
 

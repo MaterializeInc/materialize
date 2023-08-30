@@ -103,6 +103,8 @@ use tokio::sync::{mpsc, oneshot};
 pub mod config;
 pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
 
+use crate::config::WriteBufferManagerHandle;
+
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -150,7 +152,10 @@ impl InstanceOptions {
         }
     }
 
-    fn as_rocksdb_options(&self, tuning_config: &RocksDBConfig) -> RocksDBOptions {
+    fn as_rocksdb_options(
+        &self,
+        tuning_config: &RocksDBConfig,
+    ) -> (RocksDBOptions, Option<WriteBufferManagerHandle>) {
         // Defaults + `create_if_missing`
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
@@ -158,9 +163,10 @@ impl InstanceOptions {
         // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
 
-        config::apply_to_options(tuning_config, &mut options);
-
-        options
+        let write_buffer_handle = config::apply_to_options(tuning_config, &mut options);
+        // Returns the rocksdb options and an optional `WriteBufferManagerHandle`
+        // if write buffer manager was enabled in the configs.
+        (options, write_buffer_handle)
     }
 
     fn as_rocksdb_write_options(&self) -> WriteOptions {
@@ -321,7 +327,6 @@ where
         let (tx, rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
 
         let instance_path = instance_path.to_owned();
-
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
             rocksdb_core_loop(
@@ -530,7 +535,17 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
-    let rocksdb_options = options.as_rocksdb_options(&tuning_config);
+
+    // Handle to an optional reference of a write buffer manager which
+    // should be valid till the rocksdb thread is running.
+    // The shared write buffer manager will be cleaned up if all
+    // the handles are dropped across all the rocksdb instances.
+    let (rocksdb_options, write_buffer_handle) = options.as_rocksdb_options(&tuning_config);
+    tracing::info!(
+        "Starting rocksdb at {:?} with write_buffer_manager: {:?}",
+        instance_path,
+        write_buffer_handle
+    );
 
     let retry_result = Retry::default()
         .max_duration(retry_max_duration)

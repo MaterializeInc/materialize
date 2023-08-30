@@ -62,6 +62,21 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
                 config.upsert_rocksdb_stats_persist_interval_seconds(),
                 config.upsert_rocksdb_point_lookup_block_cache_size_mb(),
                 config.upsert_rocksdb_shrink_allocated_buffers_by_ratio(),
+                config.upsert_rocksdb_write_buffer_manager_memory_bytes(),
+                config
+                    .upsert_rocksdb_write_buffer_manager_cluster_memory_fraction()
+                    .and_then(|d| match d.try_into() {
+                        Err(e) => {
+                            tracing::error!(
+                                "Couldn't convert upsert_rocksdb_write_buffer_manager_cluster_memory_fraction {:?} to f64, so defaulting to `None`: {e:?}",
+                                config
+                                    .upsert_rocksdb_write_buffer_manager_cluster_memory_fraction()
+                            );
+                            None
+                        }
+                        Ok(o) => Some(o),
+                    }),
+                config.upsert_rocksdb_write_buffer_manager_allow_stall(),
             ) {
                 Ok(u) => u,
                 Err(e) => {
