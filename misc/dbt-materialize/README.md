@@ -41,6 +41,8 @@ dbt-materialize:
       cluster: [cluster] # default 'default'
       sslmode: require
       keepalives_idle: 0 # default 0
+      retries: 1  # default 1 retry on error/timeout when opening connections
+      search_path: [optional, override the default search_path]
 
 ```
 
