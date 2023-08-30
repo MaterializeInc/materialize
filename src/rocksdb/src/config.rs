@@ -218,7 +218,10 @@ impl SharedWriteBufferManager {
     /// If a shared [WriteBufferManager] does not already exist, then it's initialized
     /// with given `init_value`.
     /// A strong reference is returned for the shared buffer manager.
-    pub(crate) fn get_or_init(&self, init_value: WriteBufferManager) -> Arc<WriteBufferManager> {
+    pub(crate) fn get_or_init<F>(&self, initializer: F) -> Arc<WriteBufferManager>
+    	where
+    	    F: FnOnce() -> WriteBufferManager> 
+    {
         let mut lock = self.shared.lock().expect("lock poisoned");
 
         match lock.upgrade() {

@@ -68,7 +68,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
                     .and_then(|d| match d.try_into() {
                         Err(e) => {
                             tracing::error!(
-                                "Couldn't convert {:?} to f64, so defaulting to `None`: {e:?}",
+                                "Couldn't convert upsert_rocksdb_write_buffer_manager_cluster_memory_fraction {:?} to f64, so defaulting to `None`: {e:?}",
                                 config
                                     .upsert_rocksdb_write_buffer_manager_cluster_memory_fraction()
                             );

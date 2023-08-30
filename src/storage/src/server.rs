@@ -80,6 +80,8 @@ pub fn serve(
         source_metrics,
         sink_metrics,
         decode_metrics,
+	// The shared RocksDB `WriteBufferManager` is shared between the workers.
+	// It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager,
     };
 
