@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:jammy-20221130 AS crosstool
+FROM ubuntu:lunar-20230731 as crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -68,7 +68,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:jammy-20221130
+FROM ubuntu:lunar-20230731
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -99,7 +99,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     make \
     openssh-client \
     pkg-config \
-    postgresql-client-14 \
+    postgresql-client \
     python3 \
     python3-dev \
     python3-pip \
@@ -202,7 +202,7 @@ RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
 
 COPY requirements.txt /workdir/
 
-RUN pip3 install -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+RUN pip3 install --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
 
 # Install APT repo generator.
 
