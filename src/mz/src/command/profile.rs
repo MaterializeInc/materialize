@@ -139,7 +139,7 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 
     let app_password = admin_client
         .create_app_password(CreateAppPasswordRequest {
-            description: "App password for the CLI",
+            description: "Materialize CLI (mz)",
         })
         .await?;
 
