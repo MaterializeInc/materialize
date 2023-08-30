@@ -113,7 +113,7 @@ SELECT * FROM rudderstack_source LIMIT 10;
 
 This will show you the last ten records ingested from RudderStack.
 
-If you don't see any data, head over to the [RudderStack console](https://app.rudderstack.com/) and try to scync your source to trigger a new data ingestion.
+If you don't see any data, head over to the [RudderStack console](https://app.rudderstack.com/) and try to sync your source to trigger a new data ingestion.
 
 ## Step 6. Parse Incoming Data
 
