@@ -25,7 +25,6 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{ClusterId, ReplicaId};
-use mz_expr::explain::ExplainContext;
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
@@ -36,9 +35,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{
-    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
-};
+use mz_repr::explain::{ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -106,8 +103,8 @@ use crate::coord::{
     SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
+use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::explain::Explainable;
 use crate::notice::AdapterNotice;
 use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -2810,44 +2807,6 @@ impl Coordinator {
             unreachable!()
         };
 
-        fn explain<T>(
-            mut plan: DataflowDescription<T>,
-            format: ExplainFormat,
-            config: &ExplainConfig,
-            humanizer: &dyn ExprHumanizer,
-            dataflow_metainfo: &DataflowMetainfo,
-        ) -> Result<String, AdapterError>
-        where
-            for<'a> Explainable<'a, DataflowDescription<T>>:
-                Explain<'a, Context = ExplainContext<'a>>,
-        {
-            // Collect the list of indexes used by the dataflow at this point.
-            let used_indexes = UsedIndexes::new(
-                plan
-                    .index_imports
-                    .iter()
-                    .map(|(id, index_import)| {
-                        (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
-                    })
-                    .collect(),
-            );
-
-            let context = ExplainContext {
-                config,
-                humanizer,
-                used_indexes,
-                finishing: None,
-                duration: Duration::default(),
-                optimizer_notices: OptimizerNotice::explain(
-                    &dataflow_metainfo.optimizer_notices,
-                    humanizer,
-                )
-                .map_err(|e| AdapterError::Explain(ExplainError::FormatError(e)))?,
-            };
-
-            Ok(Explainable::new(&mut plan).explain(&format, &context)?)
-        }
-
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
             tracing::error!(
                 "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
@@ -2863,7 +2822,7 @@ impl Coordinator {
                     tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
                     coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
                 };
-                explain(
+                explain_dataflow(
                     plan,
                     format,
                     &config,
@@ -2876,7 +2835,7 @@ impl Coordinator {
                     tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
                     coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
                 };
-                explain(
+                explain_dataflow(
                     plan,
                     format,
                     &config,
