@@ -83,7 +83,7 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     // Open the browser to login user.
     if let Err(_err) = open::that(open_url) {
         println!(
-            "Could not open a browser to visit the login page <{:?}>: Please open the page yourself.",
+            "Error: Unable to launch a web browser. Access the login page using this link: '{:?}', or execute `mz profile init --no-browser` in your command line.",
             open_url
         )
     }
