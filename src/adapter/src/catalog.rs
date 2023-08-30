@@ -85,6 +85,9 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::types::connections::inline::{
+    ConnectionResolver, InlinedConnection, IntoInlineConnection, ReferencedConnection,
+};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
@@ -1756,6 +1759,29 @@ impl CatalogState {
     }
 }
 
+impl ConnectionResolver for CatalogState {
+    fn resolve_connection(
+        &self,
+        id: GlobalId,
+    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
+        use mz_storage_client::types::connections::Connection::*;
+        match self
+            .get_entry(&id)
+            .connection()
+            .expect("catalog out of sync")
+            .connection
+            .clone()
+        {
+            Kafka(conn) => Kafka(conn.into_inline_connection(self)),
+            Postgres(conn) => Postgres(conn.into_inline_connection(self)),
+            Csr(conn) => Csr(conn.into_inline_connection(self)),
+            Ssh(conn) => Ssh(conn),
+            Aws(conn) => Aws(conn),
+            AwsPrivatelink(conn) => AwsPrivatelink(conn),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
@@ -1909,6 +1935,15 @@ impl ConnCatalog<'_> {
         }
         v.extend_from_slice(&self.search_path);
         v
+    }
+}
+
+impl ConnectionResolver for ConnCatalog<'_> {
+    fn resolve_connection(
+        &self,
+        id: GlobalId,
+    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
+        self.state().resolve_connection(id)
     }
 }
 
