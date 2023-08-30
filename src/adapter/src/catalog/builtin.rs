@@ -4219,7 +4219,7 @@ pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
     name: "mz_show_sources",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_show_sources
-AS SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id,
+AS SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sources AS sources
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id",
 };
@@ -4228,7 +4228,7 @@ pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
     name: "mz_show_sinks",
     schema: MZ_INTERNAL_SCHEMA,
     sql:"CREATE VIEW mz_internal.mz_show_sinks
-AS SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id,
+AS SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sinks AS sinks
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
 };
