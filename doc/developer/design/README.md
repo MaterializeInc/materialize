@@ -104,8 +104,9 @@ short.
 
 ### Creation
 
-1. Copy the design document template to a new date-prefixed file in
-   the design/ directory of the repository you’re working in, and fill it in.
+1. Copy the design document [template](./00000000_template.md) to a new
+   date-prefixed file in the `design` directory of the repository you’re
+   working in, and fill it in.
 2. Submit a pull request of your filled in design document. This
    makes it easy for others to add written comments.
 3. Identify your key stakeholders and socialize the design document
