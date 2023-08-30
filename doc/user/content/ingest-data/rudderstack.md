@@ -73,7 +73,7 @@ To configure Webhook as a destination in RudderStack, follow the steps outlined 
     - Navigate to the destination section.
     - Select the **Webhook**" option.
     - Assign a name to your destination.
-    - Click "Continue".
+    - Click **Continue**.
 
 ### Configuring Connection Settings
 
