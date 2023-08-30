@@ -71,7 +71,7 @@ To configure Webhook as a destination in RudderStack, follow the steps outlined 
 1.  **Select Your RudderStack Source**: Identify the source you wish to add a webhook endpoint to. If you don't have a source set up, follow the steps outlined in their [Getting Started](https://www.rudderstack.com/docs/dashboard-guides/sources/) guide.
 1.  **Choose Webhook as Destination**:
     - Navigate to the destination section.
-    - Opt for the "Webhook" option.
+    - Select the **Webhook**" option.
     - Assign a name to your destination.
     - Click "Continue".
 
