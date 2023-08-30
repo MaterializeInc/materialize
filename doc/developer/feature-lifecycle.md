@@ -2,10 +2,11 @@
 
 The feature lifecycle at Materialize consists of four phases:
 Internal Development, Private Preview, Public Preview, and General
-Availability. The DRI is responsible for bringing a project through
-all four phases. This does not mean that the DRI must personally
-do each work item for each lifecycle phase, but they are responsible
-for ensuring each work item is completed.
+Availability. The [DRI (Directly Responsible Individual)](./project-management.md)
+is responsible for bringing a project through all four phases.
+This does not mean that the DRI must personally do each work item
+for each lifecycle phase, but they are responsible for ensuring
+each work item is completed.
 
 The DRI is responsible for communicating progress through these
 lifecycle phases by:
