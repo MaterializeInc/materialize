@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -3527,6 +3527,12 @@ impl Catalog {
                 config.system_parameter_sync_config,
             )
             .await?;
+        // We need to set this variable ASAP, so that builtins get planned with the correct value
+        let variable_length_row_encoding = catalog
+            .system_config()
+            .variable_length_row_encoding_DANGEROUS();
+        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
         let comments = catalog.storage().await.load_comments().await?;
         for (object_id, sub_component, comment) in comments {
@@ -4840,6 +4846,12 @@ impl Catalog {
         .await?;
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
+        let variable_length_row_encoding =
+            if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
+                "true"
+            } else {
+                "false"
+            };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -4852,10 +4864,8 @@ impl Catalog {
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
             system_parameter_defaults: [(
-                // the serialization of items needs to be consistent across envd and testdrive, or testdrive
-                // fails.
                 "variable_length_row_encoding".to_string(),
-                "true".to_string(),
+                variable_length_row_encoding.to_string(),
             )]
             .into_iter()
             .collect(),

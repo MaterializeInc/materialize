@@ -2898,8 +2898,11 @@ impl SystemVars {
     }
 
     /// The dramatic name is to warn you not to call this unless you know what you're doing!
-    /// It should only be read once, during environmentd startup, to ensure that all replicas get the
+    /// It should only be read during environmentd startup, to ensure that all replicas get the
     /// same value.
+    ///
+    /// After startup, row decoding is controlled by the
+    /// `mz_repr::VARIABLE_LENGTH_ROW_ENCODING` global atomic variable.
     #[allow(non_snake_case)]
     pub fn variable_length_row_encoding_DANGEROUS(&self) -> bool {
         *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING)
