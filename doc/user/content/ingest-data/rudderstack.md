@@ -43,9 +43,9 @@ This shared secret allows RudderStack to authenticate each incoming request, ens
 
 Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
 
-## Step 3. Set Up a Webhook Source in Materialize
+## Step 3. Set Up a Webhook Source
 
-Using the secret, define the Materialize source to ingest data from RudderStack:
+Using the secret, create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest data from RudderStack:
 
 ```sql
 CREATE SOURCE rudderstack_source IN CLUSTER rudderstack_cluster
