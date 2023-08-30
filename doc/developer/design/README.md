@@ -65,14 +65,15 @@ These are not explicitly required for a good design document.
 You should, however, use your own judgment to determine what
 is and isn’t required for your specific case.
 
-Allow a drive-by commenter without any context to fully understand
-the design. The intention is that a group of people with some
-common context can come together, understand the design, and
-come to a decision. Provide a fully spec’ed out implementation
-of any of the solutions. Depending on the topic, it can be very
-helpful to provide a prototype, both for validating the design
-and for presenting it to others. However, it is not a required
-part of the design.
+- Allow a drive-by commenter without any context to fully understand the
+  design: the intention is that a group of people with common context can come
+  together, understand the design and come to a decision. Some context might
+  be gathered from previous design documents, from reference documentation, or
+  from looking at the code.
+- Provide a fully spec'ed reference implementation: depending on the topic, it
+  can be very helpful to prepare a prototype. Both for validating the design
+  and for presenting it to others. However, it is not always a required part
+  of the design.
 
 ## When should you make a design document?
 
