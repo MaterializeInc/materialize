@@ -2814,18 +2814,18 @@ impl Coordinator {
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
             tracing::error!(
-                "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
             );
             coord_bail!(
-                "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
             );
         };
 
         let explain = match stage {
             ExplainStage::OptimizedPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
-                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
                 explain_dataflow(
                     plan,
@@ -2837,8 +2837,8 @@ impl Coordinator {
             }
             ExplainStage::PhysicalPlan => {
                 let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
-                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
                 explain_dataflow(
                     plan,
@@ -2860,10 +2860,68 @@ impl Coordinator {
 
     fn explain_index(
         &mut self,
-        _ctx: &mut ExecuteContext,
-        _plan: plan::ExplainPlanPlan,
+        ctx: &mut ExecuteContext,
+        plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        coord_bail!("unsupported operation: explain_index");
+        let plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        } = plan;
+
+        let Explainee::Index(id) = explainee else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
+            // This is currently asserted in the planner. However, this
+            // assumption might change when we make changes for #18089.
+            unreachable!()
+        };
+
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+            tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
+            coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
+        };
+
+        let explain = match stage {
+            ExplainStage::OptimizedPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
     }
 
     async fn explain_query(
