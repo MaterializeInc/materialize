@@ -2641,7 +2641,6 @@ pub struct ExplainPlanStatement<T: AstInfo> {
     pub stage: ExplainStage,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
-    pub no_errors: bool,
     pub explainee: Explainee<T>,
 }
 
@@ -2657,9 +2656,6 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
         f.write_str(" AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
-        if self.no_errors {
-            f.write_str("BROKEN ");
-        }
         f.write_node(&self.explainee);
     }
 }
@@ -3000,7 +2996,7 @@ impl_display!(ExplainStage);
 pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
-    Query(Query<T>),
+    Query(Query<T>, bool),
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -3014,7 +3010,12 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_str("MATERIALIZED VIEW ");
                 f.write_node(name);
             }
-            Self::Query(query) => f.write_node(query),
+            Self::Query(query, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(query);
+            }
         }
     }
 }

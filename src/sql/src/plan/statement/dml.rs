@@ -229,7 +229,7 @@ pub fn describe_explain_plan(
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explainee {
-            Explainee::Query(q) => {
+            Explainee::Query(q, _) => {
                 describe_select(
                     scx,
                     SelectStatement {
@@ -261,7 +261,6 @@ pub fn plan_explain_plan(
         stage,
         config_flags,
         format,
-        no_errors,
         explainee,
     }: ExplainPlanStatement<Aug>,
     params: &Params,
@@ -308,9 +307,7 @@ pub fn plan_explain_plan(
             }
             crate::plan::Explainee::MaterializedView(mview.id())
         }
-        Explainee::Query(query) => {
-            // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-            // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
+        Explainee::Query(query, broken) => {
             let query::PlannedQuery {
                 expr: mut raw_plan,
                 desc,
@@ -328,6 +325,7 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Query {
                 raw_plan,
                 row_set_finishing,
+                broken,
             }
         }
     };
@@ -336,7 +334,6 @@ pub fn plan_explain_plan(
         stage,
         format,
         config,
-        no_errors,
         explainee,
     }))
 }

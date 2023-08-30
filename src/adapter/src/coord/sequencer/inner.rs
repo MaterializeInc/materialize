@@ -2795,7 +2795,6 @@ impl Coordinator {
             stage,
             format,
             config,
-            no_errors: _,
             explainee,
         } = plan;
 
@@ -2913,16 +2912,16 @@ impl Coordinator {
             stage,
             format,
             config,
-            no_errors,
             explainee,
         } = plan;
 
         let Explainee::Query {
             raw_plan,
             row_set_finishing,
+            broken,
         } = explainee
         else {
-            // This is currently asserted in the `sequence_explain` code that
+            // This is currently asserted in the `sequence_explain_plan` code that
             // calls this method.
             unreachable!()
         };
@@ -2935,7 +2934,7 @@ impl Coordinator {
         let pipeline_result = {
             self.explain_optimizer_pipeline(
                 raw_plan,
-                no_errors,
+                broken,
                 target_cluster,
                 ctx.session_mut(),
                 &row_set_finishing,
@@ -2949,7 +2948,7 @@ impl Coordinator {
                 (used_indexes, fast_path_plan, dataflow_metainfo)
             }
             Err(err) => {
-                if no_errors {
+                if broken {
                     tracing::error!("error while handling EXPLAIN statement: {}", err);
 
                     let used_indexes = UsedIndexes::default();

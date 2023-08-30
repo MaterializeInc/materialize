@@ -6769,22 +6769,20 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        let no_errors = self.parse_keyword(BROKEN);
-
         // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
         } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
             Explainee::MaterializedView(self.parse_raw_name()?)
         } else {
-            Explainee::Query(self.parse_query()?)
+            let broken = self.parse_keyword(BROKEN);
+            Explainee::Query(self.parse_query()?, broken)
         };
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
-            no_errors,
             explainee,
         }))
     }

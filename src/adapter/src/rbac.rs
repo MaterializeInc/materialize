@@ -813,7 +813,6 @@ fn generate_required_privileges(
             stage: _,
             format: _,
             config: _,
-            no_errors: _,
             explainee: _,
         }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
