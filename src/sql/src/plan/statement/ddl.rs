@@ -1375,7 +1375,7 @@ generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Interval),
     (ScaleFactor, f64),
-    (MaxCardinality, i64)
+    (MaxCardinality, u64)
 );
 
 pub(crate) fn load_generator_ast_to_generator(
@@ -1394,11 +1394,6 @@ pub(crate) fn load_generator_ast_to_generator(
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
             } = options.to_vec().try_into()?;
-            if let Some(max_cardinality) = max_cardinality {
-                if max_cardinality < 0 {
-                    sql_bail!("unsupported max cardinality {max_cardinality}");
-                }
-            }
             LoadGenerator::Counter { max_cardinality }
         }
         mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
