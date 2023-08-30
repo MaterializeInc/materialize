@@ -7,8 +7,6 @@ menu:
     weight: 15
 ---
 
-{{< private-preview />}}
-
 This page outlines how to create and manage roles in Materialize.
 
 ## Create a role

@@ -8,8 +8,6 @@ menu:
 
 `ALTER ... OWNER` updates the owner of an item.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "alter-owner.svg" >}}

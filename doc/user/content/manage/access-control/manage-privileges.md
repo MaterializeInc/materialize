@@ -7,8 +7,6 @@ menu:
     weight: 20
 ---
 
-{{< private-preview />}}
-
 This page outlines how to assign and manage role privileges.
 
 ## Grant privileges
