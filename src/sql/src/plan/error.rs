@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fmt, io};
 
 use itertools::Itertools;
@@ -213,6 +214,10 @@ pub enum PlanError {
     CommentTooLong {
         length: usize,
         max_size: usize,
+    },
+    InvalidTimestampInterval {
+        min: Duration,
+        requested: Duration,
     },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -573,6 +578,9 @@ impl fmt::Display for PlanError {
             Self::InternalFunctionCall => f.write_str("cannot call function with arguments of type internal"),
             Self::CommentTooLong { length, max_size } => {
                 write!(f, "provided comment was {length} bytes long, max size is {max_size} bytes")
+            }
+            Self::InvalidTimestampInterval { min, requested } => {
+                write!(f, "invalid timestamp interval of {}ms, minimum is {}ms", requested.as_millis(), min.as_millis())
             }
         }
     }
