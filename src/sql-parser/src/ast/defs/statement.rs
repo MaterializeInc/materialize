@@ -667,7 +667,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub if_not_exists: bool,
     pub body_format: Format<T>,
-    pub include_headers: bool,
+    pub include_headers: CreateWebhookSourceIncludeHeaders,
     pub validate_using: Option<CreateWebhookSourceCheck<T>>,
     pub in_cluster: T::ClusterName,
 }
@@ -688,9 +688,7 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         f.write_str("BODY FORMAT ");
         f.write_node(&self.body_format);
 
-        if self.include_headers {
-            f.write_str(" INCLUDE HEADERS");
-        }
+        f.write_node(&self.include_headers);
 
         if let Some(validate) = &self.validate_using {
             f.write_str(" ");
@@ -830,6 +828,79 @@ impl AstDisplay for CreateWebhookSourceBody {
 }
 
 impl_display!(CreateWebhookSourceBody);
+
+/// `INCLUDE [HEADER | HEADERS]`
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceIncludeHeaders {
+    /// Mapping individual header names to columns in the source.
+    pub mappings: Vec<CreateWebhookSourceMapHeader>,
+    /// Whether or not to include the `headers` column, and any filtering we might want to do.
+    pub column: Option<Vec<CreateWebhookSourceFilterHeader>>,
+}
+
+impl AstDisplay for CreateWebhookSourceIncludeHeaders {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if !self.mappings.is_empty() {
+            f.write_str(" ");
+        }
+        f.write_node(&display::separated(&self.mappings[..], " "));
+
+        if let Some(column) = &self.column {
+            f.write_str(" INCLUDE HEADERS");
+
+            if !column.is_empty() {
+                f.write_str(" ");
+                f.write_str("(");
+                f.write_node(&display::comma_separated(&column[..]));
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceIncludeHeaders);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceFilterHeader {
+    pub block: bool,
+    pub header_name: String,
+}
+
+impl AstDisplay for CreateWebhookSourceFilterHeader {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if self.block {
+            f.write_str("NOT ");
+        }
+        f.write_node(&display::escaped_string_literal(&self.header_name));
+    }
+}
+
+impl_display!(CreateWebhookSourceFilterHeader);
+
+/// `INCLUDE HEADER <name> [AS <alias>] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceMapHeader {
+    pub header_name: String,
+    pub column_name: Ident,
+    pub use_bytes: bool,
+}
+
+impl AstDisplay for CreateWebhookSourceMapHeader {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("INCLUDE HEADER ");
+
+        f.write_node(&display::escaped_string_literal(&self.header_name));
+
+        f.write_str(" AS ");
+        f.write_node(&self.column_name);
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceMapHeader);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
