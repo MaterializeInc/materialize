@@ -139,14 +139,20 @@ async fn migrate_audit_log(tx: &mut Transaction<'_>, now: u64) -> Result<(), Sta
         let details = event.details.unwrap();
         match details {
             v33::audit_log_event_v1::Details::CreateClusterReplicaV1(details) => {
-                let key = (details.cluster_id.clone(), details.replica_id.clone());
-                let prev = live_replicas.insert(key, details);
-                assert_eq!(prev, None, "replica created twice");
+                let Some(replica_id) = details.replica_id.clone() else {
+                    tracing::info!("ignoring replica create event: {details:?}");
+                    continue;
+                };
+                let key = (details.cluster_id.clone(), replica_id);
+                live_replicas.insert(key, details);
             }
             v33::audit_log_event_v1::Details::DropClusterReplicaV1(details) => {
-                let key = (details.cluster_id, details.replica_id);
-                let prev = live_replicas.remove(&key);
-                assert!(prev.is_some(), "non-existing replica dropped");
+                let Some(replica_id) = details.replica_id.clone() else {
+                    tracing::info!("ignoring replica drop event: {details:?}");
+                    continue;
+                };
+                let key = (details.cluster_id, replica_id);
+                live_replicas.remove(&key);
             }
             _ => (),
         };
@@ -156,13 +162,22 @@ async fn migrate_audit_log(tx: &mut Transaction<'_>, now: u64) -> Result<(), Sta
     // the new ID.
     let mut updates = Vec::with_capacity(live_replicas.len() * 2);
     for (_, details) in live_replicas {
-        let old_id = details.replica_id.unwrap().inner;
+        let old_id = details
+            .replica_id
+            .clone()
+            .expect("filtered to only details with `replica_id`s above")
+            .inner;
         let numeric_id = old_id.parse::<u64>().unwrap();
-        assert!(
-            details.cluster_id.starts_with('u'),
-            "non-user cluster in audit_log"
-        );
-        let new_id = format!("u{numeric_id}");
+
+        // Same logic as in `migrate_cluster_replicas`.
+        let new_id = match details.cluster_id.chars().next() {
+            Some('u') => format!("u{numeric_id}"),
+            Some('s') => details.cluster_id.clone(),
+            _ => {
+                tracing::error!("invalid cluster_ID: {details:?}");
+                continue;
+            }
+        };
 
         let drop_event = v34::AuditLogEventV1 {
             id: next_audit_log_id,

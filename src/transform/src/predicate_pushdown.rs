@@ -398,12 +398,9 @@ impl PredicatePushdown {
                             input,
                             predicates: predicates2,
                         } => {
-                            *relation = input.take_dangerous().filter(
-                                predicates
-                                    .clone()
-                                    .into_iter()
-                                    .chain(predicates2.clone().into_iter()),
-                            );
+                            *relation = input
+                                .take_dangerous()
+                                .filter(predicates.clone().into_iter().chain(predicates2.clone()));
                             self.action(relation, get_predicates)?;
                         }
                         MirRelationExpr::Map { input, scalars } => {

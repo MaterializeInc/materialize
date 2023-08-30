@@ -445,6 +445,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(VALIDATE) => Ok(self
                     .parse_validate()
                     .map_parser_err(StatementKind::ValidateConnection)?),
+                Token::Keyword(COMMENT) => Ok(self
+                    .parse_comment()
+                    .map_parser_err(StatementKind::Comment)?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -3037,14 +3040,13 @@ impl<'a> Parser<'a> {
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
                 let generator = match self
-                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, CLOCK])?
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS])?
                 {
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
                     TPCH => LoadGenerator::Tpch,
                     DATUMS => LoadGenerator::Datums,
                     MARKETING => LoadGenerator::Marketing,
-                    CLOCK => LoadGenerator::Clock,
                     _ => unreachable!(),
                 };
                 let options = if self.consume_token(&Token::LParen) {
@@ -7435,6 +7437,48 @@ impl<'a> Parser<'a> {
             old_roles,
             new_role,
         }))
+    }
+
+    fn parse_comment(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ON)?;
+
+        let object = match self.expect_one_of_keywords(&[TABLE, VIEW, COLUMN])? {
+            TABLE => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Table { name }
+            }
+            VIEW => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::View { name }
+            }
+            COLUMN => {
+                let start = self.peek_pos();
+                let mut identifiers = self.parse_identifiers()?;
+                if identifiers.len() < 2 {
+                    return Err(ParserError::new(
+                        start,
+                        "need to specify a relation and a column",
+                    ));
+                }
+
+                // The last identifier specifies the column of a relation.
+                let column_name = identifiers.pop().expect("checked length above");
+                CommentObjectType::Column {
+                    relation_name: UnresolvedItemName(identifiers),
+                    column_name,
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        self.expect_keyword(IS)?;
+        let comment = match self.next_token() {
+            Some(Token::Keyword(NULL)) => None,
+            Some(Token::String(s)) => Some(s),
+            other => return self.expected(self.peek_prev_pos(), "NULL or literal string", other),
+        };
+
+        Ok(Statement::Comment(CommentStatement { object, comment }))
     }
 }
 

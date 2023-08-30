@@ -1054,7 +1054,8 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateItem { .. }
-                | Op::UpdateRotatedKeys { .. } => {}
+                | Op::UpdateRotatedKeys { .. }
+                | Op::Comment { .. } => {}
             }
         }
 

@@ -628,6 +628,7 @@ pub struct UpsertState<S> {
     // scratch vector for calling `multi_get`
     merge_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize>,
     multi_get_scratch: Vec<UpsertKey>,
+    shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 impl<S> UpsertState<S> {
@@ -636,6 +637,7 @@ impl<S> UpsertState<S> {
         metrics: Arc<UpsertSharedMetrics>,
         worker_metrics: UpsertMetrics,
         stats: SourceStatistics,
+        shrink_upsert_unused_buffers_by_ratio: usize,
     ) -> Self {
         Self {
             inner,
@@ -650,6 +652,7 @@ impl<S> UpsertState<S> {
             merge_scratch: Vec::new(),
             merge_upsert_scratch: indexmap::IndexMap::new(),
             multi_get_scratch: Vec::new(),
+            shrink_upsert_unused_buffers_by_ratio,
         }
     }
 }
@@ -686,7 +689,7 @@ where
         completed: bool,
     ) -> Result<(), anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
+        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
     {
         fail::fail_point!("fail_merge_snapshot_chunk", |_| {
             Err(anyhow::anyhow!("Error merging snapshot values"))
@@ -696,11 +699,24 @@ where
             panic!("attempted completion of already completed upsert snapshot")
         }
         let now = Instant::now();
+        let batch_size = merges.len();
         let mut merges = merges.into_iter().peekable();
 
         self.merge_scratch.clear();
         self.merge_upsert_scratch.clear();
         self.multi_get_scratch.clear();
+
+        // Shrinking the scratch vectors if the capacity is significantly more than batch size
+        if self.shrink_upsert_unused_buffers_by_ratio > 0 {
+            let reduced_capacity =
+                self.merge_scratch.capacity() / self.shrink_upsert_unused_buffers_by_ratio;
+            if reduced_capacity > batch_size {
+                // These vectors have already been cleared above and should be empty here
+                self.merge_scratch.shrink_to(reduced_capacity);
+                self.merge_upsert_scratch.shrink_to(reduced_capacity);
+                self.multi_get_scratch.shrink_to(reduced_capacity);
+            }
+        }
 
         let mut stats = MergeStats::default();
 
@@ -795,6 +811,14 @@ where
             .set_envelope_state_count(self.snapshot_stats.values_diff);
 
         if completed {
+            if self.shrink_upsert_unused_buffers_by_ratio > 0 {
+                // After rehydration is done, these scratch buffers should now be empty
+                // Shrinking them entirely
+                self.merge_scratch.shrink_to_fit();
+                self.merge_upsert_scratch.shrink_to_fit();
+                self.multi_get_scratch.shrink_to_fit();
+            }
+
             self.worker_metrics
                 .rehydration_latency
                 .set(self.snapshot_start.elapsed().as_secs_f64());

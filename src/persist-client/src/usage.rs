@@ -967,7 +967,7 @@ mod tests {
     }
 
     fn writer_id(x: char) -> WriterId {
-        let x = vec![x, x, x, x].iter().collect::<String>();
+        let x = [x, x, x, x].iter().collect::<String>();
         let s = format!("w{x}{x}-{x}-{x}-{x}-{x}{x}{x}");
         s.parse().unwrap()
     }

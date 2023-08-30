@@ -780,7 +780,7 @@ impl RustType<ProtoPlan> for Plan {
                 assert_eq!(ids.len(), limit_is_some.len());
                 let limits = limits_raw
                     .into_iter()
-                    .zip_eq(limit_is_some.into_iter())
+                    .zip_eq(limit_is_some)
                     .map(
                         |(limit_raw, is_some)| {
                             if is_some {
@@ -984,7 +984,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         } = self
         {
             forms.raw |= collections.raw;
-            forms.arranged.extend(collections.arranged.into_iter());
+            forms.arranged.extend(collections.arranged);
             forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
             forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
             Self::ArrangeBy {

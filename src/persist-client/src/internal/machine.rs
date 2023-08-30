@@ -881,6 +881,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    #[allow(clippy::unused_async)]
     pub async fn start_reader_heartbeat_task(
         self,
         reader_id: LeasedReaderId,

@@ -2234,7 +2234,9 @@ fn generate_view_sql(
 /// so we may end up deriving `None` for the number of attributes
 /// as a conservative approximation.
 fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
-    let Some((projection, _)) = find_projection(body) else { return None };
+    let Some((projection, _)) = find_projection(body) else {
+        return None;
+    };
     derive_num_attributes_from_projection(projection)
 }
 
@@ -2256,7 +2258,9 @@ fn derive_order_by(
     Vec<SelectItem<Raw>>,
     Option<Distinct<Raw>>,
 ) {
-    let Some((projection, distinct)) = find_projection(body) else { return (vec![], vec![], None) };
+    let Some((projection, distinct)) = find_projection(body) else {
+        return (vec![], vec![], None);
+    };
     let (view_order_by, extra_columns) = derive_order_by_from_projection(projection, order_by);
     (view_order_by, extra_columns, distinct.clone())
 }
@@ -2284,7 +2288,9 @@ fn find_projection(body: &SetExpr<Raw>) -> Option<(&Vec<SelectItem<Raw>>, &Optio
 fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
     let mut num_attributes = 0usize;
     for item in projection.iter() {
-        let SelectItem::Expr { expr, .. } = item else { return None };
+        let SelectItem::Expr { expr, .. } = item else {
+            return None;
+        };
         match expr {
             Expr::QualifiedWildcard(..) | Expr::WildcardAccess(..) => {
                 return None;

@@ -1706,6 +1706,7 @@ where
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
             | ExecuteResponse::CreatedWebhookSource
+            | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll

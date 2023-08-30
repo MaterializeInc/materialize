@@ -445,8 +445,9 @@ impl Consensus for PostgresConsensus {
              ORDER BY sequence_number ASC LIMIT $3";
         let Ok(limit) = i64::try_from(limit) else {
             return Err(ExternalError::from(anyhow!(
-                    "limit must be [0, i64::MAX]. was: {:?}", limit
-                )));
+                "limit must be [0, i64::MAX]. was: {:?}",
+                limit
+            )));
         };
         let rows = {
             let client = self.get_connection().await?;

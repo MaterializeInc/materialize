@@ -107,6 +107,8 @@ impl Server {
         let internal = self.internal;
         let metrics = self.metrics.clone();
         let active_connection_count = Arc::clone(&self.active_connection_count);
+        // TODO(guswynn): remove this redundant_closure_call
+        #[allow(clippy::redundant_closure_call)]
         async move {
             let result = (|| {
                 async move {

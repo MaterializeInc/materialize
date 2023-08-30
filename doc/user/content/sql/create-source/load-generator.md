@@ -31,7 +31,6 @@ _src_name_  | The name for the source.
 **AUCTION**  | Use the [auction](#auction) load generator.
 **MARKETING**| Use the [marketing](#marketing) load generator.
 **TPCH**     | Use the [tpch](#tpch) load generator.
-**CLOCK**    | Use the [clock](#clock} load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
@@ -57,13 +56,6 @@ submit a [feature request].
 
 The counter load generator produces the sequence `1`, `2`, `3`, …. Each tick
 interval, the next number in the sequence is emitted.
-
-### Clock
-
-The clock load generator produces the currrent value of the system
-time at every tick interval, expressed in milliseconds since midnight
-UTC on January 1st, 1970. It always updates a singleton value, rather
-than appending new values.
 
 ### Auction
 

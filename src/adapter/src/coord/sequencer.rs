@@ -197,6 +197,10 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::Comment(plan) => {
+                let result = self.sequence_comment_on(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::DropObjects(plan) => {
                 let result = self.sequence_drop_objects(ctx.session_mut(), plan).await;
                 ctx.retire(result);

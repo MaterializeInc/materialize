@@ -391,7 +391,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     let list = datum.unwrap_list();
                     let fields = fields
                         .iter()
-                        .zip(list.into_iter())
+                        .zip(&list)
                         .map(|((name, typ), datum)| {
                             let name = name.to_string();
                             let datum = TypedDatum::new(datum, typ);

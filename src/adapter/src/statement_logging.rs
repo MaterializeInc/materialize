@@ -151,6 +151,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::AlteredRole
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::ClosedCursor
+            | ExecuteResponse::Comment
             | ExecuteResponse::CreatedConnection
             | ExecuteResponse::CreatedDatabase
             | ExecuteResponse::CreatedSchema

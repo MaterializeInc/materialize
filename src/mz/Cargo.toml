@@ -36,7 +36,6 @@ thiserror = "1.0.37"
 uuid = "1.2.2"
 url = "2.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-postgres-protocol = "0.6.4"
 
 [dev-dependencies]
 assert_cmd = "2.0.5"

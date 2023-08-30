@@ -77,6 +77,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
@@ -294,6 +295,7 @@ pub fn user_privilege_hack(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)

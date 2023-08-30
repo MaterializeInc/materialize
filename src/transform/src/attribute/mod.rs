@@ -486,11 +486,17 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<RelationType>().into_iter(),
             ) {
-                let humanized_columns = types
-                    .into_iter()
-                    .map(|c| context.humanizer.humanize_column_type(&c))
-                    .collect::<Vec<_>>();
-                let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
+                let attr = match types {
+                    Some(types) => {
+                        let humanized_columns = types
+                            .into_iter()
+                            .map(|c| context.humanizer.humanize_column_type(&c))
+                            .collect::<Vec<_>>();
+
+                        bracketed("(", ")", separated(", ", humanized_columns)).to_string()
+                    }
+                    None => "(<error>)".to_string(),
+                };
                 let attrs = annotations.entry(expr).or_default();
                 attrs.types = Some(attr);
             }

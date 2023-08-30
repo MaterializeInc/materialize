@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
+use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
@@ -22,7 +23,7 @@ use timely::worker::Worker as TimelyWorker;
 /// Storage instance configuration parameters that are used during dataflow rendering.
 /// Changes to these parameters are applied to `StorageWorker`s in a consistent order
 /// with source and sink creation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DataflowParameters {
     /// Configured PG replication timeouts,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
@@ -37,9 +38,30 @@ pub struct DataflowParameters {
         mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
     /// Configuration for basic hydration backpressure.
     pub delay_sources_past_rehydration: bool,
+    /// Configuration ratio to shrink upsert buffers.
+    /// Defaults to 0, which means no shrinking will happen.
+    pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 impl DataflowParameters {
+    /// Creates a new instance of `DataflowParameters` with given shared rocksdb write buffer manager
+    /// and the cluster memory limit
+    pub fn new(
+        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
+        cluster_memory_limit: Option<usize>,
+    ) -> Self {
+        Self {
+            pg_replication_timeouts: Default::default(),
+            upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig::new(
+                shared_rocksdb_write_buffer_manager,
+                cluster_memory_limit,
+            ),
+            auto_spill_config: Default::default(),
+            storage_dataflow_max_inflight_bytes_config: Default::default(),
+            delay_sources_past_rehydration: Default::default(),
+            shrink_upsert_unused_buffers_by_ratio: Default::default(),
+        }
+    }
     /// Update the `DataflowParameters` with new configuration.
     pub fn update(
         &mut self,
@@ -48,6 +70,7 @@ impl DataflowParameters {
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
         storage_dataflow_max_inflight_bytes_config: mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
         delay_sources_past_rehydration: bool,
+        shrink_upsert_unused_buffers_by_ratio: usize,
     ) {
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.upsert_rocksdb_tuning_config.apply(rocksdb_params);
@@ -55,6 +78,7 @@ impl DataflowParameters {
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
+        self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
     }
 }
 
@@ -107,6 +131,8 @@ pub enum InternalStorageCommand {
         auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
         /// Configuration for basic hydration backpressure.
         delay_sources_past_rehydration: bool,
+        /// Configuration ratio to shrink upsert buffers by
+        shrink_upsert_unused_buffers_by_ratio: usize,
     },
 }
 

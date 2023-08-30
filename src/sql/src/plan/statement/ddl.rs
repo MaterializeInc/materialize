@@ -33,10 +33,11 @@ use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
-    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -86,13 +87,13 @@ use crate::ast::{
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
-    ObjectType,
+    ObjectType, SystemObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
-    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
-    SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -107,7 +108,7 @@ use crate::plan::{
     AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
     AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
@@ -1437,7 +1438,6 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
-        mz_sql_parser::ast::LoadGenerator::Clock => LoadGenerator::Clock,
     };
 
     let mut available_subsources = BTreeMap::new();
@@ -1450,7 +1450,6 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
-                LoadGenerator::Clock => "clock".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },
@@ -5038,6 +5037,93 @@ pub fn plan_alter_role(
         id: name.id,
         name: name.name,
         attributes,
+    }))
+}
+
+pub fn describe_comment(
+    _: &StatementContext,
+    _: CommentStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Result<Plan, PlanError> {
+    const MAX_COMMENT_LENGTH: usize = 1024;
+
+    if !scx.catalog.system_vars().enable_comment() {
+        return Err(PlanError::Unsupported {
+            feature: "COMMENT ON".to_string(),
+            issue_no: Some(20218),
+        });
+    }
+
+    let CommentStatement { object, comment } = stmt;
+
+    // TODO(parkmycar): Make max comment length configurable.
+    if let Some(c) = &comment {
+        if c.len() > 1024 {
+            return Err(PlanError::CommentTooLong {
+                length: c.len(),
+                max_size: MAX_COMMENT_LENGTH,
+            });
+        }
+    }
+
+    let name = match &object {
+        CommentObjectType::Table { name } | CommentObjectType::View { name } => name,
+        CommentObjectType::Column { relation_name, .. } => relation_name,
+    };
+    let name = normalize::unresolved_item_name(name.clone())?;
+    let item = scx.catalog.resolve_item(&name)?;
+
+    let (object_id, column_pos) = match (item.item_type(), object) {
+        (CatalogItemType::Table, CommentObjectType::Table { .. }) => {
+            (CommentObjectId::Table(item.id()), None)
+        }
+        (CatalogItemType::View, CommentObjectType::View { .. }) => {
+            (CommentObjectId::View(item.id()), None)
+        }
+        (CatalogItemType::Table, CommentObjectType::Column { column_name, .. }) => {
+            let column_name = normalize::column_name(column_name);
+            let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
+
+            // Check to make sure this column exists.
+            let Some((pos, _ty)) = desc.get_by_name(&column_name) else {
+                return Err(PlanError::UnknownColumn {
+                    table: Some(name),
+                    column: column_name,
+                });
+            };
+
+            (CommentObjectId::Table(item.id()), Some(pos + 1))
+        }
+        (ty, CommentObjectType::Table { .. }) => {
+            return Err(PlanError::InvalidObjectType {
+                expected_type: SystemObjectType::Object(ObjectType::Table),
+                actual_type: SystemObjectType::Object(ty.into()),
+                object_name: item.name().item.clone(),
+            })
+        }
+        (ty, CommentObjectType::View { .. }) => {
+            return Err(PlanError::InvalidObjectType {
+                expected_type: SystemObjectType::Object(ObjectType::View),
+                actual_type: SystemObjectType::Object(ty.into()),
+                object_name: item.name().item.clone(),
+            })
+        }
+        (ty, _) => {
+            return Err(PlanError::Unsupported {
+                feature: format!("COMMENT on {ty} not yet supported."),
+                // TODO(parkmycar): File an issue.
+                issue_no: None,
+            });
+        }
+    };
+
+    Ok(Plan::Comment(CommentPlan {
+        object_id,
+        sub_component: column_pos,
+        comment,
     }))
 }
 
