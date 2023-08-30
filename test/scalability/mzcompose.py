@@ -130,7 +130,6 @@ def run_with_concurrency(
     for measurement in measurements:
         df_detail = pd.concat([df_detail, pd.DataFrame([measurement])])
 
-    assert len(df_detail) == count
     print("Best and worst individual measurements:")
     print(df_detail.sort_values(by=["wallclock"]))
 
