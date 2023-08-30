@@ -661,6 +661,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
+    branches: "main v*.*"
 
   - id: output-consistency-test
     label: "Output consistency test"
