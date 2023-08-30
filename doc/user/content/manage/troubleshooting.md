@@ -41,8 +41,7 @@ CREATE MATERIALIZED VIEW num_bids AS
 CREATE INDEX num_bids_idx ON num_bids (item);
 ```
 
-The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use [`EXPLAIN`](https://materialize.com/docs/sql/explain/) to display the plan used to evaluate the join.
-Note that you can also explain the plan of queries and common views with `EXPLAIN` and `EXPLAIN VIEW`, respectively.
+The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the plan used to evaluate the join.
 
 ```sql
 EXPLAIN MATERIALIZED VIEW num_bids
@@ -70,7 +69,7 @@ Others are specific to Materialize (`Get`, `ArrangeBy`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
 `Filter` filters records, `Join` joins records from two or more inputs, `Map` applies a function to transform records, etc.
-You can find more details on these operators in the [`EXPLAIN` documentation](https://materialize.com/docs/sql/explain/#operators-in-decorrelated-and-optimized-plans).
+You can find more details on these operators in the [`EXPLAIN PLAN` documentation](https://materialize.com/docs/sql/explain-plan/#operators-in-decorrelated-and-optimized-plans).
 But it's not important to have a deep understanding of all these operators for effective debugging.
 
 
