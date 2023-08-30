@@ -30,3 +30,4 @@ tests:
   {project_name}:
     +store_failures: true
     +schema: 'etl_failure'
+  
