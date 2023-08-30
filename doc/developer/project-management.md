@@ -60,10 +60,11 @@ visible outside of our team.
 The purpose of the Triage phase is to ensure we’re working on the
 most urgent and important problems at all times.
 
-Newly reported bugs will be triaged most frequently. `P0` or `release-blocker`
-bugs will be triaged within 24 hours, and all other bugs will be
-triaged within 3 business days. The remaining backlog of problem
-Issues will be triaged by EPD management at least once a month.
+Newly reported bugs will be triaged most frequently. If the reported
+bug has been assigned a `P0` or `release-blocker` label, it must be
+triaged within 24 hours. All other bugs will be triaged within 3
+business days. The remaining backlog of problem Issues will be triaged
+by EPD management at least once a month.
 
 Some problems will be sufficiently straightforward with a clearly
 defined scope, a limited solution space, and limited effects on other
