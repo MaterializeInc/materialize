@@ -69,6 +69,7 @@ This enables a simple and rudimentary way to grant authorization to your webhook
 To configure Webhook as a destination in RudderStack, follow the steps outlined below:
 
 1.  **Select Your RudderStack Source**: Identify the source you wish to add a webhook endpoint to. If you don't have a source set up, follow the steps outlined in their [Getting Started](https://www.rudderstack.com/docs/dashboard-guides/sources/) guide.
+
 1.  **Choose Webhook as Destination**:
     - Navigate to the destination section.
     - Select the **Webhook**" option.
@@ -103,13 +104,16 @@ On the Connection Settings page:
 With the source set up in Materialize, you can now monitor the incoming data from RudderStack:
 
 1. [Login to the Materialize console](https://console.materialize.com/).
+
 1. Go to the **SQL Shell**.
-1. Select the `default` cluster.
+
+1. Select a cluster.
+
 1. Use SQL queries to inspect and analyze the incoming data:
 
-```sql
-SELECT * FROM rudderstack_source LIMIT 10;
-```
+    ```sql
+    SELECT * FROM rudderstack_source LIMIT 10;
+    ```
 
 This will show you the last ten records ingested from RudderStack.
 
