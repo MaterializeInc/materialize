@@ -1136,9 +1136,12 @@ pub fn plan_create_source(
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => {
             let duration = timestamp_interval.duration()?;
-            if duration < scx.catalog.system_vars().min_timestamp_interval() {
+            let min = scx.catalog.system_vars().min_timestamp_interval();
+            let max = scx.catalog.system_vars().max_timestamp_interval();
+            if duration < min || duration > max {
                 return Err(PlanError::InvalidTimestampInterval {
-                    min: scx.catalog.system_vars().min_timestamp_interval(),
+                    min,
+                    max,
                     requested: duration,
                 });
             }

@@ -217,6 +217,7 @@ pub enum PlanError {
     },
     InvalidTimestampInterval {
         min: Duration,
+        max: Duration,
         requested: Duration,
     },
     // TODO(benesch): eventually all errors should be structured.
@@ -579,8 +580,8 @@ impl fmt::Display for PlanError {
             Self::CommentTooLong { length, max_size } => {
                 write!(f, "provided comment was {length} bytes long, max size is {max_size} bytes")
             }
-            Self::InvalidTimestampInterval { min, requested } => {
-                write!(f, "invalid timestamp interval of {}ms, minimum is {}ms", requested.as_millis(), min.as_millis())
+            Self::InvalidTimestampInterval { min, max, requested } => {
+                write!(f, "invalid timestamp interval of {}ms, must be in the range [{}ms, {}ms]", requested.as_millis(), min.as_millis(), max.as_millis())
             }
         }
     }

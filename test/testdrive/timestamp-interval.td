@@ -11,17 +11,20 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET min_timestamp_interval = '500ms'
 
 ! CREATE SOURCE foo FROM LOAD GENERATOR COUNTER with (TIMESTAMP INTERVAL '100ms', SIZE '1')
-contains:invalid timestamp interval of 100ms, minimum is 500ms
+contains:invalid timestamp interval of 100ms, must be in the range [500ms, 1000ms]
 
 > CREATE SOURCE quick_counter FROM LOAD GENERATOR COUNTER with (TIMESTAMP INTERVAL '500ms', SIZE '1')
 
 > SELECT c1=c2 from (SELECT COUNT(*) as c1 from quick_counter), (SELECT COUNT(*) as c2 from quick_counter)
-t
+true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_timestamp_interval = '2s'
 
 > CREATE SOURCE slow_counter FROM LOAD GENERATOR COUNTER with (TIMESTAMP INTERVAL '2s', SIZE '1')
 
 > SELECT c1=c2 from (SELECT COUNT(*) as c1 from slow_counter), (SELECT COUNT(*) as c2 from slow_counter)
-t
+true
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": ["int", "null"]} , {"name": "f2", "type": ["int", "null"]}] }
 
