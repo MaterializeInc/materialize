@@ -275,17 +275,18 @@ impl IntoResponse for WebhookError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use axum::response::IntoResponse;
     use bytes::Bytes;
     use http::StatusCode;
     use mz_adapter::AdapterError;
     use mz_repr::{ColumnType, GlobalId, ScalarType};
+    use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
     use mz_storage_client::controller::StorageError;
     use proptest::prelude::*;
 
-    use super::{pack_row, WebhookError};
+    use super::{filter_headers, pack_row, WebhookError};
 
     #[mz_ore::test]
     fn smoke_test_adapter_error_response_status() {
@@ -324,20 +325,94 @@ mod tests {
             scalar_type: ScalarType::Int64,
             nullable: false,
         };
-        assert!(pack_row(body, &headers, body_ty, None).is_err());
+        assert!(pack_row(body, &headers, body_ty, WebhookHeaders::default()).is_err());
+    }
+
+    #[mz_ore::test]
+    fn smoke_test_filter_headers() {
+        let block = BTreeSet::from(["foo".to_string()]);
+        let allow = BTreeSet::from(["bar".to_string()]);
+
+        let headers = BTreeMap::from([
+            ("foo".to_string(), "1".to_string()),
+            ("bar".to_string(), "2".to_string()),
+            ("baz".to_string(), "3".to_string()),
+        ]);
+        let mut filters = WebhookHeaderFilters::default();
+        filters.block = block.clone();
+
+        let mut h = filter_headers(&headers, &filters);
+        assert_eq!(h.next().unwrap().0, "bar");
+        assert_eq!(h.next().unwrap().0, "baz");
+        assert!(h.next().is_none());
+
+        let mut filters = WebhookHeaderFilters::default();
+        filters.allow = allow.clone();
+
+        let mut h = filter_headers(&headers, &filters);
+        assert_eq!(h.next().unwrap().0, "bar");
+        assert!(h.next().is_none());
+
+        let mut filters = WebhookHeaderFilters::default();
+        filters.allow = allow;
+        filters.block = block;
+
+        let mut h = filter_headers(&headers, &filters);
+        assert_eq!(h.next().unwrap().0, "bar");
+        assert!(h.next().is_none());
+    }
+
+    #[mz_ore::test]
+    fn filter_headers_block_overrides_allow() {
+        let block = BTreeSet::from(["foo".to_string()]);
+        let allow = block.clone();
+
+        let headers = BTreeMap::from([
+            ("foo".to_string(), "1".to_string()),
+            ("bar".to_string(), "2".to_string()),
+            ("baz".to_string(), "3".to_string()),
+        ]);
+        let filters = WebhookHeaderFilters { block, allow };
+
+        // We should yield nothing since we block the only thing we allow.
+        let mut h = filter_headers(&headers, &filters);
+        assert!(h.next().is_none());
     }
 
     proptest! {
         #[mz_ore::test]
         fn proptest_pack_row_never_panics(
             body: Vec<u8>,
-            headers: BTreeMap<String, String>,
             body_ty: ColumnType,
-            header_ty: Option<ColumnType>
+            headers: BTreeMap<String, String>,
+            non_existent_headers: Vec<String>,
+            block: BTreeSet<String>,
+            allow: BTreeSet<String>,
         ) {
             let body = Bytes::from(body);
+
+            // Include the headers column with a random set of block and allow.
+            let filters = WebhookHeaderFilters { block, allow };
+            // Include half of the existing headers, append on some non-existing ones too.
+            let mut use_bytes = false;
+            let mapped_headers = headers
+                .keys()
+                .take(headers.len() / 2)
+                .chain(non_existent_headers.iter())
+                .cloned()
+                .enumerate()
+                .map(|(idx, name)| {
+                    use_bytes = !use_bytes;
+                    (idx + 2, (name, use_bytes))
+                })
+                .collect();
+            let header_tys = WebhookHeaders {
+                header_column: Some(filters),
+                mapped_headers,
+            };
+
             // Call this method to make sure it doesn't panic.
-            let _ = pack_row(body, &headers, body_ty, header_ty);
+            let _ = pack_row(body, &headers, body_ty, header_tys);
         }
 
         #[mz_ore::test]
@@ -349,15 +424,10 @@ mod tests {
             let body = Bytes::from(body);
 
             let body_ty = ColumnType { scalar_type: ScalarType::Bytes, nullable: false };
-            let header_ty = include_headers.then(|| ColumnType {
-                scalar_type: ScalarType::Map {
-                    value_type: Box::new(ScalarType::String),
-                    custom_id: None,
-                },
-                nullable: false,
-            });
+            let mut header_tys = WebhookHeaders::default();
+            header_tys.header_column = include_headers.then(Default::default);
 
-            prop_assert!(pack_row(body, &headers, body_ty, header_ty).is_ok());
+            prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
         }
 
         #[mz_ore::test]
@@ -369,15 +439,46 @@ mod tests {
             let body = Bytes::from(body);
 
             let body_ty = ColumnType { scalar_type: ScalarType::String, nullable: false };
-            let header_ty = include_headers.then(|| ColumnType {
-                scalar_type: ScalarType::Map {
-                    value_type: Box::new(ScalarType::String),
-                    custom_id: None,
-                },
-                nullable: false,
-            });
+            let mut header_tys = WebhookHeaders::default();
+            header_tys.header_column = include_headers.then(Default::default);
 
-            prop_assert!(pack_row(body, &headers, body_ty, header_ty).is_ok());
+            prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
+        }
+
+        #[mz_ore::test]
+        fn proptest_pack_row_succeeds_for_selective_headers(
+            body: String,
+            headers: BTreeMap<String, String>,
+            include_headers: bool,
+            non_existent_headers: Vec<String>,
+            block: BTreeSet<String>,
+            allow: BTreeSet<String>,
+        ) {
+            let body = Bytes::from(body);
+            let body_ty = ColumnType { scalar_type: ScalarType::String, nullable: false };
+
+            // Include the headers column with a random set of block and allow.
+            let filters = WebhookHeaderFilters { block, allow };
+            // Include half of the existing headers, append on some non-existing ones too.
+            let mut use_bytes = false;
+            let column_offset = if include_headers { 2 } else { 1 };
+            let mapped_headers = headers
+                .keys()
+                .take(headers.len() / 2)
+                .chain(non_existent_headers.iter())
+                .cloned()
+                .enumerate()
+                .map(|(idx, name)| {
+                    use_bytes = !use_bytes;
+                    (idx + column_offset, (name, use_bytes))
+                })
+                .collect();
+            let header_tys = WebhookHeaders {
+                header_column: include_headers.then_some(filters),
+                mapped_headers,
+            };
+
+            prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
         }
     }
 }

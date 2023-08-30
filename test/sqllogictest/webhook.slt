@@ -297,6 +297,47 @@ CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER webhook_cluster FROM WEB
     length(x) > 0
   )
 
+statement ok
+CREATE SOURCE webhook_text_with_mapped_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-special-header' AS "specialHeader"
+  INCLUDE HEADER 'x-hash' AS hash BYTES
+  INCLUDE HEADER 'content-type' AS content_type
+
+query TTT
+SHOW COLUMNS FROM webhook_text_with_mapped_headers
+----
+body false text
+specialHeader true text
+hash true bytea
+content_type true text
+
+statement ok
+CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-hash' as hash BYTES
+  INCLUDE HEADER 'content-type' as content_type
+  INCLUDE HEADERS ('x-special-header')
+
+query TTT
+SHOW COLUMNS FROM webhook_text_mapped_and_filtered_headers
+----
+body false text
+headers false map
+hash true bytea
+content_type true text
+
+statement error column reference "header_a" is ambiguous
+CREATE SOURCE webhook_text_with_duplicate_header_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-first-header' as header_a
+  INCLUDE HEADER 'x-second-header' as header_a
+
+statement error column reference "body" is ambiguous
+CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-my-header' as body
+
 # Try creating a webhook source in a compute cluster.
 
 statement ok
