@@ -45,7 +45,7 @@ Change the `<secret_value>` to a unique value that only you know and store it in
 
 ## Step 3. Set Up a Webhook Source
 
-Using the secret, create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest data from RudderStack:
+Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest data from RudderStack:
 
 ```sql
 CREATE SOURCE rudderstack_source IN CLUSTER rudderstack_cluster
