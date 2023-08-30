@@ -171,7 +171,15 @@ Now that you've configured your database network and created an ingestion cluste
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
     ```
 
-1. Back in the `psql` shell connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. Back in the `psql` shell connected to Materialize, validate the SSH tunnel connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+
+    ```sql
+    VALIDATE CONNECTION ssh_connection;
+    ```
+
+    If no validation error is returned, move to the next step.
+
+1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';
