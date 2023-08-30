@@ -152,7 +152,10 @@ impl InstanceOptions {
         }
     }
 
-    fn as_rocksdb_options(&self, tuning_config: &RocksDBConfig) -> RocksDBOptions {
+    fn as_rocksdb_options(
+        &self,
+        tuning_config: &RocksDBConfig,
+    ) -> (RocksDBOptions, Option<WriteBufferManagerHandle>) {
         // Defaults + `create_if_missing`
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
@@ -160,9 +163,10 @@ impl InstanceOptions {
         // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
 
-        config::apply_to_options(tuning_config, &mut options);
-
-        options
+        let write_buffer_handle = config::apply_to_options(tuning_config, &mut options);
+        // Returns the rocksdb options and an optional `WriteBufferManagerHandle`
+        // if write buffer manager was enabled in the configs.
+        (options, write_buffer_handle)
     }
 
     fn as_rocksdb_write_options(&self) -> WriteOptions {
@@ -275,9 +279,6 @@ pub struct RocksDBInstance<K, V> {
 
     // Configuration that can change dynamically.
     dynamic_config: config::RocksDBDynamicConfig,
-
-    // Handle to the optional write buffer manager
-    _write_buffer_manager_handle: Option<WriteBufferManagerHandle>,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -326,23 +327,6 @@ where
         let (tx, rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
 
         let instance_path = instance_path.to_owned();
-
-        let handle = config::get_write_buffer_manager(&tuning_config.write_buffer_manager_config)
-            .map(|write_buffer_manager| {
-                let buffer_manager = tuning_config
-                    .shared_write_buffer_manager
-                    .get_or_init(|| write_buffer_manager);
-                WriteBufferManagerHandle {
-                    inner: buffer_manager,
-                }
-            });
-
-        tracing::info!(
-            "Starting rocksdb at {:?} with write_buffer_manager: {:?}",
-            instance_path,
-            handle
-        );
-
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
             rocksdb_core_loop(
@@ -367,7 +351,6 @@ where
             multi_get_results_scratch: Vec::new(),
             multi_put_scratch: Vec::new(),
             dynamic_config,
-            _write_buffer_manager_handle: handle,
         })
     }
 
@@ -552,7 +535,17 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
     let retry_max_duration = tuning_config.retry_max_duration;
-    let rocksdb_options = options.as_rocksdb_options(&tuning_config);
+
+    // Handle to an optional reference of a write buffer manager which
+    // should be valid till the rocksdb thread is running.
+    // The shared write buffer manager will be cleaned up if all
+    // the handles are dropped across all the rocksdb instances.
+    let (rocksdb_options, write_buffer_handle) = options.as_rocksdb_options(&tuning_config);
+    tracing::info!(
+        "Starting rocksdb at {:?} with write_buffer_manager: {:?}",
+        instance_path,
+        write_buffer_handle
+    );
 
     let retry_result = Retry::default()
         .max_duration(retry_max_duration)

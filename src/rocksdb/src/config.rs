@@ -188,10 +188,10 @@ pub struct SharedWriteBufferManager {
 #[derive(Derivative)]
 #[derivative(Debug)]
 /// A handle to the [WriteBufferManager] which will be dropped when the
-/// `RocksDBInstance` will be dropped.
-pub(crate) struct WriteBufferManagerHandle {
+/// rocksdb thread is dropped.
+pub struct WriteBufferManagerHandle {
     #[derivative(Debug(format_with = "fmt_write_buffer_manager"))]
-    pub(crate) inner: Arc<WriteBufferManager>,
+    inner: Arc<WriteBufferManager>,
 }
 
 fn fmt_write_buffer_manager(
@@ -207,27 +207,28 @@ fn fmt_write_buffer_manager(
 
 impl SharedWriteBufferManager {
     /// If a shared [WriteBufferManager] does not already exist, then it's initialized
-    /// with given `init_value`.
+    /// with given `initializer`.
     /// A strong reference is returned for the shared buffer manager.
-    pub(crate) fn get_or_init<F>(&self, initializer: F) -> Arc<WriteBufferManager>
+    pub(crate) fn get_or_init<F>(&self, initializer: F) -> WriteBufferManagerHandle
     where
         F: FnOnce() -> WriteBufferManager,
     {
         let mut lock = self.shared.lock().expect("lock poisoned");
 
-        match lock.upgrade() {
+        let wbm = match lock.upgrade() {
             Some(wbm) => wbm,
             None => {
                 let new_wbm: Arc<WriteBufferManager> = Arc::new(initializer());
                 *lock = Arc::downgrade(&new_wbm);
                 new_wbm
             }
-        }
+        };
+        WriteBufferManagerHandle { inner: wbm }
     }
 
     /// This will return a non-empty [WriteBufferManager] only after it has been
-    /// initialized by the `SharedWriteBufferManager::get_or_init` above.
-    /// This is public so that it can be used in tests.
+    /// initialized by a RocksDBInstance.
+    /// This method is only used in tests.
     pub fn get(&self) -> Option<Arc<WriteBufferManager>> {
         self.shared.lock().expect("lock poisoned").upgrade()
     }
@@ -264,7 +265,12 @@ impl IntoRocksDBType for CompressionType {
 }
 /// Apply these tuning parameters to a `rocksdb::Options`. Some may
 /// be applied to a shared `Env` underlying the `Options`.
-pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) {
+/// If configured, then a write buffer manager will be initialized
+/// and a handle to it will be returned.
+pub fn apply_to_options(
+    config: &RocksDBConfig,
+    options: &mut rocksdb::Options,
+) -> Option<WriteBufferManagerHandle> {
     let RocksDBConfig {
         compaction_style,
         optimize_compaction_memtable_budget,
@@ -280,7 +286,7 @@ pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) 
         shrink_buffers_by_ratio: _,
         dynamic: _,
         shared_write_buffer_manager,
-        write_buffer_manager_config: _,
+        write_buffer_manager_config,
     } = config;
 
     options.set_compression_type((*compression_type).into_rocksdb());
@@ -325,9 +331,14 @@ pub fn apply_to_options(config: &RocksDBConfig, options: &mut rocksdb::Options) 
         options.optimize_for_point_lookup((*block_cache_size_mb).into());
     }
 
-    if let Some(write_buffer_manager) = shared_write_buffer_manager.get() {
-        options.set_write_buffer_manager(&write_buffer_manager);
-    }
+    let write_buffer_manager = get_write_buffer_manager(write_buffer_manager_config);
+    let write_buffer_manager_handle = write_buffer_manager.map(|buf| {
+        let handle = shared_write_buffer_manager.get_or_init(|| buf);
+        options.set_write_buffer_manager(&handle.inner);
+        handle
+    });
+
+    write_buffer_manager_handle
 }
 
 /// Getting write buffer manager based on configured values
