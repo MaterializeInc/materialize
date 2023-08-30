@@ -39,9 +39,9 @@ Fundamentally, there are two types of issues we create to identify
 potential work: bugs and problems. Bugs report a defect in an
 existing feature. Bugs can be reported by internal team members
 and external users, and should be created in the repository that
-contains the buggy code wherever possible. Use a private repository
+contains the buggy code wherever possible (use a private repository
 if the issue description contains sensitive information that you
-want to record.
+want to record).
 
 Problems, on the other hand, can identify potential improvements
 as well as net-new features. Because of this, they can vary greatly
