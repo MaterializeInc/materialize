@@ -33,6 +33,7 @@ use mz_sql::catalog::{
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage_client::types::connections::inline::ReferencedConnection;
 use mz_storage_client::types::connections::KafkaConnection;
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_client::types::sources::{
@@ -503,7 +504,7 @@ impl CatalogState {
     fn pack_postgres_source_update(
         &self,
         id: GlobalId,
-        postgres: &PostgresSourceConnection,
+        postgres: &PostgresSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -519,7 +520,7 @@ impl CatalogState {
     fn pack_kafka_source_update(
         &self,
         id: GlobalId,
-        kafka: &KafkaSourceConnection,
+        kafka: &KafkaSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -622,7 +623,7 @@ impl CatalogState {
     fn pack_kafka_connection_update(
         &self,
         id: GlobalId,
-        kafka: &KafkaConnection,
+        kafka: &KafkaConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let progress_topic_holder;

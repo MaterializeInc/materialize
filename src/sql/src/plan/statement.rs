@@ -19,6 +19,7 @@ use mz_sql_parser::ast::{
     ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
+use mz_storage_client::types::connections::inline::ReferencedConnection;
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
@@ -805,16 +806,16 @@ impl<'a> StatementContext<'a> {
         &self,
         ssh_tunnel: Option<with_options::Object>,
         aws_privatelink: Option<with_options::Object>,
-    ) -> Result<Tunnel, PlanError> {
+    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
                 let id = GlobalId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
-                    Connection::Ssh(connection) => Ok(Tunnel::Ssh(SshTunnel {
+                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
                         connection_id: id,
-                        connection: connection.clone(),
+                        connection: id,
                     })),
                     _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
                 }

@@ -48,6 +48,7 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
+use mz_storage_client::types::connections::inline::ReferencedConnection;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -589,7 +590,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -1137,7 +1138,7 @@ pub enum DataSourceDesc {
 
 #[derive(Clone, Debug)]
 pub struct Ingestion {
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<ReferencedConnection>,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
@@ -1194,7 +1195,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]
@@ -1207,7 +1208,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 
