@@ -8,8 +8,6 @@ menu:
 
 `ALTER ROLE` alters the attributes of an existing role.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "alter-role.svg" >}}

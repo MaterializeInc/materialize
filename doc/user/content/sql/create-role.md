@@ -11,8 +11,6 @@ menu:
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "create-role.svg" >}}

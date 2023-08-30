@@ -7,8 +7,6 @@ menu:
     weight: 25
 ---
 
-{{< private-preview />}}
-
 This tutorial walks you through managing roles in Materialize with [Terraform](https://www.terraform.io/). By the end of this tutorial you will:
 
 * Create two new roles in your Materialize
