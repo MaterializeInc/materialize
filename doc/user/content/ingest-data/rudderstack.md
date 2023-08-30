@@ -1,5 +1,5 @@
 ---
-title: "Ingest data RudderStack using webhooks"
+title: "RudderStack"
 description: "How to stream data from RudderStack to Materialize using webhooks"
 menu:
   main:
