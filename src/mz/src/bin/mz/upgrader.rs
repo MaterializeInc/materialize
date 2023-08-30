@@ -56,9 +56,8 @@ impl UpgradeChecker {
             .map_err(|_| Error::TimestampConversionError)?
             .as_secs();
 
-        file.write(current_time.to_string().as_bytes())?;
-
-        file.write(format!("\n{}{}.{}.{}", MZ_V_PREFIX, major, minor, patch).as_bytes())?;
+        file.write_all(current_time.to_string().as_bytes())?;
+        file.write_all(format!("\n{}{}.{}.{}", MZ_V_PREFIX, major, minor, patch).as_bytes())?;
 
         Ok(())
     }
@@ -168,7 +167,7 @@ impl UpgradeChecker {
         let user_agent = format!("mz/{}", VERSION.clone());
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(&user_agent).map_err(|err| Error::HeaderParseError(err))?,
+            HeaderValue::from_str(&user_agent).map_err(Error::HeaderParseError)?,
         );
 
         let client = reqwest::Client::new();
@@ -187,12 +186,12 @@ impl UpgradeChecker {
                 .headers(headers.clone())
                 .send()
                 .await
-                .map_err(|err| Error::GitHubFetchError(err))?;
+                .map_err(Error::GitHubFetchError)?;
 
             let tags: Vec<GithubTag> = response
                 .json()
                 .await
-                .map_err(|err| Error::ReqwestJsonParseError(err))?;
+                .map_err(Error::ReqwestJsonParseError)?;
 
             if let Some(tag) = tags
                 .into_iter()

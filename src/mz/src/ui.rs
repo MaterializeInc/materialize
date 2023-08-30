@@ -68,9 +68,9 @@ impl OutputFormatter {
     /// Outputs a prefix warning.
     pub fn output_warning(&self, msg: &str) -> Result<(), Error> {
         if self.no_color {
-            println!("** Warning ** {}", msg);
+            println!("\n* Warning * {}", msg);
         } else {
-            println!("\x1b[93m* Warning * \x1b[0m {}", msg);
+            println!("\n\x1b[93m* Warning * \x1b[0m {}", msg);
         }
 
         Ok(())
