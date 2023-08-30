@@ -10,7 +10,7 @@ menu:
 
 [RudderStack](https://rudderstack.com/) is a Customer Data Platform (CDP) for gathering and routing data from your applications.
 
-This guide will walk you through the steps to ingest data from RudderStack and Materialize.
+This guide will walk you through the steps to ingest data from RudderStack to Materialize.
 
 ## Before you begin
 
