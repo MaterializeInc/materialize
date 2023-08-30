@@ -59,7 +59,7 @@ impl DataflowParameters {
             auto_spill_config: Default::default(),
             storage_dataflow_max_inflight_bytes_config: Default::default(),
             delay_sources_past_rehydration: Default::default(),
-            shrink_upsert_unused_buffers_by_ratio: Default::default()
+            shrink_upsert_unused_buffers_by_ratio: Default::default(),
         }
     }
     /// Update the `DataflowParameters` with new configuration.
