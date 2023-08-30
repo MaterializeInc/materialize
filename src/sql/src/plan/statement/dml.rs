@@ -293,19 +293,24 @@ pub fn plan_explain_plan(
             bail_never_supported!(
                 "EXPLAIN ... VIEW <view_name>",
                 "sql/explain-plan",
-                "Use `EXPLAIN ... SELECT * FROM <view_name>` instead."
+                "Use `EXPLAIN ... SELECT * FROM <view_name>` (if the view is not indexed) or `EXPLAIN ... INDEX <idx_name>` (if the view is indexed) instead."
             );
         }
         Explainee::MaterializedView(name) => {
-            let mview = scx.get_item_by_resolved_name(&name)?;
-            if mview.item_type() != CatalogItemType::MaterializedView {
-                sql_bail!(
-                    "Expected {} to be a materialized view, not a {}",
-                    name,
-                    mview.item_type()
-                );
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::MaterializedView {
+                sql_bail!("Expected {name} to be a materialized view, not a {item_type}");
             }
-            crate::plan::Explainee::MaterializedView(mview.id())
+            crate::plan::Explainee::MaterializedView(item.id())
+        }
+        Explainee::Index(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::Index {
+                sql_bail!("Expected {name} to be an index, not a {item_type}");
+            }
+            crate::plan::Explainee::Index(item.id())
         }
         Explainee::Query(query, broken) => {
             let query::PlannedQuery {

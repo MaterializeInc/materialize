@@ -75,6 +75,13 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR MATERIALIZED VIEW foo
 ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: MaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
+EXPLAIN OPTIMIZED PLAN FOR INDEX foo
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR INDEX foo
+=>
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: Index(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
 EXPLAIN OPTIMIZED PLAN WITH(types) FOR VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR VIEW foo

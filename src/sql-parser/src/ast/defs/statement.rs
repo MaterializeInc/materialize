@@ -2996,6 +2996,7 @@ impl_display!(ExplainStage);
 pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
+    Index(T::ItemName),
     Query(Query<T>, bool),
 }
 
@@ -3008,6 +3009,10 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
             }
             Self::MaterializedView(name) => {
                 f.write_str("MATERIALIZED VIEW ");
+                f.write_node(name);
+            }
+            Self::Index(name) => {
+                f.write_str("INDEX ");
                 f.write_node(name);
             }
             Self::Query(query, broken) => {

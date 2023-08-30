@@ -6768,11 +6768,13 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        // VIEW name | MATERIALIZED VIEW name | query
+        // VIEW name | MATERIALIZED VIEW name | INDEX name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
         } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
             Explainee::MaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keyword(INDEX) {
+            Explainee::Index(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
             Explainee::Query(self.parse_query()?, broken)
