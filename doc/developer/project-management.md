@@ -1,7 +1,7 @@
 # Project Management
 
 At Materialize, we have a
-[unified EPD roadmap](https://github.com/orgs/MaterializeInc/projects/43).
+[unified EPD (Engineering, Product, Design) roadmap](https://github.com/orgs/MaterializeInc/projects/43).
 The roadmap describes all prioritized projects across our EPD teams,
 including: Product Teams, Functional Teams, Product Design, Developer
 Experience, Education, and Analytics. Each roadmap item is marked with
