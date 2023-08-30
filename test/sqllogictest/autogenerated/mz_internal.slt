@@ -341,7 +341,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  bytes_received  uint8
 8  envelope_state_bytes  uint8
 9  envelope_state_count  uint8
-10 rehydration_latency_ms uint8
+10  rehydration_latency_ms  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position
