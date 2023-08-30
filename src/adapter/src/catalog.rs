@@ -2164,7 +2164,7 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
-    Ingestion(IngestionDescription),
+    Ingestion(IngestionDescription<(), ReferencedConnection>),
     /// Receives data from some other source
     Source,
     /// Receives introspection data from an internal system
@@ -2452,8 +2452,8 @@ impl Sink {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum StorageSinkConnectionState {
-    Pending(StorageSinkConnectionBuilder),
-    Ready(StorageSinkConnection),
+    Pending(StorageSinkConnectionBuilder<ReferencedConnection>),
+    Ready(StorageSinkConnection<ReferencedConnection>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2508,7 +2508,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
     pub resolved_ids: ResolvedIds,
 }
 
@@ -2572,7 +2572,7 @@ impl CatalogItem {
     pub fn source_desc(
         &self,
         entry: &CatalogEntry,
-    ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
+    ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
@@ -2895,7 +2895,9 @@ impl CatalogEntry {
 
     /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
-    pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
+    pub fn source_desc(
+        &self,
+    ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.item.source_desc(self)
     }
 
@@ -7937,13 +7939,18 @@ impl Catalog {
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
             }),
-            Plan::CreateConnection(CreateConnectionPlan { connection, .. }) => {
-                CatalogItem::Connection(Connection {
-                    create_sql: connection.create_sql,
-                    connection: connection.connection,
-                    resolved_ids,
-                })
-            }
+            Plan::CreateConnection(CreateConnectionPlan {
+                connection:
+                    mz_sql::plan::Connection {
+                        create_sql,
+                        connection,
+                    },
+                ..
+            }) => CatalogItem::Connection(Connection {
+                create_sql,
+                connection,
+                resolved_ids,
+            }),
             _ => {
                 return Err(Error::new(ErrorKind::Corruption {
                     detail: "catalog entry generated inappropriate plan".to_string(),
@@ -9167,13 +9174,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
-    fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
+    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.source_desc()
     }
 
     fn connection(
         &self,
-    ) -> Result<&mz_storage_client::types::connections::Connection, SqlCatalogError> {
+    ) -> Result<
+        &mz_storage_client::types::connections::Connection<ReferencedConnection>,
+        SqlCatalogError,
+    > {
         Ok(&self.connection()?.connection)
     }
 

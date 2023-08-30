@@ -69,6 +69,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
     CollectionDescription, DataSource, DataSourceOther, ReadPolicy, StorageError,
 };
+use mz_storage_client::types::connections::inline::IntoInlineConnection;
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
@@ -229,10 +230,15 @@ impl Coordinator {
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => (
-                            DataSource::Ingestion(ingestion),
-                            source_status_collection_id,
-                        ),
+                        DataSourceDesc::Ingestion(ingestion) => {
+                            let ingestion =
+                                ingestion.into_inline_connection(self.catalog().state());
+
+                            (
+                                DataSource::Ingestion(ingestion),
+                                source_status_collection_id,
+                            )
+                        }
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),
@@ -334,8 +340,14 @@ impl Coordinator {
             let conn_id = ctx.session().conn_id().clone();
             let connection_context = self.connection_context.clone();
             let otel_ctx = OpenTelemetryContext::obtain();
+
+            let connection = plan
+                .connection
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state());
+
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
-                let connection = &plan.connection.connection;
                 let result = match connection
                     .validate(connection_gid, &connection_context)
                     .await
@@ -385,7 +397,6 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog_mut().allocate_oid()?;
-        let connection = plan.connection.connection;
 
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
@@ -393,7 +404,7 @@ impl Coordinator {
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: connection.clone(),
+                connection: plan.connection.connection.clone(),
                 resolved_ids,
             }),
             owner_id: *session.current_role_id(),
@@ -401,7 +412,7 @@ impl Coordinator {
 
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => {
-                match connection {
+                match plan.connection.connection {
                     mz_storage_client::types::connections::Connection::AwsPrivatelink(
                         ref privatelink,
                     ) => {
@@ -777,9 +788,14 @@ impl Coordinator {
             ctx
         );
 
+        let referenced_builder = sink.connection_builder.clone();
+
         // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
-        let connection_builder = sink.connection_builder;
+        let connection_builder = sink
+            .connection_builder
+            .into_inline_connection(self.catalog().state());
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let connection_context = self.connection_context.clone();
         task::spawn(
@@ -794,6 +810,7 @@ impl Coordinator {
                         create_export_token,
                         result: mz_storage_client::sink::build_sink_connection(
                             connection_builder,
+                            referenced_builder,
                             connection_context,
                         )
                         .await
@@ -4158,7 +4175,9 @@ impl Coordinator {
 
                 // Get new ingestion description for storage.
                 let ingestion = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => ingestion.clone(),
+                    DataSourceDesc::Ingestion(ingestion) => ingestion
+                        .clone()
+                        .into_inline_connection(self.catalog().state()),
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
@@ -4361,7 +4380,9 @@ impl Coordinator {
 
                 // Get new ingestion description for storage.
                 let ingestion = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => ingestion.clone(),
+                    DataSourceDesc::Ingestion(ingestion) => ingestion
+                        .clone()
+                        .into_inline_connection(self.catalog().state()),
                     _ => unreachable!("already verified of type ingestion"),
                 };
 

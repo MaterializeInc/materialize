@@ -31,6 +31,7 @@ use mz_sql_parser::ast::{
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
     PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
 };
+use mz_storage_client::types::connections::inline::IntoInlineConnection;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::{
     GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
@@ -231,7 +232,9 @@ async fn purify_create_source(
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
-                    Connection::Kafka(connection) => connection.clone(),
+                    Connection::Kafka(connection) => {
+                        connection.clone().into_inline_connection(&catalog)
+                    }
                     _ => sql_bail!(
                         "{} is not a kafka connection",
                         scx.catalog.resolve_full_name(item.name())
@@ -311,7 +314,9 @@ async fn purify_create_source(
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Postgres(connection) => connection.clone(),
+                    Connection::Postgres(connection) => {
+                        connection.clone().into_inline_connection(&catalog)
+                    }
                     _ => sql_bail!(
                         "{} is not a postgres connection",
                         scx.catalog.resolve_full_name(item.name())
@@ -642,7 +647,7 @@ async fn purify_alter_source(
 
         // Ensure it's an ingestion-based and alterable source.
         let desc = match item.source_desc()? {
-            Some(desc) => desc,
+            Some(desc) => desc.clone().into_inline_connection(scx.catalog),
             None => {
                 sql_bail!("cannot ALTER this type of source")
             }
@@ -653,8 +658,8 @@ async fn purify_alter_source(
             return Ok((vec![], Statement::AlterSource(stmt)));
         }
 
-        match &desc.connection {
-            GenericSourceConnection::Postgres(pg_connection) => pg_connection.clone(),
+        match desc.connection {
+            GenericSourceConnection::Postgres(pg_connection) => pg_connection,
             _ => sql_bail!(
                 "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
                 scx.catalog.minimal_qualification(item.name()),
@@ -934,7 +939,7 @@ async fn purify_csr_connection_proto(
             let scx = StatementContext::new(None, &*catalog);
 
             let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
-                Connection::Csr(connection) => connection.clone(),
+                Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
@@ -987,7 +992,7 @@ async fn purify_csr_connection_avro(
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);
         let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
-            Connection::Csr(connection) => connection.clone(),
+            Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection.connect(connection_context).await?;
