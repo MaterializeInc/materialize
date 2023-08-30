@@ -179,6 +179,9 @@ pub struct SharedWriteBufferManager {
     /// The strong pointers will be owned by each `RocksDBInstance`.
     /// When the rocksdb instances are cleaned up, the [WriteBufferManager] here will
     /// be cleaned up as well.
+    /// Updates to config values via [RocksDbWriteBufferManagerConfig] will not update
+    /// the [WriteBufferManager] once it's initialized here and there's at least one RocksDBInstance
+    /// keeping a strong reference to it.
     shared: Arc<Mutex<Weak<WriteBufferManager>>>,
 }
 
