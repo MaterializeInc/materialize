@@ -47,6 +47,7 @@ class MaterializeCredentials(PostgresCredentials):
             "sslmode",
             "keepalives_idle",
             "connect_timeout",
+            "search_path",
             "retries",
         )
 
