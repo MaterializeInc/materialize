@@ -69,7 +69,7 @@ This enables a simple and rudimentary way to grant authorization to your webhook
 To configure Webhook as a destination in RudderStack, follow the steps outlined below:
 
 1.  **Select Your RudderStack Source**: Identify the source you wish to add a webhook endpoint to. If you don't have a source set up, follow the steps outlined in their [Getting Started](https://www.rudderstack.com/docs/dashboard-guides/sources/) guide.
-2.  **Choose Webhook as Destination**:
+1.  **Choose Webhook as Destination**:
     - Navigate to the destination section.
     - Opt for the "Webhook" option.
     - Assign a name to your destination.
@@ -115,7 +115,7 @@ This will show you the last ten records ingested from RudderStack.
 
 If you don't see any data, head over to the [RudderStack console](https://app.rudderstack.com/) and try to scync your source to trigger a new data ingestion.
 
-## Step 6. Create a Materialized View
+## Step 6. Parse Incoming Data
 
 Depending on your use case, you can create a materialized view to parse the incoming data from RudderStack:
 
