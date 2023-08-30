@@ -1121,7 +1121,10 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
-    Webhook(Option<WebhookValidation>),
+    Webhook {
+        validate_using: Option<WebhookValidation>,
+        headers: WebhookHeaders,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1144,6 +1147,30 @@ pub struct WebhookValidation {
     pub headers: Vec<(usize, bool)>,
     /// Any secrets that are used in that validation.
     pub secrets: Vec<WebhookValidationSecret>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaders {
+    /// Optionally include a column named `headers` whose content is possibly filtered.
+    pub header_column: Option<WebhookHeaderFilters>,
+    /// The column index to provide the specific request header, and whether to provide it as bytes.
+    pub mapped_headers: BTreeMap<usize, (String, bool)>,
+}
+
+impl WebhookHeaders {
+    /// Returns the number of columns needed to represent our headers.
+    pub fn num_columns(&self) -> usize {
+        let header_column = self.header_column.as_ref().map(|_| 1).unwrap_or(0);
+        let mapped_headers = self.mapped_headers.len();
+
+        header_column + mapped_headers
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaderFilters {
+    pub block: BTreeSet<String>,
+    pub allow: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

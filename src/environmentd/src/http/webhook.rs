@@ -16,6 +16,7 @@ use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
+use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_client::controller::StorageError;
 
 use anyhow::Context;
@@ -58,7 +59,7 @@ pub async fn handle_webhook(
     let AppendWebhookResponse {
         tx,
         body_ty,
-        header_ty,
+        header_tys,
         validator,
     } = client
         .append_webhook(database, schema, name, conn_id)
@@ -75,7 +76,7 @@ pub async fn handle_webhook(
     }
 
     // Pack our body and headers into a Row.
-    let row = pack_row(body, &headers, body_ty, header_ty)?;
+    let row = pack_row(body, &headers, body_ty, header_tys)?;
 
     // Send the row to get appended.
     tx.append(vec![(row, 1)]).await?;
@@ -88,10 +89,11 @@ fn pack_row(
     body: Bytes,
     headers: &BTreeMap<String, String>,
     body_ty: ColumnType,
-    header_ty: Option<ColumnType>,
+    header_tys: WebhookHeaders,
 ) -> Result<Row, WebhookError> {
-    // If we're including headers then we have two columns.
-    let num_cols = header_ty.as_ref().map(|_| 2).unwrap_or(1);
+    // 1 column for the body plus however many are needed for the headers.
+    let num_cols = 1 + header_tys.num_columns();
+    let mut num_cols_written = 0;
 
     // Pack our row.
     let mut row = Row::with_capacity(num_cols);
@@ -122,17 +124,49 @@ fn pack_row(
             ))?;
         }
     }
+    num_cols_written += 1;
 
     // Pack the headers into our row, if required.
-    if header_ty.is_some() {
+    if let Some(filters) = header_tys.header_column {
         packer.push_dict(
-            headers
-                .iter()
-                .map(|(name, val)| (name.as_str(), Datum::String(val))),
+            filter_headers(headers, &filters).map(|(name, val)| (name, Datum::String(val))),
         );
+        num_cols_written += 1;
+    }
+
+    // Pack the mapped headers.
+    for idx in num_cols_written..num_cols {
+        let (header_name, use_bytes) = header_tys
+            .mapped_headers
+            .get(&idx)
+            .ok_or_else(|| anyhow::anyhow!("Invalid header column index {idx}"))?;
+        let header = headers.get(header_name);
+        let datum = match header {
+            Some(h) if *use_bytes => Datum::Bytes(h.as_bytes()),
+            Some(h) => Datum::String(h),
+            None => Datum::Null,
+        };
+        packer.push(datum);
     }
 
     Ok(row)
+}
+
+fn filter_headers<'a: 'b, 'b>(
+    headers: &'a BTreeMap<String, String>,
+    filters: &'b WebhookHeaderFilters,
+) -> impl Iterator<Item = (&'a str, &'a str)> + 'b {
+    headers
+        .iter()
+        .filter(|(header_name, _val)| {
+            // If our block list is empty, then don't filter anything.
+            filters.block.is_empty() || !filters.block.contains(*header_name)
+        })
+        .filter(|(header_name, _val)| {
+            // If our allow list is empty, then don't filter anything.
+            filters.allow.is_empty() || filters.allow.contains(*header_name)
+        })
+        .map(|(key, val)| (key.as_str(), val.as_str()))
 }
 
 /// Errors we can encounter when appending data to a Webhook Source.
