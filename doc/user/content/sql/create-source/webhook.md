@@ -145,7 +145,7 @@ CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
   CHECK (
     WITH (
       HEADERS, BODY AS request_body,
-      SECRET my_webhook_shared_secret,
+      SECRET my_webhook_shared_secret
     )
     decode(headers->'x-signature', 'base64') = hmac(request_body, my_webhook_shared_secret, 'sha256')
   );
@@ -266,7 +266,7 @@ To store the sensitive credentials and make them reusable across multiple `CREAT
 
 
 ```sql
-  CREATE SECRET BASIC_HOOK_AUTH AS 'Basic <base64_auth>';
+CREATE SECRET BASIC_HOOK_AUTH AS 'Basic <base64_auth>';
 ```
 
 ### Creating a Source
@@ -274,14 +274,14 @@ To store the sensitive credentials and make them reusable across multiple `CREAT
 After a successful secret creation, you can use the same secret to create different webhooks with the same basic authentication to check if a request is valid.
 
 ```sql
-  CREATE SOURCE webhook_with_basic_auth IN CLUSTER my_cluster
-  FROM WEBHOOK
+CREATE SOURCE webhook_with_basic_auth IN CLUSTER my_cluster
+FROM WEBHOOK
     BODY FORMAT JSON
     CHECK (
       WITH (
         HEADERS,
         BODY AS request_body,
-        SECRET BASIC_HOOK_AUTH,
+        SECRET BASIC_HOOK_AUTH
       )
       headers->'authorization' = BASIC_HOOK_AUTH
     );
