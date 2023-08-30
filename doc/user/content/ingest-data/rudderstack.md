@@ -64,7 +64,7 @@ CREATE SOURCE rudderstack_source IN CLUSTER rudderstack_cluster
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
 
-## Step 4. Configure Webhook as a Destination in RudderStack
+## Step 4. Webhook Destination in RudderStack
 
 To configure Webhook as a destination in RudderStack, follow the steps outlined below:
 
