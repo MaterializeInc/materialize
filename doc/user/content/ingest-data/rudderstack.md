@@ -28,7 +28,7 @@ create a [cluster](/sql/create-cluster) guide,
 or create a managed cluster with two medium replicas using the following SQL statement:
 
 ```sql
-CREATE CLUSTER rudderstack_cluster SIZE = 'medium', REPLICATION FACTOR = 2;
+CREATE CLUSTER rudderstack_cluster SIZE = '3xsmall', REPLICATION FACTOR = 2;
 ```
 
 ## Step 2. Create a Shared Secret
