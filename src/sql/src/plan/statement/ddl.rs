@@ -505,7 +505,10 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    let allowed_with_options = vec![CreateSourceOptionName::Size];
+    let allowed_with_options = vec![
+        CreateSourceOptionName::Size,
+        CreateSourceOptionName::TimestampInterval,
+    ];
     if let Some(op) = with_options
         .iter()
         .find(|op| !allowed_with_options.contains(&op.name))
@@ -1131,7 +1134,19 @@ pub fn plan_create_source(
     let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
 
     let timestamp_interval = match timestamp_interval {
-        Some(timestamp_interval) => timestamp_interval.duration()?,
+        Some(timestamp_interval) => {
+            let duration = timestamp_interval.duration()?;
+            let min = scx.catalog.system_vars().min_timestamp_interval();
+            let max = scx.catalog.system_vars().max_timestamp_interval();
+            if duration < min || duration > max {
+                return Err(PlanError::InvalidTimestampInterval {
+                    min,
+                    max,
+                    requested: duration,
+                });
+            }
+            duration
+        }
         None => scx.catalog.config().timestamp_interval,
     };
 

@@ -1293,6 +1293,20 @@ pub const ENABLE_COMMENT: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const MIN_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("min_timestamp_interval"),
+    value: &Duration::from_millis(1000),
+    description: "Minimum timestamp interval",
+    internal: true,
+};
+
+pub const MAX_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("max_timestamp_interval"),
+    value: &Duration::from_millis(1000),
+    description: "Maximum timestamp interval",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2262,6 +2276,8 @@ impl SystemVars {
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&ENABLE_COMMENT)
+            .with_var(&MIN_TIMESTAMP_INTERVAL)
+            .with_var(&MAX_TIMESTAMP_INTERVAL)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
@@ -2882,6 +2898,15 @@ impl SystemVars {
     /// Returns the `enable_comment` configuration parameter.
     pub fn enable_comment(&self) -> bool {
         *self.expect_value(&ENABLE_COMMENT)
+    }
+
+    /// Returns the `min_timestamp_interval` configuration parameter.
+    pub fn min_timestamp_interval(&self) -> Duration {
+        *self.expect_value(&MIN_TIMESTAMP_INTERVAL)
+    }
+    /// Returns the `max_timestamp_interval` configuration parameter.
+    pub fn max_timestamp_interval(&self) -> Duration {
+        *self.expect_value(&MAX_TIMESTAMP_INTERVAL)
     }
 
     pub fn logging_filter(&self) -> CloneableEnvFilter {
