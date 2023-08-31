@@ -11,7 +11,47 @@ menu:
     name: "Amazon MSK"
 ---
 
-This guide goes through the required steps to connect Materialize to an Amazon MSK cluster, including some of the more complicated bits around configuring security settings in Amazon MSK.
+This guide goes through the required steps to connect Materialize to an Amazon MSK cluster.
+
+## Before you begin
+
+Before you begin, you must have:
+
+- MSK cluster running on AWS.
+- A client machine that can interact with your cluster.
+
+## Creating a connection
+
+There are three ways to connect to a Kafka cluster running on AWS:
+
+- AWS PrivateLink
+- SSH Tunnel
+- Public Cluster
+
+Follow the instructions in the section that best matches your use case.
+
+{{< tabs tabID="1" >}}
+
+{{< tab "Privatelink">}}
+
+{{< note >}}
+Materialize provides Terraform modules for both [MSK cluster](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) which can be used to create the target groups for each Kafka broker (step 1), the network load balancer (step 2),
+the TCP listeners (step 3) and the VPC endpoint service (step 5).
+{{< /note >}}
+
+{{% privatelink/kafka %}}
+
+{{< /tab >}}
+
+{{< tab "SSH Tunnel">}}
+
+{{% ssh/kafka %}}
+
+{{< /tab >}}
+
+{{< tab "Public Cluster">}}
+
+This section goes through the required steps to connect Materialize to an Amazon MSK cluster, including some of the more complicated bits around configuring security settings in Amazon MSK.
 
 If you already have an Amazon MSK cluster, you can skip step 1 and directly move on to [Make the cluster public and enable SASL](#make-the-cluster-public-and-enable-sasl). You can also skip steps 3 and 4 if you already have Apache Kafka installed and running, and have created a topic that you want to create a source for.
 
@@ -142,7 +182,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     d. From a `psql` terminal, connect to Materialize.
 
-    e. Create a source using the command below. Replace `<source-name>` with whatever you want to name your source. The broker url is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
+    e. Create a connection using the command below. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` is from _Store a new secret_ under Step 2.
 
       ```sql
       CREATE SECRET msk_password AS '<your-password>';
@@ -153,19 +193,29 @@ The process to connect Materialize to Amazon MSK consists of the following steps
           SASL USERNAME = '<your-username>',
           SASL PASSWORD = SECRET msk_password
         );
-
-      CREATE SOURCE <source-name>
-        FROM KAFKA CONNECTION kafka_connection (TOPIC '<topic-name>')
-        FORMAT text
-        WITH (SIZE = '3xsmall');
       ```
 
     f. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your cluster.
 
     **Note:** The example above walked through creating a source which is a way of connecting Materialize to an external data source. We created a connection to Amazon MSK using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `text`, however, Materialize supports various other options as well. For example, you can ingest messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
 
+{{< /tab >}}
+{{< /tabs >}}
+
+## Creating a source
+
+The Kafka connection created in the previous section can then be reused across multiple [`CREATE SOURCE`](/sql/create-source/kafka/)
+statements:
+
+```sql
+CREATE SOURCE json_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT BYTES
+  WITH (SIZE = '3xsmall');
+```
+
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
+- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)

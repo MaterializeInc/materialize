@@ -237,4 +237,4 @@ CREATE SOURCE mz_source
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
-- [AWS MSK integration guide](/integrations/aws-msk)
+- [AWS Kafka integration guide](/integrations/aws-kafka)
