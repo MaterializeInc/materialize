@@ -505,7 +505,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  region_name  text
 5  levels  bigint
 6  to_cut  bigint
-7  hint  double␠precision
+7  savings  numeric
+8  hint  double␠precision
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_message_counts' ORDER BY position

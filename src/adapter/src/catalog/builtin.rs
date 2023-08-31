@@ -3540,7 +3540,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 dod.dataflow_id,
                 dor.id AS region_id,
                 dod.id,
-                ars.records
+                ars.records,
+                ars.size
             FROM
                 mz_internal.mz_dataflow_operator_dataflows dod
                 JOIN mz_internal.mz_dataflow_addresses doa
@@ -3602,7 +3603,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 o.dataflow_id,
                 o.region_id,
                 o.id,
-                o.records
+                o.records,
+                o.size
             FROM
                 operators o
                 JOIN pivot p
@@ -3619,9 +3621,14 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
         -- groups in the next level, so there should be even further reduction happening or there
         -- is some substantial skew in the data. But if the latter is the case, then we should not
         -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
-        -- at these unusually large groups.
+        -- at these unusually large groups. In addition to selecting the levels to cut, we also
+        -- compute a conservative estimate of the memory savings in bytes that will result from
+        -- cutting these levels from the hierarchy. The estimate is based on the sizes of the
+        -- input arrangements for each level to be cut. These arrangements should dominate the
+        -- size of each level that can be cut, since the reduction gadget internal to the level
+        -- does not remove much data at these levels.
         cuts AS (
-            SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
+            SELECT c.dataflow_id, c.region_id, COUNT(*) AS to_cut, SUM(c.size) AS savings
             FROM candidates c
             GROUP BY c.dataflow_id, c.region_id
             HAVING COUNT(*) > 0
@@ -3637,6 +3644,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
             dod.name AS region_name,
             l.levels,
             c.to_cut,
+            c.savings,
             pow(16, l.levels - c.to_cut) - 1 AS hint
         FROM cuts c
             JOIN levels l

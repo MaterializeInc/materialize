@@ -957,6 +957,7 @@ hierarchical scheme for either aggregation or Top K computations.
 | `region_name`   | [`text`]             | The internal name of the root operator scope for the min/max aggregation or Top K.                        |
 | `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
 | `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
+| `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
 | `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy. |
 
 ### `mz_message_counts`
