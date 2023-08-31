@@ -217,6 +217,8 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("ResolvedDatabaseSpecifier.value", ATTR)
         .enum_attribute("CommentKey.object", ATTR)
         .enum_attribute("CommentKey.sub_component", ATTR)
+        .enum_attribute("ResolvedDatabaseSpecifier.spec", ATTR)
+        .enum_attribute("SchemaSpecifier.spec", ATTR)
         // We derive Arbitrary for all protobuf types for wire compatibility testing.
         .message_attribute(".", ARBITRARY_ATTR)
         .enum_attribute(".", ARBITRARY_ATTR)
