@@ -32,6 +32,7 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration consensus_connection_pool_ttl_stagger = 16;
     optional uint64 stats_budget_bytes = 17;
     optional ProtoUntrimmableColumns stats_untrimmable_columns = 18;
+    map<string, bool> feature_flags = 19;
 }
 
 message ProtoRetryParameters {
