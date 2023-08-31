@@ -408,7 +408,7 @@ WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 ----
 Explained Query (fast path):
   Project (#1)
-    ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(-1); (1); (2); (3); (6); (7); (9)]
+    ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(1); (2); (3); (6); (7); (9); (-1)]
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
