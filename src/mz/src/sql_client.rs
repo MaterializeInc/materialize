@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    env, fs::OpenOptions,
+    env,
+    fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
     process::Command,
@@ -81,7 +82,11 @@ impl Client {
 
     /// Creates and fills a file with content
     /// if it does not exists.
-    fn create_file_with_content_if_not_exists(&self, path: &PathBuf, content: Option<&[u8]>) -> Result<(), Error> {
+    fn create_file_with_content_if_not_exists(
+        &self,
+        path: &PathBuf,
+        content: Option<&[u8]>,
+    ) -> Result<(), Error> {
         // Create the new file and use `.create_new(true)` to avoid
         // race conditions: https://doc.rust-lang.org/stable/std/fs/struct.OpenOptions.html#method.create_new
         match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -94,7 +99,7 @@ impl Client {
                 if e.kind() == std::io::ErrorKind::AlreadyExists {
                     // Do nothing.
                 } else {
-                    return Err(Error::IOError(e))
+                    return Err(Error::IOError(e));
                 }
             }
         }
@@ -112,7 +117,10 @@ impl Client {
         };
         path.push(PG_PSQLRC_MZ_FILENAME);
 
-        let _ = self.create_file_with_content_if_not_exists(&path, Some(PG_PSQLRC_MZ_DEFAULT_CONTENT.as_bytes()));
+        let _ = self.create_file_with_content_if_not_exists(
+            &path,
+            Some(PG_PSQLRC_MZ_DEFAULT_CONTENT.as_bytes()),
+        );
 
         // Check if '.psqlrc' exists, if it doesn't, create one.
         // Otherwise the '\include ~/.psqlrc' line
