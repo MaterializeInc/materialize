@@ -25,7 +25,7 @@ If you don't have a RudderStack source set up, follow the steps outlined in thei
 
 To create a Materialize cluster, follow the steps outlined in our
 create a [cluster](/sql/create-cluster) guide,
-or create a managed cluster with two medium replicas using the following SQL statement:
+or create a managed cluster using the following SQL statement:
 
 ```sql
 CREATE CLUSTER rudderstack_cluster SIZE = '3xsmall', REPLICATION FACTOR = 2;
@@ -64,7 +64,7 @@ CREATE SOURCE rudderstack_source IN CLUSTER rudderstack_cluster
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
 
-## Step 4. Webhook Destination in RudderStack
+## Step 4. Add a Webhook Destination in RudderStack
 
 To configure Webhook as a destination in RudderStack, follow the steps outlined below:
 
@@ -72,7 +72,7 @@ To configure Webhook as a destination in RudderStack, follow the steps outlined 
 
 1.  **Choose Webhook as Destination**:
     1. Navigate to the destination section.
-    1. Select the **Webhook**" option.
+    1. Select the **Webhook** option.
     1. Assign a name to your destination.
     1. Click **Continue**.
 
