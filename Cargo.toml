@@ -88,6 +88,10 @@ resolver = "2"
 edition = "2021"
 rust-version = "1.71.0"
 
+[profile.dev]
+# TODO(gusywnn|benesch): remove this when incremental ice's are improved
+incremental = false
+
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
 # in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
