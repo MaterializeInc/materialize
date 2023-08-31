@@ -164,13 +164,40 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
 pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 
-    for (public_id, export) in dd.sink_exports.iter() {
-        map.insert(export.from, *public_id);
+    // Dataflows created from a `CREATE MATERIALIZED VIEW` have:
+    //
+    // 1. Exactly one entry in `objects_to_build` representing the dataflow to
+    //    be installed. This entry has a transient ID that changes whenever the
+    //    dataflow is re-installed.
+    // 2. Exactly one entry in `sink_exports` referencing the `objects_to_build`
+    //    entry.
+    // 3. No enties in index_exports.
+    //
+    // Because the user-facing ID is for the `sink_exports` entry in (2), we
+    // create a mapping.
+    if dd.sink_exports.len() == 1 && dd.objects_to_build.len() == 1 && dd.index_exports.is_empty() {
+        for (public_id, export) in dd.sink_exports.iter() {
+            map.insert(export.from, *public_id);
+        }
     }
 
-    for (public_id, (export, _)) in dd.index_exports.iter() {
-        map.insert(export.on_id, *public_id);
-    }
+    // Dataflows created from a `CREATE INDEX` adhere to the following
+    // constraints.
+    //
+    // 1. One or more entries in `objects_to_build`. The last entry arranges a
+    //    `Get $id` where $id might be:
+    //    1. The previous `objects_to_build` entry that corresponds to the
+    //       dataflow of the indexed view (if we index a VIEW).
+    //    2. A `source_imports` entry (if we index a SOURCE, TABLE, or
+    //       MATERIALIZED VIEW).
+    //    3. An `index_imports` entry (if we index a SOURCE, TABLE, or
+    //       MATERIALIZED VIEW that is already indexed).
+    // 2. Exactly one entry in `index_exports` identified by the same ID as the
+    //    last `objects_to_build` entry.
+    //
+    // Because there are no transient IDs involved in the above configurations,
+    // we don't need to add further entries to the `map` to account for these
+    // cases.
 
     map
 }

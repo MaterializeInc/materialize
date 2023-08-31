@@ -2134,7 +2134,7 @@ WITH
     SELECT list_agg(id) AS replicas
     FROM mz_cluster_replicas
     GROUP BY cluster_id
-    -- Add a `{NULL}` list to accomodate collections that are not installed
+    -- Add a `{NULL}` list to accommodate collections that are not installed
     -- on a replica.
     UNION VALUES (LIST[NULL])
   ),

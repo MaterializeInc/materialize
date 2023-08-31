@@ -35,6 +35,12 @@ statement ok
 CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 
 statement ok
+CREATE INDEX ov_a_idx ON ov(a);
+
+statement ok
+CREATE INDEX ov_b_idx ON ov(b);
+
+statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
@@ -183,10 +189,17 @@ EOF
 # TopKBasic plan.
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
-SELECT * FROM ov
+INDEX ov_a_idx
 ----
-Explained Query:
-  TopK::MonotonicTopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 must_consolidate
+materialize.public.ov_a_idx:
+  ArrangeBy
+    raw=true
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    Get::PassArrangements materialize.public.ov
+      raw=true
+
+materialize.public.ov:
+  TopK::Basic order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -202,7 +215,7 @@ EOF
 # MonotonicTopK plan.
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
-SELECT * FROM ov
+SELECT * FROM (SELECT * FROM t ORDER BY b asc, a desc LIMIT 5)
 ----
 Explained Query:
   TopK::MonotonicTopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 must_consolidate
@@ -852,6 +865,69 @@ Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
 
 EOF
+
+
+
+# Test EXPLAIN INDEX for an indexed source
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+INDEX t_a_idx
+----
+materialize.public.t_a_idx:
+  ArrangeBy
+    raw=true
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    Get::PassArrangements materialize.public.t
+      raw=true
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view (first index)
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+INDEX ov_a_idx;
+----
+materialize.public.ov_a_idx:
+  ArrangeBy
+    raw=true
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    Get::PassArrangements materialize.public.ov
+      raw=true
+
+materialize.public.ov:
+  TopK::Basic order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
+    ArrangeBy
+      input_key=[#0]
+      raw=true
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view (based on a prior index)
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+INDEX ov_b_idx;
+----
+materialize.public.ov_b_idx:
+  ArrangeBy
+    input_key=[#0]
+    raw=false
+    arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    Get::PassArrangements materialize.public.ov
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.ov_a_idx (*** full scan ***, index export)
+
+EOF
+
 
 # Test Join::Differential (acyclic).
 query T multiline

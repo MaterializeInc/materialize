@@ -2641,7 +2641,6 @@ pub struct ExplainPlanStatement<T: AstInfo> {
     pub stage: ExplainStage,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
-    pub no_errors: bool,
     pub explainee: Explainee<T>,
 }
 
@@ -2657,9 +2656,6 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
         f.write_str(" AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
-        if self.no_errors {
-            f.write_str("BROKEN ");
-        }
         f.write_node(&self.explainee);
     }
 }
@@ -2955,7 +2951,7 @@ impl<T: AstInfo> AstDisplay for Assignment<T> {
 }
 impl_display_t!(Assignment);
 
-/// Specifies what [Statement::ExplainPlan] is actually explaining The new API
+/// Specifies what [Statement::ExplainPlan] is actually explained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExplainStage {
     /// The mz_sql::HirRelationExpr after parsing
@@ -3000,7 +2996,8 @@ impl_display!(ExplainStage);
 pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
-    Query(Query<T>),
+    Index(T::ItemName),
+    Query(Query<T>, bool),
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -3014,7 +3011,16 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_str("MATERIALIZED VIEW ");
                 f.write_node(name);
             }
-            Self::Query(query) => f.write_node(query),
+            Self::Index(name) => {
+                f.write_str("INDEX ");
+                f.write_node(name);
+            }
+            Self::Query(query, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(query);
+            }
         }
     }
 }

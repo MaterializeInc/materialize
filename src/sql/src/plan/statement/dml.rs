@@ -229,7 +229,7 @@ pub fn describe_explain_plan(
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explainee {
-            Explainee::Query(q) => {
+            Explainee::Query(q, _) => {
                 describe_select(
                     scx,
                     SelectStatement {
@@ -261,7 +261,6 @@ pub fn plan_explain_plan(
         stage,
         config_flags,
         format,
-        no_errors,
         explainee,
     }: ExplainPlanStatement<Aug>,
     params: &Params,
@@ -294,23 +293,26 @@ pub fn plan_explain_plan(
             bail_never_supported!(
                 "EXPLAIN ... VIEW <view_name>",
                 "sql/explain-plan",
-                "Use `EXPLAIN ... SELECT * FROM <view_name>` instead."
+                "Use `EXPLAIN ... SELECT * FROM <view_name>` (if the view is not indexed) or `EXPLAIN ... INDEX <idx_name>` (if the view is indexed) instead."
             );
         }
         Explainee::MaterializedView(name) => {
-            let mview = scx.get_item_by_resolved_name(&name)?;
-            if mview.item_type() != CatalogItemType::MaterializedView {
-                sql_bail!(
-                    "Expected {} to be a materialized view, not a {}",
-                    name,
-                    mview.item_type()
-                );
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::MaterializedView {
+                sql_bail!("Expected {name} to be a materialized view, not a {item_type}");
             }
-            crate::plan::Explainee::MaterializedView(mview.id())
+            crate::plan::Explainee::MaterializedView(item.id())
         }
-        Explainee::Query(query) => {
-            // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-            // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
+        Explainee::Index(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::Index {
+                sql_bail!("Expected {name} to be an index, not a {item_type}");
+            }
+            crate::plan::Explainee::Index(item.id())
+        }
+        Explainee::Query(query, broken) => {
             let query::PlannedQuery {
                 expr: mut raw_plan,
                 desc,
@@ -328,6 +330,7 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Query {
                 raw_plan,
                 row_set_finishing,
+                broken,
             }
         }
     };
@@ -336,7 +339,6 @@ pub fn plan_explain_plan(
         stage,
         format,
         config,
-        no_errors,
         explainee,
     }))
 }
@@ -353,8 +355,6 @@ pub fn plan_explain_timestamp(
     };
 
     let raw_plan = {
-        // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-        // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         let query::PlannedQuery {
             expr: mut raw_plan,
             desc: _,

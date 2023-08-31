@@ -36,7 +36,10 @@ CREATE VIEW iv AS
 SELECT * FROM t WHERE a IS NOT NULL;
 
 statement ok
-CREATE DEFAULT INDEX ON iv;
+CREATE INDEX iv_a_idx ON iv(a);
+
+statement ok
+CREATE INDEX iv_b_idx ON iv(b);
 
 statement ok
 CREATE MATERIALIZED VIEW mv AS
@@ -332,8 +335,7 @@ Explained Query:
             Join on=(#0 = #2) type=differential
               Get l2
               ArrangeBy keys=[[#1]]
-                Filter (#1) IS NOT NULL
-                  Get materialize.public.iv
+                Get materialize.public.iv
     cte l2 =
       ArrangeBy keys=[[#0]]
         Get l1
@@ -349,7 +351,7 @@ Source materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
-  - materialize.public.iv_primary_idx (*** full scan ***)
+  - materialize.public.iv_b_idx (differential join)
 
 EOF
 
@@ -422,6 +424,49 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed source
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+INDEX t_a_idx
+----
+materialize.public.t_a_idx:
+  ArrangeBy keys=[[#0]]
+    Get materialize.public.t
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view (first index)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+INDEX iv_a_idx;
+----
+materialize.public.iv_a_idx:
+  ArrangeBy keys=[[#0]]
+    Get materialize.public.iv
+
+materialize.public.iv:
+  Filter (#0) IS NOT NULL
+    Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view (based on a prior index)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+INDEX iv_b_idx;
+----
+materialize.public.iv_b_idx:
+  ArrangeBy keys=[[#1]]
+    Get materialize.public.iv
+
+Used Indexes:
+  - materialize.public.iv_a_idx (*** full scan ***, index export)
 
 EOF
 

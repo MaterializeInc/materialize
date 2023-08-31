@@ -6700,7 +6700,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
         let stage = match self.parse_one_of_keywords(&[
@@ -6710,7 +6710,6 @@ impl<'a> Parser<'a> {
             OPTIMIZED,
             PHYSICAL,
             OPTIMIZER,
-            QUERY,
         ]) {
             Some(PLAN) => {
                 // EXPLAIN PLAN = EXPLAIN OPTIMIZED PLAN
@@ -6769,22 +6768,22 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        let no_errors = self.parse_keyword(BROKEN);
-
-        // VIEW name | MATERIALIZED VIEW name | query
+        // VIEW name | MATERIALIZED VIEW name | INDEX name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
         } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
             Explainee::MaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keyword(INDEX) {
+            Explainee::Index(self.parse_raw_name()?)
         } else {
-            Explainee::Query(self.parse_query()?)
+            let broken = self.parse_keyword(BROKEN);
+            Explainee::Query(self.parse_query()?, broken)
         };
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
-            no_errors,
             explainee,
         }))
     }

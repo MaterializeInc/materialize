@@ -25,7 +25,6 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{ClusterId, ReplicaId};
-use mz_expr::explain::ExplainContext;
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
@@ -36,9 +35,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{
-    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
-};
+use mz_repr::explain::{ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -106,8 +103,8 @@ use crate::coord::{
     SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
+use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::explain::Explainable;
 use crate::notice::AdapterNotice;
 use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -1134,8 +1131,13 @@ impl Coordinator {
         {
             Ok((df, df_metainfo)) => {
                 self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
+
+                self.catalog_mut().set_optimized_plan(id, df.clone());
                 self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
-                self.must_ship_dataflow(df, cluster_id).await;
+
+                let df = self.must_ship_dataflow(df, cluster_id).await;
+                self.catalog_mut().set_physical_plan(id, df);
+
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
@@ -2795,12 +2797,11 @@ impl Coordinator {
             stage,
             format,
             config,
-            no_errors: _,
             explainee,
         } = plan;
 
         let Explainee::MaterializedView(id) = explainee else {
-            // This is currently asserted in the `sequence_explain` code that
+            // This is currently asserted in the `sequence_explain_plan` code that
             // calls this method.
             unreachable!()
         };
@@ -2811,60 +2812,22 @@ impl Coordinator {
             unreachable!()
         };
 
-        fn explain<T>(
-            mut plan: DataflowDescription<T>,
-            format: ExplainFormat,
-            config: &ExplainConfig,
-            humanizer: &dyn ExprHumanizer,
-            dataflow_metainfo: &DataflowMetainfo,
-        ) -> Result<String, AdapterError>
-        where
-            for<'a> Explainable<'a, DataflowDescription<T>>:
-                Explain<'a, Context = ExplainContext<'a>>,
-        {
-            // Collect the list of indexes used by the dataflow at this point.
-            let used_indexes = UsedIndexes::new(
-                plan
-                    .index_imports
-                    .iter()
-                    .map(|(id, index_import)| {
-                        (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
-                    })
-                    .collect(),
-            );
-
-            let context = ExplainContext {
-                config,
-                humanizer,
-                used_indexes,
-                finishing: None,
-                duration: Duration::default(),
-                optimizer_notices: OptimizerNotice::explain(
-                    &dataflow_metainfo.optimizer_notices,
-                    humanizer,
-                )
-                .map_err(|e| AdapterError::Explain(ExplainError::FormatError(e)))?,
-            };
-
-            Ok(Explainable::new(&mut plan).explain(&format, &context)?)
-        }
-
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
             tracing::error!(
-                "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
             );
             coord_bail!(
-                "cannot find dataflow metainformation FOR MATERIALIZED VIEW {id} in catalog"
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
             );
         };
 
         let explain = match stage {
             ExplainStage::OptimizedPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
-                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
-                explain(
+                explain_dataflow(
                     plan,
                     format,
                     &config,
@@ -2874,10 +2837,10 @@ impl Coordinator {
             }
             ExplainStage::PhysicalPlan => {
                 let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} FOR MATERIALIZED VIEW {id} in catalog");
-                    coord_bail!("cannot find {stage} FOR MATERIALIZED VIEW in catalog");
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
-                explain(
+                explain_dataflow(
                     plan,
                     format,
                     &config,
@@ -2897,10 +2860,68 @@ impl Coordinator {
 
     fn explain_index(
         &mut self,
-        _ctx: &mut ExecuteContext,
-        _plan: plan::ExplainPlanPlan,
+        ctx: &mut ExecuteContext,
+        plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        coord_bail!("unsupported operation: explain_index");
+        let plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        } = plan;
+
+        let Explainee::Index(id) = explainee else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
+            // This is currently asserted in the planner. However, this
+            // assumption might change when we make changes for #18089.
+            unreachable!()
+        };
+
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+            tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
+            coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
+        };
+
+        let explain = match stage {
+            ExplainStage::OptimizedPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
     }
 
     async fn explain_query(
@@ -2913,16 +2934,16 @@ impl Coordinator {
             stage,
             format,
             config,
-            no_errors,
             explainee,
         } = plan;
 
         let Explainee::Query {
             raw_plan,
             row_set_finishing,
+            broken,
         } = explainee
         else {
-            // This is currently asserted in the `sequence_explain` code that
+            // This is currently asserted in the `sequence_explain_plan` code that
             // calls this method.
             unreachable!()
         };
@@ -2933,9 +2954,9 @@ impl Coordinator {
         };
 
         let pipeline_result = {
-            self.explain_optimizer_pipeline(
+            self.explain_query_optimizer_pipeline(
                 raw_plan,
-                no_errors,
+                broken,
                 target_cluster,
                 ctx.session_mut(),
                 &row_set_finishing,
@@ -2949,7 +2970,7 @@ impl Coordinator {
                 (used_indexes, fast_path_plan, dataflow_metainfo)
             }
             Err(err) => {
-                if no_errors {
+                if broken {
                     tracing::error!("error while handling EXPLAIN statement: {}", err);
 
                     let used_indexes = UsedIndexes::default();
@@ -3013,7 +3034,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn explain_optimizer_pipeline(
+    async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
@@ -3046,6 +3067,7 @@ impl Coordinator {
 
         let catalog = self.catalog();
         let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        // Set parameter values for optimizing one-shot SELECT queries.
         let explainee_id = GlobalId::Explain;
         let is_oneshot = true;
 

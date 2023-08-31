@@ -800,7 +800,6 @@ pub struct ExplainPlanPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
-    pub no_errors: bool,
     pub explainee: Explainee,
 }
 
@@ -811,11 +810,20 @@ pub enum Explainee {
     MaterializedView(GlobalId),
     /// An existing index.
     Index(GlobalId),
-    /// The object to be explained is a one-off query and may or may not served
-    /// using a dataflow.
+    /// The object to be explained is a one-off query and may or may not be
+    /// served using a dataflow.
+    /// The object to be explained is a one-off query.
+    ///
+    /// THe query may be served using a dataflow or using a FastPathPlan.
+    ///
+    /// Queries that have their `broken` flag set are expected to cause a panic
+    /// in the optimizer code. In this case, pipeline execution will stop, but
+    /// panic will be intercepted and will not propagate to the caller. This is
+    /// useful when debugging queries that cause panics.
     Query {
         raw_plan: HirRelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
+        broken: bool,
     },
 }
 
