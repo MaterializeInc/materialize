@@ -103,8 +103,7 @@ CREATE REPLICA SET cl.p1 REPLICAS (p1_r1 SIZE 'large');
 ```
 
 This requires a change to the names of replicas in managed clusters. Instead of
-only using the names `r1..rN`, we could use the replica set name, or `default`, as a
-prefix.
+only using the names `r1..rN`, we could use the replica set name as a prefix.
 
 The syntax to drop replicas stays the same:
 
@@ -166,10 +165,10 @@ include unbilled replicas in the audit log, but clearly marked as such.
 
 ```sql
 -- Create an unbilled replica set
-CREATE REPLICA SET cl.support BILLED AS 'free', SIZE 'xlarge';
+CREATE REPLICA SET cl.support BILL AS 'free', SIZE 'xlarge';
 ```
 
-The `BILLED` setting is reserved for Materialize and cannot be used by users.
+The `BILL` setting is reserved for Materialize and cannot be used by users.
 
 ## Alternatives
 
