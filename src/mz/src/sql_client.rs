@@ -89,7 +89,7 @@ impl Client {
     ) -> Result<(), Error> {
         // Create the new file and use `.create_new(true)` to avoid
         // race conditions: https://doc.rust-lang.org/stable/std/fs/struct.OpenOptions.html#method.create_new
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
+        match OpenOptions::new().write(true).create_new(true).open(path) {
             Ok(mut file) => {
                 if let Some(content) = content {
                     let _ = file.write_all(content);
