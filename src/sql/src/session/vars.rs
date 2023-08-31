@@ -1576,6 +1576,11 @@ feature_flags!(
         statement_logging_use_reproducible_rng,
         "statement logging with reproducible RNG"
     ),
+    (
+        enable_notices_for_index_too_wide_for_literal_constraints,
+        "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
+        false
+    ),
 );
 
 /// Represents the input to a variable.

@@ -5093,10 +5093,16 @@ impl Coordinator {
         session: &Session,
         optimizer_notices: &Vec<OptimizerNotice>,
     ) {
-        let humanizer = self.catalog().for_session(session);
-        for optimizer_notice in optimizer_notices {
-            let (notice, hint) = optimizer_notice.to_string(&humanizer);
-            session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
+        if self
+            .catalog
+            .system_config()
+            .enable_notices_for_index_too_wide_for_literal_constraints()
+        {
+            let humanizer = self.catalog().for_session(session);
+            for optimizer_notice in optimizer_notices {
+                let (notice, hint) = optimizer_notice.to_string(&humanizer);
+                session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
+            }
         }
     }
 }
