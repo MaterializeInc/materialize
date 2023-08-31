@@ -111,11 +111,11 @@ impl Context {
     // Prints a warning comment about the cloud endpoint
     /// TODO: Remove after releasing version 0.1.6 and give anyone using `mz` time to apply the fix.
     pub fn print_warning_comment(&self) {
-        println!("⚠️ \t Warning\t ⚠️ \nStarting from version 0.1.3, it is a must to include the 'api.' subdomain in the cloud endpoint.");
-        println!("\nWrong: cloud-endpoint = \"https://staging.cloud.materialize.com\"");
-        println!("Right: cloud-endpoint = \"https://api.staging.cloud.materialize.com\"");
-        println!("\nPlease address this in your config before upcoming releases.");
-        println!("Config path: ~/.config/materialize/mz.toml.\n");
+        eprintln!("⚠️ \t Warning\t ⚠️ \nStarting from version 0.1.3, it is a must to include the 'api.' subdomain in the cloud endpoint.");
+        eprintln!("\nWrong: cloud-endpoint = \"https://staging.cloud.materialize.com\"");
+        eprintln!("Right: cloud-endpoint = \"https://api.staging.cloud.materialize.com\"");
+        eprintln!("\nPlease address this in your config before upcoming releases.");
+        eprintln!("Config path: ~/.config/materialize/mz.toml.\n");
     }
 
     /// Verifies the cloud endpoint is ok.
