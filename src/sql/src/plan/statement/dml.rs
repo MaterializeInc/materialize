@@ -480,6 +480,7 @@ pub fn plan_subscribe(
         up_to,
         output,
     }: SubscribeStatement<Aug>,
+    params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
     let (from, desc, scope) = match relation {
@@ -501,7 +502,7 @@ pub fn plan_subscribe(
             (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
-            let query = plan_query(scx, query, &Params::empty(), QueryLifetime::Subscribe)?;
+            let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
             // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
@@ -769,7 +770,9 @@ pub fn plan_copy(
             CopyRelation::Select(stmt) => {
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
-            CopyRelation::Subscribe(stmt) => Ok(plan_subscribe(scx, stmt, Some(format))?),
+            CopyRelation::Subscribe(stmt) => {
+                Ok(plan_subscribe(scx, stmt, &Params::empty(), Some(format))?)
+            }
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {

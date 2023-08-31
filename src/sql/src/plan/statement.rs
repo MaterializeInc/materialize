@@ -193,7 +193,7 @@ pub fn describe(
         // SCL statements.
         Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
         Statement::Deallocate(stmt) => scl::describe_deallocate(&scx, stmt)?,
-        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt)?,
+        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt, param_types_in)?,
         Statement::Discard(stmt) => scl::describe_discard(&scx, stmt)?,
         Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
@@ -340,7 +340,7 @@ pub fn plan(
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
-        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, None),
+        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, params, None),
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
@@ -371,7 +371,7 @@ pub fn plan(
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
         Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
-        Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
+        Statement::Declare(stmt) => scl::plan_declare(scx, stmt, params),
         Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
         Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),

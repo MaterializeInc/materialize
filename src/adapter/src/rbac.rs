@@ -1119,6 +1119,7 @@ fn generate_required_privileges(
             name: _,
             stmt: _,
             sql: _,
+            params: _,
         })
         | Plan::Fetch(plan::FetchPlan {
             name: _,
