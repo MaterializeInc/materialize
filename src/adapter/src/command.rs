@@ -30,7 +30,9 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, WebhookValidation, WebhookValidationSecret};
+use mz_sql::plan::{
+    ExecuteTimeout, Plan, PlanKind, WebhookHeaders, WebhookValidation, WebhookValidationSecret,
+};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
@@ -423,7 +425,7 @@ impl AppendWebhookValidator {
 pub struct AppendWebhookResponse {
     pub tx: MonotonicAppender,
     pub body_ty: ColumnType,
-    pub header_ty: Option<ColumnType>,
+    pub header_tys: WebhookHeaders,
     pub validator: Option<AppendWebhookValidator>,
 }
 
@@ -432,7 +434,7 @@ impl fmt::Debug for AppendWebhookResponse {
         f.debug_struct("AppendWebhookResponse")
             .field("tx", &self.tx)
             .field("body_ty", &self.body_ty)
-            .field("header_ty", &self.header_ty)
+            .field("header_tys", &self.header_tys)
             .field("validate_expr", &"(...)")
             .finish()
     }

@@ -21,6 +21,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTE
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
+use mz_ore::collections::HashSet;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -116,9 +117,16 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View, WebhookValidation,
+    Source, SourceSinkClusterConfig, Table, Type, View, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation,
 };
 use crate::session::vars;
+
+// TODO: Figure out what the maximum number of columns we can actually support is, and set that.
+//
+// The real max is probably higher than this, but it's easier to relax a constraint than make it
+// more strict.
+const MAX_NUM_COLUMNS: usize = 256;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -437,10 +445,12 @@ pub fn plan_create_webhook_source(
             nullable: false,
         },
     ];
-    let mut column_names = vec!["body"];
+    let mut column_names = vec!["body".to_string()];
 
-    if include_headers {
-        // Optionally include the headers of the request as a second column.
+    let mut headers = WebhookHeaders::default();
+
+    // Include a `headers` column, possibly filtered.
+    if let Some(filters) = include_headers.column {
         column_ty.push(ColumnType {
             scalar_type: ScalarType::Map {
                 value_type: Box::new(ScalarType::String),
@@ -448,7 +458,55 @@ pub fn plan_create_webhook_source(
             },
             nullable: false,
         });
-        column_names.push("headers");
+        column_names.push("headers".to_string());
+
+        let (allow, block): (BTreeSet<_>, BTreeSet<_>) =
+            filters.into_iter().partition_map(|filter| {
+                if filter.block {
+                    itertools::Either::Right(filter.header_name)
+                } else {
+                    itertools::Either::Left(filter.header_name)
+                }
+            });
+        headers.header_column = Some(WebhookHeaderFilters { allow, block });
+    }
+
+    // Map headers to specific columns.
+    for header in include_headers.mappings {
+        let scalar_type = header
+            .use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+        column_ty.push(ColumnType {
+            scalar_type,
+            nullable: true,
+        });
+        column_names.push(header.column_name.into_string());
+
+        let column_idx = column_ty.len() - 1;
+        // Double check we're consistent with column names.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "header column names and types don't match"
+        );
+        headers
+            .mapped_headers
+            .insert(column_idx, (header.header_name, header.use_bytes));
+    }
+
+    // Validate our columns.
+    let mut unique_check = HashSet::with_capacity(column_names.len());
+    for name in &column_names {
+        if !unique_check.insert(name) {
+            return Err(PlanError::AmbiguousColumn(name.clone().into()));
+        }
+    }
+    if column_names.len() > MAX_NUM_COLUMNS {
+        return Err(PlanError::TooManyColumns {
+            max_num_columns: MAX_NUM_COLUMNS,
+            req_num_columns: column_names.len(),
+        });
     }
 
     let typ = RelationType::new(column_ty);
@@ -475,7 +533,10 @@ pub fn plan_create_webhook_source(
         name,
         source: Source {
             create_sql,
-            data_source: DataSourceDesc::Webhook(validate_using),
+            data_source: DataSourceDesc::Webhook {
+                validate_using,
+                headers,
+            },
             desc,
         },
         if_not_exists,

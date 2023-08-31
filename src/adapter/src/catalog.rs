@@ -71,7 +71,8 @@ use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
-    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookValidation,
+    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookHeaders,
+    WebhookValidation,
 };
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -2105,7 +2106,9 @@ pub enum DataSourceDesc {
     /// Receives data from HTTP requests.
     Webhook {
         /// Optional components used to validation a webhook request.
-        validation: Option<WebhookValidation>,
+        validate_using: Option<WebhookValidation>,
+        /// Describes whether or not to include headers and how to map them.
+        headers: WebhookHeaders,
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
@@ -2208,7 +2211,10 @@ impl Source {
                     );
                     DataSourceDesc::Source
                 }
-                mz_sql::plan::DataSourceDesc::Webhook(validation) => {
+                mz_sql::plan::DataSourceDesc::Webhook {
+                    validate_using,
+                    headers,
+                } => {
                     assert!(
                         matches!(
                             plan.cluster_config,
@@ -2217,7 +2223,8 @@ impl Source {
                         "webhook sources must be created on an existing cluster"
                     );
                     DataSourceDesc::Webhook {
-                        validation,
+                        validate_using,
+                        headers,
                         cluster_id: cluster_id.expect("checked above"),
                     }
                 }
@@ -7770,12 +7777,16 @@ impl Catalog {
                     }
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
-                    mz_sql::plan::DataSourceDesc::Webhook(validation) => {
+                    mz_sql::plan::DataSourceDesc::Webhook {
+                        validate_using,
+                        headers,
+                    } => {
                         let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
                             unreachable!("webhook sources must use an existing cluster");
                         };
                         DataSourceDesc::Webhook {
-                            validation,
+                            validate_using,
+                            headers,
                             cluster_id: id,
                         }
                     }

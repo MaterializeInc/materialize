@@ -64,6 +64,10 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    TooManyColumns {
+        max_num_columns: usize,
+        req_num_columns: usize,
+    },
     AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
@@ -398,6 +402,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::TooManyColumns { max_num_columns, req_num_columns } => write!(
+                f,
+                "attempt to create relation with too many columns, {} max: {}",
+                req_num_columns, max_num_columns
             ),
             Self::AmbiguousTable(table) => write!(
                 f,
