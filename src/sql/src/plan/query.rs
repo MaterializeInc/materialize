@@ -113,7 +113,7 @@ pub fn plan_root_query(
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing, _) = plan_query(&mut qcx, &query)?;
+    let (mut expr, scope, mut finishing, expected_group_size) = plan_query(&mut qcx, &query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -123,7 +123,7 @@ pub fn plan_root_query(
     try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
 
     if lifetime.is_maintained() {
-        expr.finish_maintained(&mut finishing);
+        expr.finish_maintained(&mut finishing, expected_group_size);
     }
 
     let typ = qcx.relation_type(&expr);
