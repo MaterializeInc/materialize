@@ -39,9 +39,10 @@ Before a feature can move to Private Preview, it must:
     - Impact other customer environments when ungated for a single customer.
     - Impact other clusters/workloads, when ungated in a customer environment.
     - Cause stability issues for other features.
-- Live behind a gated feature flag.
+- Live behind a gated feature flag (disabled by default).
 - Have basic tests live and running.
 - Have basic reference documentation live behind a {{< private-preview >}} flag.
+- Have its GitHub epic status set to "Private Preview"
 
 ## Private Preview
 
@@ -80,6 +81,8 @@ Before a feature can move to Public Preview, it must:
 - Support all known customer configurations, except those that are explicitly out of scope.
 - Have polished reference documentation live behind a {{< public-preview >}} flag.
 - Have a merged release note behind a {{< public-preview >}} flag.
+- Have its GitHub epic status set to "Public Preview"
+- Have its feature flag enabled in all environments by default
 
 ## Public Preview
 
@@ -103,6 +106,8 @@ Before a feature can move to General Availability, it must:
   justification for why it’s not required.
 - Have a merged release note that the feature is in General Availability.
 - Have a merged Changelog announcement.
+- Have its GitHub epic status set to "GA" and closed
+- Have its feature flag removed
 
 ## General Availability
 
