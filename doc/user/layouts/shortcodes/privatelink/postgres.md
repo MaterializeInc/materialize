@@ -1,47 +1,34 @@
-This section covers how to create `AWS PRIVATELINK` connections
-and retrieve the AWS principal needed to configure the AWS PrivateLink service.
-
 1. #### Create target groups
-    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html) **for each broker** with the following details:
+    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html) for your RDS instance with the following details:
 
     a. Target type as **IP address**.
 
     b. Protocol as **TCP**.
 
-    c. Port as **9092**, or the port that you are using in case it is not 9092 (e.g. 9094 for TLS or 9096 for SASL).
+    c. Port as **5432**, or the port that you are using in case it is not 5432.
 
-    d. Make sure that the target group is in the same VPC as the Kafka cluster.
+    d. Make sure that the target group is in the same VPC as the RDS instance.
 
-    e. Click next, and register the respective Kafka broker to each target group using its IP address.
-
-1. #### Create a Network Load Balancer (NLB)
-    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the Kafka brokers are in.
-
-1. #### Create TCP listeners
-
-    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html) for every Kafka broker that forwards to the corresponding target group you created (e.g. `b-1`, `b-2`, `b-3`).
-
-    The listener port needs to be unique, and will be used later on in the `CREATE CONNECTION` statement.
-
-    For example, you can create a listener for:
-
-    a. Port `9001` → broker `b-1...`.
-
-    b. Port `9002` → broker `b-2...`.
-
-    c. Port `9003` → broker `b-3...`.
+    e. Click next, and register the respective RDS instance to the target group using its IP address.
 
 1. #### Verify security groups and health checks
 
-    Once the TCP listeners have been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) for each target group are passing and that the targets are reported as healthy.
+    Once the target groups have been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) are passing and that the targets are reported as healthy.
 
-    If you have set up a security group for your Kafka cluster, you must ensure that it allows traffic on both the listener port and the health check port.
+    If you have set up a security group for your RDS instance, you must ensure that it allows traffic on the health check port.
 
     **Remarks**:
 
     a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
 
     b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+
+1. #### Create a Network Load Balancer (NLB)
+    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the RDS instance is in.
+
+1. #### Create TCP listeners
+
+    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html) for your RDS instance that forwards to the corresponding target group you created.
 
 1. #### Create a VPC endpoint service
 
@@ -59,7 +46,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
     );
     ```
 
-    Update the list of the availability zones to match the ones in your AWS account.
+    Update the list of the availability zones to match the ones that you are using in your AWS account.
 
 ## Configure the AWS PrivateLink service
 
@@ -93,18 +80,21 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
 
 ```sql
-CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKERS (
-        'b-1.hostname-1:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9001, AVAILABILITY ZONE 'use1-az2'),
-        'b-2.hostname-2:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9002, AVAILABILITY ZONE 'use1-az1'),
-        'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003, AVAILABILITY ZONE 'use1-az3')
-    ),
-    -- Authentication details
-    -- Depending on the authentication method the Kafka cluster is using
-    SASL MECHANISMS = 'SCRAM-SHA-512',
-    SASL USERNAME = 'foo',
-    SASL PASSWORD = SECRET kafka_password
+CREATE CONNECTION pg_connection TO POSTGRES (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass,
+    AWS PRIVATELINK privatelink_svc
 );
 ```
 
-The `(PORT <port_number>)` value must match the port that you used when creating the **TCP listener** in the Network Load Balancer. Be sure to specify the correct availability zone for each broker.
+This PostgreSQL connection can then be reused across multiple [CREATE SOURCE](https://materialize.com/docs/sql/create-source/postgres/) statements:
+
+```sql
+CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR ALL TABLES
+  WITH (SIZE = '3xsmall');
+```
