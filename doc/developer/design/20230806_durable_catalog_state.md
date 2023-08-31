@@ -309,8 +309,8 @@ migrations have been run.
 #### Misc
 
 - `confirm_leadership`: Check that the persist shard upper is equal to the upper cached in memory.
-  This will use the `fetch_recent_upper` method in persist which requires fetching the latest state
-  from consensus and is therefore a potentially expensive operation.
+  This will use a linearized version of the `fetch_recent_upper` method in persist which requires
+  fetching the latest state from consensus and is therefore a potentially expensive operation.
 - `dump`: Convert the in-memory state to a JSON string.
 
 ### Catalog Transactions
@@ -411,6 +411,15 @@ frameworks (not counting the builtin migration framework).
   on the current proposed implementation is that the Coordinator already reads the entire durable
   catalog state into memory for every catalog transaction. So we already need that amount of memory
   free at any time in order to be able to serve DDL.
+
+## Future Work
+
+- Move storage usage out of the catalog state.
+- Update the timestamp oracle to store a catalog timestamp used to make changes to the catalog. We
+  can then fetch the epoch AS OF catalog_ts to check if it changed instead of needing a
+  linearized `fetch_recent_upper` in persist.
+- Differential catalog state; update the catalog state to refresh itself whenever it's changed
+  concurrently instead of halting.
 
 ## Open questions
 
