@@ -102,7 +102,7 @@ pub enum Statement<T: AstInfo> {
     AlterDefaultPrivileges(AlterDefaultPrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
-    Comment(CommentStatement),
+    Comment(CommentStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -3784,12 +3784,12 @@ impl_display_t!(ReassignOwnedStatement);
 
 /// `COMMENT ON ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CommentStatement {
-    pub object: CommentObjectType,
+pub struct CommentStatement<T: AstInfo> {
+    pub object: CommentObjectType<T>,
     pub comment: Option<String>,
 }
 
-impl AstDisplay for CommentStatement {
+impl<T: AstInfo> AstDisplay for CommentStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("COMMENT ON ");
         f.write_node(&self.object);
@@ -3805,10 +3805,10 @@ impl AstDisplay for CommentStatement {
         }
     }
 }
-impl_display!(CommentStatement);
+impl_display_t!(CommentStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CommentObjectType {
+pub enum CommentObjectType<T: AstInfo> {
     Table {
         name: UnresolvedItemName,
     },
@@ -3819,9 +3819,48 @@ pub enum CommentObjectType {
         relation_name: UnresolvedItemName,
         column_name: Ident,
     },
+    MaterializedView {
+        name: UnresolvedItemName,
+    },
+    Source {
+        name: UnresolvedItemName,
+    },
+    Sink {
+        name: UnresolvedItemName,
+    },
+    Index {
+        name: UnresolvedItemName,
+    },
+    Func {
+        name: UnresolvedItemName,
+    },
+    Connection {
+        name: UnresolvedItemName,
+    },
+    Type {
+        name: UnresolvedItemName,
+    },
+    Secret {
+        name: UnresolvedItemName,
+    },
+    Role {
+        name: Ident,
+    },
+    Database {
+        name: UnresolvedDatabaseName,
+    },
+    Schema {
+        name: UnresolvedSchemaName,
+    },
+    Cluster {
+        name: T::ClusterName,
+    },
+    ClusterReplica {
+        name: QualifiedReplica,
+    },
 }
 
-impl AstDisplay for CommentObjectType {
+impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         use CommentObjectType::*;
 
@@ -3843,7 +3882,60 @@ impl AstDisplay for CommentObjectType {
                 f.write_str(".");
                 f.write_node(column_name);
             }
+            MaterializedView { name } => {
+                f.write_str("MATERIALIZED VIEW ");
+                f.write_node(name);
+            }
+            Source { name } => {
+                f.write_str("SOURCE ");
+                f.write_node(name);
+            }
+            Sink { name } => {
+                f.write_str("SINK ");
+                f.write_node(name);
+            }
+            Index { name } => {
+                f.write_str("INDEX ");
+                f.write_node(name);
+            }
+            Func { name } => {
+                f.write_str("FUNCTION ");
+                f.write_node(name);
+            }
+            Connection { name } => {
+                f.write_str("CONNECTION ");
+                f.write_node(name);
+            }
+            Type { name } => {
+                f.write_str("TYPE ");
+                f.write_node(name);
+            }
+            Secret { name } => {
+                f.write_str("SECRET ");
+                f.write_node(name);
+            }
+            Role { name } => {
+                f.write_str("ROLE ");
+                f.write_node(name);
+            }
+            Database { name } => {
+                f.write_str("DATABASE ");
+                f.write_node(name);
+            }
+            Schema { name } => {
+                f.write_str("SCHEMA ");
+                f.write_node(name);
+            }
+            Cluster { name } => {
+                f.write_str("CLUSTER ");
+                f.write_node(name);
+            }
+            ClusterReplica { name } => {
+                f.write_str("CLUSTER REPLICA ");
+                f.write_node(name);
+            }
         }
     }
 }
-impl_display!(CommentObjectType);
+
+impl_display_t!(CommentObjectType);
