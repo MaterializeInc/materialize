@@ -16,7 +16,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpointState;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{
     BrokerRewrite, BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
@@ -1177,32 +1176,15 @@ impl AwsPrivatelinkConnection {
 
         let status = cloud_resource_reader.read(id).await?;
 
-        let Some(state) = status.state else {
-            return Err(anyhow!("endpoint status is unknown"));
-        };
+        let availability = status
+            .conditions
+            .as_ref()
+            .and_then(|conditions| conditions.iter().find(|c| c.type_ == "Available"));
 
-        match state {
-            // Connection established to the customer's VPC Endpoint Service.
-            VpcEndpointState::Available => Ok(()),
-
-            // AWS States
-            VpcEndpointState::Deleted => Err(anyhow!("endpoint has been deleted")),
-            VpcEndpointState::Deleting => Err(anyhow!("endpoint is being deleted")),
-            VpcEndpointState::Expired => Err(anyhow!("endpoint has expired")),
-            VpcEndpointState::Failed => Err(anyhow!("failed to create endpoint")),
-            // Customer has approved the connection. It should eventually move to Available.
-            VpcEndpointState::Pending => Err(anyhow!(
-                "endpoint is approved and should become available soon"
-            )),
-            // Waiting on the customer to approve the connection.
-            VpcEndpointState::PendingAcceptance => Err(anyhow!("endpoint is waiting for approval")),
-            VpcEndpointState::Rejected => Err(anyhow!("endpoint creation has been rejected")),
-            VpcEndpointState::Unknown => Err(anyhow!("endpoint state is unknown")),
-            // Internal States
-            VpcEndpointState::PendingServiceDiscovery
-            | VpcEndpointState::CreatingEndpoint
-            | VpcEndpointState::RecreatingEndpoint
-            | VpcEndpointState::UpdatingEndpoint => Err(anyhow!("endpoint is being created")),
+        match availability {
+            Some(condition) if condition.status == "True" => Ok(()),
+            Some(condition) => Err(anyhow!("{}", condition.message)),
+            None => Err(anyhow!("Endpoint availability is unknown")),
         }
     }
 
