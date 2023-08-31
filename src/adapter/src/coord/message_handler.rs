@@ -382,7 +382,7 @@ impl Coordinator {
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        let mut plans: Vec<CreateSourcePlans> = vec![];
+        let mut create_source_plans: Vec<CreateSourcePlans> = vec![];
         let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
@@ -405,7 +405,7 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push(CreateSourcePlans {
+            create_source_plans.push(CreateSourcePlans {
                 source_id,
                 plan,
                 resolved_ids,
@@ -428,7 +428,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
 
-                plans.push(CreateSourcePlans {
+                create_source_plans.push(CreateSourcePlans {
                     source_id,
                     plan,
                     resolved_ids,
@@ -437,7 +437,7 @@ impl Coordinator {
                 // Finally, sequence all plans in one go
                 self.sequence_plan(
                     ctx,
-                    Plan::CreateSources(plans),
+                    Plan::CreateSources(create_source_plans),
                     ResolvedIds(BTreeSet::new()),
                 )
                 .await;
@@ -447,7 +447,7 @@ impl Coordinator {
                     ctx,
                     Plan::PurifiedAlterSource {
                         alter_source,
-                        subsources: plans,
+                        subsources: create_source_plans,
                     },
                     ResolvedIds(BTreeSet::new()),
                 )
@@ -457,9 +457,13 @@ impl Coordinator {
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                     .await
             }
-            Ok(Plan::CreateSink(create_sink)) => {
-                self.sequence_plan(ctx, Plan::CreateSink(create_sink), resolved_ids)
-                    .await;
+            Ok(plan @ Plan::CreateSink(_)) => {
+                assert!(
+                    create_source_plans.is_empty(),
+                    "CREATE SINK does not generate source plans"
+                );
+
+                self.sequence_plan(ctx, plan, resolved_ids).await
             }
             Ok(p) => {
                 unreachable!("{:?} is not purified", p)
