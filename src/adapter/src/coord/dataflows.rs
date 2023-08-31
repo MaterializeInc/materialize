@@ -50,7 +50,7 @@ use crate::catalog::{
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampProvider;
-use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
+use crate::coord::Coordinator;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
 use crate::{rbac, AdapterError};
@@ -182,7 +182,7 @@ impl Coordinator {
         self.initialize_compute_read_policies(
             plan.export_ids().collect(),
             instance,
-            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+            Some(self.catalog().system_config().default_retention_timestamp()),
         )
         .await;
 

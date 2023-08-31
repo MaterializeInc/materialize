@@ -177,10 +177,6 @@ mod sql;
 /// The default is set to a second to track the default timestamp frequency for sources.
 const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
 
-/// The default logical compaction window for new objects
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
-    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
@@ -1287,7 +1283,9 @@ impl Coordinator {
             );
             let policy = entry
                 .item()
-                .initial_logical_compaction_window()
+                .initial_logical_compaction_window(
+                    self.catalog().system_config().default_retention(),
+                )
                 .map(|duration| {
                     let ts = Timestamp::from(
                         u64::try_from(duration.as_millis())
@@ -1713,15 +1711,15 @@ impl Coordinator {
         //
         // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
         // as well.
-        let lag = if is_retained_metrics_index {
-            let retention = self.catalog().state().system_config().metrics_retention();
-            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
-                tracing::error!("absurd metrics retention duration: {retention:?}");
-                u64::MAX
-            }))
+        let retention = if is_retained_metrics_index {
+            self.catalog().state().system_config().metrics_retention()
         } else {
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+            self.catalog().state().system_config().default_retention()
         };
+        let lag = Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+            tracing::error!("absurd retention duration: {retention:?}");
+            u64::MAX
+        }));
 
         let time = write_frontier.into_option().expect("checked above");
         let time = time.saturating_sub(lag);

@@ -110,7 +110,7 @@ use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{ConnMeta, TargetCluster};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
@@ -2716,25 +2716,49 @@ impl CatalogItem {
     /// tables, sources, indexes, and MVs.
     ///
     /// If `custom_logical_compaction_window()` returns something, use
-    /// that.  Otherwise, use a sensible default (currently 1s).
+    /// that.  Otherwise, use the default.
     ///
     /// For objects that do not have the concept of compaction window,
     /// return nothing.
-    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
-        let custom_logical_compaction_window = match self {
+    pub fn initial_logical_compaction_window(
+        &self,
+        default_compaction_window: Duration,
+    ) -> Option<Duration> {
+        match self {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_) => self
+                .custom_logical_compaction_window()
+                .or(Some(default_compaction_window)),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
-        };
-        Some(custom_logical_compaction_window.unwrap_or(DEFAULT_LOGICAL_COMPACTION_WINDOW))
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    /// This item uses the default retention window
+    pub fn uses_default_retention(&self) -> bool {
+        if self.is_retained_metrics_object() {
+            return false;
+        }
+        match self {
+            CatalogItem::Table(table) => table.custom_logical_compaction_window.is_none(),
+            CatalogItem::Source(source) => source.custom_logical_compaction_window.is_none(),
+            CatalogItem::Index(index) => index.custom_logical_compaction_window.is_none(),
+            CatalogItem::MaterializedView(_) => true,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
     }
 
     /// Whether the item's logical compaction window

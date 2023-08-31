@@ -100,7 +100,7 @@ use crate::coord::{
     peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
     PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    SinkConnectionReady, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -266,7 +266,7 @@ impl Coordinator {
 
                 self.initialize_storage_read_policies(
                     source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    Some(self.catalog().system_config().default_retention_timestamp()),
                 )
                 .await;
 
@@ -571,7 +571,7 @@ impl Coordinator {
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    Some(self.catalog().system_config().default_retention_timestamp()),
                 )
                 .await;
 
@@ -1045,7 +1045,7 @@ impl Coordinator {
 
                 self.initialize_storage_read_policies(
                     vec![id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    Some(self.catalog().system_config().default_retention_timestamp()),
                 )
                 .await;
 
@@ -3830,11 +3830,9 @@ impl Coordinator {
         let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
             options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS.into(),
-                    )))
-                }
+                IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
+                    Some(self.catalog().system_config().default_retention()),
+                ),
             });
         }
 
@@ -4431,7 +4429,7 @@ impl Coordinator {
 
                 self.initialize_storage_read_policies(
                     source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    Some(self.catalog().system_config().default_retention_timestamp()),
                 )
                 .await;
             }

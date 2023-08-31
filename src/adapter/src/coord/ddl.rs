@@ -121,6 +121,7 @@ impl Coordinator {
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
+        let mut update_default_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
 
@@ -207,6 +208,7 @@ impl Coordinator {
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
+                    update_default_retention |= name == vars::DEFAULT_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                 }
@@ -218,6 +220,7 @@ impl Coordinator {
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
+                    update_default_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
                 }
@@ -475,6 +478,9 @@ impl Coordinator {
             }
             if update_metrics_retention {
                 self.update_metrics_retention();
+            }
+            if update_default_retention {
+                self.update_default_retention();
             }
             if update_tracing_config {
                 self.update_tracing_config();
@@ -742,6 +748,36 @@ impl Coordinator {
             .filter_map(|entry| {
                 if let (true, Some(cluster_id)) = (
                     entry.item().is_retained_metrics_object(),
+                    entry.item().is_compute_object_on_cluster(),
+                ) {
+                    Some((cluster_id, entry.id(), policy.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.update_storage_base_read_policies(storage_policies);
+        self.update_compute_base_read_policies(compute_policies);
+    }
+
+    fn update_default_retention(&mut self) {
+        let lag = self.catalog().system_config().default_retention_timestamp();
+        let policy = ReadPolicy::lag_writes_by(lag, SINCE_GRANULARITY);
+        let storage_policies = self
+            .catalog()
+            .entries()
+            .filter(|entry| {
+                entry.item().uses_default_retention()
+                    && entry.item().is_compute_object_on_cluster().is_none()
+            })
+            .map(|entry| (entry.id(), policy.clone()))
+            .collect::<Vec<_>>();
+        let compute_policies = self
+            .catalog()
+            .entries()
+            .filter_map(|entry| {
+                if let (true, Some(cluster_id)) = (
+                    entry.item().uses_default_retention(),
                     entry.item().is_compute_object_on_cluster(),
                 ) {
                     Some((cluster_id, entry.id(), policy.clone()))
