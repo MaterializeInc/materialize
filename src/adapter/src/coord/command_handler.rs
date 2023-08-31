@@ -615,7 +615,9 @@ impl Coordinator {
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
-            stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
+            stmt @ (Statement::CreateSource(_)
+            | Statement::AlterSource(_)
+            | Statement::CreateSink(_)) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
                 let catalog = self.owned_catalog();
