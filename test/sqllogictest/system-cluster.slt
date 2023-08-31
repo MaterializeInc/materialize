@@ -92,16 +92,24 @@ query T multiline
 EXPLAIN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
-  Project (#2, #3)
-    Filter (#0 = "u3")
-      ReadExistingIndex mz_internal.mz_show_materialized_views_ind
+  Project (#1, #2)
+    ReadExistingIndex mz_internal.mz_show_materialized_views_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_materialized_views_ind (*** full scan ***)
+  - mz_internal.mz_show_materialized_views_ind (lookup)
 
-Notices:
-  - Notice: Index mz_internal.mz_show_materialized_views_ind on mz_show_materialized_views(schema_id, cluster_id) is too wide to use for literal equalities `schema_id = "u3"`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (schema_id).
+EOF
+
+query T multiline
+EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER default
+----
+Explained Query (fast path):
+  Project (#1, #2)
+    Filter (#3 = "u1")
+      ReadExistingIndex mz_internal.mz_show_materialized_views_ind lookup_value=("u3")
+
+Used Indexes:
+  - mz_internal.mz_show_materialized_views_ind (lookup)
 
 EOF
 
@@ -109,16 +117,25 @@ query T multiline
 EXPLAIN SHOW INDEXES
 ----
 Explained Query (fast path):
-  Project (#3..=#6)
-    Filter NOT(like["s%"](#0)) AND (#1 = "u3")
+  Project (#1..=#4)
+    Filter NOT(like["s%"](#5))
+      ReadExistingIndex mz_internal.mz_show_indexes_ind lookup_value=("u3")
+
+Used Indexes:
+  - mz_internal.mz_show_indexes_ind (lookup)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW INDEXES IN CLUSTER DEFAULT
+----
+Explained Query (fast path):
+  Project (#1..=#4)
+    Filter (#6 = "u1")
       ReadExistingIndex mz_internal.mz_show_indexes_ind
 
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (*** full scan ***)
-
-Notices:
-  - Notice: Index mz_internal.mz_show_indexes_ind on mz_show_indexes(on_id, schema_id, cluster_id) is too wide to use for literal equalities `schema_id = "u3"`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (schema_id).
 
 EOF
 
@@ -204,6 +221,18 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
+----
+Explained Query (fast path):
+  Project (#0..=#3)
+    ReadExistingIndex mz_internal.mz_show_cluster_replicas_ind lookup_values=[("ingest_qck"); ("compute_qck")]
+
+Used Indexes:
+  - mz_internal.mz_show_cluster_replicas_ind (lookup)
 
 EOF
 

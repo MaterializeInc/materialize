@@ -147,6 +147,11 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+/// Note: When creating a built-in index, it's usually best to choose a key that has only one
+/// component. For example, if you created an index
+/// `ON mz_internal.mz_object_lifetimes (id, object_type)`, then this index couldn't be used for a
+/// lookup for `WHERE object_type = ...`, and neither for joins keyed on just `id`.
+/// See <https://materialize.com/docs/transform-data/optimization/#matching-multi-column-indexes-to-multi-column-where-clauses>
 #[derive(Debug)]
 pub struct BuiltinIndex {
     pub name: &'static str,
@@ -4679,7 +4684,7 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_materialized_views_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_materialized_views (schema_id, cluster_id)",
+ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4715,7 +4720,7 @@ pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_indexes_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_indexes (on_id, schema_id, cluster_id)",
+ON mz_internal.mz_show_indexes (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4742,7 +4747,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_cluster_replicas (cluster, replica, size, ready)",
+ON mz_internal.mz_show_cluster_replicas (cluster)",
     is_retained_metrics_object: false,
 };
 
@@ -4859,7 +4864,7 @@ pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_object_lifetimes_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_object_lifetimes (id, object_type)",
+ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
 
