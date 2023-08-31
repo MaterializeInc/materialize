@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import statistics
-from typing import Optional
 
 import numpy as np
 from scipy import stats  # type: ignore
@@ -29,7 +28,7 @@ class NormalDistributionOverlap(TerminationCondition):
     """Signal termination if the overlap between the two distributions is above the threshold"""
 
     def __init__(self, threshold: float) -> None:
-        self._last_fit: Optional[statistics.NormalDist] = None
+        self._last_fit: statistics.NormalDist | None = None
         super().__init__(threshold=threshold)
 
     def terminate(self, measurement: Measurement) -> bool:

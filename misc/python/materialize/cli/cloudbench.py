@@ -18,7 +18,7 @@ import os
 import shlex
 import sys
 import time
-from typing import NamedTuple, Optional, Union, cast
+from typing import NamedTuple, cast
 
 import boto3
 
@@ -98,7 +98,7 @@ def configure_check(parser: argparse.ArgumentParser) -> None:
 DEFAULT_BUCKET = "mz-cloudbench"
 
 
-def try_get_object(key: str, bucket: str) -> Optional[str]:
+def try_get_object(key: str, bucket: str) -> str | None:
     client = boto3.client("s3")
     try:
         result = client.get_object(Bucket=bucket, Key=key)
@@ -121,9 +121,7 @@ def check(ns: argparse.Namespace) -> None:
     insts = manifest.split("\n")
     if not insts:
         raise RuntimeError(f"No instances found for bench ID {bench_id}")
-    results: list[Optional[Union[BenchSuccessResult, BenchFailureLogs]]] = [
-        None for _ in insts
-    ]
+    results: list[BenchSuccessResult | BenchFailureLogs | None] = [None for _ in insts]
     not_done = list(range(len(results)))
     while not_done:
         for i in not_done:
@@ -144,7 +142,7 @@ def check(ns: argparse.Namespace) -> None:
             time.sleep(60)
     for r in results:
         assert isinstance(r, BenchSuccessResult) or isinstance(r, BenchFailureLogs)
-    done_results = cast(list[Union[BenchFailureLogs, BenchSuccessResult]], results)
+    done_results = cast(list[BenchFailureLogs | BenchSuccessResult], results)
     failed = [
         (i, r) for i, r in enumerate(done_results) if isinstance(r, BenchFailureLogs)
     ]
@@ -189,7 +187,7 @@ def start(ns: argparse.Namespace) -> None:
 
     bench_script = ns.bench_script
     script_name = bench_script[0]
-    script_args = " ".join((shlex.quote(arg) for arg in bench_script[1:]))
+    script_args = " ".join(shlex.quote(arg) for arg in bench_script[1:])
 
     # zip up the `misc` repository, for shipment to the remote machine
     os.chdir("misc/python")

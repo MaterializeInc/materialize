@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any, Deque, Sequence, Union
+from collections import deque
+from collections.abc import Sequence
+from typing import Any
 
 from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
@@ -57,7 +59,7 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         connection.autocommit = use_autocommit
         self.cursor = connection.cursor()
         self.output_printer = output_printer
-        self.last_statements = Deque[str](maxlen=5)
+        self.last_statements = deque[str](maxlen=5)
 
     def ddl(self, sql: str) -> None:
         self._execute_with_cursor(sql)
@@ -104,7 +106,7 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             raise
 
     def _extract_message_from_error(
-        self, error: Union[ProgrammingError, DatabaseError]
+        self, error: ProgrammingError | DatabaseError
     ) -> str:
         error_args = error.args[0]
         message = error_args.get("M")

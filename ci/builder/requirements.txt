@@ -12,12 +12,10 @@ cryptography==39.0.1
 colored==1.4.4
 docker==6.0.1
 ec2instanceconnectcli==1.0.2
-flake8==6.0.0
 python-frontmatter==1.0.0
 humanize==4.4.0
 ipympl==0.9.3
 ipywidgets==8.1.0
-isort==5.11.4
 junit-xml==1.9
 jupyterlab==4.0.5
 jupyter-black==0.3.4
@@ -46,6 +44,7 @@ pytest==7.2.1
 pytest-split==0.8.0
 pyyaml==6.0
 requests==2.28.1
+ruff==0.0.285
 scipy==1.10.0
 semver==3.0.0
 shtab==1.5.8

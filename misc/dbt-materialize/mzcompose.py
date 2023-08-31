@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, List, Optional
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Dbt, Materialized, Redpanda
@@ -23,8 +23,8 @@ SERVICES = [
 @dataclass
 class TestCase:
     name: str
-    dbt_env: dict[str, str]
-    materialized_options: list[str]
+    dbt_env: Dict[str, str]
+    materialized_options: List[str]
     materialized_image: Optional[str] = None
 
 

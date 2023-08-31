@@ -9,7 +9,7 @@
 
 import operator
 import urllib.parse
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from kubernetes.client import (
     V1Container,
@@ -81,10 +81,10 @@ class MaterializedAliasService(K8sService):
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(
         self,
-        tag: Optional[str] = None,
+        tag: str | None = None,
         release_mode: bool = True,
         coverage_mode: bool = False,
-        log_filter: Optional[str] = None,
+        log_filter: str | None = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
         minio_namespace: str = DEFAULT_K8S_NAMESPACE,
         cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,

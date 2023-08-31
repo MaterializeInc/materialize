@@ -10,7 +10,6 @@
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Optional
 
 from pg8000.exceptions import InterfaceError
 
@@ -40,9 +39,9 @@ class MaterializeApplication(CloudtestApplicationBase):
     def __init__(
         self,
         release_mode: bool = True,
-        tag: Optional[str] = None,
-        aws_region: Optional[str] = None,
-        log_filter: Optional[str] = None,
+        tag: str | None = None,
+        aws_region: str | None = None,
+        log_filter: str | None = None,
     ) -> None:
         self.tag = tag
         self.environmentd = EnvironmentdService()
@@ -57,7 +56,7 @@ class MaterializeApplication(CloudtestApplicationBase):
 
         self.create_resources_and_wait()
 
-    def get_resources(self, log_filter: Optional[str]) -> list[K8sResource]:
+    def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
             *cockroach_resources(),
             *postgres_resources(),

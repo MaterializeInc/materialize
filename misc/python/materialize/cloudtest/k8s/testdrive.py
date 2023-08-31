@@ -9,7 +9,6 @@
 
 import os
 from inspect import Traceback
-from typing import Optional
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
@@ -21,7 +20,7 @@ class Testdrive(K8sPod):
     def __init__(
         self,
         release_mode: bool,
-        aws_region: Optional[str] = None,
+        aws_region: str | None = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
         materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
         materialize_internal_url: str = "postgres://mz_system@environmentd:6877/materialize",
@@ -60,10 +59,10 @@ class Testdrive(K8sPod):
     def run(
         self,
         *args: str,
-        input: Optional[str] = None,
+        input: str | None = None,
         no_reset: bool = False,
-        seed: Optional[int] = None,
-        caller: Optional[Traceback] = None,
+        seed: int | None = None,
+        caller: Traceback | None = None,
         default_timeout: str = "300s",
         log_filter: str = "off",
     ) -> None:

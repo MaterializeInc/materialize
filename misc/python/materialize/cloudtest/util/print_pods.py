@@ -9,14 +9,13 @@
 
 
 import subprocess
-from typing import Optional
 
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 
 
 def print_pods(
     context: str = DEFAULT_K8S_CONTEXT_NAME,
-    label: Optional[str] = None,
+    label: str | None = None,
 ) -> None:
     cmd = [
         "kubectl",

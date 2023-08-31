@@ -28,8 +28,9 @@ import os
 import subprocess
 import sys
 import webbrowser
+from collections.abc import Sequence
 from pathlib import Path
-from typing import IO, Any, Optional, Sequence, Text, Union
+from typing import IO, Any
 
 import junit_xml
 from humanize import naturalsize
@@ -382,7 +383,7 @@ class DockerComposeCommand(Command):
         self,
         name: str,
         help: str,
-        help_epilog: Optional[str] = None,
+        help_epilog: str | None = None,
         runs_containers: bool = False,
     ):
         self.name = name
@@ -469,9 +470,7 @@ class DockerComposeCommand(Command):
                 "See https://materialize.com/docs/third-party/docker/."
             )
 
-    def capture(
-        self, args: list[str], stderr: Union[None, int, IO[bytes]] = None
-    ) -> str:
+    def capture(self, args: list[str], stderr: None | int | IO[bytes] = None) -> str:
         try:
             return spawn.capture(args, stderr=stderr)
         except subprocess.CalledProcessError as e:
@@ -674,8 +673,8 @@ UpCommand = DockerComposeCommand(
 class ArgumentParser(argparse.ArgumentParser):
     def parse_known_args(
         self,
-        args: Optional[Sequence[Text]] = None,
-        namespace: Optional[argparse.Namespace] = None,
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
     ) -> tuple[argparse.Namespace, list[str]]:
         namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(namespace, "unknown_args", unknown_args)
@@ -686,8 +685,8 @@ class ArgumentParser(argparse.ArgumentParser):
 class ArgumentSubparser(argparse.ArgumentParser):
     def parse_known_args(
         self,
-        args: Optional[Sequence[Text]] = None,
-        namespace: Optional[argparse.Namespace] = None,
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
     ) -> tuple[argparse.Namespace, list[str]]:
         new_namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(new_namespace, "unknown_subargs", unknown_args)

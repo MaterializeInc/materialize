@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -47,7 +47,7 @@ class Expression:
     def resolve_return_type_category(self) -> DataTypeCategory:
         raise NotImplementedError
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         raise NotImplementedError
 
     def recursively_collect_involved_characteristics(
@@ -111,7 +111,7 @@ class LeafExpression(Expression):
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         return self.data_type
 
     def to_sql(self, is_root_level: bool) -> str:

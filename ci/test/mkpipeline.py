@@ -25,8 +25,9 @@ import os
 import subprocess
 import sys
 from collections import OrderedDict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 

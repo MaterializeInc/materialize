@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import sys
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator, Optional
+from typing import Any
 
 import requests
 
@@ -34,9 +35,9 @@ def verbose_http_errors() -> Generator[None, None, None]:
 class WebRequests:
     def __init__(
         self,
-        auth: Optional[AuthConfig],
+        auth: AuthConfig | None,
         base_url: str,
-        client_cert: Optional[tuple[str, str]] = None,
+        client_cert: tuple[str, str] | None = None,
     ):
         self.auth = auth
         self.base_url = base_url
@@ -174,7 +175,7 @@ class WebRequests:
 
         return response
 
-    def _create_headers(self, auth: Optional[AuthConfig]) -> dict[str, Any]:
+    def _create_headers(self, auth: AuthConfig | None) -> dict[str, Any]:
         headers = {}
         if auth:
             headers["Authorization"] = f"Bearer {auth.token}"

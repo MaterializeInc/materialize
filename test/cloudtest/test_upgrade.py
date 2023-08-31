@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 import pytest
 
@@ -42,9 +41,7 @@ class CloudtestUpgrade(Scenario):
 
 
 @pytest.mark.long
-def test_upgrade(
-    aws_region: Optional[str], log_filter: Optional[str], dev: bool
-) -> None:
+def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
     print(
         f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"

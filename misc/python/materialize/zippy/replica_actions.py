@@ -9,7 +9,6 @@
 
 import random
 from textwrap import dedent
-from typing import Optional
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
@@ -103,7 +102,7 @@ class CreateReplica(Action):
 class DropReplica(Action):
     """Drops a replica from the default cluster."""
 
-    replica: Optional[ReplicaExists]
+    replica: ReplicaExists | None
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:

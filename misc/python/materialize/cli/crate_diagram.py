@@ -24,14 +24,14 @@ import webbrowser
 from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Any, DefaultDict, Optional
+from typing import IO, Any
 
 import click
 import toml
 
 from materialize import MZ_ROOT, spawn
 
-DepBuilder = DefaultDict[str, list[str]]
+DepBuilder = defaultdict[str, list[str]]
 DepMap = dict[str, list[str]]
 
 
@@ -58,7 +58,7 @@ def split_list(items: str) -> list[str]:
     default=None,
     help="The diagram file to generate. Default is 'crates{roots}.svg'",
 )
-def main(show: bool, diagram_file: Optional[str], roots: list[str]) -> None:
+def main(show: bool, diagram_file: str | None, roots: list[str]) -> None:
     if diagram_file is None:
         if roots:
             diagram_file = "crates-{}.svg".format("-".join(sorted(roots)))
@@ -70,7 +70,7 @@ def main(show: bool, diagram_file: Optional[str], roots: list[str]) -> None:
         data = toml.load(fh)
 
     members = set()
-    areas: DefaultDict[str, list[str]] = defaultdict(list)
+    areas: defaultdict[str, list[str]] = defaultdict(list)
     member_meta = {}
     all_deps = {}
     for member_path in data["workspace"]["members"]:
@@ -158,7 +158,7 @@ def filter_to_roots(
 
 
 def add_deps(
-    deps: DepMap, new_deps: DefaultDict[str, set[str]], roots: list[str]
+    deps: DepMap, new_deps: defaultdict[str, set[str]], roots: list[str]
 ) -> None:
     for root in roots:
         for dep in deps[root]:
@@ -203,7 +203,7 @@ def write_dot_graph(
 
 def add_hover_style(diagram_file: Path | str) -> None:
     found_svg = False
-    with open(diagram_file, "r") as fh:
+    with open(diagram_file) as fh:
         lines = fh.readlines()
         for i, line in enumerate(lines):
             if "<svg" in line:

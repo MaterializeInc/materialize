@@ -13,7 +13,7 @@ import sys
 import time
 from concurrent import futures
 from math import floor, sqrt
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
@@ -258,7 +258,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     endpoints: list[Endpoint] = []
     for i, target in enumerate(args.target):
-        endpoint: Optional[Endpoint] = None
+        endpoint: Endpoint | None = None
         if target == "local":
             endpoint = MaterializeLocal()
         if target == "remote":

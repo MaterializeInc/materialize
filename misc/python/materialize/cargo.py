@@ -16,7 +16,6 @@ necessary to support this repository are implemented.
 """
 
 from pathlib import Path
-from typing import Optional
 
 try:
     from semver.version import Version
@@ -74,7 +73,7 @@ class Crate:
                     for name, c in config[dep_type].items()
                     if "path" in c
                 )
-        self.rust_version: Optional[str] = None
+        self.rust_version: str | None = None
         try:
             self.rust_version = str(config["package"]["rust-version"])
         except KeyError:
@@ -152,7 +151,7 @@ class Workspace:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate
 
-        self.rust_version: Optional[str] = None
+        self.rust_version: str | None = None
         try:
             self.rust_version = workspace_config["package"].get("rust-version")
         except KeyError:

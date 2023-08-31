@@ -9,11 +9,10 @@
 
 """Git utilities."""
 
+import functools
 import subprocess
 import sys
-from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Union
 
 try:
     from semver.version import Version
@@ -57,8 +56,8 @@ def rev_parse(rev: str, *, abbrev: bool = False) -> str:
     return out
 
 
-@lru_cache(maxsize=None)
-def expand_globs(root: Path, *specs: Union[Path, str]) -> set[str]:
+@functools.cache
+def expand_globs(root: Path, *specs: Path | str) -> set[str]:
     """Find unignored files within the specified paths."""
     # The goal here is to find all files in the working tree that are not
     # ignored by .gitignore. Naively using `git ls-files` doesn't work, because
@@ -125,7 +124,7 @@ def is_dirty() -> bool:
     return proc.returncode != 0 or idx.returncode != 0
 
 
-def first_remote_matching(pattern: str) -> Optional[str]:
+def first_remote_matching(pattern: str) -> str | None:
     """Get the name of the remote that matches the pattern"""
     remotes = spawn.capture(["git", "remote", "-v"])
     for remote in remotes.splitlines():
@@ -154,7 +153,7 @@ def create_branch(name: str) -> None:
     spawn.runv(["git", "checkout", "-b", name])
 
 
-def checkout(rev: str, branch: Optional[str] = None) -> None:
+def checkout(rev: str, branch: str | None = None) -> None:
     """Git checkout the rev"""
     spawn.runv(["git", "checkout", rev])
 
@@ -169,7 +168,7 @@ def tag_annotated(tag: str) -> None:
     spawn.runv(["git", "tag", "-a", "-m", tag, tag])
 
 
-def push(remote: str, remote_ref: Optional[str] = None) -> None:
+def push(remote: str, remote_ref: str | None = None) -> None:
     if remote_ref:
         spawn.runv(["git", "push", remote, f"HEAD:{remote_ref}"])
     else:

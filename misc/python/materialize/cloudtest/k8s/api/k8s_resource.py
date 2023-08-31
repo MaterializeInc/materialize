@@ -9,7 +9,6 @@
 
 import subprocess
 from textwrap import dedent
-from typing import Optional
 
 from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
 from kubernetes.config import new_client_from_config  # type: ignore
@@ -23,7 +22,7 @@ class K8sResource:
     def __init__(self, namespace: str):
         self.selected_namespace = namespace
 
-    def kubectl(self, *args: str, input: Optional[str] = None) -> None:
+    def kubectl(self, *args: str, input: str | None = None) -> None:
         try:
             cmd = [
                 "kubectl",
@@ -73,7 +72,7 @@ class K8sResource:
         assert False
 
     def image(
-        self, service: str, tag: Optional[str] = None, release_mode: bool = True
+        self, service: str, tag: str | None = None, release_mode: bool = True
     ) -> str:
         if tag is not None:
             return f"materialize/{service}:{tag}"

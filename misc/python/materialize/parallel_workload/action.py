@@ -9,7 +9,7 @@
 
 import random
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import pg8000
 
@@ -332,7 +332,7 @@ class CreateViewAction(Action):
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = self.rng.choice(self.db.tables)
-            base_object2: Optional[Table] = self.rng.choice(self.db.tables)
+            base_object2: Table | None = self.rng.choice(self.db.tables)
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
             view = View(self.rng, view_id, base_object, base_object2)

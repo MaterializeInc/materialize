@@ -9,7 +9,6 @@
 
 import subprocess
 from textwrap import dedent
-from typing import Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
@@ -20,7 +19,7 @@ class Application:
     resources: list[K8sResource]
     images: list[str]
     release_mode: bool
-    aws_region: Optional[str]
+    aws_region: str | None
 
     def __init__(self) -> None:
         pass
@@ -36,7 +35,7 @@ class Application:
     def acquire_images(self) -> None:
         raise NotImplementedError
 
-    def kubectl(self, *args: str, namespace: Optional[str] = None) -> str:
+    def kubectl(self, *args: str, namespace: str | None = None) -> str:
         try:
             cmd = ["kubectl", "--context", self.context(), *args]
 

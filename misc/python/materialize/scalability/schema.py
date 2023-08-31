@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum, auto
-from typing import Optional
 
 
 class Source(Enum):
@@ -29,8 +28,8 @@ class Schema:
         source: Source = Source.TABLE,
         schema: str = "scalability",
         create_index: bool = True,
-        transaction_isolation: Optional[TransactionIsolation] = None,
-        cluster_name: Optional[str] = None,
+        transaction_isolation: TransactionIsolation | None = None,
+        cluster_name: str | None = None,
         object_count: int = 1,
     ) -> None:
         self.schema = schema

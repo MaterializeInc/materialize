@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
@@ -266,7 +265,7 @@ class QueryGenerator:
         self,
         logger: ConsistencyTestLogger,
         expression: Expression,
-        reason: Optional[str],
+        reason: str | None,
     ) -> None:
         if self.config.verbose_output:
             reason_desc = f" ({reason})" if reason else ""

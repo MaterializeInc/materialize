@@ -10,11 +10,21 @@
 [tool.black]
 target_version = ["py311"]
 
-[tool.isort]
-extend_skip = ["target"]
-known_first_party = ["materialize"]
-profile = "black"
-py_version = "311"
+[tool.ruff]
+target-version = "py311"
+select = [
+    "F",
+    "I",
+    "UP", # e.g. PEP585 (Python 3.10+) type annotations
+]
+extend-exclude = [
+    "venv", "target",
+    # this dbt adapter may be published elsewhere, so doesn't follow the same compatibility rules as our internal code
+    "misc/dbt-materialize",
+]
+
+[tool.ruff.isort]
+known-first-party = ["materialize"]
 
 [tool.pyright]
 # Allow pyright to find imports for python files

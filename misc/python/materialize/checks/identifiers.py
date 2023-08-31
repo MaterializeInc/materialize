@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from random import Random
 from textwrap import dedent
-from typing import Any, Optional
+from typing import Any
 
 from pg8000.converters import literal  # type: ignore
 
@@ -190,7 +190,7 @@ class Identifiers(Check):
         },
     ]
 
-    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.ident = rng.choice(self.IDENTS) if rng else self.IDENTS[0]
         super().__init__(base_version, rng)
 

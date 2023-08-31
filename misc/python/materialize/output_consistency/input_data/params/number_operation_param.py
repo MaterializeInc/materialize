@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -32,10 +31,9 @@ class NumericOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
-        incompatibility_combinations: Optional[
-            list[set[ExpressionCharacteristics]]
-        ] = None,
+        incompatibilities: set[ExpressionCharacteristics] | None = None,
+        incompatibility_combinations: list[set[ExpressionCharacteristics]]
+        | None = None,
         only_int_type: bool = False,
         no_int_type_larger_int4: bool = False,
         no_floating_point_type: bool = False,
@@ -98,7 +96,7 @@ class MaxSignedInt4OperationParam(NumericOperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibilities: set[ExpressionCharacteristics] | None = None,
     ):
         super().__init__(
             optional=optional,

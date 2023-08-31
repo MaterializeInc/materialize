@@ -10,7 +10,7 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 
@@ -47,7 +47,7 @@ class Kubectl:
         self,
         resource_type: str,
         name: str,
-        namespace: Optional[str],
+        namespace: str | None,
         patch: Any,
     ) -> None:
         command = [
@@ -71,12 +71,12 @@ class Kubectl:
 
     def wait(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
-        resource_name: Optional[str],
+        resource_name: str | None,
         wait_for: str,
         timeout_secs: int,
-        label: Optional[str] = None,
+        label: str | None = None,
     ) -> None:
         if resource_name is None and label is None:
             raise RuntimeError("Either resource_name or label must be set")
@@ -97,7 +97,7 @@ class Kubectl:
 
     def delete(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
         resource_name: str,
     ) -> None:
@@ -127,9 +127,9 @@ class Kubectl:
 
     def get(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
-        resource_name: Optional[str] = None,
+        resource_name: str | None = None,
     ) -> dict[str, Any]:
         command = [
             "kubectl",
@@ -159,7 +159,7 @@ class Kubectl:
 
     def get_retry(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
         resource_name: str,
         max_attempts: int,
@@ -176,10 +176,10 @@ class Kubectl:
 
     def get_or_none(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
-        resource_name: Optional[str] = None,
-    ) -> Optional[dict[str, Any]]:
+        resource_name: str | None = None,
+    ) -> dict[str, Any] | None:
         try:
             return self.get(namespace, resource_type, resource_name)
         except KubectlError as e:
@@ -191,7 +191,7 @@ class Kubectl:
         self,
         filepath: str,
         tests_dir: str,
-        substitutions: Optional[dict[str, str]] = None,
+        substitutions: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Load a Kubernetes YAML specification to assert against. If `substitutions`
