@@ -69,6 +69,8 @@ pub struct Config<'a> {
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
+    /// Host name or URL for connecting to the HTTP server of this instance.
+    pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will
     /// skip any migrations that require it, which will likely cause tests to
     /// fail.

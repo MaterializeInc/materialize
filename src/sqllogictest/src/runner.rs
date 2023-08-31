@@ -954,6 +954,7 @@ impl<'a> RunnerInner<'a> {
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
+        let host_name = format!("localhost:{}", listeners.http_local_addr().port());
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -1012,6 +1013,7 @@ impl<'a> RunnerInner<'a> {
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
+            http_host_name: Some(host_name),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

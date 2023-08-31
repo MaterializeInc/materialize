@@ -212,6 +212,7 @@ pub struct CatalogState {
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
+    http_host_name: Option<String>,
     default_privileges: DefaultPrivileges,
     system_privileges: PrivilegeMap,
     comments: CommentsMap,
@@ -262,6 +263,7 @@ impl CatalogState {
             egress_ips: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
+            http_host_name: Default::default(),
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
@@ -739,6 +741,37 @@ impl CatalogState {
         }
         membership.insert(RoleId::Public);
         membership
+    }
+
+    /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
+    /// source.
+    ///
+    /// Note: Identifiers for the source, e.g. item name, are URL encoded.
+    pub fn try_get_webhook_url(
+        &self,
+        id: &GlobalId,
+        conn_id: Option<&ConnectionId>,
+    ) -> Option<url::Url> {
+        let entry = self.try_get_entry(id)?;
+        let name = self.resolve_full_name(entry.name(), conn_id);
+        let host_name = self
+            .http_host_name
+            .as_ref()
+            .map(|x| x.as_str())
+            .unwrap_or_else(|| "<HOST>");
+
+        let RawDatabaseSpecifier::Name(database) = name.database else {
+            return None;
+        };
+
+        let mut url = url::Url::parse(&format!("https://{host_name}/api/webhook")).ok()?;
+        url.path_segments_mut()
+            .ok()?
+            .push(&database)
+            .push(&name.schema)
+            .push(&name.item);
+
+        Some(url)
     }
 
     /// Parse a SQL string into a catalog view item with only a limited
@@ -3417,6 +3450,7 @@ impl Catalog {
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+                http_host_name: config.http_host_name,
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
                 comments: CommentsMap::default(),
@@ -4895,6 +4929,7 @@ impl Catalog {
             system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
+            http_host_name: None,
             connection_context: None,
             active_connection_count,
         })

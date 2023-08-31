@@ -153,6 +153,7 @@ impl Severity {
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
+            AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
         }
     }
 }

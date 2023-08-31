@@ -2831,3 +2831,67 @@ fn webhook_too_large_request() {
     // Note: If this changes then we need to update our docs.
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_url_notice() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_webhook_sources"]);
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| tx.unbounded_send(notice).expect("send notice"))
+        .connect(postgres::NoTls)
+        .unwrap();
+    let http_client = Client::new();
+
+    // Create a webhook source that includes headers.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE \"webhook-source(with odd/name\" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT INCLUDE HEADERS",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let url_notice = rx
+        .try_next()
+        .expect("contains notice")
+        .expect("contains message");
+    // We should only get the one notice.
+    assert!(rx.try_next().is_err());
+
+    // Print the notice to stderr for future debug-ability.
+    eprintln!("notice: {}", url_notice.message());
+    let url_in_quotes = url_notice
+        .message()
+        .strip_prefix("URL to POST data is ")
+        .expect("got wrong message");
+    // Remove the single quotes.
+    let https_url = url_in_quotes.replace('\'', "");
+    // Our local test server does not have the certs for https.
+    let http_url = https_url.replace("https", "http");
+
+    // Send a request with duplicate headers.
+    let resp = http_client
+        .post(http_url)
+        .body("request_foo")
+        .send()
+        .expect("failed to POST event");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // Wait for the source to process our request.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let row = client
+        .query_one("SELECT body FROM \"webhook-source(with odd/name\"", &[])
+        .expect("success");
+    let body: String = row.get("body");
+    assert_eq!(body, "request_foo");
+}

@@ -207,6 +207,8 @@ pub struct Config {
     pub bootstrap_role: Option<String>,
     /// Generation we want deployed. Generally only present when doing a production deploy.
     pub deploy_generation: Option<u64>,
+    /// Host name or URL for connecting to the HTTP server of this instance.
+    pub http_host_name: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -513,6 +515,7 @@ impl Listeners {
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
+            http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
         })
         .await?;
