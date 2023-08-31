@@ -49,8 +49,12 @@ Before a feature can move to Private Preview, it must:
 The goal of Private Preview is to identify and address all of
 the reasons why the implementation of a feature might not work.
 To do this, the DRI is responsible for getting the feature in
-front of internal and external testers by posting in the
-#epd-announce channel.
+front of relevant internal (e.g. DevEx) and external (e.g. customers)
+testers. It is recommended to kick this off by posting to
+#epd-announce and asking for support on identifying testers.
+Customer-facing teams such as field engineering are well-positioned
+to provide guidance on external testers. If you're unsure how
+to proceed, reach out to your manager for help.
 
 Testers may raise a few different classes of issues:
 [value, usability, feasibility, and viability](https://www.svpg.com/four-big-risks/).
