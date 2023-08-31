@@ -67,8 +67,7 @@ weeks for larger ones.
 
 _Note: features in Private Preview will not be available in
 customer environments by default, they will be turned on for
-individual customers via the
-[limit increase process](https://www.notion.so/Adjusting-environment-limits-ba79e95871734ab2a292ecc8698d01e9).
+individual customers via our [feature flagging system](https://www.notion.so/materialize/45cf26682e1b4d1d87325d04f5885725).
 Customers who test these features should be warned that they
 are subject to significant, and occasionally incompatible, changes._
 
