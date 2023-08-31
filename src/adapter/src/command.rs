@@ -489,8 +489,6 @@ pub enum ExecuteResponse {
     CreatedSecret,
     /// The requested sink was created.
     CreatedSink,
-    /// The requested HTTP source was created.
-    CreatedWebhookSource,
     /// The requested source was created.
     CreatedSource,
     /// The requested table was created.
@@ -663,7 +661,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
-            ExecuteResponseKind::CreatedWebhookSource => Ok(ExecuteResponse::CreatedWebhookSource),
             ExecuteResponseKind::CreatedSource => Ok(ExecuteResponse::CreatedSource),
             ExecuteResponseKind::CreatedTable => Ok(ExecuteResponse::CreatedTable),
             ExecuteResponseKind::CreatedView => Ok(ExecuteResponse::CreatedView),
@@ -725,7 +722,6 @@ impl ExecuteResponse {
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
-            CreatedWebhookSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
             CreatedView { .. } => Some("CREATE VIEW".into()),
