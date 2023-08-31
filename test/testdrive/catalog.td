@@ -633,6 +633,8 @@ mz_show_materialized_views
 mz_show_my_object_privileges
 mz_show_my_role_members
 mz_show_my_schema_privileges
+mz_show_sinks
+mz_show_sources
 mz_show_my_system_privileges
 mz_show_object_privileges
 mz_show_role_members
@@ -658,7 +660,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-99
+123
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

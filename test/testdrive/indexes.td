@@ -326,8 +326,8 @@ mz_show_indexes_ind                                         mz_show_indexes     
 mz_show_materialized_views_ind                              mz_show_materialized_views                   mz_introspection    {schema_id,cluster_id}
 mz_show_schemas_ind                                         mz_schemas                                   mz_introspection    {database_id}
 mz_show_secrets_ind                                         mz_secrets                                   mz_introspection    {schema_id}
-mz_show_sinks_ind                                           mz_sinks                                     mz_introspection    {schema_id}
-mz_show_sources_ind                                         mz_sources                                   mz_introspection    {schema_id}
+mz_show_sinks_ind                                           mz_show_sinks                                mz_introspection    {schema_id,cluster_id}
+mz_show_sources_ind                                         mz_show_sources                              mz_introspection    {schema_id,cluster_id}
 mz_show_tables_ind                                          mz_tables                                    mz_introspection    {schema_id}
 mz_show_types_ind                                           mz_types                                     mz_introspection    {schema_id}
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
