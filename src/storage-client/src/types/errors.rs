@@ -125,7 +125,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         ProtoEnvelopeErrorV1 {
             kind: Some(match self {
                 EnvelopeError::Debezium(text) => Kind::Debezium(text.clone()),
-                EnvelopeError::Upsert(rust) => Kind::Upsert(Box::new(rust.into_proto())),
+                EnvelopeError::Upsert(rust) => Kind::Upsert(rust.into_proto()),
                 EnvelopeError::Flat(text) => Kind::Flat(text.clone()),
             }),
         }
@@ -136,7 +136,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         match proto.kind {
             Some(Kind::Debezium(text)) => Ok(Self::Debezium(text)),
             Some(Kind::Upsert(proto)) => {
-                let rust = RustType::from_proto(*proto)?;
+                let rust = RustType::from_proto(proto)?;
                 Ok(Self::Upsert(rust))
             }
             Some(Kind::Flat(text)) => Ok(Self::Flat(text)),
@@ -162,7 +162,7 @@ impl Display for EnvelopeError {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct UpsertValueError {
     /// The underlying error. Boxed because this is a recursive type.
-    pub inner: Box<DataflowError>,
+    pub inner: DecodeError,
     /// The (good) key associated with the errored value.
     pub for_key: Row,
 }
@@ -270,7 +270,7 @@ impl RustType<ProtoUpsertError> for UpsertError {
         ProtoUpsertError {
             kind: Some(match self {
                 UpsertError::KeyDecode(err) => Kind::KeyDecode(err.into_proto()),
-                UpsertError::Value(err) => Kind::Value(Box::new(err.into_proto())),
+                UpsertError::Value(err) => Kind::Value(err.into_proto()),
                 UpsertError::NullKey(err) => Kind::NullKey(err.into_proto()),
             }),
         }
@@ -284,7 +284,7 @@ impl RustType<ProtoUpsertError> for UpsertError {
                 Ok(Self::KeyDecode(rust))
             }
             Some(Kind::Value(proto)) => {
-                let rust = RustType::from_proto(*proto)?;
+                let rust = RustType::from_proto(proto)?;
                 Ok(Self::Value(rust))
             }
             Some(Kind::NullKey(proto)) => {
@@ -439,7 +439,7 @@ impl RustType<ProtoDataflowError> for DataflowError {
                 DataflowError::DecodeError(err) => DecodeError(*err.into_proto()),
                 DataflowError::EvalError(err) => EvalError(*err.into_proto()),
                 DataflowError::SourceError(err) => SourceError(*err.into_proto()),
-                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(err.into_proto()),
+                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(*err.into_proto()),
             }),
         }
     }
@@ -451,7 +451,9 @@ impl RustType<ProtoDataflowError> for DataflowError {
                 DecodeError(err) => Ok(DataflowError::DecodeError(Box::new(err.into_rust()?))),
                 EvalError(err) => Ok(DataflowError::EvalError(Box::new(err.into_rust()?))),
                 SourceError(err) => Ok(DataflowError::SourceError(Box::new(err.into_rust()?))),
-                EnvelopeErrorV1(err) => Ok(DataflowError::EnvelopeError(err.into_rust()?)),
+                EnvelopeErrorV1(err) => {
+                    Ok(DataflowError::EnvelopeError(Box::new(err.into_rust()?)))
+                }
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
         }

@@ -721,9 +721,9 @@ fn upsert_commands<G: Scope>(
                     Some(Ok(row_buf.clone()))
                 }
             },
-            Some(Err(err)) => Some(Err(UpsertError::Value(UpsertValueError {
+            Some(Err(inner)) => Some(Err(UpsertError::Value(UpsertValueError {
                 for_key: key_row,
-                inner: Box::new(DataflowError::DecodeError(Box::new(err))),
+                inner,
             }))),
             None => None,
         };
