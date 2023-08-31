@@ -717,6 +717,8 @@ steps:
     if: build.tag != "" && build.branch != "main" && build.branch !~ /^v.*\..*\$/
 
     inputs:
+      # Changes to dependencies
+      - Cargo.lock
       # Changes to the SQL syntax
       - src/sql-parser/src
       - src/expr-parser/src
