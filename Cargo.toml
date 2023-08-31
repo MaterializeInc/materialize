@@ -86,7 +86,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.71.0"
+rust-version = "1.72.0"
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
