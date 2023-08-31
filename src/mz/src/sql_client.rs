@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    env, fs,
+    env, fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
     process::Command,
@@ -79,6 +79,29 @@ impl Client {
         url
     }
 
+    /// Creates and fills a file with content
+    /// if it does not exists.
+    fn create_file_with_content_if_not_exists(&self, path: &PathBuf, content: Option<&[u8]>) -> Result<(), Error> {
+        // Create the new file and use `.create_new(true)` to avoid
+        // race conditions: https://doc.rust-lang.org/stable/std/fs/struct.OpenOptions.html#method.create_new
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                if let Some(content) = content {
+                    let _ = file.write_all(content);
+                }
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    // Do nothing.
+                } else {
+                    return Err(Error::IOError(e))
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// This function configures an own .psqlrc-mz file
     /// to include the '\timing' function every time
     /// the user executes the `mz sql` command.
@@ -89,24 +112,14 @@ impl Client {
         };
         path.push(PG_PSQLRC_MZ_FILENAME);
 
-        // Check if the file doesn't exists yet
-        // and create it.
-        if !Path::new(&path).exists() {
-            match fs::File::create(&path) {
-                Ok(mut file) => file.write_all(PG_PSQLRC_MZ_DEFAULT_CONTENT.as_bytes())?,
-                Err(err) => return Err(Error::IOError(err)),
-            }
-        }
-
-        path.pop();
-        path.push(".psqlrc");
+        let _ = self.create_file_with_content_if_not_exists(&path, Some(PG_PSQLRC_MZ_DEFAULT_CONTENT.as_bytes()));
 
         // Check if '.psqlrc' exists, if it doesn't, create one.
         // Otherwise the '\include ~/.psqlrc' line
         // will throw an error message in every execution.
-        if !Path::new(&path).exists() {
-            let _ = fs::File::create(&path);
-        }
+        path.pop();
+        path.push(".psqlrc");
+        let _ = self.create_file_with_content_if_not_exists(&path, None);
 
         Ok(())
     }
