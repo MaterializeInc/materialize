@@ -252,7 +252,7 @@ def main() -> int:
     # use `ALTER SYSTEM` to set them to whatever we want within the SLT (or other)
     # test itself. However, that doesn't work for `variable_length_row_encoding`,
     # as it's only read once on startup and doesn't take effect until restart.
-    if os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"]:
+    if os.environ.get("MZ_SYSTEM_PARAMETER_DEFAULT"):
        os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] += ";variable_length_row_encoding=true"
     else:
         os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] = "variable_length_row_encoding=true"
