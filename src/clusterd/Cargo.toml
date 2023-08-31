@@ -24,7 +24,6 @@ mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
-mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-storage-client = { path = "../storage-client" }

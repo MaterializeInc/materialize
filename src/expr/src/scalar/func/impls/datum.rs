@@ -51,6 +51,8 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    // TODO[btv] - if we plan to keep changing row format,
+    // should we make this unmaterializable?
     fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
         // This will undercount sizes for installations that aren't in the
         // `variable_length_row_encoding` treatment, but

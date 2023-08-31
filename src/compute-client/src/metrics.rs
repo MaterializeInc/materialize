@@ -362,7 +362,7 @@ impl<M> CommandMetrics<M> {
 
         match command {
             CreateTimely { .. } => &self.create_timely,
-            CreateInstance { .. } => &self.create_instance,
+            CreateInstance(_) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
             CreateDataflow(_) => &self.create_dataflow,

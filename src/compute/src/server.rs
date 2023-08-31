@@ -401,7 +401,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
-            ComputeCommand::CreateInstance { .. } => {
+            ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
                     self.timely_worker.index(),
                     Arc::clone(&self.persist_clients),
