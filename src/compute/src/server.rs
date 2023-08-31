@@ -495,16 +495,16 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // this before being too confident. It should be rare without peeks, but could happen with e.g.
             // multiple outputs of a dataflow.
 
-            // The logging configuration with which a prior `CreateInstance` was called, if it was.
-            let mut old_logging_config = None;
+            // The values with which a prior `CreateInstance` was called, if it was.
+            let mut old_instance_config = None;
             // Index dataflows by `export_ids().collect()`, as this is a precondition for their compatibility.
             let mut old_dataflows = BTreeMap::default();
             // Maintain allowed compaction, in case installed identifiers may have been allowed to compact.
             let mut old_frontiers = BTreeMap::default();
             for command in compute_state.command_history.iter() {
                 match command {
-                    ComputeCommand::CreateInstance(logging) => {
-                        old_logging_config = Some(logging);
+                    ComputeCommand::CreateInstance(config) => {
+                        old_instance_config = Some(config);
                     }
                     ComputeCommand::CreateDataflow(dataflow) => {
                         let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
@@ -572,13 +572,13 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));
                         }
                     }
-                    ComputeCommand::CreateInstance(logging) => {
+                    ComputeCommand::CreateInstance(config) => {
                         // Cluster creation should not be performed again!
-                        if Some(logging) != old_logging_config {
+                        if Some(config) != old_instance_config {
                             halt!(
-                                "new logging configuration does not match existing logging configuration:\n{:?}\nvs\n{:?}",
-                                logging,
-                                old_logging_config,
+                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
+                                config,
+                                old_instance_config,
                             );
                         }
                     }

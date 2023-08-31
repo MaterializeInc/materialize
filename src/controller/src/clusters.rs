@@ -237,9 +237,11 @@ where
         &mut self,
         id: ClusterId,
         config: ClusterConfig,
+        variable_length_row_encoding: bool,
     ) -> Result<(), anyhow::Error> {
         self.storage.create_instance(id);
-        self.compute.create_instance(id, config.arranged_logs)?;
+        self.compute
+            .create_instance(id, config.arranged_logs, variable_length_row_encoding)?;
         Ok(())
     }
 

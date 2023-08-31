@@ -179,8 +179,10 @@ JOIN orders ON (l_orderkey = o_orderkey)
 WHERE l_quantity = 24
   OR l_linenumber = 6
   AND l_quantity BETWEEN 3 AND 2 + 2
+ORDER BY 1, 2
 ----
-26 values hashing to b8d07ecb87ec94562c873071d7939da4
+26 values hashing to 8446ba06a48881cd258f97468fd5f29e
+
 
 
 query T multiline
@@ -276,8 +278,11 @@ WHERE l_shipDATE BETWEEN '1995-04-19' AND '1995-11-14'
   AND c_acctbal >= l_extendedprice
 GROUP BY 1,
          2
+ORDER BY 1,
+         2
 ----
 60 values hashing to bf00a961bb64d74c2b059630076a7730
+
 
 
 query T multiline
@@ -507,8 +512,11 @@ WHERE l_receiptDATE BETWEEN '1992-06-21' AND '1992-11-22'
   AND l_receiptDATE BETWEEN '1992-07-13' AND '1998-11-27'
   AND l_quantity BETWEEN 1 AND 21 + 9
 GROUP BY 1
+ORDER BY 1
 ----
-27 values hashing to fbd9375dc785794c4bd84625ece3ae17
+27 values hashing to 7c44effac4aa5f346b01340af9382123
+
+
 
 
 query T multiline
@@ -616,7 +624,8 @@ WHERE o_orderkey BETWEEN 117 AND 165 + 124
   AND l_orderkey BETWEEN 62 AND 126 + 154
 GROUP BY 1
 ----
-27 values hashing to d59ce113f4282be17d36dc9138f6d5f2
+27 values hashing to 5990c609ef0c343e4cc5c941b12002d1
+
 
 
 query T multiline

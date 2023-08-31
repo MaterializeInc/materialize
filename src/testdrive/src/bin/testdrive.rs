@@ -79,6 +79,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic;
 use std::time::Duration;
 use std::{io, process};
 
@@ -282,11 +283,19 @@ struct Args {
         env = "AWS_SECRET_ACCESS_KEY"
     )]
     aws_secret_access_key: String,
+
+    // This should be kept in sync with the value that environmentd
+    // is started with, or the tests of catalog serialization will get confused.
+    #[clap(long)]
+    variable_length_row_encoding: bool,
 }
 
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
+
+    mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+        .store(args.variable_length_row_encoding, atomic::Ordering::SeqCst);
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)

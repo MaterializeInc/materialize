@@ -55,6 +55,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_disk_cluster_replicas": "true",
     "statement_logging_max_sample_rate": "1.0",
     "statement_logging_default_sample_rate": "1.0",
+    # This needs to be kept in sync with the --variable-length-row-encoding
+    # flag to testdrive.
+    "variable_length_row_encoding": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
@@ -851,6 +854,7 @@ class Testdrive(Service):
                 f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
+                "--variable-length-row-encoding",
             ]
 
         if aws_region:

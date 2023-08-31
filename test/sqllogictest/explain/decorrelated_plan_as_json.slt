@@ -84,11 +84,8 @@ SELECT 1 / 0
                       {
                         "Ok": {
                           "data": [
-                            4,
-                            1,
-                            0,
-                            0,
-                            0
+                            42,
+                            1
                           ]
                         }
                       },
@@ -103,11 +100,7 @@ SELECT 1 / 0
                       {
                         "Ok": {
                           "data": [
-                            4,
-                            0,
-                            0,
-                            0,
-                            0
+                            41
                           ]
                         }
                       },
@@ -184,11 +177,8 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                           {
                             "Ok": {
                               "data": [
-                                4,
-                                1,
-                                0,
-                                0,
-                                0
+                                42,
+                                1
                               ]
                             }
                           },
@@ -203,11 +193,8 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                           {
                             "Ok": {
                               "data": [
-                                4,
-                                2,
-                                0,
-                                0,
-                                0
+                                42,
+                                2
                               ]
                             }
                           },
@@ -250,11 +237,8 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                             {
                               "Ok": {
                                 "data": [
-                                  4,
-                                  1,
-                                  0,
-                                  0,
-                                  0
+                                  42,
+                                  1
                                 ]
                               }
                             },
@@ -269,11 +253,8 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                             {
                               "Ok": {
                                 "data": [
-                                  4,
-                                  2,
-                                  0,
-                                  0,
-                                  0
+                                  42,
+                                  2
                                 ]
                               }
                             },
@@ -319,11 +300,8 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              4,
-                              3,
-                              0,
-                              0,
-                              0
+                              42,
+                              3
                             ]
                           }
                         },
@@ -338,11 +316,8 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              4,
-                              4,
-                              0,
-                              0,
-                              0
+                              42,
+                              4
                             ]
                           }
                         },
@@ -466,11 +441,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                           {
                                             "Ok": {
                                               "data": [
-                                                4,
-                                                0,
-                                                0,
-                                                0,
-                                                0
+                                                41
                                               ]
                                             }
                                           },
@@ -493,11 +464,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                           {
                                             "Ok": {
                                               "data": [
-                                                4,
-                                                0,
-                                                0,
-                                                0,
-                                                0
+                                                41
                                               ]
                                             }
                                           },
@@ -531,11 +498,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                     {
                                       "Ok": {
                                         "data": [
-                                          4,
-                                          0,
-                                          0,
-                                          0,
-                                          0
+                                          41
                                         ]
                                       }
                                     },
@@ -581,11 +544,8 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   {
                     "Ok": {
                       "data": [
-                        4,
-                        1,
-                        0,
-                        0,
-                        0
+                        42,
+                        1
                       ]
                     }
                   },
@@ -730,11 +690,8 @@ SELECT generate_series(a, b) from t
                           {
                             "Ok": {
                               "data": [
-                                4,
-                                1,
-                                0,
-                                0,
-                                0
+                                42,
+                                1
                               ]
                             }
                           },
@@ -2986,15 +2943,8 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                             {
                                                                               "Ok": {
                                                                                 "data": [
-                                                                                  5,
-                                                                                  1,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0
+                                                                                  47,
+                                                                                  1
                                                                                 ]
                                                                               }
                                                                             },
@@ -3540,15 +3490,8 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                             {
                                                                               "Ok": {
                                                                                 "data": [
-                                                                                  5,
-                                                                                  1,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0,
-                                                                                  0
+                                                                                  47,
+                                                                                  1
                                                                                 ]
                                                                               }
                                                                             },
@@ -8196,11 +8139,8 @@ FROM
                                                                         {
                                                                           "Ok": {
                                                                             "data": [
-                                                                              4,
-                                                                              5,
-                                                                              0,
-                                                                              0,
-                                                                              0
+                                                                              42,
+                                                                              5
                                                                             ]
                                                                           }
                                                                         },

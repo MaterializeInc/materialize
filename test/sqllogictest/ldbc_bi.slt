@@ -2821,8 +2821,8 @@ Explained Query:
                 Map (true, -1) // { arity: 2 }
                   Get l6 // { arity: 0 }
           Constant // { arity: 2 }
-            - (15393162796819, false)
             - (1450, true)
+            - (15393162796819, false)
     cte l6 =
       Distinct // { arity: 0 }
         Project () // { arity: 0 }

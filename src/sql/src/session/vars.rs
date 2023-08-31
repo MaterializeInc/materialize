@@ -849,6 +849,13 @@ static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
     usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
 
+const VARIABLE_LENGTH_ROW_ENCODING: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("variable_length_row_encoding"),
+    value: &false,
+    description: "Determines whether `repr::row::VARIABLE_LENGTH_ENCODING` is set. See that module for details.",
+    internal: true,
+};
+
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
     value: &DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS,
@@ -2256,6 +2263,7 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+            .with_var(&VARIABLE_LENGTH_ROW_ENCODING)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2493,6 +2501,7 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
+        self.propagate_var_change(VARIABLE_LENGTH_ROW_ENCODING.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -2886,6 +2895,17 @@ impl SystemVars {
 
     pub fn coord_slow_message_reporting_threshold_ms(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+    }
+
+    /// The dramatic name is to warn you not to call this unless you know what you're doing!
+    /// It should only be read during environmentd startup, to ensure that all replicas get the
+    /// same value.
+    ///
+    /// After startup, row decoding is controlled by the
+    /// `mz_repr::VARIABLE_LENGTH_ROW_ENCODING` global atomic variable.
+    #[allow(non_snake_case)]
+    pub fn variable_length_row_encoding_DANGEROUS(&self) -> bool {
+        *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
