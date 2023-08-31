@@ -166,6 +166,8 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
     **Note:** It might take some time for the endpoint service connection to show up, so you would need to wait for the endpoint service connection to be ready before you create a source.
 
+## Validate the AWS PrivateLink connection
+
 ## Create a source connection
 
 In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
