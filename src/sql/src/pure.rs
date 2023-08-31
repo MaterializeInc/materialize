@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::error::ErrorExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
@@ -27,11 +27,12 @@ use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
-    DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
+    CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
+    UnresolvedItemName,
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -41,6 +42,7 @@ use mz_storage_types::sources::{
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
+use rdkafka::admin::AdminClient;
 use tracing::info;
 use uuid::Uuid;
 
@@ -58,7 +60,8 @@ use crate::plan::StatementContext;
 use crate::{kafka_util, normalize};
 
 use self::error::{
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
+    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 
@@ -154,21 +157,26 @@ pub async fn purify_statement(
         Statement::AlterSource(stmt) => {
             purify_alter_source(catalog, stmt, connection_context).await
         }
-        Statement::CreateSink(stmt) => purify_create_sink(catalog, stmt),
+        Statement::CreateSink(stmt) => {
+            let r = purify_create_sink(catalog, stmt, connection_context).await?;
+            Ok((vec![], r))
+        }
         o => unreachable!("{:?} does not need to be purified", o),
     }
 }
 
-pub fn purify_create_sink(
+/// Checks that the sink described in the statement can connect to its external
+/// resources.
+///
+/// We must not leave any state behind in the Kafka broker, so just ensure that
+/// we can connect. This means we don't ensure that we can create the topic and
+/// introduces TOCTOU errors, but creating an inoperable sink is infinitely
+/// preferable to leaking state in users' environments.
+async fn purify_create_sink(
     catalog: impl SessionCatalog,
     mut stmt: CreateSinkStatement<Aug>,
-) -> Result<
-    (
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        Statement<Aug>,
-    ),
-    PlanError,
-> {
+    connection_context: ConnectionContext,
+) -> Result<Statement<Aug>, PlanError> {
     // updating avro format with comments so that they are frozen in the `create_sql`
     // only if the feature is enabled
     if catalog.system_vars().enable_sink_doc_on_option() {
@@ -259,7 +267,111 @@ pub fn purify_create_sink(
         }
     }
 
-    Ok((vec![], Statement::CreateSink(stmt)))
+    // General purification
+    let CreateSinkStatement {
+        connection, format, ..
+    } = &stmt;
+
+    match &connection {
+        CreateSinkConnection::Kafka {
+            connection:
+                KafkaConnection {
+                    connection,
+                    options,
+                },
+            key: _,
+        } => {
+            let scx = StatementContext::new(None, &catalog);
+            let mut connection = {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                // Get Kafka connection
+                match item.connection()? {
+                    Connection::Kafka(connection) => {
+                        connection.clone().into_inline_connection(scx.catalog)
+                    }
+                    _ => sql_bail!(
+                        "{} is not a kafka connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
+                }
+            };
+
+            let extracted_options: KafkaConfigOptionExtracted = options.clone().try_into()?;
+
+            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+                connection.options.insert(k, v);
+            }
+
+            let client: AdminClient<_> = connection
+                .create_with_context(
+                    &connection_context,
+                    MzClientContext::default(),
+                    &BTreeMap::new(),
+                )
+                .await
+                .map_err(|e| {
+                    // anyhow doesn't support Clone, so not trivial to move into PlanError
+                    KafkaSinkPurificationError::AdminClientError(
+                        e.display_with_causes().to_string(),
+                    )
+                })?;
+
+            let metadata = client
+                .inner()
+                .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
+                .map_err(|e| {
+                    KafkaSinkPurificationError::AdminClientError(
+                        e.display_with_causes().to_string(),
+                    )
+                })?;
+
+            if metadata.brokers().len() == 0 {
+                Err(KafkaSinkPurificationError::ZeroBrokers)?;
+            }
+        }
+    }
+
+    if let Some(format) = format {
+        match format {
+            Format::Avro(AvroSchema::Csr {
+                csr_connection: CsrConnectionAvro { connection, .. },
+            })
+            | Format::Protobuf(ProtobufSchema::Csr {
+                csr_connection: CsrConnectionProtobuf { connection, .. },
+            }) => {
+                let connection = {
+                    let scx = StatementContext::new(None, &catalog);
+                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
+                    // Get Kafka connection
+                    match item.connection()? {
+                        Connection::Csr(connection) => {
+                            connection.clone().into_inline_connection(&catalog)
+                        }
+                        _ => Err(CsrPurificationError::NotCsrConnection(
+                            scx.catalog.resolve_full_name(item.name()),
+                        ))?,
+                    }
+                };
+
+                let client = connection.connect(&connection_context).await.map_err(|e| {
+                    CsrPurificationError::ClientError(e.display_with_causes().to_string())
+                })?;
+
+                client.list_subjects().await.map_err(|e| {
+                    CsrPurificationError::ClientError(e.display_with_causes().to_string())
+                })?;
+            }
+            Format::Avro(AvroSchema::InlineSchema { .. })
+            | Format::Bytes
+            | Format::Csv { .. }
+            | Format::Json
+            | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
+            | Format::Regex(..)
+            | Format::Text => {}
+        }
+    }
+
+    Ok(Statement::CreateSink(stmt))
 }
 
 async fn purify_create_source(
