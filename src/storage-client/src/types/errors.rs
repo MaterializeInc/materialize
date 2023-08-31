@@ -463,7 +463,7 @@ mod columnation {
         type Item = DataflowError;
 
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-            match item {
+            let err = match item {
                 DataflowError::DecodeError(err) => {
                     let err = self.copy_decode_error(&*err);
                     let reference = self.decode_error_region.copy_iter(once(err));
@@ -748,7 +748,9 @@ mod columnation {
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
                     DataflowError::EnvelopeError(boxed)
                 }
-            }
+            };
+            debug_assert_eq!(item, &err);
+            err
         }
 
         fn clear(&mut self) {
