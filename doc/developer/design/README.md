@@ -100,6 +100,10 @@ Many smaller changes do still benefit from a quick design doc to clarify
 thinking. Err on the side of writing a design document. If in doubt, keep it
 short.
 
+Feel free to do prototyping or experimental work before writing a design
+document. Prototypes and experiments can be an effective way to further clarify
+your thinking and inform the writing process.
+
 ## How should you make a design document?
 
 ### Creation
