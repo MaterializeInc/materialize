@@ -48,6 +48,12 @@ impl std::fmt::Display for SeqNo {
     }
 }
 
+impl timely::PartialOrder for SeqNo {
+    fn less_equal(&self, other: &Self) -> bool {
+        self <= other
+    }
+}
+
 impl std::str::FromStr for SeqNo {
     type Err = String;
 
@@ -87,30 +93,6 @@ impl RustType<u64> for SeqNo {
 impl Default for SeqNo {
     fn default() -> Self {
         Self::minimum()
-    }
-}
-
-impl timely::PartialOrder for SeqNo {
-    fn less_equal(&self, other: &Self) -> bool {
-        self <= other
-    }
-}
-
-impl timely::progress::Timestamp for SeqNo {
-    type Summary = SeqNo;
-
-    fn minimum() -> Self {
-        SeqNo::minimum()
-    }
-}
-
-impl timely::progress::PathSummary<SeqNo> for SeqNo {
-    fn results_in(&self, src: &SeqNo) -> Option<SeqNo> {
-        Some(SeqNo(self.0.checked_add(src.0)?))
-    }
-
-    fn followed_by(&self, other: &Self) -> Option<Self> {
-        Some(SeqNo(self.0.checked_add(other.0)?))
     }
 }
 

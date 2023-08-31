@@ -41,7 +41,8 @@ use crate::internal::state::{
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
     ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoRollup, ProtoStateDiff, ProtoStateField,
     ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
+    WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -710,7 +711,8 @@ pub struct Rollup<T> {
 
 impl<T: Timestamp + Lattice + Codec64> Rollup<T> {
     /// Creates a `StateRollup` from a state and diffs from its last rollup.
-    /// WIP: explain bounds
+    ///
+    /// The diffs must span the seqno range `(state.last_rollup().seqno, state.seqno]`.
     pub(crate) fn from(state: UntypedState<T>, diffs: Vec<VersionedData>) -> Self {
         let latest_rollup_seqno = *state.latest_rollup().0;
         let mut verify_seqno = latest_rollup_seqno;
@@ -752,17 +754,18 @@ impl<T: Timestamp + Lattice + Codec64> Rollup<T> {
 
 #[derive(Debug)]
 pub(crate) struct InlinedDiffs {
-    pub(crate) description: Description<SeqNo>,
+    pub(crate) lower: SeqNo,
+    pub(crate) upper: SeqNo,
     pub(crate) diffs: Vec<VersionedData>,
 }
 
 impl InlinedDiffs {
-    pub(crate) fn lower(&self) -> SeqNo {
-        *self.description.lower().first().expect("seqno")
-    }
-
-    pub(crate) fn upper(&self) -> SeqNo {
-        *self.description.upper().first().expect("seqno")
+    pub(crate) fn description(&self) -> Description<SeqNo> {
+        Description::new(
+            Antichain::from_elem(self.lower),
+            Antichain::from_elem(self.upper),
+            Antichain::from_elem(SeqNo::minimum()),
+        )
     }
 
     fn from(lower: SeqNo, upper: SeqNo, diffs: Vec<VersionedData>) -> Self {
@@ -771,11 +774,8 @@ impl InlinedDiffs {
             assert!(diff.seqno < upper);
         }
         Self {
-            description: Description::new(
-                Antichain::from_elem(lower),
-                Antichain::from_elem(upper),
-                Antichain::from_elem(SeqNo::minimum()),
-            ),
+            lower,
+            upper,
             diffs,
         }
     }
@@ -784,36 +784,18 @@ impl InlinedDiffs {
 impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
     fn into_proto(&self) -> ProtoInlinedDiffs {
         ProtoInlinedDiffs {
-            description: Some(self.description.into_proto()),
-            seqnos: self
-                .diffs
-                .iter()
-                .map(|x| x.seqno.into_proto())
-                .collect::<Vec<_>>(),
-            diffs: self
-                .diffs
-                .iter()
-                // cloning a Bytes is cheap
-                .map(|x| x.data.clone().into())
-                .collect::<Vec<_>>(),
+            lower: self.lower.into_proto(),
+            upper: self.upper.into_proto(),
+            diffs: self.diffs.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoInlinedDiffs) -> Result<Self, TryFromProtoError> {
-        let description: Description<SeqNo> = proto.description.into_rust_if_some("description")?;
-
-        assert_eq!(proto.seqnos.len(), proto.diffs.len());
-        let diffs = proto
-            .seqnos
-            .iter()
-            .zip(proto.diffs.into_iter())
-            .map(|(seqno, data)| VersionedData {
-                seqno: SeqNo(*seqno),
-                data: Bytes::from(data),
-            })
-            .collect();
-
-        Ok(Self { description, diffs })
+        Ok(Self {
+            lower: proto.lower.into_rust()?,
+            upper: proto.upper.into_rust()?,
+            diffs: proto.diffs.into_rust()?,
+        })
     }
 }
 
@@ -925,10 +907,22 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             collections,
         };
 
-        let diffs: Option<InlinedDiffs> = x.diffs.into_rust_if_some("diffs").ok();
+        let diffs: Option<InlinedDiffs> = x.diffs.map(|diffs| diffs.into_rust()).transpose()?;
         if let Some(diffs) = &diffs {
-            assert_eq!(diffs.lower(), state.latest_rollup().0.next());
-            assert_eq!(diffs.upper(), state.seqno.next());
+            if diffs.lower != state.latest_rollup().0.next() {
+                return Err(TryFromProtoError::InvalidPersistState(format!(
+                    "diffs lower ({}) should match latest rollup's successor: ({})",
+                    diffs.lower,
+                    state.latest_rollup().0.next()
+                )));
+            }
+            if diffs.upper != state.seqno.next() {
+                return Err(TryFromProtoError::InvalidPersistState(format!(
+                    "diffs upper ({}) should match state's successor: ({})",
+                    diffs.lower,
+                    state.seqno.next()
+                )));
+            }
         }
 
         Ok(Rollup {
@@ -940,6 +934,22 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
                 diff_codec: x.diff_codec.into_rust()?,
             },
             diffs,
+        })
+    }
+}
+
+impl RustType<ProtoVersionedData> for VersionedData {
+    fn into_proto(&self) -> ProtoVersionedData {
+        ProtoVersionedData {
+            seqno: self.seqno.into_proto(),
+            data: Bytes::clone(&self.data),
+        }
+    }
+
+    fn from_proto(proto: ProtoVersionedData) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            seqno: proto.seqno.into_rust()?,
+            data: Bytes::clone(&proto.data),
         })
     }
 }

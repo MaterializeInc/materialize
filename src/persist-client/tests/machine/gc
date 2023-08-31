@@ -68,7 +68,7 @@ state=v3 diffs=[v2, v4)
 
 add-rollup input=v3
 ----
-ok
+v4
 
 # run gc up to our latest seqno. gc should truncate up to the latest rollup
 # and introduce its own seqno (to remove the older rollup from state)
@@ -125,7 +125,7 @@ state=v7 diffs=[v4, v8)
 # now add in rollup from v6 and run gc. should clear only the b0,b1 seqnos
 add-rollup input=v6_last_b0_b1_reference
 ----
-ok
+v8
 
 # run gc to clear only the b0,b1 seqnos
 gc to_seqno=v7
@@ -158,7 +158,7 @@ part 0
 # write a new rollup at v7 so we can GC v6, the last reference to b0 and b1, on our next call
 add-rollup input=v7
 ----
-ok
+v10
 
 gc to_seqno=v7
 ----

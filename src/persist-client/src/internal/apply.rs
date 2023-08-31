@@ -27,12 +27,12 @@ use crate::error::CodecMismatch;
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
-use crate::internal::paths::PartialRollupKey;
+use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
-use crate::internal::state_versions::StateVersions;
+use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::PubSubSender;
@@ -257,11 +257,16 @@ where
             })
     }
 
-    pub fn clone_state_for_rollup(&self) -> TypedState<K, V, T, D> {
-        self.state
+    pub async fn write_rollup_for_state(&self) -> Option<EncodedRollup> {
+        let state = self
+            .state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.clone_for_rollup()
-            })
+            });
+
+        self.state_versions
+            .write_rollup_for_state(self.shard_metrics.as_ref(), state, &RollupId::new())
+            .await
     }
 
     pub async fn apply_unbatched_cmd<

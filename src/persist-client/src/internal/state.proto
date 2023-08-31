@@ -78,11 +78,16 @@ message ProtoHandleDebugState {
     string purpose = 2;
 }
 
-message ProtoInlinedDiffs {
-    ProtoU64Description description = 1;
+message ProtoVersionedData {
+    uint64 seqno = 1;
+    bytes data = 2;
+}
 
-    repeated uint64 seqnos = 2;
-    repeated bytes diffs = 3;
+message ProtoInlinedDiffs {
+    uint64 lower = 1;
+    uint64 upper = 2;
+
+    repeated ProtoVersionedData diffs = 3;
 }
 
 message ProtoRollup {

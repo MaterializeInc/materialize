@@ -47,7 +47,7 @@ state=v4 diffs=[v2, v5)
 # write a bunch of rollups to verify GC bounds
 add-rollup input=v3
 ----
-ok
+v5
 
 write-rollup output=v5
 ----
@@ -55,11 +55,11 @@ state=v5 diffs=[v4, v6)
 
 add-rollup input=v4
 ----
-ok
+v6
 
 add-rollup input=v5
 ----
-ok
+v7
 
 consensus-scan from_seqno=v1
 ----
@@ -157,11 +157,11 @@ state=v9 diffs=[v6, v10)
 
 add-rollup input=v8
 ----
-ok
+v10
 
 add-rollup input=v9
 ----
-ok
+v11
 
 # (this is also subtle, but we GC to v8 again like before.
 # this time we can make further progress though, as previously

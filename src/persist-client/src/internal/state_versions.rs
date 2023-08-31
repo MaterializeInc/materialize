@@ -38,9 +38,7 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
-use crate::internal::state::{
-    HollowBlobRef, HollowRollup, NoOpStateTransition, ProtoRollup, State, TypedState,
-};
+use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -676,6 +674,10 @@ impl StateVersions {
                 // early-out if it is no longer possible to inline all the diffs from
                 // the last known rollup to the current state. some or all of the diffs
                 // have already been truncated by another process.
+                //
+                // this can happen if one process gets told to write a rollup, the
+                // maintenance task falls arbitrarily behind, and another process writes
+                // a new rollup / GCs and truncates past the first process's rollup.
                 self.metrics.state.rollup_write_noop_truncated.inc();
                 if first.seqno != latest_rollup_seqno.next() {
                     assert!(
@@ -709,7 +711,9 @@ impl StateVersions {
         Some(rollup)
     }
 
-    /// Encodes the given state as a rollup to be written to the specified key.
+    /// Encodes the given state and diffs as a rollup to be written to the specified key.
+    ///
+    /// The diffs must span the seqno range `(state.last_rollup().seqno, state.seqno]`.
     pub fn encode_rollup_blob<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
@@ -725,22 +729,9 @@ impl StateVersions {
     {
         let shard_id = state.shard_id;
         let rollup_seqno = state.seqno;
-        let latest_rollup_seqno = *state.latest_rollup().0;
-
-        let mut verify_seqno = latest_rollup_seqno;
-        for diff in &diffs {
-            assert_eq!(verify_seqno.next(), diff.seqno);
-            verify_seqno = diff.seqno;
-        }
-        assert_eq!(verify_seqno, state.seqno);
 
         let rollup = Rollup::from(state.into(), diffs);
-        let desc = rollup
-            .diffs
-            .as_ref()
-            .expect("inlined diffs")
-            .description
-            .clone();
+        let desc = rollup.diffs.as_ref().expect("inlined diffs").description();
 
         let buf = self.metrics.codecs.state.encode(|| {
             let mut buf = Vec::new();
@@ -1009,7 +1000,7 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         &self.state
     }
 
-    pub fn into_rollup_proto_without_diffs(&self) -> ProtoRollup {
+    pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize {
         Rollup::from_state_without_diffs(
             self.state.clone(),
             self.key_codec.clone(),

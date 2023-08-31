@@ -27,7 +27,7 @@ state=v2 diffs=[v2, v3)
 
 add-rollup input=v2
 ----
-ok
+v3
 
 consensus-scan from_seqno=v0
 ----

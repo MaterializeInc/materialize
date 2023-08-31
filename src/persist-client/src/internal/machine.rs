@@ -39,7 +39,7 @@ use crate::internal::compact::CompactReq;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
     IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
@@ -111,13 +111,7 @@ where
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
-        let state = self.applier.clone_state_for_rollup();
-        let rollup = self
-            .applier
-            .state_versions
-            .write_rollup_for_state(self.applier.shard_metrics.as_ref(), state, &RollupId::new())
-            .await;
-
+        let rollup = self.applier.write_rollup_for_state().await;
         let Some(rollup) = rollup else {
             return RoutineMaintenance::default();
         };
@@ -1270,16 +1264,10 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let output = args.expect_str("output");
 
-        let state = datadriven.machine.applier.clone_state_for_rollup();
         let rollup = datadriven
             .machine
             .applier
-            .state_versions
-            .write_rollup_for_state(
-                datadriven.machine.applier.shard_metrics.as_ref(),
-                state,
-                &RollupId::new(),
-            )
+            .write_rollup_for_state()
             .await
             .expect("rollup");
 
@@ -1316,7 +1304,7 @@ pub mod datadriven {
         }
 
         datadriven.routine.push(maintenance);
-        Ok("ok\n".to_string())
+        Ok(format!("{}\n", datadriven.machine.seqno()))
     }
 
     pub async fn write_batch(
