@@ -1931,10 +1931,10 @@ where
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct ParseError {
-    pub(crate) kind: ParseErrorKind,
-    pub(crate) type_name: String,
-    pub(crate) input: String,
-    pub(crate) details: Option<String>,
+    pub kind: ParseErrorKind,
+    pub type_name: String,
+    pub input: String,
+    pub details: Option<String>,
 }
 
 #[derive(
@@ -2059,7 +2059,18 @@ impl RustType<ProtoParseError> for ParseError {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
 pub enum ParseHexError {
     InvalidHexDigit(char),
