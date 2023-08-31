@@ -239,6 +239,11 @@ NB: The storage events are read once at start-time and never read again.
 
 #### Initialization
 
+We will use an environments org ID to deterministically generate the persist shard ID. The org ID
+and persist shards are both v4 UUIDs, so we could technically use the org ID as the persist shard
+ID. However, we'll likely want to modify the ord ID to something like `hash(ord_id) + "catalog"` for
+nicer looking observability in dashboards and such.
+
 - `init_persist_catalog_state`:
     1. Creates a new persist write handle.
     2. Read the shard upper into memory.
