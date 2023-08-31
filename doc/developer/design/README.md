@@ -116,11 +116,11 @@ short.
 4. Schedule a meeting to discuss the design document live with your
    stakeholders. Rule of thumb is that you should give your reviewers
    about a week to thoroughly review and engage with your document.
-5. Optional, but recommended: announce that the design document is ready
-   for review in #epd-announce. It may be useful to get extra eyes on
-   your design, but remember that this process is not intended to design
-   by committee. Use your judgment in engaging with feedback from outside
-   of your group of stakeholders.
+5. Optional: announce that the design document is ready for review in
+   #epd-announce. It may be useful to get extra eyes on your design, but
+   remember that this process is not intended to design by committee.
+   Use your judgment in engaging with feedback from outside of your group
+   of stakeholders.
 
 ### Iteration
 
