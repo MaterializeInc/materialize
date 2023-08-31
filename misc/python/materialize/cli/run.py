@@ -253,7 +253,9 @@ def main() -> int:
     # test itself. However, that doesn't work for `variable_length_row_encoding`,
     # as it's only read once on startup and doesn't take effect until restart.
     if os.environ.get("MZ_SYSTEM_PARAMETER_DEFAULT"):
-       os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] += ";variable_length_row_encoding=true"
+        os.environ[
+            "MZ_SYSTEM_PARAMETER_DEFAULT"
+        ] += ";variable_length_row_encoding=true"
     else:
         os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] = "variable_length_row_encoding=true"
     print(f"$ {' '.join(command)}")
