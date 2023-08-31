@@ -239,7 +239,17 @@ impl Coordinator {
                             source_status_collection_id,
                         ),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
-                        DataSourceDesc::Webhook { .. } => (DataSource::Webhook, None),
+                        DataSourceDesc::Webhook { .. } => {
+                            if let Some(url) = self
+                                .catalog()
+                                .state()
+                                .try_get_webhook_url(&source_id, Some(session.conn_id()))
+                            {
+                                session.add_notice(AdapterNotice::WebhookSourceCreated { url })
+                            }
+
+                            (DataSource::Webhook, None)
+                        }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }

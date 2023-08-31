@@ -399,6 +399,7 @@ impl Listeners {
         } else {
             (TracingHandle::disabled(), None)
         };
+        let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
 
         let inner = self.runtime.block_on(async {
             self.inner
@@ -460,6 +461,7 @@ impl Listeners {
                     config_sync_loop_interval: None,
                     bootstrap_role: config.bootstrap_role,
                     deploy_generation: config.deploy_generation,
+                    http_host_name: Some(host_name),
                 })
                 .await
         })?;

@@ -503,6 +503,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
 }
 
@@ -1979,6 +1980,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
+        http_host_name,
         tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
@@ -2033,6 +2035,7 @@ pub async fn serve(
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
+            http_host_name,
         })
         .await?;
     let session_id = catalog.config().session_id;

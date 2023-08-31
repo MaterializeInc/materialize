@@ -500,6 +500,7 @@ impl Usage {
             aws_privatelink_availability_zones: None,
             system_parameter_sync_config: None,
             storage_usage_retention_period: None,
+            http_host_name: None,
             connection_context: None,
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         })
