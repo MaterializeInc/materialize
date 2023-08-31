@@ -37,7 +37,8 @@ use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::pure::error::{
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
+    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -221,8 +222,10 @@ pub enum PlanError {
     InvalidGroupSizeHints,
     PgSourcePurification(PgSourcePurificationError),
     KafkaSourcePurification(KafkaSourcePurificationError),
+    KafkaSinkPurification(KafkaSinkPurificationError),
     TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
+    CsrPurification(CsrPurificationError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -273,6 +276,8 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::TestScriptSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
+            Self::CsrPurification(e) => e.detail(),
+            Self::KafkaSinkPurification(e) => e.detail(),
             _ => None,
         }
     }
@@ -348,6 +353,8 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
+            Self::CsrPurification(e) => e.hint(),
+            Self::KafkaSinkPurification(e) => e.hint(),
             Self::UnknownColumn { table, similar, .. } => {
                 let suffix = "Make sure to surround case sensitive names in double quotes.";
                 match &similar[..] {
@@ -578,6 +585,8 @@ impl fmt::Display for PlanError {
             Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
             Self::TestScriptSourcePurification(e) => write!(f, "TEST SCRIPT source validation: {}", e),
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
+            Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
+            Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
             }
@@ -687,6 +696,18 @@ impl From<PgSourcePurificationError> for PlanError {
 impl From<KafkaSourcePurificationError> for PlanError {
     fn from(e: KafkaSourcePurificationError) -> Self {
         PlanError::KafkaSourcePurification(e)
+    }
+}
+
+impl From<KafkaSinkPurificationError> for PlanError {
+    fn from(e: KafkaSinkPurificationError) -> Self {
+        PlanError::KafkaSinkPurification(e)
+    }
+}
+
+impl From<CsrPurificationError> for PlanError {
+    fn from(e: CsrPurificationError) -> Self {
+        PlanError::CsrPurification(e)
     }
 }
 
