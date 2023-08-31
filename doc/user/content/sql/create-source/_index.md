@@ -232,8 +232,8 @@ It's a good idea to size up a source when:
     keys.
 
     In this case, it's also possible to enable _spill to disk_ to accommodate
-    larger state sizes without sizing up. See [`Disk-attached replicas`]
-    (/sql/create-cluster-replica#disk-attached-replicas) for more details.
+    larger state sizes without sizing up. See [`Disk-attached replicas`](/sql/create-cluster-replica#disk-attached-replicas)
+    for more details.
 
 Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.
