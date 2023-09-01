@@ -12,11 +12,10 @@ use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
-use timely::dataflow::operators::to_stream::Event;
 
 /// CREATE TABLE organizations
 ///   (
@@ -75,8 +74,7 @@ impl Generator for Auction {
         &self,
         now: NowFn,
         seed: Option<u64>,
-        _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<(dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>)> {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
@@ -117,64 +115,57 @@ impl Generator for Auction {
         let mut pending: VecDeque<(usize, Row)> =
             organizations.chain(users).chain(accounts).collect();
 
-        let mut offset = 0;
-        Box::new(
-            iter::from_fn(move || {
-                {
-                    if pending.is_empty() {
-                        counter += 1;
-                        let now = to_datetime(now());
-                        let mut auction = Row::with_capacity(4);
-                        let mut packer = auction.packer();
-                        packer.push(Datum::Int64(counter)); // auction id
-                        let max_seller_id = i64::try_from(CELEBRETIES.len())
-                            .expect("demo entries less than i64::MAX");
-                        packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // seller
-                        packer.push(Datum::String(AUCTIONS.choose(&mut rng).unwrap())); // item
-                        packer.push(Datum::TimestampTz(
-                            (now + chrono::Duration::seconds(10))
-                                .try_into()
-                                .expect("timestamp must fit"),
-                        )); // end time
-                        pending.push_back((AUCTIONS_OUTPUT, auction));
-                        const MAX_BIDS: i64 = 10;
-                        for i in 0..rng.gen_range(2..MAX_BIDS) {
-                            let bid_id = Datum::Int64(counter * MAX_BIDS + i);
-                            let bid = {
-                                let mut bid = Row::with_capacity(5);
-                                let mut packer = bid.packer();
-                                packer.push(bid_id);
-                                packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // buyer
-                                packer.push(Datum::Int64(counter)); // auction id
-                                packer.push(Datum::Int32(rng.gen_range(1..100))); // amount
-                                packer.push(Datum::TimestampTz(
-                                    (now + chrono::Duration::seconds(i))
-                                        .try_into()
-                                        .expect("timestamp must fit"),
-                                )); // bid time
-                                bid
-                            };
-                            pending.push_back((BIDS_OUTPUT, bid));
-                        }
-                    }
-                    // Pop from the front so auctions always appear before bids.
-                    let pend = pending.pop_front();
-                    pend.map(|(output, row)| {
-                        let msg = (output, Event::Message(MzOffset::from(offset), (row, 1)));
-
-                        // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.
-                        let progress = if counter != 0 || pending.is_empty() {
-                            offset += 1;
-                            Some((output, Event::Progress(Some(MzOffset::from(offset)))))
-                        } else {
-                            None
+        Box::new(iter::from_fn(move || {
+            {
+                if pending.is_empty() {
+                    counter += 1;
+                    let now = to_datetime(now());
+                    let mut auction = Row::with_capacity(4);
+                    let mut packer = auction.packer();
+                    packer.push(Datum::Int64(counter)); // auction id
+                    let max_seller_id =
+                        i64::try_from(CELEBRETIES.len()).expect("demo entries less than i64::MAX");
+                    packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // seller
+                    packer.push(Datum::String(AUCTIONS.choose(&mut rng).unwrap())); // item
+                    packer.push(Datum::TimestampTz(
+                        (now + chrono::Duration::seconds(10))
+                            .try_into()
+                            .expect("timestamp must fit"),
+                    )); // end time
+                    pending.push_back((AUCTIONS_OUTPUT, auction));
+                    const MAX_BIDS: i64 = 10;
+                    for i in 0..rng.gen_range(2..MAX_BIDS) {
+                        let bid_id = Datum::Int64(counter * MAX_BIDS + i);
+                        let bid = {
+                            let mut bid = Row::with_capacity(5);
+                            let mut packer = bid.packer();
+                            packer.push(bid_id);
+                            packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // buyer
+                            packer.push(Datum::Int64(counter)); // auction id
+                            packer.push(Datum::Int32(rng.gen_range(1..100))); // amount
+                            packer.push(Datum::TimestampTz(
+                                (now + chrono::Duration::seconds(i))
+                                    .try_into()
+                                    .expect("timestamp must fit"),
+                            )); // bid time
+                            bid
                         };
-                        std::iter::once(msg).chain(progress)
-                    })
+                        pending.push_back((BIDS_OUTPUT, bid));
+                    }
                 }
-            })
-            .flatten(),
-        )
+                // Pop from the front so auctions always appear before bids.
+                let pend = pending.pop_front();
+                pend.map(|(output, row)| {
+                    // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.
+                    let typ = if counter != 0 || pending.is_empty() {
+                        GeneratorMessageType::Finalized
+                    } else {
+                        GeneratorMessageType::InProgress
+                    };
+                    (output, typ, row, 1)
+                })
+            }
+        }))
     }
 }
 

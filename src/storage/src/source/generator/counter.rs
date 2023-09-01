@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::iter;
+
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
-use timely::dataflow::operators::to_stream::Event;
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 
 pub struct Counter {
     /// How many values will be emitted before old ones are retracted,
@@ -18,7 +19,10 @@ pub struct Counter {
     /// behavior is changed,
     /// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
     /// must be updated.
-    pub max_cardinality: Option<u64>,
+    ///
+    /// This is verified by the planner to be nonnegative. We encode it as
+    /// an `i64` to make the code in `Counter::by_seed` simpler.
+    pub max_cardinality: Option<i64>,
 }
 
 impl Generator for Counter {
@@ -26,39 +30,50 @@ impl Generator for Counter {
         &self,
         _now: NowFn,
         _seed: Option<u64>,
-        resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>> {
+        let mut counter = 0;
         let max_cardinality = self.max_cardinality;
-
         Box::new(
-            (resume_offset.offset..)
-                .map(move |offset| {
-                    let retraction = match max_cardinality {
-                        // At offset `max` we must start retracting the value of `offset - max`. For
-                        // example if max_cardinality is 2 then the collection should contain:
-                        // (1, 0, +1)
-                        // (2, 1, +1)
-                        // (1, 2, -1) <- Here offset becomes >= max and we retract the value that was
-                        // (3, 2, +1)    emitted at (offset - max), which equals (offset - max + 1).
-                        // (2, 3, -1)
-                        // (4, 3, +1)
-                        Some(max) if offset >= max => {
-                            let retracted_value = i64::try_from(offset - max + 1).unwrap();
-                            let row = Row::pack_slice(&[Datum::Int64(retracted_value)]);
-                            Some((0, Event::Message(MzOffset::from(offset), (row, -1))))
+            iter::repeat_with(move || {
+                let to_retract = match max_cardinality {
+                    Some(max) => {
+                        if max <= counter {
+                            Some(counter - max + 1)
+                        } else {
+                            None
                         }
-                        _ => None,
-                    };
-
-                    let inserted_value = i64::try_from(offset + 1).unwrap();
-                    let row = Row::pack_slice(&[Datum::Int64(inserted_value)]);
-                    let insertion = [
-                        (0, Event::Message(MzOffset::from(offset), (row, 1))),
-                        (0, Event::Progress(Some(MzOffset::from(offset + 1)))),
-                    ];
-                    retraction.into_iter().chain(insertion)
-                })
-                .flatten(),
+                    }
+                    None => None,
+                };
+                counter += 1;
+                // NB: we could get rid of this allocation with
+                // judicious use of itertools::Either, if it were
+                // important to highly optimize this code path.
+                if let Some(to_retract) = to_retract {
+                    vec![
+                        (
+                            0,
+                            GeneratorMessageType::InProgress,
+                            Row::pack_slice(&[Datum::Int64(counter)]),
+                            1,
+                        ),
+                        (
+                            0,
+                            GeneratorMessageType::Finalized,
+                            Row::pack_slice(&[Datum::Int64(to_retract)]),
+                            -1,
+                        ),
+                    ]
+                } else {
+                    vec![(
+                        0,
+                        GeneratorMessageType::Finalized,
+                        Row::pack_slice(&[Datum::Int64(counter)]),
+                        1,
+                    )]
+                }
+            })
+            .flatten(),
         )
     }
 }
