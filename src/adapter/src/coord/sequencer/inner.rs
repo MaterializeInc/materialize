@@ -781,13 +781,11 @@ impl Coordinator {
             ctx
         );
 
-        self.create_storage_export(
-            create_export_token,
-            &catalog_sink,
-            catalog_sink.connection.clone(),
-        )
-        .await
-        .unwrap_or_terminate("cannot fail to create exports");
+        self.create_storage_export(create_export_token, &catalog_sink)
+            .await
+            .unwrap_or_terminate("cannot fail to create exports");
+
+        ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
 
     /// Validates that a view definition does not contain any expressions that may lead to
