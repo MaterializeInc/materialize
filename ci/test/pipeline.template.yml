@@ -659,7 +659,9 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
-          args: [--scenario=KafkaUpsertUnique]
+          args:
+            - --scenario=KafkaUpsertUnique
+            - --this-params=variable_length_row_encoding=false
     coverage: skip
 
   - id: deploy-website
