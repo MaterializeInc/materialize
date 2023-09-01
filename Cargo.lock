@@ -4994,6 +4994,7 @@ dependencies = [
  "once_cell",
  "postgres-protocol",
  "regex",
+ "reqwest",
  "serde_json",
  "shell-words",
  "tempfile",

@@ -120,6 +120,7 @@ use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
+mod consistency;
 mod error;
 mod migrate;
 
@@ -3275,6 +3276,7 @@ pub struct DefaultPrivileges {
 // map_key_to_string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
 struct RoleDefaultPrivileges(
+    /// Denormalized, the key is the grantee Role.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     BTreeMap<RoleId, DefaultPrivilegeAclItem>,
 );
@@ -8065,6 +8067,17 @@ impl Catalog {
     /// identically.
     pub fn dump(&self) -> Result<CatalogDump, Error> {
         Ok(CatalogDump::new(self.state.dump()?))
+    }
+
+    /// Checks the [`Catalog`]s internal consistency.
+    ///
+    /// Returns a JSON object describing the inconsistencies, if there are any.
+    pub fn check_consistency(&self) -> Result<(), serde_json::Value> {
+        self.state.check_consistency().map_err(|inconsistencies| {
+            serde_json::to_value(inconsistencies).unwrap_or_else(|_| {
+                serde_json::Value::String("failed to serialize inconsistencies".to_string())
+            })
+        })
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {

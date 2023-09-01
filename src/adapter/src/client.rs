@@ -564,6 +564,16 @@ impl SessionClient {
         catalog.dump().map_err(AdapterError::from)
     }
 
+    /// Checks the catalog for internal consistency, returning a JSON object describing the
+    /// inconsistencies, if there are any.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
+        let catalog = self.catalog_snapshot().await;
+        catalog.check_consistency()
+    }
+
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
     pub fn retire_execute(
