@@ -14,6 +14,7 @@ use bytes::BufMut;
 use mz_expr::{EvalError, PartitionId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -25,7 +26,7 @@ include!(concat!(
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -71,7 +72,7 @@ impl Display for DecodeError {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeErrorKind {
     Text(String),
     Bytes(String),
@@ -108,7 +109,7 @@ impl Display for DecodeErrorKind {
 }
 
 /// Errors arising during envelope processing.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum EnvelopeError {
     /// An error arising while processing the Debezium envelope.
     Debezium(String),
@@ -159,7 +160,7 @@ impl Display for EnvelopeError {
 
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct UpsertValueError {
     /// The underlying error. Boxed because this is a recursive type.
     pub inner: DecodeError,
@@ -204,7 +205,9 @@ impl Display for UpsertValueError {
 }
 
 /// A source contained a record with a NULL key, which we don't support.
-#[derive(Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
+)]
 pub struct UpsertNullKeyError {
     partition_id: Option<PartitionId>,
 }
@@ -248,7 +251,7 @@ impl Display for UpsertNullKeyError {
 }
 
 /// An error that can be retracted by a future message using upsert logic.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -308,7 +311,7 @@ impl Display for UpsertError {
 
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SourceError {
     pub source_id: GlobalId,
     pub error: SourceErrorDetails,
@@ -345,7 +348,7 @@ impl Display for SourceError {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceErrorDetails {
     Initialization(String),
     Other(String),
@@ -401,7 +404,7 @@ impl Display for SourceErrorDetails {
 /// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),
@@ -832,6 +835,30 @@ mod columnation {
             source_error_region.heap_size(&mut callback);
             string_region.heap_size(&mut callback);
             u8_region.heap_size(callback);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use proptest::prelude::*;
+        use timely::container::columnation::TimelyStack;
+
+        use super::*;
+
+        fn columnation_roundtrip<T: Columnation>(item: &T) -> TimelyStack<T> {
+            let mut container = TimelyStack::with_capacity(1);
+            container.copy(item);
+            container
+        }
+
+        proptest! {
+            #[mz_ore::test]
+            // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+            #[cfg_attr(miri, ignore)]
+            fn dataflow_error_roundtrip(expect in any::<DataflowError>()) {
+                let actual = columnation_roundtrip(&expect);
+                proptest::prop_assert_eq!(&expect, &actual[0])
+            }
         }
     }
 }
