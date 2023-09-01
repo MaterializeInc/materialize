@@ -7,14 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import subprocess
-from textwrap import dedent
 
 from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
 from kubernetes.config import new_client_from_config  # type: ignore
 
 from materialize import MZ_ROOT, mzbuild, ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
+from materialize.cloudtest.util.common import run_process_with_error_information
 from materialize.cloudtest.util.wait import wait
 
 
@@ -23,29 +22,16 @@ class K8sResource:
         self.selected_namespace = namespace
 
     def kubectl(self, *args: str, input: str | None = None) -> None:
-        try:
-            cmd = [
-                "kubectl",
-                "--context",
-                self.context(),
-                "--namespace",
-                self.namespace(),
-                *args,
-            ]
+        cmd = [
+            "kubectl",
+            "--context",
+            self.context(),
+            "--namespace",
+            self.namespace(),
+            *args,
+        ]
 
-            subprocess.run(cmd, text=True, input=input, check=True)
-        except subprocess.CalledProcessError as e:
-            print(
-                dedent(
-                    f"""
-                    cmd: {e.cmd}
-                    returncode: {e.returncode}
-                    stdout: {e.stdout}
-                    stderr: {e.stderr}
-                    """
-                )
-            )
-            raise e
+        run_process_with_error_information(cmd, input)
 
     def api(self) -> CoreV1Api:
         api_client = new_client_from_config(context=self.context())
