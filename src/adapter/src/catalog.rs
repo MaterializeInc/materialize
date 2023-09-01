@@ -1960,6 +1960,17 @@ pub struct Database {
     pub privileges: PrivilegeMap,
 }
 
+impl From<Database> for storage::Database {
+    fn from(database: Database) -> storage::Database {
+        storage::Database {
+            id: database.id,
+            name: database.name,
+            owner_id: database.owner_id,
+            privileges: database.privileges.into_all_values().collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
@@ -1970,6 +1981,18 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+}
+
+impl Schema {
+    fn to_durable_schema(self, database_id: Option<DatabaseId>) -> storage::Schema {
+        storage::Schema {
+            id: self.id.into(),
+            name: self.name.schema,
+            database_id,
+            owner_id: self.owner_id,
+            privileges: self.privileges.into_all_values().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1985,6 +2008,17 @@ pub struct Role {
 impl Role {
     pub fn is_user(&self) -> bool {
         self.id.is_user()
+    }
+}
+
+impl From<Role> for storage::Role {
+    fn from(role: Role) -> storage::Role {
+        storage::Role {
+            id: role.id,
+            name: role.name,
+            attributes: role.attributes,
+            membership: role.membership,
+        }
     }
 }
 
@@ -2070,6 +2104,19 @@ impl Cluster {
     }
 }
 
+impl From<Cluster> for storage::Cluster {
+    fn from(cluster: Cluster) -> storage::Cluster {
+        storage::Cluster {
+            id: cluster.id,
+            name: cluster.name,
+            linked_object_id: cluster.linked_object_id,
+            owner_id: cluster.owner_id,
+            privileges: cluster.privileges.into_all_values().collect(),
+            config: cluster.config,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ClusterReplica {
     pub name: String,
@@ -2101,6 +2148,18 @@ impl ClusterReplica {
                     ClusterStatus::NotReady(reason_x.or(reason_y))
                 }
             })
+    }
+}
+
+impl From<ClusterReplica> for storage::ClusterReplica {
+    fn from(replica: ClusterReplica) -> storage::ClusterReplica {
+        storage::ClusterReplica {
+            cluster_id: replica.cluster_id,
+            replica_id: replica.replica_id,
+            name: replica.name,
+            serialized_config: replica.config.into(),
+            owner_id: replica.owner_id,
+        }
     }
 }
 
@@ -2136,6 +2195,18 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+}
+
+impl From<CatalogEntry> for storage::Item {
+    fn from(entry: CatalogEntry) -> storage::Item {
+        storage::Item {
+            id: entry.id,
+            name: entry.name,
+            definition: Catalog::to_serialized_item(entry.item),
+            owner_id: entry.owner_id,
+            privileges: entry.privileges.into_all_values().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5777,7 +5848,7 @@ impl Catalog {
                     }
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
-                    tx.update_role(id, existing_role.clone())?;
+                    tx.update_role(id, existing_role.clone().into())?;
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {
                         builtin_table_updates.push(builtin_update);
                     }
@@ -5876,7 +5947,7 @@ impl Catalog {
                         ..(entry.clone())
                     };
 
-                    tx.update_item(id, &sink)?;
+                    tx.update_item(id, sink.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5976,7 +6047,7 @@ impl Catalog {
                         ..(entry.clone())
                     };
 
-                    tx.update_item(id, &source)?;
+                    tx.update_item(id, source.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -6846,7 +6917,7 @@ impl Catalog {
                     }
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.insert(role_id, grantor_id);
-                    tx.update_role(member_id, member_role.clone())?;
+                    tx.update_role(member_id, member_role.clone().into())?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, 1));
 
@@ -6880,7 +6951,7 @@ impl Catalog {
                         .push(state.pack_role_members_update(role_id, member_id, -1));
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.remove(&role_id);
-                    tx.update_role(member_id, member_role.clone())?;
+                    tx.update_role(member_id, member_role.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -6922,7 +6993,7 @@ impl Catalog {
                                     .push(state.pack_cluster_update(&cluster_name, -1));
                                 let cluster = state.get_cluster_mut(*id);
                                 update_privilege_fn(&mut cluster.privileges);
-                                tx.update_cluster(*id, cluster)?;
+                                tx.update_cluster(*id, cluster.clone().into())?;
                                 builtin_table_updates
                                     .push(state.pack_cluster_update(&cluster_name, 1));
                             }
@@ -6933,7 +7004,7 @@ impl Catalog {
                                 let database = state.get_database_mut(id);
                                 update_privilege_fn(&mut database.privileges);
                                 let database = state.get_database(id);
-                                tx.update_database(*id, database)?;
+                                tx.update_database(*id, database.clone().into())?;
                                 builtin_table_updates.push(state.pack_database_update(database, 1));
                             }
                             ObjectId::Schema((database_spec, schema_spec)) => {
@@ -6955,7 +7026,11 @@ impl Catalog {
                                     ResolvedDatabaseSpecifier::Ambient => None,
                                     ResolvedDatabaseSpecifier::Id(id) => Some(*id),
                                 };
-                                tx.update_schema(database_id, schema_id, schema)?;
+                                tx.update_schema(
+                                    database_id,
+                                    schema_id,
+                                    schema.clone().to_durable_schema(database_id.clone()),
+                                )?;
                                 builtin_table_updates.push(state.pack_schema_update(
                                     database_spec,
                                     &schema_id,
@@ -6967,7 +7042,7 @@ impl Catalog {
                                 let entry = state.get_entry_mut(id);
                                 update_privilege_fn(&mut entry.privileges);
                                 if !entry.item().is_temporary() {
-                                    tx.update_item(*id, entry)?;
+                                    tx.update_item(*id, entry.clone().into())?;
                                 }
                                 builtin_table_updates.extend(state.pack_item_update(*id, 1));
                             }
@@ -7257,14 +7332,14 @@ impl Catalog {
                             })?;
 
                         if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, &to_entry)?;
+                            tx.update_item(*id, to_entry.clone().into())?;
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
 
                         updates.push((id.clone(), dependent_item.name().clone(), to_entry.item));
                     }
                     if !new_entry.item().is_temporary() {
-                        tx.update_item(id, &new_entry)?;
+                        tx.update_item(id, new_entry.clone().into())?;
                     }
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, new_entry.item));
@@ -7303,7 +7378,7 @@ impl Catalog {
                                 new_owner,
                             );
                             cluster.owner_id = new_owner;
-                            tx.update_cluster(*id, cluster)?;
+                            tx.update_cluster(*id, cluster.clone().into())?;
                             builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
                         }
                         ObjectId::ClusterReplica((cluster_id, replica_id)) => {
@@ -7335,7 +7410,11 @@ impl Catalog {
                                 .get_mut(replica_id)
                                 .expect("catalog out of sync");
                             replica.owner_id = new_owner;
-                            tx.update_cluster_replica(*cluster_id, *replica_id, replica)?;
+                            tx.update_cluster_replica(
+                                *cluster_id,
+                                *replica_id,
+                                replica.clone().into(),
+                            )?;
                             builtin_table_updates.push(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
@@ -7353,7 +7432,7 @@ impl Catalog {
                             );
                             database.owner_id = new_owner;
                             let database = state.get_database(id);
-                            tx.update_database(*id, database)?;
+                            tx.update_database(*id, database.clone().into())?;
                             builtin_table_updates.push(state.pack_database_update(database, 1));
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
@@ -7374,7 +7453,11 @@ impl Catalog {
                                 ResolvedDatabaseSpecifier::Ambient => None,
                                 ResolvedDatabaseSpecifier::Id(id) => Some(id),
                             };
-                            tx.update_schema(database_id.cloned(), schema_id, schema)?;
+                            tx.update_schema(
+                                database_id.cloned(),
+                                schema_id,
+                                schema.clone().to_durable_schema(database_id.cloned()),
+                            )?;
                             builtin_table_updates.push(state.pack_schema_update(
                                 database_spec,
                                 &schema_id,
@@ -7401,7 +7484,7 @@ impl Catalog {
                             );
                             entry.owner_id = new_owner;
                             if !entry.item().is_temporary() {
-                                tx.update_item(*id, entry)?;
+                                tx.update_item(*id, entry.clone().into())?;
                             }
                             builtin_table_updates.extend(state.pack_item_update(*id, 1));
                         }
@@ -7427,7 +7510,7 @@ impl Catalog {
                     builtin_table_updates.push(state.pack_cluster_update(&name, -1));
                     let cluster = state.get_cluster_mut(id);
                     cluster.config = config;
-                    tx.update_cluster(id, cluster)?;
+                    tx.update_cluster(id, cluster.clone().into())?;
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     info!("update cluster {}", name);
                 }
@@ -7465,7 +7548,7 @@ impl Catalog {
                         drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
-                    tx.update_item(id, entry)?;
+                    tx.update_item(id, entry.clone().into())?;
 
                     if Self::should_audit_log_item(&to_item) {
                         let name = Self::full_name_detail(
@@ -7780,6 +7863,49 @@ impl Catalog {
             },
             CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
                 create_sql: connection.create_sql.clone(),
+            },
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        }
+    }
+
+    pub(crate) fn to_serialized_item(item: CatalogItem) -> SerializedCatalogItem {
+        match item {
+            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
+                create_sql: table.create_sql,
+            },
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    match source.data_source {
+                        DataSourceDesc::Introspection(_) => false,
+                        _ => true,
+                    },
+                    "cannot serialize introspection/builtin sources",
+                );
+                SerializedCatalogItem::V1 {
+                    create_sql: source.create_sql,
+                }
+            }
+            CatalogItem::View(view) => SerializedCatalogItem::V1 {
+                create_sql: view.create_sql,
+            },
+            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
+                create_sql: mview.create_sql,
+            },
+            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
+                create_sql: index.create_sql,
+            },
+            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
+                create_sql: sink.create_sql,
+            },
+            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
+                create_sql: typ.create_sql,
+            },
+            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
+                create_sql: secret.create_sql,
+            },
+            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
+                create_sql: connection.create_sql,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }

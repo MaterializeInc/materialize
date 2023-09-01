@@ -26,8 +26,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
-    CatalogSchema, ObjectType, RoleAttributes,
+    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -45,7 +44,7 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
-    self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
+    is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
     SerializedReplicaLocation, SerializedReplicaLogging, SystemObjectMapping,
 };
@@ -76,9 +75,7 @@ const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-) -> Result<(), catalog::error::Error> {
+fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -113,7 +110,7 @@ fn add_new_builtin_clusters_migration(
 fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     bootstrap_args: &BootstrapArgs,
-) -> Result<(), catalog::error::Error> {
+) -> Result<(), Error> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .clusters
         .items()
@@ -1516,20 +1513,21 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub(crate) fn update_item(
-        &mut self,
-        id: GlobalId,
-        entry: &catalog::CatalogEntry,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
-                let definition = Catalog::serialize_item(entry.item());
+                let item = item.clone();
+                // Schema IDs cannot change.
+                assert_eq!(
+                    SchemaId::from(item.name.qualifiers.schema_spec),
+                    v.schema_id
+                );
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: entry.name().item.clone(),
-                    definition,
-                    owner_id: *entry.owner_id(),
-                    privileges: entry.privileges().all_values_owned().collect(),
+                    name: item.name.item,
+                    definition: item.definition,
+                    owner_id: item.owner_id,
+                    privileges: item.privileges,
                 })
             } else {
                 None
@@ -1553,6 +1551,11 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
+                // Schema IDs cannot change.
+                assert_eq!(
+                    SchemaId::from(item.name.qualifiers.schema_spec),
+                    v.schema_id
+                );
                 Some(ItemValue {
                     schema_id: v.schema_id,
                     name: item.name.item.clone(),
@@ -1582,10 +1585,11 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub(crate) fn update_role(&mut self, id: RoleId, role: catalog::Role) -> Result<(), Error> {
+    pub(crate) fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
-                Some(RoleValue::from(role.clone()))
+                let role = role.clone();
+                Some(RoleValue::from(role))
             } else {
                 None
             }
@@ -1638,19 +1642,16 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
     /// DO NOT call this function in a loop.
-    pub(crate) fn update_cluster(
-        &mut self,
-        id: ClusterId,
-        cluster: &catalog::Cluster,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), Error> {
         let n = self.clusters.update(|k, _v| {
             if k.id == id {
+                let cluster = cluster.clone();
                 Some(ClusterValue {
-                    name: cluster.name().to_string(),
-                    linked_object_id: cluster.linked_object_id(),
+                    name: cluster.name,
+                    linked_object_id: cluster.linked_object_id,
                     owner_id: cluster.owner_id,
-                    privileges: cluster.privileges().all_values_owned().collect(),
-                    config: cluster.config.clone(),
+                    privileges: cluster.privileges,
+                    config: cluster.config,
                 })
             } else {
                 None
@@ -1674,14 +1675,15 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        replica: &catalog::ClusterReplica,
+        replica: ClusterReplica,
     ) -> Result<(), Error> {
         let n = self.cluster_replicas.update(|k, _v| {
             if k.id == replica_id {
+                let replica = replica.clone();
                 Some(ClusterReplicaValue {
                     cluster_id,
-                    name: replica.name.clone(),
-                    config: replica.config.clone().into(),
+                    name: replica.name,
+                    config: replica.serialized_config,
                     owner_id: replica.owner_id,
                 })
             } else {
@@ -1705,14 +1707,15 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_database(
         &mut self,
         id: DatabaseId,
-        database: &catalog::Database,
+        database: Database,
     ) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
             if id == k.id {
+                let database = database.clone();
                 Some(DatabaseValue {
-                    name: database.name().to_string(),
+                    name: database.name,
                     owner_id: database.owner_id,
-                    privileges: database.privileges().all_values_owned().collect(),
+                    privileges: database.privileges,
                 })
             } else {
                 None
@@ -1736,15 +1739,16 @@ impl<'a> Transaction<'a> {
         &mut self,
         database_id: Option<DatabaseId>,
         schema_id: SchemaId,
-        schema: &catalog::Schema,
+        schema: Schema,
     ) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
             if schema_id == k.id {
+                let schema = schema.clone();
                 Some(SchemaValue {
                     database_id,
-                    name: schema.name().schema.clone(),
+                    name: schema.name,
                     owner_id: schema.owner_id,
-                    privileges: schema.privileges().all_values_owned().collect(),
+                    privileges: schema.privileges,
                 })
             } else {
                 None
@@ -1993,6 +1997,7 @@ impl<'a> Transaction<'a> {
 
 // Structs used to pass information to outside modules.
 
+#[derive(Debug, Clone)]
 pub struct Database {
     pub id: DatabaseId,
     pub name: String,
@@ -2000,6 +2005,7 @@ pub struct Database {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Schema {
     pub id: SchemaId,
     pub name: String,
@@ -2008,6 +2014,7 @@ pub struct Schema {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Role {
     pub id: RoleId,
     pub name: String,
@@ -2015,6 +2022,7 @@ pub struct Role {
     pub membership: RoleMembership,
 }
 
+#[derive(Debug, Clone)]
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
@@ -2024,6 +2032,7 @@ pub struct Cluster {
     pub config: ClusterConfig,
 }
 
+#[derive(Debug, Clone)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
@@ -2032,7 +2041,7 @@ pub struct ClusterReplica {
     pub owner_id: RoleId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
@@ -2176,8 +2185,8 @@ pub struct RoleValue {
     membership: RoleMembership,
 }
 
-impl From<catalog::Role> for RoleValue {
-    fn from(role: catalog::Role) -> Self {
+impl From<Role> for RoleValue {
+    fn from(role: Role) -> Self {
         RoleValue {
             name: role.name,
             attributes: role.attributes,
