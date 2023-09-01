@@ -441,23 +441,22 @@ def workflow_autospill(c: Composition) -> None:
 # This test is there to compare rehydration metrics with different configs.
 # Can be run locally with the command ./mzcompose run load-test
 def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
-    from string import ascii_lowercase
     from textwrap import dedent
 
     # Following variables can be updated to tweak how much data the kafka
-    # topic should be populated with and what should be the upsert state.
+    # topic should be populated with and what should be the upsert state size.
     pad_len = 1024
     string_pad = "x" * pad_len  # 1KB
     repeat = 250 * 1024  # repeat * string_pad = 250MB upsert state size
-    updates_count = 4  # repeat * updates_count = 1GB total kafka topic size with multiple updates for the same key
+    updates_count = 2  # repeat * updates_count = 500MB total kafka topic size with multiple updates for the same key
 
-    backpressure_bytes = 100 * 1024 * 1024  # 100MB
+    backpressure_bytes = 50 * 1024 * 1024  # 50MB
 
     c.down(destroy_volumes=True)
     c.up("redpanda", "materialized", "clusterd1")
     # initial hydration
     with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
+        Testdrive(no_reset=True, consistent_seed=True, default_timeout=f"{5 * 60}s"),
         Materialized(
             options=[
                 "--orchestrator-process-scratch-directory=/scratch",
@@ -468,18 +467,14 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 # Force backpressure to be enabled.
                 "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                 "storage_dataflow_max_inflight_bytes_disk_only": "true",
-                "storage_dataflow_delay_sources_past_rehydration": "true",
             },
             environment_extra=materialized_environment_extra,
-            memory="5Gb",
         ),
         Clusterd(
             name="clusterd1",
             options=[
                 "--scratch-directory=/scratch",
-                "--announce-memory-limit=1048376000",  # 1GiB
             ],
-            memory="3.5Gb",
         ),
     ):
         c.up("testdrive", persistent=True)
@@ -492,10 +487,10 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """
             )
         )
-        for letter in ascii_lowercase[:updates_count]:
+        for number in range(updates_count):
             c.exec(
                 "testdrive",
-                f"--var=value={letter}{string_pad}",
+                f"--var=value={number}{string_pad}",
                 f"--var=repeat={repeat}",
                 "load-test/insert.td",
             )
@@ -517,22 +512,78 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """
             )
         )
-        c.kill("clusterd1")
-        c.up("clusterd1")
 
-        c.testdrive(
-            dedent(
-                f"""
-                > select * from v1;
+        scenarios = [
+            (
+                "default",
+                {
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                },
+            ),
+            (
+                "with write_buffer_manager no stall",
+                {
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                    "upsert_rocksdb_write_buffer_manager_memory_bytes": f"{5 * 1024 * 1024}",
+                    "upsert_rocksdb_write_buffer_manager_allow_stall": "false",
+                },
+            ),
+            (
+                "with write_buffer_manager stall enabled",
+                {
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                    "upsert_rocksdb_write_buffer_manager_memory_bytes": f"{5 * 1024 * 1024}",
+                    "upsert_rocksdb_write_buffer_manager_allow_stall": "true",
+                },
+            ),
+        ]
+        for scenario_name, mz_configs in scenarios:
+            with c.override(
+                Materialized(
+                    options=[
+                        "--orchestrator-process-scratch-directory=/scratch",
+                    ],
+                    additional_system_parameter_defaults=mz_configs,
+                    environment_extra=materialized_environment_extra,
+                ),
+            ):
+                c.kill("materialized", "clusterd1")
+                print(f"Running rehydration for scenario {scenario_name}")
+                c.up("materialized", "clusterd1")
+                c.testdrive(
+                    dedent(
+                        f"""
+                > select sum(envelope_state_count)
+                  from mz_internal.mz_source_statistics st
+                  join mz_sources s on s.id = st.id
+                  where name = 's1';
                 {repeat + 2}
-                """
-            )
-        )
 
-        rehydration_latency_ms = c.sql_query(
-            """select max(rehydration_latency_ms)
-            from mz_internal.mz_source_statistics st
-            join mz_sources s on s.id = st.id
-            where name = 's1';"""
-        )[0]
-        print(f"It took {rehydration_latency_ms} minutes!")
+                > select bool_and(rehydration_latency_ms IS NOT NULL)
+                  from mz_internal.mz_source_statistics st
+                  join mz_sources s on s.id = st.id
+                  where name = 's1';
+                true
+                """
+                    )
+                )
+
+                rehydration_latency_ms = c.sql_query(
+                    """select max(rehydration_latency_ms)
+                    from mz_internal.mz_source_statistics st
+                    join mz_sources s on s.id = st.id
+                    where name = 's1';"""
+                )[0]
+                print(f"Scenario {scenario_name} took {rehydration_latency_ms} ms")
