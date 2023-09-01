@@ -16,6 +16,7 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
+  CARGO_BUILD_JOBS: "default"
 
 steps:
   - id: build-x86_64
