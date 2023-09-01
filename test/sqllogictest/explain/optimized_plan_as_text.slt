@@ -41,6 +41,10 @@ CREATE INDEX iv_a_idx ON iv(a);
 statement ok
 CREATE INDEX iv_b_idx ON iv(b);
 
+# This is an identical index to the above (on the same object, on the same key)
+statement ok
+CREATE INDEX iv_b_idx_2 ON iv(b);
+
 statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL;
@@ -467,6 +471,20 @@ materialize.public.iv_b_idx:
 
 Used Indexes:
   - materialize.public.iv_a_idx (*** full scan ***, index export)
+
+EOF
+
+# Test EXPLAIN INDEX for an indexed view where the index is exactly the same as a prior index.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+INDEX iv_b_idx_2;
+----
+materialize.public.iv_b_idx_2:
+  ArrangeBy keys=[[#1]]
+    Get materialize.public.iv
+
+Used Indexes:
+  - materialize.public.iv_b_idx (plan root (no new arrangement), index export)
 
 EOF
 
@@ -1002,7 +1020,7 @@ Used Indexes:
 
 EOF
 
-# An index is used two times by the same (self) join. We should show three usages for it, one is 1st input.
+# An index is used two times by the same (self) join. We should show a 1st input and a non-1st input usage.
 query T multiline
 EXPLAIN
 SELECT *
@@ -1137,6 +1155,7 @@ Used Indexes:
 EOF
 
 # This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
+# (But we print only one full scan due to deduplication.)
 query T multiline
 EXPLAIN
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
