@@ -14,16 +14,14 @@ operational after an upgrade.
 import random
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Materialized,
-    Postgres,
-    SchemaRegistry,
-    TestCerts,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.cockroach import Cockroach
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.postgres import Postgres
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.test_certs import TestCerts
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
 

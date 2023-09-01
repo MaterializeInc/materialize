@@ -35,7 +35,7 @@ from materialize.cloudtest.k8s.api.k8s_config_map import K8sConfigMap
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
-from materialize.mzcompose.services import Cockroach
+from materialize.mzcompose.cockroach import Cockroach
 
 
 class CockroachConfigMap(K8sConfigMap):

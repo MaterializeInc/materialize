@@ -13,7 +13,9 @@ import tempfile
 from textwrap import dedent, indent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Redpanda, Testdrive
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.redpanda import Redpanda
+from materialize.mzcompose.testdrive import Testdrive
 
 SERVICES = [
     Redpanda(),

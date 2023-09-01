@@ -10,15 +10,13 @@
 import random
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.clusterd import Clusterd
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.toxiproxy import Toxiproxy
+from materialize.mzcompose.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

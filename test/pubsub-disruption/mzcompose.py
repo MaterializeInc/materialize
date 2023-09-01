@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Redpanda, Testdrive, Toxiproxy
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.redpanda import Redpanda
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.toxiproxy import Toxiproxy
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),

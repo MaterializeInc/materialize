@@ -16,15 +16,13 @@ from typing import Any
 from pg8000 import Cursor  # type: ignore
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Localstack,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.clusterd import Clusterd
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.localstack import Localstack
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

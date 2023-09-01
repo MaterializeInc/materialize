@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 from materialize.mzcompose import Composition, ServiceHealthcheck
-from materialize.mzcompose.services import Cockroach, Materialized, Testdrive
+from materialize.mzcompose.cockroach import Cockroach
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.testdrive import Testdrive
 from materialize.ui import UIError
 
 CRDB_NODE_COUNT = 4

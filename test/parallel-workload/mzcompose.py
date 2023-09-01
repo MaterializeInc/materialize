@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach, Materialized
+from materialize.mzcompose.cockroach import Cockroach
+from materialize.mzcompose.materialized import Materialized
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import Complexity, Scenario
 

@@ -8,14 +8,12 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Minio,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.minio import Minio
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 
 versioned_mz = [
     Materialized(

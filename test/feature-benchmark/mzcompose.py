@@ -42,18 +42,16 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Materialized,
-    Minio,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
-from materialize.mzcompose.services import Kafka as KafkaService
-from materialize.mzcompose.services import Kgen as KgenService
+from materialize.mzcompose.cockroach import Cockroach
+from materialize.mzcompose.kafka import Kafka as KafkaService
+from materialize.mzcompose.kgen import Kgen as KgenService
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.minio import Minio
+from materialize.mzcompose.postgres import Postgres
+from materialize.mzcompose.redpanda import Redpanda
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 from materialize.version_list import VersionsFromDocs
 
 #

@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Dbt, Materialized, Redpanda
+from materialize.mzcompose.dbt import Dbt
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.redpanda import Redpanda
 
 SERVICES = [
     Materialized(),

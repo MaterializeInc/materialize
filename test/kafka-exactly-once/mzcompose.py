@@ -8,13 +8,11 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

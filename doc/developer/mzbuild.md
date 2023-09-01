@@ -240,7 +240,7 @@ Let's add another mzbuild dependency, this time on `materialized`:
 
 ```py
 from materialize.mzcompose import Service
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.materialized import Materialized
 
 SERVICES = [
     Materialized(),
@@ -290,7 +290,7 @@ Compose.
 
 ```py
 from materialize.mzcompose import Service
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.materialized import Materialized
 
 SERVICES = [
     Materialized(),

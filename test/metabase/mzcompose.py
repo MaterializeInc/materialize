@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, Service
-from materialize.mzcompose.services import Materialized, Metabase
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.metabase import Metabase
 
 SERVICES = [
     Materialized(),

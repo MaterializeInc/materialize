@@ -21,7 +21,8 @@ from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres  # noqa: F401
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.postgres import Postgres
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,

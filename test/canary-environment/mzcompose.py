@@ -11,7 +11,10 @@ import os
 from textwrap import dedent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Dbt, Materialized, Postgres, Testdrive
+from materialize.mzcompose.dbt import Dbt
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.postgres import Postgres
+from materialize.mzcompose.testdrive import Testdrive
 
 # The FieldEng cluster in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"

@@ -10,7 +10,8 @@
 import pg8000
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Postgres
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.postgres import Postgres
 from materialize.scalability.endpoint import Endpoint
 
 

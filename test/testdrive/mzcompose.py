@@ -11,15 +11,13 @@ from pathlib import Path
 
 from materialize import ci_util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Localstack,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.localstack import Localstack
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.redpanda import Redpanda
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

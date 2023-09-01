@@ -11,16 +11,16 @@ from typing import Any, cast
 
 import boto3
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
+from materialize.mzcompose import (
     DEFAULT_CLOUD_REGION,
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_ORDINAL,
     DEFAULT_ORG_ID,
-    Localstack,
-    Materialized,
-    Testdrive,
+    Composition,
 )
+from materialize.mzcompose.localstack import Localstack
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.testdrive import Testdrive
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME

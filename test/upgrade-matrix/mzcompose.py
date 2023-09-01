@@ -38,14 +38,12 @@ from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Debezium,
-    Materialized,
-    Postgres,
-    Redpanda,
-)
-from materialize.mzcompose.services import Testdrive as TestdriveService
+from materialize.mzcompose.cockroach import Cockroach
+from materialize.mzcompose.debezium import Debezium
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.postgres import Postgres
+from materialize.mzcompose.redpanda import Redpanda
+from materialize.mzcompose.testdrive import Testdrive as TestdriveService
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
 

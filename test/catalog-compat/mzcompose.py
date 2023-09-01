@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, Service
-from materialize.mzcompose.services import Kafka, Zookeeper
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

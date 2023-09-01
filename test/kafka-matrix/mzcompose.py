@@ -8,15 +8,13 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Localstack,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.localstack import Localstack
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.redpanda import Redpanda
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 
 REDPANDA_VERSIONS = ["v23.1.2", "v22.2.11", "v22.1.11"]
 

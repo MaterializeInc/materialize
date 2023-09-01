@@ -9,8 +9,8 @@
 
 import argparse
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach, Service
+from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
+from materialize.mzcompose.cockroach import Cockroach
 
 SERVICES = [
     Cockroach(setup_materialize=True),

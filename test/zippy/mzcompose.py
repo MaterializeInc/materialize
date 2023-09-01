@@ -13,20 +13,18 @@ from datetime import timedelta
 from enum import Enum
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Debezium,
-    Grafana,
-    Kafka,
-    Materialized,
-    Minio,
-    Postgres,
-    Prometheus,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.clusterd import Clusterd
+from materialize.mzcompose.cockroach import Cockroach
+from materialize.mzcompose.debezium import Debezium
+from materialize.mzcompose.grafana import Grafana
+from materialize.mzcompose.kafka import Kafka
+from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.minio import Minio
+from materialize.mzcompose.postgres import Postgres
+from materialize.mzcompose.prometheus import Prometheus
+from materialize.mzcompose.schema_registry import SchemaRegistry
+from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
