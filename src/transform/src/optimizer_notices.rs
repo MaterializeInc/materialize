@@ -13,7 +13,7 @@ use std::fmt::{Error, Write};
 
 use itertools::Itertools;
 
-use mz_expr::explain::display_singleton_row;
+use mz_expr::explain::{display_singleton_row, Humanized};
 use mz_expr::MirScalarExpr;
 use mz_ore::str::separated;
 use mz_repr::explain::ExprHumanizer;
@@ -64,7 +64,7 @@ impl OptimizerNotice {
                         exprs
                             .clone()
                             .into_iter()
-                            .map(|expr| expr.to_string_with_col_names(&col_names)),
+                            .map(|expr| Humanized::new(&expr, &col_names).to_string()),
                     )
                 };
                 let index_key_display = display_exprs(index_key);
@@ -73,7 +73,7 @@ impl OptimizerNotice {
 
                 let usable_subset = usable_subset
                     .into_iter()
-                    .map(|expr| expr.clone().to_string_with_col_names(&col_names))
+                    .map(|expr| Humanized::new(expr, &col_names).to_string())
                     .collect_vec();
                 let usable_literal_constraints_display = if usable_subset.len() == 1 {
                     if literal_values.len() == 1 {
