@@ -101,6 +101,11 @@
 "Dataflow: materialize.public.lineitem_by_suppkey" ReduceHierarchical 8 5 4095
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
 
+# Validate that there are positive memory savings listed for the entries above.
+> SELECT COUNT(savings > 0)
+  FROM mz_internal.mz_expected_group_size_advice;
+8
+
 # Create partly hinted versions of the views and check that the advice gets revised accordingly.
 > DROP MATERIALIZED VIEW lineitem_by_suppkey;
 
@@ -137,3 +142,8 @@
 "Dataflow: materialize.public.lineitem_by_partkey" ReduceHierarchical 8 6 255
 "Dataflow: materialize.public.lineitem_by_partkey" TopK 8 6 255
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
+
+# Validate that there are positive memory savings listed for the entries above.
+> SELECT COUNT(savings > 0)
+  FROM mz_internal.mz_expected_group_size_advice;
+6
