@@ -53,11 +53,10 @@ impl UpgradeChecker {
         if SystemTime::now()
             .duration_since(stored_timestamp)
             .map_err(|_| Error::TimestampConversionError)?
-            <= time::Duration::weeks(1)
+            >= time::Duration::weeks(1)
         {
             return Ok(true);
         }
-
         Ok(false)
     }
 
@@ -84,8 +83,7 @@ impl UpgradeChecker {
     fn is_installed_version_older_than(&self, version: Version) -> bool {
         let installed_version = build_info!().semver_version();
 
-        println!("inst: {} / lat: {}", installed_version, version);
-        installed_version > version
+        version > installed_version
     }
 
     /// Fetches and returns the latest tag version from the Materialize repository
@@ -115,7 +113,6 @@ impl UpgradeChecker {
                 .strip_prefix("v")
                 .ok_or(Error::LocationInvalidError)?;
             let latest_version = Version::parse(&version).map_err(Error::SemVerParseError)?;
-            println!("Latest version: {}", latest_version);
             return Ok(latest_version);
         }
 
@@ -159,23 +156,17 @@ impl UpgradeChecker {
         if let Some((last_modified_time, cached_version)) =
             self.get_cached_timpestamp_and_version()?
         {
-            println!(
-                "Cache mod: {:?} / version: {} ",
-                last_modified_time, cached_version
-            );
             // If the already cached version is greater than the local version
             // Warn the user and avoid querying GitHub
             let cached_version =
                 Version::parse(&cached_version).map_err(Error::SemVerParseError)?;
             if self.is_installed_version_older_than(cached_version) {
-                println!("Return true");
                 return Ok(true);
             }
 
             // If the cache is not older than a week then there
             // is no need to check new versions yet.
             if !self.is_cache_older_than_a_week(last_modified_time)? {
-                println!("Return false");
                 return Ok(false);
             }
         }
@@ -189,7 +180,6 @@ impl UpgradeChecker {
                 }
             }
             Err(e) => {
-                println!("Error: {}", e);
                 return Err(e);
             }
         }
