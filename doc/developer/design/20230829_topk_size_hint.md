@@ -536,6 +536,3 @@ and risk with the gain from the change leans on the direction of maintaining bac
 compatibility, as advocated by the proposal in this design document.
 
 ## Open questions
-
-* Is there any other way at present to add even more top-k or min/max aggregates to the same SQL
-query block than envisioned in the design?
