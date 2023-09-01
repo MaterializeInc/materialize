@@ -36,8 +36,8 @@ use uuid::Uuid;
 
 use crate::cfg::PersistFlag;
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
-    SerdeLeasedBatchPartMetadata,
+    fetch_leased_part, BatchFetcher, FetchBatchFilter, FetchedPart, LeasedBatchPart,
+    SerdeLeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
@@ -1097,7 +1097,9 @@ where
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
-            as_of.clone(),
+            FetchBatchFilter::Snapshot {
+                as_of: as_of.clone(),
+            },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
         );
 
@@ -1118,10 +1120,7 @@ where
         let mut contents = Vec::new();
 
         while let Some(iter) = consolidator.next().await {
-            contents.extend(
-                iter.filter(|(_, _, t, _)| !as_of.less_than(t))
-                    .map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)),
-            )
+            contents.extend(iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)))
         }
 
         // NB: we don't currently guarantee that encoding is deterministic, so we still need to

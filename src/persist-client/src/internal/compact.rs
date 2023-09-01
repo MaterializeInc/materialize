@@ -35,7 +35,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
 use crate::cfg::{MiB, PersistFlag};
-use crate::fetch::{fetch_batch_part, Cursor, EncodedPart};
+use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
@@ -684,7 +684,12 @@ where
             true,
         );
 
-        let mut consolidator = Consolidator::new(desc.since().clone(), prefetch_budget_bytes);
+        let mut consolidator = Consolidator::new(
+            FetchBatchFilter::Compaction {
+                since: desc.since().clone(),
+            },
+            prefetch_budget_bytes,
+        );
 
         for (desc, parts) in runs {
             consolidator.enqueue_run(

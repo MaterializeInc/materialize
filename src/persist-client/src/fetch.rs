@@ -119,7 +119,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-enum FetchBatchFilter<T> {
+pub(crate) enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
     },
@@ -127,10 +127,32 @@ enum FetchBatchFilter<T> {
         as_of: Antichain<T>,
         lower: Antichain<T>,
     },
+    Compaction {
+        since: Antichain<T>,
+    },
 }
 
 impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
-    fn filter_ts(&self, t: &mut T) -> bool {
+    pub(crate) fn new(meta: &SerdeLeasedBatchPartMetadata) -> Self
+    where
+        T: Codec64,
+    {
+        match &meta {
+            SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
+                let as_of =
+                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                FetchBatchFilter::Snapshot { as_of }
+            }
+            SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
+                let as_of =
+                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                let lower =
+                    Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                FetchBatchFilter::Listen { as_of, lower }
+            }
+        }
+    }
+    pub(crate) fn filter_ts(&self, t: &mut T) -> bool {
         match self {
             FetchBatchFilter::Snapshot { as_of } => {
                 // This time is covered by a listen
@@ -158,6 +180,10 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 }
                 true
             }
+            FetchBatchFilter::Compaction { since } => {
+                t.advance_by(since.borrow());
+                true
+            }
         }
     }
 }
@@ -181,17 +207,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let ts_filter = match &part.metadata {
-        SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
-            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            FetchBatchFilter::Snapshot { as_of }
-        }
-        SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
-            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            let lower = Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            FetchBatchFilter::Listen { as_of, lower }
-        }
-    };
+    let ts_filter = FetchBatchFilter::new(&part.metadata);
 
     let encoded_part = fetch_batch_part(
         &part.shard_id,
