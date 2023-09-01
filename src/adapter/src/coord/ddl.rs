@@ -34,7 +34,7 @@ use mz_sql::session::vars::{
     MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
+use mz_storage_client::controller::{ExportDescription, ReadPolicy};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sinks::SinkAsOf;
@@ -816,7 +816,7 @@ impl Coordinator {
 
     pub(crate) async fn create_storage_export(
         &mut self,
-        create_export_token: CreateExportToken,
+        id: GlobalId,
         sink: &Sink,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
@@ -871,7 +871,7 @@ impl Coordinator {
             .controller
             .storage
             .create_exports(vec![(
-                create_export_token,
+                id,
                 ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
