@@ -55,6 +55,64 @@ from materialize.ui import UIError
 T = TypeVar("T")
 say = ui.speaker("C> ")
 
+# Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
+# minor version in the release series, and minor versions have been known to
+# introduce breakage.
+DEFAULT_DEBEZIUM_VERSION = "1.9.6.Final"
+
+LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
+
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
+
+
+DEFAULT_MZ_VOLUMES = [
+    "mzdata:/mzdata",
+    "mydata:/var/lib/mysql-files",
+    "tmp:/share/tmp",
+    "scratch:/scratch",
+]
+
+DEFAULT_SYSTEM_PARAMETERS = {
+    "persist_sink_minimum_batch_updates": "128",
+    "enable_multi_worker_storage_persist_sink": "true",
+    "storage_persist_sink_minimum_batch_updates": "100",
+    "persist_pubsub_push_diff_enabled": "true",
+    "persist_pubsub_client_enabled": "true",
+    "persist_stats_audit_percent": "100",
+    "enable_ld_rbac_checks": "true",
+    "enable_rbac_checks": "true",
+    "enable_monotonic_oneshot_selects": "true",
+    "enable_with_mutually_recursive": "true",
+    "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_dangerous_functions": "true",
+    "enable_disk_cluster_replicas": "true",
+    "statement_logging_max_sample_rate": "1.0",
+    "statement_logging_default_sample_rate": "1.0",
+    # This needs to be kept in sync with the --variable-length-row-encoding
+    # flag to testdrive.
+    "variable_length_row_encoding": "true",
+    # Following values are set based on Load Test environment to
+    # reduce CRDB load as we are struggling with it in CI:
+    "persist_next_listen_batch_retryer_clamp": "100ms",
+    "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+    # Advance coverage on some Persist internals changes
+    "persist_streaming_compaction_enabled": "true",
+    "persist_streaming_snapshot_and_fetch_enabled": "true",
+}
+
+DEFAULT_CRDB_ENVIRONMENT = [
+    "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=60s",
+    "COCKROACH_LOG_MAX_SYNC_DURATION=60s",
+]
+
+
+# TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
+DEFAULT_CLOUD_PROVIDER = "mzcompose"
+DEFAULT_CLOUD_REGION = "us-east-1"
+DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_ORDINAL = "0"
+DEFAULT_MZ_ENVIRONMENT_ID = f"{DEFAULT_CLOUD_PROVIDER}-{DEFAULT_CLOUD_REGION}-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
+
 
 class UnknownCompositionError(UIError):
     """The specified composition was unknown."""
