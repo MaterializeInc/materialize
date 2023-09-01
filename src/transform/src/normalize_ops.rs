@@ -12,7 +12,7 @@
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Normalize the structure of various operators.
 #[derive(Debug)]
@@ -28,7 +28,7 @@ impl crate::Transform for NormalizeOps {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _args: TransformArgs,
+        _ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // Canonicalize and fuse various operators as a bottom-up transforms.
         relation.try_visit_mut_post::<_, crate::TransformError>(

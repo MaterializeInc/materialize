@@ -124,8 +124,8 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 
                 for (id, (span, since)) in downgrades {
                     let Some(mut since_handle) = since_handles.remove(&id) else {
-                            panic!("downgrade command for absent collection {id}");
-                        };
+                        panic!("downgrade command for absent collection {id}");
+                    };
 
                     futs.push(async move {
                         let epoch = since_handle.opaque().clone();

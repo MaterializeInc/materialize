@@ -558,7 +558,8 @@ impl Coordinator {
                     | Statement::RevokePrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
-                    | Statement::ValidateConnection(_) => {
+                    | Statement::ValidateConnection(_)
+                    | Statement::Comment(_) => {
                         // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
                         if !txn.is_implicit() {
@@ -808,36 +809,43 @@ impl Coordinator {
                 schema: Some(schema),
                 item: name,
             };
-            let Ok(entry) = coord.catalog().resolve_entry(None, &vec![], &name, &conn_id) else {
+            let Ok(entry) = coord
+                .catalog()
+                .resolve_entry(None, &vec![], &name, &conn_id)
+            else {
                 return Err(name);
             };
 
-            let (body_ty, header_ty, validator) = match entry.item() {
+            let (body_ty, header_tys, validator) = match entry.item() {
                 CatalogItem::Source(Source {
-                    data_source: DataSourceDesc::Webhook { validation, .. },
+                    data_source:
+                        DataSourceDesc::Webhook {
+                            validate_using,
+                            headers,
+                            ..
+                        },
                     desc,
                     ..
                 }) => {
-                    // All Webhook sources should have at most 2 columns.
-                    mz_ore::soft_assert!(desc.arity() <= 2);
+                    // Assert we have one column for the body, and how ever many are required for
+                    // the headers.
+                    let num_columns = headers.num_columns() + 1;
+                    mz_ore::soft_assert!(desc.arity() <= num_columns);
 
                     let body = desc
                         .get_by_name(&"body".into())
                         .map(|(_idx, ty)| ty.clone())
                         .ok_or(name.clone())?;
-                    let header = desc
-                        .get_by_name(&"headers".into())
-                        .map(|(_idx, ty)| ty.clone());
 
                     // Create a validator that can be called to validate a webhook request.
-                    let validator = validation.as_ref().map(|v| {
+                    let validator = validate_using.as_ref().map(|v| {
                         let validation = v.clone();
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
                         )
                     });
-                    (body, header, validator)
+                    (body, headers.clone(), validator)
                 }
                 _ => return Err(name),
             };
@@ -851,7 +859,7 @@ impl Coordinator {
             Ok(AppendWebhookResponse {
                 tx: row_tx,
                 body_ty,
-                header_ty,
+                header_tys,
                 validator,
             })
         }

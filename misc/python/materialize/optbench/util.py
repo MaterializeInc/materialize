@@ -7,16 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from pathlib import Path
 from re import match
-from typing import Callable, Optional
 
 import numpy as np
 
 from . import Scenario
 
 
-def duration_to_timedelta(duration: str) -> Optional[np.timedelta64]:
+def duration_to_timedelta(duration: str) -> np.timedelta64 | None:
     """Converts a duration like `{time}.{frac}{unit}` to a `np.timedelta64`."""
 
     frac_to_ns: dict[str, Callable[[str], str]] = {

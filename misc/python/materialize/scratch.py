@@ -17,7 +17,7 @@ import shlex
 import subprocess
 import sys
 from subprocess import CalledProcessError
-from typing import NamedTuple, Optional, cast
+from typing import NamedTuple, cast
 
 import boto3
 from botocore.exceptions import ClientError
@@ -53,19 +53,19 @@ def instance_typedef_tags(i: InstanceTypeDef) -> dict[str, str]:
     return {t["Key"]: t["Value"] for t in i.get("Tags", [])}
 
 
-def name(tags: dict[str, str]) -> Optional[str]:
+def name(tags: dict[str, str]) -> str | None:
     return tags.get("Name")
 
 
-def launched_by(tags: dict[str, str]) -> Optional[str]:
+def launched_by(tags: dict[str, str]) -> str | None:
     return tags.get("LaunchedBy")
 
 
-def ami_user(tags: dict[str, str]) -> Optional[str]:
+def ami_user(tags: dict[str, str]) -> str | None:
     return tags.get("ami-user", "ubuntu")
 
 
-def delete_after(tags: dict[str, str]) -> Optional[datetime.datetime]:
+def delete_after(tags: dict[str, str]) -> datetime.datetime | None:
     unix = tags.get("scratch-delete-after")
     if not unix:
         return None
@@ -73,7 +73,7 @@ def delete_after(tags: dict[str, str]) -> Optional[datetime.datetime]:
     return datetime.datetime.fromtimestamp(unix)
 
 
-def instance_host(instance: Instance, user: Optional[str] = None) -> str:
+def instance_host(instance: Instance, user: str | None = None) -> str:
     if user is None:
         user = ami_user(tags(instance))
     return f"{user}@{instance.id}"
@@ -116,15 +116,15 @@ def print_instances(ists: list[Instance], format: str) -> None:
 
 def launch(
     *,
-    key_name: Optional[str],
+    key_name: str | None,
     instance_type: str,
     ami: str,
     ami_user: str,
     tags: dict[str, str],
-    display_name: Optional[str] = None,
+    display_name: str | None = None,
     size_gb: int,
     security_group_name: str,
-    instance_profile: Optional[str],
+    instance_profile: str | None,
     nonce: str,
     delete_after: datetime.datetime,
 ) -> Instance:
@@ -292,7 +292,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
 
 class MachineDesc(BaseModel):
     name: str
-    launch_script: Optional[str]
+    launch_script: str | None
     instance_type: str
     ami: str
     tags: dict[str, str] = {}
@@ -304,10 +304,10 @@ class MachineDesc(BaseModel):
 def launch_cluster(
     descs: list[MachineDesc],
     *,
-    nonce: Optional[str] = None,
-    key_name: Optional[str] = None,
+    nonce: str | None = None,
+    key_name: str | None = None,
     security_group_name: str = DEFAULT_SECURITY_GROUP_NAME,
-    instance_profile: Optional[str] = DEFAULT_INSTANCE_PROFILE_NAME,
+    instance_profile: str | None = DEFAULT_INSTANCE_PROFILE_NAME,
     extra_tags: dict[str, str] = {},
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
@@ -346,7 +346,7 @@ def launch_cluster(
     )
 
     hosts_str = "".join(
-        (f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs))
+        f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs)
     )
     for i in instances:
         mssh(i, "sudo tee -a /etc/hosts", input=hosts_str.encode())
@@ -399,7 +399,7 @@ def mssh(
     command: str,
     *,
     extra_ssh_args: list[str] = [],
-    input: Optional[bytes] = None,
+    input: bytes | None = None,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
     host = instance_host(instance)

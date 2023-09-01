@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import time
+from collections.abc import Callable
 from textwrap import dedent
-from typing import Any, Callable, Optional
+from typing import Any
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized
@@ -39,7 +40,7 @@ class Executor:
     def DockerMem(self) -> int:
         raise NotImplementedError
 
-    def Messages(self) -> Optional[int]:
+    def Messages(self) -> int | None:
         raise NotImplementedError
 
 
@@ -78,10 +79,10 @@ class Docker(Executor):
     def DockerMem(self) -> int:
         return self._composition.mem("materialized")
 
-    def Messages(self) -> Optional[int]:
+    def Messages(self) -> int | None:
         """Return the sum of all messages in the system from mz_internal.mz_message_counts_per_worker"""
 
-        def one_count(e: Docker) -> Optional[int]:
+        def one_count(e: Docker) -> int | None:
             result = e._composition.sql_query(
                 dedent(
                     """
@@ -109,7 +110,7 @@ class Docker(Executor):
                 return int(result[0][0])
 
         # Loop until the message count converges
-        prev_count: Optional[int] = None
+        prev_count: int | None = None
         for i in range(50):
             new_count = one_count(self)
             if new_count is not None and prev_count is not None:

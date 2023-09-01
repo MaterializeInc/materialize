@@ -93,6 +93,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
     RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
     StorageResponse,
@@ -162,6 +163,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
+        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -202,6 +204,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             Arc::clone(&persist_clients),
         );
         let async_worker = Rc::new(RefCell::new(async_worker));
+        let cluster_memory_limit = instance_context.cluster_memory_limit;
 
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
@@ -226,7 +229,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             sink_statistics: BTreeMap::new(),
             internal_cmd_tx: command_sequencer,
             async_worker,
-            dataflow_parameters: Default::default(),
+            dataflow_parameters: DataflowParameters::new(
+                shared_rocksdb_write_buffer_manager,
+                cluster_memory_limit,
+            ),
             tracing_handle,
         };
 
@@ -861,12 +867,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
                 delay_sources_past_rehydration,
+                shrink_upsert_unused_buffers_by_ratio,
             } => self.storage_state.dataflow_parameters.update(
                 pg,
                 rocksdb,
                 auto_spill_config,
                 storage_dataflow_max_inflight_bytes_config,
                 delay_sources_past_rehydration,
+                shrink_upsert_unused_buffers_by_ratio,
             ),
         }
     }
@@ -1183,6 +1191,8 @@ impl StorageState {
                             .storage_dataflow_max_inflight_bytes_config,
                         auto_spill_config: params.upsert_auto_spill_config,
                         delay_sources_past_rehydration: params.delay_sources_past_rehydration,
+                        shrink_upsert_unused_buffers_by_ratio: params
+                            .shrink_upsert_unused_buffers_by_ratio,
                     })
                 }
             }

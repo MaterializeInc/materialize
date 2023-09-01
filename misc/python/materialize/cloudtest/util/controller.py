@@ -12,7 +12,7 @@ import socket
 import subprocess
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any
 
 from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint, retry
@@ -45,8 +45,8 @@ class ControllerDefinition:
     name: str
     default_port: str
     has_configurable_address: bool = True
-    endpoint: Optional[Endpoint] = None
-    client_cert: Optional[tuple[str, str]] = None
+    endpoint: Endpoint | None = None
+    client_cert: tuple[str, str] | None = None
 
     def default_address(self) -> str:
         return f"http://127.0.0.1:{self.default_port}"
@@ -58,13 +58,13 @@ class ControllerDefinition:
         return self.endpoint.base_url
 
     def requests(
-        self, auth: Optional[AuthConfig], client_cert: Optional[tuple[str, str]] = None
+        self, auth: AuthConfig | None, client_cert: tuple[str, str] | None = None
     ) -> WebRequests:
         return WebRequests(auth, self.configured_base_url(), client_cert)
 
 
 def wait_for_connectable(
-    address: Union[tuple[Any, int], str],
+    address: tuple[Any, int] | str,
     max_attempts: int = 30,
 ) -> None:
     def f() -> None:

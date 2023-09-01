@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -27,7 +27,7 @@ class OperationArgsValidator:
         match_argument_fn: Callable[
             [Expression, set[ExpressionCharacteristics], int], bool
         ],
-        skip_argument_indices: Optional[set[int]] = None,
+        skip_argument_indices: set[int] | None = None,
     ) -> int:
         if skip_argument_indices is None:
             skip_argument_indices = set()
@@ -45,7 +45,7 @@ class OperationArgsValidator:
         self,
         args: list[Expression],
         characteristic_combination: set[ExpressionCharacteristics],
-        skip_argument_indices: Optional[set[int]] = None,
+        skip_argument_indices: set[int] | None = None,
     ) -> int:
         def match_fn(
             _arg: Expression,

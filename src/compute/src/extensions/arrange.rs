@@ -247,7 +247,12 @@ where
     L: FnMut(&Tr) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
-    let Some(logger) = scope.log_register().get::<ComputeEvent>("materialize/compute") else {return arranged};
+    let Some(logger) = scope
+        .log_register()
+        .get::<ComputeEvent>("materialize/compute")
+    else {
+        return arranged;
+    };
     let operator = arranged.trace.operator().global_id;
     let trace = Rc::downgrade(&arranged.trace.trace_box_unstable());
 
@@ -264,7 +269,9 @@ where
                     data.swap(&mut buffer);
                     output.session(&time).give_container(&mut buffer);
                 }
-                let Some(trace) = trace.upgrade() else {return;};
+                let Some(trace) = trace.upgrade() else {
+                    return;
+                };
 
                 let (size, capacity, allocations) = logic(&trace.borrow().trace);
 

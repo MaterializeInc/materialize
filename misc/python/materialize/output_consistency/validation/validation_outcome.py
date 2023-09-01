@@ -6,8 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from collections.abc import Sequence
 from enum import Enum
-from typing import Optional, Sequence
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     InconsistencyIgnoreFilter,
@@ -46,7 +46,7 @@ class ValidationOutcome:
     """Outcome of a result comparison"""
 
     def __init__(self) -> None:
-        self.success_reason: Optional[str] = None
+        self.success_reason: str | None = None
         self.count_ignored_errors = 0
         self.errors: list[ValidationError] = []
         self.warnings: list[ValidationWarning] = []

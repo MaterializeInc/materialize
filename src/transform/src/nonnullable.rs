@@ -19,7 +19,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use mz_repr::{Datum, RelationType, ScalarType};
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]
@@ -35,7 +35,7 @@ impl crate::Transform for NonNullable {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);

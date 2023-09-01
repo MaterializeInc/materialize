@@ -40,6 +40,22 @@ use crate::{
     server::server,
 };
 
+/// Strips the `.api` from the login endpoint.
+/// The `.api` prefix will cause a failure during login
+/// in the browser.
+fn strip_api_from_endpoint(endpoint: Url) -> Url {
+    if let Some(domain) = endpoint.domain() {
+        if let Some(corrected_domain) = domain.strip_prefix("api.") {
+            let mut new_endpoint = endpoint.clone();
+            let _ = new_endpoint.set_host(Some(corrected_domain));
+
+            return new_endpoint;
+        }
+    };
+
+    endpoint
+}
+
 /// Opens the default web browser in the host machine
 /// and awaits a single request containing the profile's app password.
 pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
@@ -48,7 +64,9 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     let (server, port) = server(tx);
 
     // Build the login URL
-    let mut url = cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone());
+    let mut url =
+        strip_api_from_endpoint(cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone()));
+
     url.path_segments_mut()
         .expect("constructor validated URL can be a base")
         .extend(&["account", "login"]);
@@ -56,9 +74,8 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     let mut query_pairs = url.query_pairs_mut();
     query_pairs.append_pair(
         "redirectUrl",
-        &format!("/access/cli?redirectUri=http://localhost:{port}"),
+        &format!("/access/cli?redirectUri=http://localhost:{port}&tokenDescription=Materialize%20CLI%20%28mz%29"),
     );
-
     // The replace is a little hack to avoid asking an additional parameter
     // for a custom login.
     let open_url = &query_pairs.finish().as_str().replace("cloud", "console");
@@ -66,7 +83,7 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     // Open the browser to login user.
     if let Err(_err) = open::that(open_url) {
         println!(
-            "Could not open a browser to visit the login page <{:?}>: Please open the page yourself.",
+            "Error: Unable to launch a web browser. Access the login page using this link: '{:?}', or execute `mz profile init --no-browser` in your command line.",
             open_url
         )
     }
@@ -122,7 +139,7 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 
     let app_password = admin_client
         .create_app_password(CreateAppPasswordRequest {
-            description: "App password for the CLI",
+            description: "Materialize CLI (mz)",
         })
         .await?;
 

@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 
@@ -17,7 +16,7 @@ class ReturnTypeSpec:
     def __init__(
         self,
         type_category: DataTypeCategory,
-        indices_of_required_input_type_hints: Optional[list[int]] = None,
+        indices_of_required_input_type_hints: list[int] | None = None,
     ):
         self.type_category = type_category
         self.indices_of_required_input_type_hints = indices_of_required_input_type_hints

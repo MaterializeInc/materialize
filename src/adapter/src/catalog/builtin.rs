@@ -147,6 +147,11 @@ pub struct BuiltinFunc {
     pub inner: &'static mz_sql::func::Func,
 }
 
+/// Note: When creating a built-in index, it's usually best to choose a key that has only one
+/// component. For example, if you created an index
+/// `ON mz_internal.mz_object_lifetimes (id, object_type)`, then this index couldn't be used for a
+/// lookup for `WHERE object_type = ...`, and neither for joins keyed on just `id`.
+/// See <https://materialize.com/docs/transform-data/optimization/#matching-multi-column-indexes-to-multi-column-where-clauses>
 #[derive(Debug)]
 pub struct BuiltinIndex {
     pub name: &'static str,
@@ -2012,7 +2017,11 @@ SELECT
     name,
     mz_sources.type,
     occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
+    -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
+    CASE
+        WHEN mz_sources.type = 'webhook' THEN 'running'
+        ELSE coalesce(status, 'created')
+    END status,
     error,
     details
 FROM mz_sources
@@ -2125,7 +2134,7 @@ WITH
     SELECT list_agg(id) AS replicas
     FROM mz_cluster_replicas
     GROUP BY cluster_id
-    -- Add a `{NULL}` list to accomodate collections that are not installed
+    -- Add a `{NULL}` list to accommodate collections that are not installed
     -- on a replica.
     UNION VALUES (LIST[NULL])
   ),
@@ -2191,6 +2200,17 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     is_retained_metrics_object: false,
 });
 
+pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_comments",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("object_type", ScalarType::String.nullable(false))
+        .with_column("sub_id", ScalarType::UInt64.nullable(true))
+        .with_column("comment", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_prepared_statement_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2249,7 +2269,8 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
-        .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
+        .with_column("envelope_state_count", ScalarType::UInt64.nullable(false))
+        .with_column("rehydration_latency_ms", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: false,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3519,7 +3540,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 dod.dataflow_id,
                 dor.id AS region_id,
                 dod.id,
-                ars.records
+                ars.records,
+                ars.size
             FROM
                 mz_internal.mz_dataflow_operator_dataflows dod
                 JOIN mz_internal.mz_dataflow_addresses doa
@@ -3581,7 +3603,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 o.dataflow_id,
                 o.region_id,
                 o.id,
-                o.records
+                o.records,
+                o.size
             FROM
                 operators o
                 JOIN pivot p
@@ -3598,9 +3621,14 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
         -- groups in the next level, so there should be even further reduction happening or there
         -- is some substantial skew in the data. But if the latter is the case, then we should not
         -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
-        -- at these unusually large groups.
+        -- at these unusually large groups. In addition to selecting the levels to cut, we also
+        -- compute a conservative estimate of the memory savings in bytes that will result from
+        -- cutting these levels from the hierarchy. The estimate is based on the sizes of the
+        -- input arrangements for each level to be cut. These arrangements should dominate the
+        -- size of each level that can be cut, since the reduction gadget internal to the level
+        -- does not remove much data at these levels.
         cuts AS (
-            SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
+            SELECT c.dataflow_id, c.region_id, COUNT(*) AS to_cut, SUM(c.size) AS savings
             FROM candidates c
             GROUP BY c.dataflow_id, c.region_id
             HAVING COUNT(*) > 0
@@ -3616,6 +3644,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
             dod.name AS region_name,
             l.levels,
             c.to_cut,
+            c.savings,
             pow(16, l.levels - c.to_cut) - 1 AS hint
         FROM cuts c
             JOIN levels l
@@ -4681,7 +4710,7 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_materialized_views_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_materialized_views (schema_id, cluster_id)",
+ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4717,7 +4746,7 @@ pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_indexes_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_indexes (on_id, schema_id, cluster_id)",
+ON mz_internal.mz_show_indexes (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4744,7 +4773,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_cluster_replicas (cluster, replica, size, ready)",
+ON mz_internal.mz_show_cluster_replicas (cluster)",
     is_retained_metrics_object: false,
 };
 
@@ -4861,7 +4890,7 @@ pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_object_lifetimes_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_object_lifetimes (id, object_type)",
+ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
 
@@ -5103,6 +5132,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
         Builtin::Table(&MZ_PREPARED_STATEMENT_HISTORY),
         Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
+        Builtin::Table(&MZ_COMMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),

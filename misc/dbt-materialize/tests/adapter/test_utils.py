@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.adapter.utils.base_utils import BaseUtils
 from dbt.tests.adapter.utils.fixture_cast_bool_to_text import (
     models__test_cast_bool_to_text_yml,
 )

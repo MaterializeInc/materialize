@@ -12,6 +12,7 @@ MZFROM ubuntu-base
 RUN apt-get update && apt-get -qy install ca-certificates
 
 COPY persistcli /usr/local/bin/persistcli
+COPY mz-stash-debug /usr/local/bin/mz-stash-debug
 
 # TODO: the intention is for this image to eventually serve as the one-off
 # job launcher for all of materialize, not just for persist. but because of

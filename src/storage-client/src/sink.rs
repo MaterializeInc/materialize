@@ -17,6 +17,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 use rdkafka::ClientContext;
 use tracing::warn;
 
+use crate::types::connections::inline::ReferencedConnection;
 use crate::types::connections::ConnectionContext;
 use crate::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
@@ -29,10 +30,15 @@ use crate::types::sinks::{
 // infinitely retried -- and we don't one to unintentionally be introduced in this function.
 pub async fn build_sink_connection(
     builder: StorageSinkConnectionBuilder,
+    // TODO: The entire sink connection pipeline needs to be refactored and this
+    // will be removed as part of that.
+    referenced_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, anyhow::Error> {
-    match builder {
-        StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, connection_context).await,
+) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
+    match (builder, referenced_builder) {
+        (StorageSinkConnectionBuilder::Kafka(k), StorageSinkConnectionBuilder::Kafka(rk)) => {
+            build_kafka(k, rk, connection_context).await
+        }
     }
 }
 
@@ -222,8 +228,9 @@ async fn publish_kafka_schemas(
 
 async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
+    referenced_builder: KafkaSinkConnectionBuilder<ReferencedConnection>,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, anyhow::Error> {
+) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
     // Create Kafka topic.
     let client: AdminClient<_> = builder
         .connection
@@ -283,7 +290,7 @@ async fn build_kafka(
     };
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
-        connection: builder.connection,
+        connection: referenced_builder.connection,
         connection_id: builder.connection_id,
         topic: builder.topic_name,
         relation_key_indices: builder.relation_key_indices,

@@ -28,7 +28,8 @@ use mz_repr::explain::IndexUsageType;
 use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
-use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformArgs, TransformError};
+use crate::optimizer_notices::OptimizerNotice;
+use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -45,8 +46,9 @@ pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
     stats: &dyn StatisticsOracle,
-) -> Result<(), TransformError> {
+) -> Result<DataflowMetainfo, TransformError> {
     let ctx = crate::typecheck::empty_context();
+    let mut dataflow_metainfo = DataflowMetainfo::default();
 
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
@@ -57,6 +59,7 @@ pub fn optimize_dataflow(
         indexes,
         stats,
         &Optimizer::logical_optimizer(&ctx),
+        &mut dataflow_metainfo,
     )?;
 
     optimize_dataflow_filters(dataflow)?;
@@ -75,6 +78,7 @@ pub fn optimize_dataflow(
         indexes,
         stats,
         &Optimizer::logical_cleanup_pass(&ctx, false),
+        &mut dataflow_metainfo,
     )?;
 
     // Physical optimization pass
@@ -83,6 +87,7 @@ pub fn optimize_dataflow(
         indexes,
         stats,
         &Optimizer::physical_optimizer(&ctx),
+        &mut dataflow_metainfo,
     )?;
 
     optimize_dataflow_monotonic(dataflow)?;
@@ -91,7 +96,7 @@ pub fn optimize_dataflow(
 
     mz_repr::explain::trace_plan(dataflow);
 
-    Ok(())
+    Ok(dataflow_metainfo)
 }
 
 /// Inline views used in one other view, and in no exported objects.
@@ -212,6 +217,7 @@ fn optimize_dataflow_relations(
     indexes: &dyn IndexOracle,
     stats: &dyn StatisticsOracle,
     optimizer: &Optimizer,
+    dataflow_metainfo: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
@@ -221,7 +227,12 @@ fn optimize_dataflow_relations(
         // Re-run all optimizations on the composite views.
         optimizer.transform(
             object.plan.as_inner_mut(),
-            TransformArgs::with_id_and_stats(indexes, stats, &object.id),
+            &mut TransformCtx::with_id_and_stats_and_metainfo(
+                indexes,
+                stats,
+                &object.id,
+                dataflow_metainfo,
+            ),
         )?;
     }
 
@@ -922,5 +933,31 @@ impl IndexUsageContext {
                 .extend(keys_to_add.iter().cloned());
         }
         contexts
+    }
+}
+
+/// Extra information about the dataflow. This is not going to be shipped, but has to be processed
+/// in other ways, e.g., showing notices to the user, or saving meta-information to the catalog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DataflowMetainfo {
+    /// Notices that the optimizer wants to show to users.
+    pub optimizer_notices: Vec<OptimizerNotice>,
+}
+
+impl Default for DataflowMetainfo {
+    fn default() -> Self {
+        DataflowMetainfo {
+            optimizer_notices: Vec::new(),
+        }
+    }
+}
+
+impl DataflowMetainfo {
+    /// Pushes an `OptimizerNotice` into `DataflowMetainfo::optimizer_notices`, but only if the
+    /// exact same notice is not already present.
+    pub fn push_optimizer_notice_dedup(&mut self, notice: OptimizerNotice) {
+        if !self.optimizer_notices.contains(&notice) {
+            self.optimizer_notices.push(notice);
+        }
     }
 }

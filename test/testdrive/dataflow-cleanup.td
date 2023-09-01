@@ -95,11 +95,11 @@ false
 true
 > SELECT mz_internal.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
-false
+> SELECT count(*) FROM mz_internal.mz_dataflow_operators
+0
 > DROP MATERIALIZED VIEW q14
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
-false
+> SELECT count(*)  FROM mz_internal.mz_dataflow_operators
+0
 
 # Clean up.
 > DROP CLUSTER test CASCADE

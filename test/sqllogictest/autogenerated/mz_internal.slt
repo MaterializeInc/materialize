@@ -341,6 +341,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  bytes_received  uint8
 8  envelope_state_bytes  uint8
 9  envelope_state_count  uint8
+10  rehydration_latency_ms  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position
@@ -504,7 +505,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  region_name  text
 5  levels  bigint
 6  to_cut  bigint
-7  hint  double␠precision
+7  savings  numeric
+8  hint  double␠precision
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_message_counts' ORDER BY position
@@ -557,6 +559,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  requested_ns  uint8
 3  count  numeric
 
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
+----
+1  id  text
+2  object_type  text
+3  sub_id  uint8
+4  comment  text
+
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
 ----
@@ -580,6 +590,7 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
+mz_comments
 mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
 mz_compute_delays_histogram_raw

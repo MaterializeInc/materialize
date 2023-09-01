@@ -10,6 +10,7 @@
 //! `EXPLAIN ... AS TEXT` support for structures defined in this crate.
 
 use std::fmt;
+use std::fmt::Formatter;
 
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
@@ -45,8 +46,16 @@ where
         }
 
         if !self.context.used_indexes.is_empty() {
-            writeln!(f, "")?;
+            writeln!(f)?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
+
+        if !self.context.optimizer_notices.is_empty() {
+            writeln!(f)?;
+            writeln!(f, "Notices:")?;
+            for notice in self.context.optimizer_notices.iter() {
+                writeln!(f, "{}", notice)?;
+            }
         }
 
         if self.context.config.timing {
@@ -75,7 +84,7 @@ where
             );
 
             if no > 0 {
-                writeln!(f, "")?;
+                writeln!(f)?;
             }
 
             writeln!(f, "{}{}:", ctx.indent, id)?;
@@ -100,7 +109,7 @@ where
             .any(|ExplainSource { op, .. }| !op.is_identity())
         {
             // render one blank line between the plans and sources
-            writeln!(f, "")?;
+            writeln!(f)?;
             // render sources
             for ExplainSource {
                 id,
@@ -121,12 +130,20 @@ where
         }
 
         if !self.context.used_indexes.is_empty() {
-            writeln!(f, "")?;
+            writeln!(f)?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
+        if !self.context.optimizer_notices.is_empty() {
+            writeln!(f)?;
+            writeln!(f, "Notices:")?;
+            for notice in self.context.optimizer_notices.iter() {
+                writeln!(f, "{}", notice)?;
+            }
+        }
+
         if self.context.config.timing {
-            writeln!(f, "")?;
+            writeln!(f)?;
             writeln!(f, "Optimization time: {:?}", self.context.duration)?;
         }
 
@@ -819,63 +836,93 @@ where
 
 impl fmt::Display for MirScalarExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string_with_col_names(&None))
+    }
+}
+
+impl MirScalarExpr {
+    /// Prettyprints the `MirScalarExpr`. If `col_names` is given, then column references will be
+    /// printed as column names.
+    pub fn to_string_with_col_names(&self, col_names: &Option<Vec<String>>) -> String {
         use MirScalarExpr::*;
         match self {
-            Column(i) => write!(f, "#{}", i),
-            Literal(row, _) => match row {
-                Ok(row) => write!(f, "{}", row.unpack_first()),
-                Err(err) => write!(f, "error({})", err.to_string().quoted()),
+            Column(i) => match col_names {
+                Some(input_col_names) => input_col_names[*i].to_string(),
+                None => format!("#{}", i),
             },
-            CallUnmaterializable(func) => write!(f, "{}()", func),
+            Literal(row, _) => match row {
+                Ok(row) => format!("{}", row.unpack_first()),
+                Err(err) => format!("error({})", err.to_string().quoted()),
+            },
+            CallUnmaterializable(func) => format!("{}()", func),
             CallUnary { func, expr } => {
                 if let crate::UnaryFunc::Not(_) = *func {
                     if let CallUnary { func, expr } = expr.as_ref() {
                         if let Some(is) = func.is() {
-                            return write!(f, "({}) IS NOT {}", expr, is);
+                            return format!(
+                                "({}) IS NOT {}",
+                                expr.to_string_with_col_names(col_names),
+                                is
+                            );
                         }
                     }
                 }
                 if let Some(is) = func.is() {
-                    write!(f, "({}) IS {}", expr, is)
+                    format!("({}) IS {}", expr.to_string_with_col_names(col_names), is)
                 } else {
-                    write!(f, "{}({})", func, expr)
+                    format!("{}({})", func, expr.to_string_with_col_names(col_names))
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
-                    write!(f, "({} {} {})", expr1, func, expr2)
+                    format!(
+                        "({} {} {})",
+                        expr1.to_string_with_col_names(col_names),
+                        func,
+                        expr2.to_string_with_col_names(col_names)
+                    )
                 } else {
-                    write!(f, "{}({}, {})", func, expr1, expr2)
+                    format!(
+                        "{}({}, {})",
+                        func,
+                        expr1.to_string_with_col_names(col_names),
+                        expr2.to_string_with_col_names(col_names)
+                    )
                 }
             }
             CallVariadic { func, exprs } => {
+                let expr_strings = exprs
+                    .iter()
+                    .map(|expr| expr.to_string_with_col_names(col_names));
+                let exprs_display = separated(", ", expr_strings.clone());
                 use crate::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "array[{}]", exprs)
+                        format!("array[{}]", exprs_display)
                     }
                     ListCreate { .. } => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "list[{}]", exprs)
+                        format!("list[{}]", exprs_display)
                     }
                     RecordCreate { .. } => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "row({})", exprs)
+                        format!("row({})", exprs_display)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
                         let func = format!(" {} ", func);
-                        let exprs = separated(&func, exprs);
-                        write!(f, "({})", exprs)
+                        let exprs = separated(&func, expr_strings);
+                        format!("({})", exprs)
                     }
                     func => {
-                        let exprs = separated(", ", exprs);
-                        write!(f, "{}({})", func, exprs)
+                        format!("{}({})", func, exprs_display)
                     }
                 }
             }
             If { cond, then, els } => {
-                write!(f, "case when {} then {} else {} end", cond, then, els)
+                format!(
+                    "case when {} then {} else {} end",
+                    cond.to_string_with_col_names(col_names),
+                    then.to_string_with_col_names(col_names),
+                    els.to_string_with_col_names(col_names)
+                )
             }
         }
     }
@@ -897,4 +944,19 @@ impl fmt::Display for AggregateExpr {
         self.expr.fmt(f)?;
         write!(f, ")")
     }
+}
+
+/// Displays a `Row` of which the caller knows to contain exactly 1 field. This is to avoid printing
+/// an extra pair of parenthesis that wrap `Row`s in the normal Display.
+pub fn display_singleton_row(r: Row) -> impl fmt::Display {
+    struct SingletonRow(Row);
+    impl fmt::Display for SingletonRow {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            let mut iter = self.0.into_iter();
+            let d = iter.next().unwrap();
+            assert!(matches!(iter.next(), None));
+            write!(f, "{}", d)
+        }
+    }
+    SingletonRow(r)
 }

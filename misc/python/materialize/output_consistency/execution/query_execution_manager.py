@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from datetime import datetime
-from typing import Optional
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -263,7 +262,7 @@ class QueryExecutionManager:
         query_id: str,
         query_execution: QueryExecution,
         collapsed: bool,
-        status: Optional[str] = None,
+        status: str | None = None,
         flush: bool = False,
     ) -> None:
         status = "" if status is None else f" ({status})"
@@ -313,7 +312,7 @@ class QueryExecutionManager:
         )
 
         duration_info = ", ".join(
-            "{:.3f}".format(duration) for duration in query_execution.durations
+            f"{duration:.3f}" for duration in query_execution.durations
         )
         self.output_printer.print_info(f"Durations: {duration_info}")
 

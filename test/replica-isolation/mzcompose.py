@@ -8,9 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any, Callable, Optional
+from typing import Any
 
 from pg8000 import Cursor  # type: ignore
 
@@ -46,7 +47,7 @@ class AllowCompactionCheck:
         assert "." in replica
         self.replica = replica
         self.host = host
-        self.ids: Optional[list[str]] = None
+        self.ids: list[str] | None = None
         self.satisfied = False
 
     def find_ids(self, c: Composition) -> None:

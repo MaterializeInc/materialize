@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -39,6 +39,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
+use mz_ore::option::FallibleMapExt;
 use mz_ore::soft_assert;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -61,15 +62,17 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
+    Aug, CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
+    PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     Ingestion as PlanIngestion, Params, Plan, PlanContext, PlanNotice,
-    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookValidation,
+    SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookHeaders,
+    WebhookValidation,
 };
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -82,16 +85,21 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::types::connections::inline::{
+    ConnectionResolver, InlinedConnection, IntoInlineConnection, ReferencedConnection,
+};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
 use mz_storage_client::types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
+use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
@@ -208,8 +216,10 @@ pub struct CatalogState {
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
     aws_privatelink_availability_zones: Option<BTreeSet<String>>,
+    http_host_name: Option<String>,
     default_privileges: DefaultPrivileges,
     system_privileges: PrivilegeMap,
+    comments: CommentsMap,
 }
 
 fn skip_temp_items<S>(
@@ -257,8 +267,10 @@ impl CatalogState {
             egress_ips: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
+            http_host_name: Default::default(),
             default_privileges: Default::default(),
             system_privileges: Default::default(),
+            comments: Default::default(),
         }
     }
 
@@ -733,6 +745,37 @@ impl CatalogState {
         }
         membership.insert(RoleId::Public);
         membership
+    }
+
+    /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
+    /// source.
+    ///
+    /// Note: Identifiers for the source, e.g. item name, are URL encoded.
+    pub fn try_get_webhook_url(
+        &self,
+        id: &GlobalId,
+        conn_id: Option<&ConnectionId>,
+    ) -> Option<url::Url> {
+        let entry = self.try_get_entry(id)?;
+        let name = self.resolve_full_name(entry.name(), conn_id);
+        let host_name = self
+            .http_host_name
+            .as_ref()
+            .map(|x| x.as_str())
+            .unwrap_or_else(|| "<HOST>");
+
+        let RawDatabaseSpecifier::Name(database) = name.database else {
+            return None;
+        };
+
+        let mut url = url::Url::parse(&format!("https://{host_name}/api/webhook")).ok()?;
+        url.path_segments_mut()
+            .ok()?
+            .push(&database)
+            .push(&name.schema)
+            .push(&name.item);
+
+        Some(url)
     }
 
     /// Parse a SQL string into a catalog view item with only a limited
@@ -1716,10 +1759,34 @@ impl CatalogState {
     }
 }
 
+impl ConnectionResolver for CatalogState {
+    fn resolve_connection(
+        &self,
+        id: GlobalId,
+    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
+        use mz_storage_client::types::connections::Connection::*;
+        match self
+            .get_entry(&id)
+            .connection()
+            .expect("catalog out of sync")
+            .connection
+            .clone()
+        {
+            Kafka(conn) => Kafka(conn.into_inline_connection(self)),
+            Postgres(conn) => Postgres(conn.into_inline_connection(self)),
+            Csr(conn) => Csr(conn.into_inline_connection(self)),
+            Ssh(conn) => Ssh(conn),
+            Aws(conn) => Aws(conn),
+            AwsPrivatelink(conn) => AwsPrivatelink(conn),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
     physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
+    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo>,
 }
 
 impl Catalog {
@@ -1761,13 +1828,27 @@ impl Catalog {
         self.plans.physical_plan_by_id.get(id)
     }
 
-    /// Drop all optimized and physical plans for the item identified by `id`.
-    ///
-    /// Ignore requests for non-existing plans.
+    /// Set the `DataflowMetainfo` for the item identified by `id`.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn drop_plans(&mut self, id: GlobalId) {
+    pub fn set_dataflow_metainfo(&mut self, id: GlobalId, metainfo: DataflowMetainfo) {
+        self.plans.dataflow_metainfos.insert(id, metainfo);
+    }
+
+    /// Try to get the `DataflowMetainfo` for the item identified by `id`.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn try_get_dataflow_metainfo(&self, id: &GlobalId) -> Option<&DataflowMetainfo> {
+        self.plans.dataflow_metainfos.get(id)
+    }
+
+    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the item identified by
+    /// `id`.
+    ///
+    /// Ignore requests for non-existing plans or `DataflowMetainfo`s.
+    #[tracing::instrument(level = "trace", skip(self))]
+    pub fn drop_plans_and_metainfos(&mut self, id: GlobalId) {
         self.plans.optimized_plan_by_id.remove(&id);
         self.plans.physical_plan_by_id.remove(&id);
+        self.plans.dataflow_metainfos.remove(&id);
     }
 }
 
@@ -1854,6 +1935,15 @@ impl ConnCatalog<'_> {
         }
         v.extend_from_slice(&self.search_path);
         v
+    }
+}
+
+impl ConnectionResolver for ConnCatalog<'_> {
+    fn resolve_connection(
+        &self,
+        id: GlobalId,
+    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
+        self.state().resolve_connection(id)
     }
 }
 
@@ -2074,7 +2164,7 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
-    Ingestion(IngestionDescription),
+    Ingestion(IngestionDescription<(), ReferencedConnection>),
     /// Receives data from some other source
     Source,
     /// Receives introspection data from an internal system
@@ -2084,7 +2174,9 @@ pub enum DataSourceDesc {
     /// Receives data from HTTP requests.
     Webhook {
         /// Optional components used to validation a webhook request.
-        validation: Option<WebhookValidation>,
+        validate_using: Option<WebhookValidation>,
+        /// Describes whether or not to include headers and how to map them.
+        headers: WebhookHeaders,
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
@@ -2187,7 +2279,10 @@ impl Source {
                     );
                     DataSourceDesc::Source
                 }
-                mz_sql::plan::DataSourceDesc::Webhook(validation) => {
+                mz_sql::plan::DataSourceDesc::Webhook {
+                    validate_using,
+                    headers,
+                } => {
                     assert!(
                         matches!(
                             plan.cluster_config,
@@ -2196,7 +2291,8 @@ impl Source {
                         "webhook sources must be created on an existing cluster"
                     );
                     DataSourceDesc::Webhook {
-                        validation,
+                        validate_using,
+                        headers,
                         cluster_id: cluster_id.expect("checked above"),
                     }
                 }
@@ -2356,8 +2452,8 @@ impl Sink {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum StorageSinkConnectionState {
-    Pending(StorageSinkConnectionBuilder),
-    Ready(StorageSinkConnection),
+    Pending(StorageSinkConnectionBuilder<ReferencedConnection>),
+    Ready(StorageSinkConnection<ReferencedConnection>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2412,7 +2508,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
     pub resolved_ids: ResolvedIds,
 }
 
@@ -2476,7 +2572,7 @@ impl CatalogItem {
     pub fn source_desc(
         &self,
         entry: &CatalogEntry,
-    ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
+    ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
@@ -2799,7 +2895,9 @@ impl CatalogEntry {
 
     /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
-    pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
+    pub fn source_desc(
+        &self,
+    ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.item.source_desc(self)
     }
 
@@ -2964,6 +3062,93 @@ struct AllocatedBuiltinSystemIds<T> {
     all_builtins: Vec<(T, GlobalId)>,
     new_builtins: Vec<(T, GlobalId)>,
     migrated_builtins: Vec<GlobalId>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CommentsMap {
+    map: BTreeMap<CommentObjectId, BTreeMap<Option<usize>, String>>,
+}
+
+impl CommentsMap {
+    pub fn update_comment(
+        &mut self,
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
+    ) -> Option<String> {
+        let object_comments = self.map.entry(object_id).or_default();
+
+        // Either replace the existing comment, or remove it if comment is None/NULL.
+        let (empty, prev) = if let Some(comment) = comment {
+            let prev = object_comments.insert(sub_component, comment);
+            (false, prev)
+        } else {
+            let prev = object_comments.remove(&sub_component);
+            (object_comments.is_empty(), prev)
+        };
+
+        // Cleanup entries that are now empty.
+        if empty {
+            self.map.remove(&object_id);
+        }
+
+        // Return the previous comment, if there was one, for easy removal.
+        prev
+    }
+
+    /// Remove all comments for `object_id` from the map.
+    ///
+    /// Generally there is one comment for a given [`CommentObjectId`], but in the case of
+    /// relations you can also have comments on the individual columns. Dropping the comments for a
+    /// relation will also drop all of the comments on any columns.
+    pub fn drop_comments(
+        &mut self,
+        object_id: CommentObjectId,
+    ) -> Vec<(CommentObjectId, Option<usize>, String)> {
+        match self.map.remove(&object_id) {
+            None => Vec::new(),
+            Some(comments) => comments
+                .into_iter()
+                .map(|(sub_comp, comment)| (object_id, sub_comp, comment))
+                .collect(),
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (CommentObjectId, Option<usize>, &str)> {
+        self.map
+            .iter()
+            .map(|(id, comments)| {
+                comments
+                    .iter()
+                    .map(|(pos, comment)| (*id, *pos, comment.as_str()))
+            })
+            .flatten()
+    }
+}
+
+impl Serialize for CommentsMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let comment_count = self
+            .map
+            .iter()
+            .map(|(_object_id, comments)| comments.len())
+            .sum();
+
+        let mut seq = serializer.serialize_seq(Some(comment_count))?;
+        for (object_id, sub) in &self.map {
+            for (sub_component, comment) in sub {
+                seq.serialize_element(&(
+                    format!("{object_id:?}"),
+                    format!("{sub_component:?}"),
+                    comment,
+                ))?;
+            }
+        }
+        seq.end()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
@@ -3309,12 +3494,15 @@ impl Catalog {
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+                http_host_name: config.http_host_name,
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
+                comments: CommentsMap::default(),
             },
             plans: CatalogPlans {
                 optimized_plan_by_id: Default::default(),
                 physical_plan_by_id: Default::default(),
+                dataflow_metainfos: BTreeMap::new(),
             },
             transient_revision: 0,
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
@@ -3435,6 +3623,20 @@ impl Catalog {
                 config.system_parameter_sync_config,
             )
             .await?;
+        // We need to set this variable ASAP, so that builtins get planned with the correct value
+        let variable_length_row_encoding = catalog
+            .system_config()
+            .variable_length_row_encoding_DANGEROUS();
+        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
+
+        let comments = catalog.storage().await.load_comments().await?;
+        for (object_id, sub_component, comment) in comments {
+            catalog
+                .state
+                .comments
+                .update_comment(object_id, sub_component, Some(comment));
+        }
 
         // Now that LD is loaded, set the intended stash timeout.
         // TODO: Move this into the stash constructor.
@@ -3876,6 +4078,14 @@ impl Catalog {
                     builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
                 }
             }
+        }
+        for (id, sub_component, comment) in catalog.state.comments.iter() {
+            builtin_table_updates.push(catalog.state.pack_comment_update(
+                id,
+                sub_component,
+                comment,
+                1,
+            ));
         }
         for (_id, role) in &catalog.state.roles_by_id {
             if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
@@ -4466,7 +4676,7 @@ impl Catalog {
         );
         for id in migration_metadata.all_drop_ops.drain(..) {
             self.state.drop_item(id);
-            self.drop_plans(id);
+            self.drop_plans_and_metainfos(id);
         }
         for (id, oid, name, owner_id, privileges, item_rebuilder) in
             migration_metadata.all_create_ops.drain(..)
@@ -4732,6 +4942,12 @@ impl Catalog {
         .await?;
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
+        let variable_length_row_encoding =
+            if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
+                "true"
+            } else {
+                "false"
+            };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -4743,7 +4959,12 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
-            system_parameter_defaults: Default::default(),
+            system_parameter_defaults: [(
+                "variable_length_row_encoding".to_string(),
+                variable_length_row_encoding.to_string(),
+            )]
+            .into_iter()
+            .collect(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
@@ -4752,6 +4973,7 @@ impl Catalog {
             system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
+            http_host_name: None,
             connection_context: None,
             active_connection_count,
         })
@@ -5491,7 +5713,7 @@ impl Catalog {
         self.transient_revision += 1;
 
         for id in drop_ids {
-            self.drop_plans(id);
+            self.drop_plans_and_metainfos(id);
         }
 
         Ok(TransactionResult {
@@ -6284,6 +6506,37 @@ impl Catalog {
                     );
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
+                Op::Comment {
+                    object_id,
+                    sub_component,
+                    comment,
+                } => {
+                    tx.update_comment(object_id, sub_component, comment.clone())?;
+                    let prev_comment =
+                        state
+                            .comments
+                            .update_comment(object_id, sub_component, comment.clone());
+
+                    // If we're replacing or deleting a comment, we need to issue a retraction for
+                    // the previous value.
+                    if let Some(prev) = prev_comment {
+                        builtin_table_updates.push(state.pack_comment_update(
+                            object_id,
+                            sub_component,
+                            &prev,
+                            -1,
+                        ));
+                    }
+
+                    if let Some(new) = comment {
+                        builtin_table_updates.push(state.pack_comment_update(
+                            object_id,
+                            sub_component,
+                            &new,
+                            1,
+                        ));
+                    }
+                }
                 Op::DropObject(id) => match id {
                     ObjectId::Database(id) => {
                         let database = &state.database_by_id[&id];
@@ -6515,6 +6768,7 @@ impl Catalog {
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
+                        let entry_type = entry.item_type();
                         if id.is_system() {
                             let name = entry.name();
                             let full_name = state
@@ -6547,6 +6801,27 @@ impl Catalog {
                             )?;
                         }
                         state.drop_item(id);
+
+                        // Drop any associated comments.
+                        let object_id = match entry_type {
+                            CatalogItemType::Table => Some(CommentObjectId::Table(id)),
+                            CatalogItemType::View => Some(CommentObjectId::View(id)),
+                            _ => None,
+                        };
+                        if let Some(object_id) = object_id {
+                            let deleted = tx.drop_comments(object_id)?;
+                            let dropped = state.comments.drop_comments(object_id);
+                            mz_ore::soft_assert_eq!(
+                                deleted,
+                                dropped,
+                                "transaction and state out of sync"
+                            );
+
+                            let updates = dropped.into_iter().map(|(id, col_pos, comment)| {
+                                state.pack_comment_update(id, col_pos, &comment, -1)
+                            });
+                            builtin_table_updates.extend(updates);
+                        }
                     }
                 },
                 Op::DropTimeline(timeline) => {
@@ -7574,12 +7849,16 @@ impl Catalog {
                     }
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
-                    mz_sql::plan::DataSourceDesc::Webhook(validation) => {
+                    mz_sql::plan::DataSourceDesc::Webhook {
+                        validate_using,
+                        headers,
+                    } => {
                         let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
                             unreachable!("webhook sources must use an existing cluster");
                         };
                         DataSourceDesc::Webhook {
-                            validation,
+                            validate_using,
+                            headers,
                             cluster_id: id,
                         }
                     }
@@ -7660,13 +7939,18 @@ impl Catalog {
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
             }),
-            Plan::CreateConnection(CreateConnectionPlan { connection, .. }) => {
-                CatalogItem::Connection(Connection {
-                    create_sql: connection.create_sql,
-                    connection: connection.connection,
-                    resolved_ids,
-                })
-            }
+            Plan::CreateConnection(CreateConnectionPlan {
+                connection:
+                    mz_sql::plan::Connection {
+                        create_sql,
+                        connection,
+                    },
+                ..
+            }) => CatalogItem::Connection(Connection {
+                create_sql,
+                connection,
+                resolved_ids,
+            }),
             _ => {
                 return Err(Error::new(ErrorKind::Corruption {
                     detail: "catalog entry generated inappropriate plan".to_string(),
@@ -8000,6 +8284,11 @@ pub enum Op {
         item: CatalogItem,
         owner_id: RoleId,
     },
+    Comment {
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
+    },
     DropObject(ObjectId),
     DropTimeline(Timeline),
     GrantRole {
@@ -8296,6 +8585,28 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 res
             }
         }
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        self.state
+            .entry_by_id
+            .get(&id)
+            .try_map(|entry| {
+                Ok::<_, SqlCatalogError>(
+                    entry
+                        .item
+                        .desc(&self.resolve_full_name(&entry.name))?
+                        .iter_names()
+                        .cloned()
+                        .map(|col_name| col_name.to_string())
+                        .collect(),
+                )
+            })
+            .unwrap_or(None)
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.state.entry_by_id.get(&id).is_some()
     }
 }
 
@@ -8863,13 +9174,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
-    fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
+    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         self.source_desc()
     }
 
     fn connection(
         &self,
-    ) -> Result<&mz_storage_client::types::connections::Connection, SqlCatalogError> {
+    ) -> Result<
+        &mz_storage_client::types::connections::Connection<ReferencedConnection>,
+        SqlCatalogError,
+    > {
         Ok(&self.connection()?.connection)
     }
 

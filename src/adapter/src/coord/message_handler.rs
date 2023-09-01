@@ -768,6 +768,7 @@ impl Coordinator {
                 in_immediate_multi_stmt_txn: _,
                 key,
                 typ,
+                dataflow_metainfo,
             } => {
                 self.sequence_peek_stage(
                     ctx,
@@ -787,6 +788,7 @@ impl Coordinator {
                         real_time_recency_ts: Some(real_time_recency_ts),
                         key,
                         typ,
+                        dataflow_metainfo,
                     }),
                 )
                 .await;

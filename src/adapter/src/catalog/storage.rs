@@ -30,8 +30,8 @@ use mz_sql::catalog::{
     CatalogSchema, ObjectType, RoleAttributes,
 };
 use mz_sql::names::{
-    DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
-    SchemaSpecifier,
+    CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
+    SchemaId, SchemaSpecifier,
 };
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
@@ -56,7 +56,7 @@ pub mod stash;
 
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
     DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
     SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
     SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
@@ -642,6 +642,22 @@ impl Connection {
             .collect()
     }
 
+    /// Load all comments.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_comments(
+        &mut self,
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+        let comments = COMMENTS_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (CommentKey, CommentValue)| (k.object_id, k.sub_component, v.comment))
+            .collect::<Result<_, _>>()?;
+
+        Ok(comments)
+    }
+
     /// Persist mapping from system objects to global IDs and fingerprints.
     ///
     /// Panics if provided id is not a system id.
@@ -905,6 +921,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         schemas,
         roles,
         items,
+        comments,
         clusters,
         cluster_replicas,
         introspection_sources,
@@ -925,6 +942,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
                     tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(COMMENTS_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
                     tx.peek_one(
@@ -956,6 +974,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         items: TableTransaction::new(items, |a: &ItemValue, b| {
             a.schema_id == b.schema_id && a.name == b.name
         })?,
+        comments: TableTransaction::new(comments, |a: &CommentValue, b| a.comment == b.comment)?,
         roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
         clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
         cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
@@ -982,6 +1001,7 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
+    comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
@@ -1775,6 +1795,34 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub(crate) fn update_comment(
+        &mut self,
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
+    ) -> Result<(), Error> {
+        let key = CommentKey {
+            object_id,
+            sub_component,
+        };
+        let value = comment.map(|c| CommentValue { comment: c });
+        self.comments.set(key, value)?;
+
+        Ok(())
+    }
+
+    pub(crate) fn drop_comments(
+        &mut self,
+        object_id: CommentObjectId,
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+        let deleted = self.comments.delete(|k, _v| k.object_id == object_id);
+        let deleted = deleted
+            .into_iter()
+            .map(|(k, v)| (k.object_id, k.sub_component, v.comment))
+            .collect();
+        Ok(deleted)
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub(crate) fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {
@@ -1851,6 +1899,7 @@ impl<'a> Transaction<'a> {
         let databases = Arc::new(self.databases.pending());
         let schemas = Arc::new(self.schemas.pending());
         let items = Arc::new(self.items.pending());
+        let comments = Arc::new(self.comments.pending());
         let roles = Arc::new(self.roles.pending());
         let clusters = Arc::new(self.clusters.pending());
         let cluster_replicas = Arc::new(self.cluster_replicas.pending());
@@ -1874,6 +1923,7 @@ impl<'a> Transaction<'a> {
                     add_batch(&tx, &mut batches, &DATABASES_COLLECTION, &databases).await?;
                     add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &schemas).await?;
                     add_batch(&tx, &mut batches, &ITEM_COLLECTION, &items).await?;
+                    add_batch(&tx, &mut batches, &COMMENTS_COLLECTION, &comments).await?;
                     add_batch(&tx, &mut batches, &ROLES_COLLECTION, &roles).await?;
                     add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &clusters).await?;
                     add_batch(
@@ -2101,6 +2151,17 @@ pub struct ItemValue {
     definition: SerializedCatalogItem,
     owner_id: RoleId,
     privileges: Vec<MzAclItem>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct CommentKey {
+    object_id: CommentObjectId,
+    sub_component: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+pub struct CommentValue {
+    comment: String,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]

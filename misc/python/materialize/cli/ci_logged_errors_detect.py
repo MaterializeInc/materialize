@@ -14,7 +14,7 @@ import argparse
 import os
 import re
 import sys
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -65,7 +65,7 @@ ERROR_RE = re.compile(
 
 
 class KnownIssue:
-    def __init__(self, regex: re.Pattern[Any], apply_to: Optional[str], info: Any):
+    def __init__(self, regex: re.Pattern[Any], apply_to: str | None, info: Any):
         self.regex = regex
         self.apply_to = apply_to
         self.info = info

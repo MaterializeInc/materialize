@@ -32,6 +32,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_storage_client::types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
 use once_cell::sync::Lazy;
@@ -80,7 +81,7 @@ use crate::session::vars::SystemVars;
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
-pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
+pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
     /// Returns the id of the role that is issuing the query.
     fn active_role_id(&self) -> &RoleId;
 
@@ -572,12 +573,12 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_desc(&self) -> Result<Option<&SourceDesc>, CatalogError>;
+    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, CatalogError>;
 
     /// Returns the resolved connection.
     ///
     /// If the catalog item is not a connection, it returns an error.
-    fn connection(&self) -> Result<&Connection, CatalogError>;
+    fn connection(&self) -> Result<&Connection<ReferencedConnection>, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;

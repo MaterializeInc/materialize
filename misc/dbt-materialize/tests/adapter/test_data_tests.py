@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import check_result_nodes_by_name, run_dbt
+from dbt.tests.util import run_dbt
 from fixtures import not_null, test_materialized_view, unique
 
 

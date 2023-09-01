@@ -353,6 +353,7 @@ impl Coordinator {
                 mz_controller::clusters::ClusterConfig {
                     arranged_logs: cluster.log_indexes.clone(),
                 },
+                self.variable_length_row_encoding,
             )
             .expect("creating cluster must not fail");
 

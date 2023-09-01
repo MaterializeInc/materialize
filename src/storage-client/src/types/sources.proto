@@ -213,7 +213,6 @@ message ProtoLoadGeneratorSourceConnection {
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
         google.protobuf.Empty marketing = 7;
-        google.protobuf.Empty clock = 8;
     }
     optional uint64 tick_micros = 2;
 }
@@ -223,9 +222,7 @@ message ProtoTestScriptSourceConnection {
 }
 
 message ProtoCounterLoadGenerator {
-    // Must be non-negative,
-    // but kept as int64 to make downstream logic simpler
-    optional int64 max_cardinality = 1;
+    optional uint64 max_cardinality = 1;
 }
 
 message ProtoTpchLoadGenerator {

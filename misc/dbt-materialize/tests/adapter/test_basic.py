@@ -45,7 +45,6 @@ from dbt.tests.util import (
     relation_from_name,
     run_dbt,
 )
-from fixtures import expected_base_relation_types
 
 
 class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):

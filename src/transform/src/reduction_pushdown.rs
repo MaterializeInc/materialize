@@ -53,7 +53,7 @@ use std::iter::FromIterator;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
@@ -69,7 +69,7 @@ impl crate::Transform for ReductionPushdown {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // `try_visit_mut_pre` is used here because after pushing down a reduction,
         // we want to see if we can push the same reduction further down.

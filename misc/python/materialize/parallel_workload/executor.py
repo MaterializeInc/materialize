@@ -9,11 +9,11 @@
 
 import random
 import threading
-from typing import Optional, TextIO
+from typing import TextIO
 
 import pg8000
 
-log: Optional[TextIO]
+log: TextIO | None
 lock: threading.Lock
 
 
@@ -37,7 +37,7 @@ class Executor:
     cur: pg8000.Cursor
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
-    insert_table: Optional[int]
+    insert_table: int | None
 
     def __init__(self, rng: random.Random, cur: pg8000.Cursor):
         self.rng = rng

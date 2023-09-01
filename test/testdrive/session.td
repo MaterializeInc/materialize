@@ -27,6 +27,7 @@ database                            materialize             "Sets the current da
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
+enable_comment                      off                     "Enables the COMMENT ON feature for objects in the database (Materialize)."
 enable_rbac_checks                  on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 extra_float_digits                  3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."

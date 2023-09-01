@@ -8,9 +8,8 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-import argparse
+from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import Callable, Optional
 
 import requests
 from requests.exceptions import ConnectionError
@@ -23,13 +22,20 @@ from materialize.cloudtest.util.jwt_key import fetch_jwt, make_jwt
 class AuthConfig:
     organization_id: str
     token: str
-    app_user: Optional[str]
-    app_password: Optional[str]
+    app_user: str | None
+    app_password: str | None
 
     refresh_fn: Callable[[AuthConfig], None]
 
     def refresh(self) -> None:
         self.refresh_fn(self)
+
+
+@dataclass
+class TestUserConfig:
+    email: str
+    password: str
+    frontegg_host: str
 
 
 DEFAULT_ORG_ID = "80b1a04a-2277-11ed-a1ce-5405dbb9e0f7"
@@ -39,28 +45,32 @@ DEFAULT_ORG_ID = "80b1a04a-2277-11ed-a1ce-5405dbb9e0f7"
 # connections getting frequently (but sporadically) interrupted here - we
 # should track this down and remove these retries
 def create_auth(
-    args: argparse.Namespace, refresh_fn: Callable[[AuthConfig], None]
+    user: TestUserConfig | None,
+    refresh_fn: Callable[[AuthConfig], None],
 ) -> AuthConfig:
     config: AuthConfig = retry(
-        lambda: _create_auth(args, refresh_fn), 5, [ConnectionError]
+        lambda: _create_auth(
+            user,
+            refresh_fn,
+        ),
+        5,
+        [ConnectionError],
     )
     return config
 
 
 def _create_auth(
-    args: argparse.Namespace, refresh_fn: Callable[[AuthConfig], None]
+    user: TestUserConfig | None,
+    refresh_fn: Callable[[AuthConfig], None],
 ) -> AuthConfig:
-    if args.e2e_test_user_email is not None:
-        assert args.e2e_test_user_password is not None
-        assert args.frontegg_host is not None
-
+    if user is not None:
         token = fetch_jwt(
-            email=args.e2e_test_user_email,
-            password=args.e2e_test_user_password,
-            host=args.frontegg_host,
+            email=user.email,
+            password=user.password,
+            host=user.frontegg_host,
         )
 
-        identity_url = f"https://{args.frontegg_host}/identity/resources/users/v2/me"
+        identity_url = f"https://{user.frontegg_host}/identity/resources/users/v2/me"
         response = requests.get(
             identity_url,
             headers={"authorization": f"Bearer {token}"},
@@ -69,8 +79,8 @@ def _create_auth(
         response.raise_for_status()
 
         organization_id = response.json()["tenantId"]
-        app_user = args.e2e_test_user_email
-        app_password = make_app_password(args.frontegg_host, token)
+        app_user = user.email
+        app_password = make_app_password(user.frontegg_host, token)
     else:
         organization_id = DEFAULT_ORG_ID
         token = make_jwt(tenant_id=organization_id)
@@ -86,8 +96,11 @@ def _create_auth(
     )
 
 
-def update_auth(args: argparse.Namespace, auth: AuthConfig) -> None:
-    new_auth = create_auth(args, auth.refresh_fn)
+def update_auth(
+    user: TestUserConfig | None,
+    auth: AuthConfig,
+) -> None:
+    new_auth = create_auth(user, auth.refresh_fn)
 
     for field in fields(new_auth):
         setattr(auth, field.name, getattr(new_auth, field.name))

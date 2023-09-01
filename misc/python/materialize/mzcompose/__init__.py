@@ -28,6 +28,8 @@ import subprocess
 import sys
 import time
 import traceback
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
@@ -35,16 +37,9 @@ from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
     Any,
-    Callable,
-    Iterable,
-    Iterator,
     Literal,
-    Optional,
-    OrderedDict,
-    Sequence,
     TypedDict,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -74,7 +69,7 @@ class Composition:
     @dataclass
     class TestResult:
         duration: float
-        error: Optional[str]
+        error: str | None
 
     def __init__(
         self,
@@ -83,7 +78,7 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
-        project_name: Optional[str] = None,
+        project_name: str | None = None,
     ):
         self.name = name
         self.description = None
@@ -237,7 +232,7 @@ class Composition:
         *args: str,
         capture: bool = False,
         capture_stderr: bool = False,
-        stdin: Optional[str] = None,
+        stdin: str | None = None,
         check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
@@ -288,7 +283,7 @@ class Composition:
                 print(e.stdout)
             raise UIError(f"running docker compose failed (exit status {e.returncode})")
 
-    def port(self, service: str, private_port: Union[int, str]) -> int:
+    def port(self, service: str, private_port: int | str) -> int:
         """Get the public port for a service's private port.
 
         Delegates to `docker compose port`. See that command's help for details.
@@ -437,8 +432,8 @@ class Composition:
         self,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
     ) -> Connection:
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
@@ -450,8 +445,8 @@ class Composition:
         self,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
         conn = self.sql_connection(service, user, port, password)
@@ -462,8 +457,8 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
         print_statement: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
@@ -480,8 +475,8 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
     ) -> Any:
         """Execute and return results of a SQL query."""
         with self.sql_cursor(
@@ -499,8 +494,8 @@ class Composition:
         env_extra: dict[str, str] = {},
         capture: bool = False,
         capture_stderr: bool = False,
-        stdin: Optional[str] = None,
-        entrypoint: Optional[str] = None,
+        stdin: str | None = None,
+        entrypoint: str | None = None,
         check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
@@ -545,9 +540,9 @@ class Composition:
         detach: bool = False,
         capture: bool = False,
         capture_stderr: bool = False,
-        stdin: Optional[str] = None,
+        stdin: str | None = None,
         check: bool = True,
-        workdir: Optional[str] = None,
+        workdir: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -787,7 +782,7 @@ class Composition:
         service: str = "testdrive",
         persistent: bool = True,
         args: list[str] = [],
-        caller: Optional[Traceback] = None,
+        caller: Traceback | None = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -812,7 +807,7 @@ class ServiceHealthcheck(TypedDict, total=False):
     """Configuration for a check to determine whether the containers for this
     service are healthy."""
 
-    test: Union[list[str], str]
+    test: list[str] | str
     """A specification of a command to run."""
 
     interval: str
@@ -901,7 +896,7 @@ class ServiceConfig(TypedDict, total=False):
     init: bool
     """Whether to run an init process in the container."""
 
-    ports: Sequence[Union[int, str]]
+    ports: Sequence[int | str]
     """Service ports to expose to the host."""
 
     environment: list[str]
@@ -912,7 +907,7 @@ class ServiceConfig(TypedDict, total=False):
     TODO(benesch): this should accept a `dict[str, str]` instead.
     """
 
-    depends_on: Union[list[str], dict[str, ServiceDependency]]
+    depends_on: list[str] | dict[str, ServiceDependency]
     """The list of other services that must be started before this one."""
 
     tmpfs: list[str]
@@ -969,14 +964,14 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
     the arguments that the user provided to the workflow.
     """
 
-    def __init__(self, name: str, description: Optional[str], args: list[str]):
+    def __init__(self, name: str, description: str | None, args: list[str]):
         self.args = args
         super().__init__(prog=f"mzcompose run {name}", description=description)
 
     def parse_known_args(
         self,
-        args: Optional[Sequence[str]] = None,
-        namespace: Optional[argparse.Namespace] = None,
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
     ) -> tuple[argparse.Namespace, list[str]]:
         if args is None:
             args = self.args
@@ -1016,10 +1011,10 @@ def _wait_for_pg(
     port: int,
     host: str,
     user: str,
-    password: Optional[str],
-    expected: Union[Iterable[Any], Literal["any"]],
+    password: str | None,
+    expected: Iterable[Any] | Literal["any"],
     print_result: bool = False,
-    ssl_context: Optional[SSLContext] = None,
+    ssl_context: SSLContext | None = None,
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
     obfuscated_password = password[0:1] if password is not None else ""

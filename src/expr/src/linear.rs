@@ -1775,13 +1775,11 @@ pub mod plan {
         {
             match self.mfp.evaluate_inner(datums, arena) {
                 Err(e) => {
-                    return Some(Err((e.into(), time, diff)))
-                        .into_iter()
-                        .chain(None.into_iter());
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                 }
                 Ok(true) => {}
                 Ok(false) => {
-                    return None.into_iter().chain(None.into_iter());
+                    return None.into_iter().chain(None);
                 }
             }
 
@@ -1816,7 +1814,7 @@ pub mod plan {
 
             // If the lower bound exceeds our `until` frontier, it should not appear in the output.
             if !valid_time(&lower_bound) {
-                return None.into_iter().chain(None.into_iter());
+                return None.into_iter().chain(None);
             }
 
             // If there are any upper bounds, determine the minimum upper bound.
@@ -1870,9 +1868,9 @@ pub mod plan {
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
-                lower.into_iter().chain(upper_opt.into_iter())
+                lower.into_iter().chain(upper_opt)
             } else {
-                None.into_iter().chain(None.into_iter())
+                None.into_iter().chain(None)
             }
         }
 

@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -30,7 +29,7 @@ class QueryTemplate:
         self,
         expect_error: bool,
         select_expressions: list[Expression],
-        where_expression: Optional[Expression],
+        where_expression: Expression | None,
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
@@ -55,7 +54,7 @@ class QueryTemplate:
         strategy: EvaluationStrategy,
         output_format: QueryOutputFormat,
         query_column_selection: QueryColumnByIndexSelection,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> str:
         db_object_name = override_db_object_name or strategy.get_db_object_name(
             self.storage_layout
@@ -107,7 +106,7 @@ FROM{space_separator}{db_object_name}
         )
         return f"WHERE {all_conditions_sql}"
 
-    def _create_row_filter_clause(self) -> Optional[str]:
+    def _create_row_filter_clause(self) -> str | None:
         """Create s SQL clause to only include rows of certain indices"""
         if self.row_selection.keys is None:
             return None

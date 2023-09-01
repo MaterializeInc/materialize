@@ -8,8 +8,6 @@ menu:
 
 `DROP ROLE` removes a role from Materialize.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "drop-role.svg" >}}

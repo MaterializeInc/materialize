@@ -28,8 +28,8 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, InspectShardPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan,
-    ShowVariablePlan, VariableValue,
+    FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
+    SetVariablePlan, ShowVariablePlan, VariableValue,
 };
 use crate::session::vars::SCHEMA_ALIAS;
 
@@ -156,20 +156,32 @@ pub fn plan_discard(
 }
 
 pub fn describe_declare(
-    _: &StatementContext,
-    _: DeclareStatement<Aug>,
+    scx: &StatementContext,
+    DeclareStatement { stmt, .. }: DeclareStatement<Aug>,
+    param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, PlanError> {
+    let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt)?;
+    // Get the desc for the inner statement, but only for its parameters. The outer DECLARE doesn't
+    // return any rows itself when executed.
+    let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, param_types_in)?;
+    // The outer describe fn calls scx.finalize_param_types, so we need to transfer the inner desc's
+    // params to this scx.
+    for (i, ty) in desc.param_types.into_iter().enumerate() {
+        scx.param_types.borrow_mut().insert(i + 1, ty);
+    }
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_declare(
     _: &StatementContext,
     DeclareStatement { name, stmt, sql }: DeclareStatement<Aug>,
+    params: &Params,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
         stmt: *stmt,
         sql,
+        params: params.clone(),
     }))
 }
 

@@ -784,6 +784,47 @@ mod upsert_rocksdb {
                   Only takes effect on source restart (Materialize).",
             internal: true,
         };
+
+    /// The number of times by which allocated buffers will be shrinked in upsert rocksdb.
+    /// If value is 0, then no shrinking will occur.
+    pub static UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_shrink_allocated_buffers_by_ratio"),
+        value: &mz_rocksdb_types::defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
+        description:
+            "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
+        internal: true,
+    };
+    /// Only used if `upsert_rocksdb_write_buffer_manager_memory_bytes` is also set
+    /// and write buffer manager is enabled
+    pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION: Lazy<
+        ServerVar<Option<Numeric>>,
+    > = Lazy::new(|| ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_cluster_memory_fraction"),
+        value: &None,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    });
+    /// `upsert_rocksdb_write_buffer_manager_memory_bytes` needs to be set for write buffer manager to be
+    /// used.
+    pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES: ServerVar<Option<usize>> =
+        ServerVar {
+            name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_memory_bytes"),
+            value: &None,
+            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+            internal: true,
+        };
+    pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_allow_stall"),
+        value: &false,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb_types::config` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -807,6 +848,13 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
 static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
     usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
+
+const VARIABLE_LENGTH_ROW_ENCODING: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("variable_length_row_encoding"),
+    value: &false,
+    description: "Determines whether `repr::row::VARIABLE_LENGTH_ENCODING` is set. See that module for details.",
+    internal: true,
+};
 
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
@@ -927,6 +975,16 @@ const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerV
     value: &false,
     description: "Whether or not to delay sources producing values in some scenarios \
                   (namely, upsert) till after rehydration is finished",
+    internal: true,
+};
+
+/// Configuration ratio to shrink unusef buffers in upsert by.
+/// For eg: is 2 is set, then the buffers will be reduced by 2 i.e. halved.
+/// Default is 0, which means shrinking is disabled.
+const STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_shrink_upsert_unused_buffers_by_ratio"),
+    value: &0,
+    description: "Configuration ratio to shrink unusef buffers in upsert by",
     internal: true,
 };
 
@@ -1101,8 +1159,7 @@ static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> 
 
 pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_ld_rbac_checks"),
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: &true,
     description:
         "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
     internal: true,
@@ -1110,8 +1167,7 @@ pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: &true,
     description: "User facing global boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
@@ -1228,6 +1284,27 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     value: &true,
     description: "consolidation after Unions that have a Negated input (Materialize).",
     internal: false,
+};
+
+pub const ENABLE_COMMENT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_comment"),
+    value: &false,
+    description: "Enables the COMMENT ON feature for objects in the database (Materialize).",
+    internal: false,
+};
+
+pub const MIN_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("min_timestamp_interval"),
+    value: &Duration::from_millis(1000),
+    description: "Minimum timestamp interval",
+    internal: true,
+};
+
+pub const MAX_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("max_timestamp_interval"),
+    value: &Duration::from_millis(1000),
+    description: "Maximum timestamp interval",
+    internal: true,
 };
 
 /// Configuration for gRPC client connections.
@@ -1518,6 +1595,11 @@ feature_flags!(
         statement_logging_use_reproducible_rng,
         "statement logging with reproducible RNG"
     ),
+    (
+        enable_notices_for_index_too_wide_for_literal_constraints,
+        "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
+        false
+    ),
 );
 
 /// Represents the input to a variable.
@@ -1688,7 +1770,7 @@ impl SessionVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .chain([self.build_info as &dyn Var, &self.user].into_iter())
+            .chain([self.build_info as &dyn Var, &self.user])
     }
 
     /// Returns an iterator over configuration parameters (and their current
@@ -2146,6 +2228,10 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2158,6 +2244,7 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
+            .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2188,10 +2275,14 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+            .with_var(&ENABLE_COMMENT)
+            .with_var(&MIN_TIMESTAMP_INTERVAL)
+            .with_var(&MAX_TIMESTAMP_INTERVAL)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+            .with_var(&VARIABLE_LENGTH_ROW_ENCODING)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2429,6 +2520,7 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
+        self.propagate_var_change(VARIABLE_LENGTH_ROW_ENCODING.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -2577,6 +2669,24 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
     }
 
+    pub fn upsert_rocksdb_shrink_allocated_buffers_by_ratio(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
+    }
+
+    pub fn upsert_rocksdb_write_buffer_manager_cluster_memory_fraction(&self) -> Option<Numeric> {
+        *self.expect_value(
+            &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION,
+        )
+    }
+
+    pub fn upsert_rocksdb_write_buffer_manager_memory_bytes(&self) -> Option<usize> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES)
+    }
+
+    pub fn upsert_rocksdb_write_buffer_manager_allow_stall(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -2670,6 +2780,11 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
     pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
         *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
+    }
+
+    /// Returns the `storage_shrink_upsert_unused_buffers_by_ratio` configuration parameter.
+    pub fn storage_shrink_upsert_unused_buffers_by_ratio(&self) -> usize {
+        *self.expect_value(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
@@ -2780,6 +2895,20 @@ impl SystemVars {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
     }
 
+    /// Returns the `enable_comment` configuration parameter.
+    pub fn enable_comment(&self) -> bool {
+        *self.expect_value(&ENABLE_COMMENT)
+    }
+
+    /// Returns the `min_timestamp_interval` configuration parameter.
+    pub fn min_timestamp_interval(&self) -> Duration {
+        *self.expect_value(&MIN_TIMESTAMP_INTERVAL)
+    }
+    /// Returns the `max_timestamp_interval` configuration parameter.
+    pub fn max_timestamp_interval(&self) -> Duration {
+        *self.expect_value(&MAX_TIMESTAMP_INTERVAL)
+    }
+
     pub fn logging_filter(&self) -> CloneableEnvFilter {
         self.expect_value(&*LOGGING_FILTER).clone()
     }
@@ -2794,6 +2923,17 @@ impl SystemVars {
 
     pub fn coord_slow_message_reporting_threshold_ms(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+    }
+
+    /// The dramatic name is to warn you not to call this unless you know what you're doing!
+    /// It should only be read during environmentd startup, to ensure that all replicas get the
+    /// same value.
+    ///
+    /// After startup, row decoding is controlled by the
+    /// `mz_repr::VARIABLE_LENGTH_ROW_ENCODING` global atomic variable.
+    #[allow(non_snake_case)]
+    pub fn variable_length_row_encoding_DANGEROUS(&self) -> bool {
+        *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
@@ -4298,6 +4438,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
+        || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -4320,6 +4461,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.

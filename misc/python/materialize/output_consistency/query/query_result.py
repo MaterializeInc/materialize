@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,

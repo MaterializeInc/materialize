@@ -9,8 +9,8 @@
 
 import random
 import time
+from collections.abc import Iterator
 from enum import Enum
-from typing import Iterator, Optional
 
 from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field
@@ -36,7 +36,7 @@ class TransactionDef:
         self.operations = operations
         self.size = size
 
-    def generate(self, fields: list[Field]) -> Iterator[Optional[Transaction]]:
+    def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         full_rowlist: list[RowList] = []
         for definition in self.operations:
             for i, rowlist in enumerate(definition.generate(fields)):
@@ -56,7 +56,7 @@ class RestartMz(TransactionDef):
         self.composition = composition
         self.probability = probability
 
-    def generate(self, fields: list[Field]) -> Iterator[Optional[Transaction]]:
+    def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
             self.composition.kill("materialized")
             time.sleep(1)

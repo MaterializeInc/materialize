@@ -228,7 +228,12 @@ pub fn describe(
                 .get_portal_unverified(name.as_str())
                 .map(|p| p.desc.clone())
             {
-                Some(desc) => Ok(desc),
+                Some(mut desc) => {
+                    // Parameters are already bound to the portal and will not be accepted through
+                    // FETCH.
+                    desc.param_types = Vec::new();
+                    Ok(desc)
+                }
                 None => Err(AdapterError::UnknownCursor(name.to_string())),
             }
         }

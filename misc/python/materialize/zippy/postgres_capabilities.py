@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.zippy.framework import Capability
 from materialize.zippy.watermarks import Watermarks
@@ -24,7 +23,7 @@ class PostgresTableExists(Capability):
 
     def __init__(self, name: str) -> None:
         self.name = name
-        self.has_pk: Optional[bool] = None
+        self.has_pk: bool | None = None
         self.watermarks = Watermarks()
 
     def get_watermarks(self) -> Watermarks:

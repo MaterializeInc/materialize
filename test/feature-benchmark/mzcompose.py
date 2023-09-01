@@ -42,10 +42,8 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach
-from materialize.mzcompose.services import Kafka as KafkaService
-from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
+    Cockroach,
     Materialized,
     Minio,
     Postgres,
@@ -54,6 +52,8 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.mzcompose.services import Kafka as KafkaService
+from materialize.mzcompose.services import Kgen as KgenService
 from materialize.version_list import VersionsFromDocs
 
 #

@@ -32,7 +32,8 @@ use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
-use crate::{IndexOracle, TransformArgs};
+use crate::optimizer_notices::{IndexTooWideForLiteralConstraints, OptimizerNotice};
+use crate::TransformCtx;
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
@@ -40,17 +41,17 @@ pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
     #[tracing::instrument(
-    target = "optimizer"
-    level = "trace",
-    skip_all,
-    fields(path.segment = "literal_constraints")
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "literal_constraints")
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, args.indexes);
+        let result = self.action(relation, ctx);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -60,10 +61,10 @@ impl LiteralConstraints {
     fn action(
         &self,
         relation: &mut MirRelationExpr,
-        indexes: &dyn IndexOracle,
+        transform_ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
-        relation.try_visit_mut_children(|e| self.action(e, indexes))?;
+        relation.try_visit_mut_children(|e| self.action(e, transform_ctx))?;
 
         if let MirRelationExpr::Get {
             id: Id::Global(id), ..
@@ -106,7 +107,7 @@ impl LiteralConstraints {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
-            let key_val = Self::detect_literal_constraints(&mfp, id, indexes);
+            let key_val = Self::detect_literal_constraints(&mfp, id, transform_ctx);
 
             match key_val {
                 None => {
@@ -190,37 +191,43 @@ impl LiteralConstraints {
         Ok(())
     }
 
-    /// Detects literal constraints in an MFP on top of a get of `id`.
-    /// For example, for `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`,
-    /// it returns `Some([f1, f2], [[3,5], [7,9]])`
+    /// Detects literal constraints in an MFP on top of a Get of `id`, and a matching index that can
+    /// be used to speed up the Filter of the MFP.
+    ///
+    /// For example, if there is an index on `(f1, f2)`, and the Filter is
+    /// `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`, it returns `Some([f1, f2], [[3,5], [7,9]])`.
+    ///
     /// We can use an index if each argument of the OR includes a literal constraint on each of the
     /// key fields of the index. Extra predicates inside the OR arguments are ok.
     fn detect_literal_constraints(
         mfp: &MapFilterProject,
-        id: GlobalId,
-        indexes: &dyn IndexOracle,
+        get_id: GlobalId,
+        transform_ctx: &mut TransformCtx,
     ) -> Option<(Vec<MirScalarExpr>, Vec<Row>)> {
-        // If each OR argument constrains each key field, then the following inner fn returns the
-        // constraining literal values as a Vec<Row>, where each Row corresponds to one OR argument,
-        // and each value in the Row corresponds to one key field.
-        //
-        // The bool shows whether we needed to inverse cast equalities to match them up with key
-        // fields. The inverse cast enables index usage when an implicit cast is wrapping a key
-        // field. E.g., if `a` is smallint, and the user writes `a = 5`, then HIR inserts an
-        // implicit cast: `smallint_to_integer(a) = 5`, which we invert to `a = 5`, where the
-        // `5` is a smallint literal. For more details on the inversion, see
-        // `invert_casts_on_expr_eq_literal_inner`.
-        fn each_or_arg_constrains_each_key_field(
-            key: &[MirScalarExpr],
-            or_args: Vec<MirScalarExpr>,
-        ) -> Option<(Vec<Row>, bool)> {
+        // Checks whether an index with the specified key can be used to speed up the given filter.
+        // See comment of `IndexMatch`.
+        fn match_index(key: &[MirScalarExpr], or_args: &Vec<MirScalarExpr>) -> IndexMatch {
+            if key.is_empty() {
+                // Nothing to do with an index that has an empty key.
+                return IndexMatch::UnusableNoSubset;
+            }
+            if !key.iter().all_unique() {
+                // This is a weird index. Why does it have duplicate key expressions?
+                return IndexMatch::UnusableNoSubset;
+            }
             let mut literal_values = Vec::new();
             let mut inv_cast_any = false;
+            // This starts with all key fields of the index.
+            // At the end, it will contain a subset S of index key fields such that if the index had
+            // only S as its key, then the index would be usable.
+            let mut usable_key_fields = key.iter().collect::<BTreeSet<_>>();
+            let mut usable = true;
             for or_arg in or_args {
                 let mut row = Row::default();
                 let mut packer = row.packer();
                 for key_field in key {
                     let and_args = or_arg.and_or_args(VariadicFunc::And);
+                    // Let's find a constraint for this key field
                     if let Some((literal, inv_cast)) = and_args
                         .iter()
                         .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
@@ -230,38 +237,115 @@ impl LiteralConstraints {
                         packer.push(literal.unpack_first());
                         inv_cast_any |= inv_cast;
                     } else {
-                        return None;
+                        // There is an `or_arg` where we didn't find a constraint for a key field,
+                        // so the index is unusable. Throw out the field from the usable fields.
+                        usable = false;
+                        usable_key_fields.remove(key_field);
+                        if usable_key_fields.is_empty() {
+                            return IndexMatch::UnusableNoSubset;
+                        }
                     }
                 }
                 literal_values.push(row);
             }
-            // We should deduplicate, because a constraint can be duplicated by
-            // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`. Here,
-            // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
-            // alter the meaning of the expression when evaluated as a filter, but if we extract
-            // those literals 2 times into `literal_values` then the Peek code will look up those
-            // keys from the index 2 times, leading to duplicate results.
-            literal_values.sort();
-            literal_values.dedup();
-            Some((literal_values, inv_cast_any))
+            if usable {
+                // We should deduplicate, because a constraint can be duplicated by
+                // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`:
+                // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
+                // alter the meaning of the expression when evaluated as a filter, but if we extract
+                // those literals 2 times into `literal_values` then the Peek code will look up
+                // those keys from the index 2 times, leading to duplicate results.
+                literal_values.sort();
+                literal_values.dedup();
+                IndexMatch::Usable(literal_values, inv_cast_any)
+            } else {
+                if usable_key_fields.is_empty() {
+                    IndexMatch::UnusableNoSubset
+                } else {
+                    IndexMatch::UnusableTooWide(
+                        usable_key_fields.into_iter().cloned().collect_vec(),
+                    )
+                }
+            }
         }
 
-        indexes
-            .indexes_on(id)
-            .filter_map(|key| {
-                let possible_vals = if key.is_empty() {
-                    None
-                } else {
-                    let or_args = Self::get_or_args(mfp);
-                    each_or_arg_constrains_each_key_field(key, or_args)
-                };
-                possible_vals.map(|(vals, inv_cast)| (key.to_owned(), vals, inv_cast))
+        let or_args = Self::get_or_args(mfp);
+
+        let index_matches = transform_ctx
+            .indexes
+            .indexes_with_id_on(get_id)
+            .map(|(index_id, key)| (index_id, key.to_owned(), match_index(key, &or_args)))
+            .collect_vec();
+
+        let result = index_matches
+            .iter()
+            .cloned()
+            .filter_map(|(_index_id, key, index_match)| match index_match {
+                IndexMatch::Usable(vals, inv_cast) => Some((key, vals, inv_cast)),
+                _ => None,
             })
             // Maximize:
             //  1. number of predicates that are sped using a single index.
             //  2. whether we are using a simpler index by having removed a cast from the key expr.
-            .max_by_key(|(key, _val, inv_cast)| (key.len(), *inv_cast))
-            .map(|(key, val, _inv_cast)| (key, val))
+            .max_by_key(|(key, _vals, inv_cast)| (key.len(), *inv_cast))
+            .map(|(key, vals, _inv_cast)| (key, vals));
+
+        if result.is_none() && !or_args.is_empty() {
+            // Let's see if we can give a hint to the user.
+            index_matches
+                .into_iter()
+                .for_each(|(index_id, index_key, index_match)| {
+                    match index_match {
+                        IndexMatch::UnusableTooWide(usable_subset) => {
+                            // see comment of `UnusableTooWide`
+                            assert!(!usable_subset.is_empty());
+                            // Determine literal values that we would get if the index was on
+                            // `usable_subset`.
+                            let literal_values = match match_index(&usable_subset, &or_args) {
+                                IndexMatch::Usable(literal_vals, _) => literal_vals,
+                                _ => unreachable!(), // `usable_subset` would make the index usable.
+                            };
+
+                            // Let's come up with a recommendation for what columns to index:
+                            // Intersect literal constraints across all OR args. (Which might
+                            // include columns that are NOT in this index, and therefore not in
+                            // `usable_subset`.)
+                            let recommended_key = or_args
+                                .iter()
+                                .map(|or_arg| {
+                                    let and_args = or_arg.and_or_args(VariadicFunc::And);
+                                    and_args
+                                        .iter()
+                                        .filter_map(|and_arg| and_arg.any_expr_eq_literal())
+                                        .collect::<BTreeSet<_>>()
+                                })
+                                .reduce(|fields1, fields2| {
+                                    fields1.intersection(&fields2).cloned().collect()
+                                })
+                                // The unwrap is safe because above we checked `!or_args.is_empty()`
+                                .unwrap()
+                                .into_iter()
+                                .collect_vec();
+
+                            transform_ctx.dataflow_metainfo.push_optimizer_notice_dedup(
+                                OptimizerNotice::IndexTooWideForLiteralConstraints(
+                                    IndexTooWideForLiteralConstraints {
+                                        index_id,
+                                        index_key,
+                                        usable_subset,
+                                        literal_values,
+                                        index_on_id: get_id,
+                                        recommended_key,
+                                    },
+                                ),
+                            )
+                        }
+                        _ => (),
+                    }
+                });
+        }
+
+        result
     }
 
     /// Removes the expressions that [LiteralConstraints::detect_literal_constraints] found, if
@@ -647,4 +731,27 @@ impl LiteralConstraints {
         }
         Ok(sum)
     }
+}
+
+/// Whether an index is usable to speed up a Filter with literal constraints.
+#[derive(Clone)]
+enum IndexMatch {
+    /// The index is usable, that is, each OR argument constrains each key field.
+    ///
+    /// The `Vec<Row>` has the constraining literal values, where each Row corresponds to one OR
+    /// argument, and each value in the Row corresponds to one key field.
+    ///
+    /// The `bool` indicates whether we needed to inverse cast equalities to match them up with key
+    /// fields. The inverse cast enables index usage when an implicit cast is wrapping a key field.
+    /// E.g., if `a` is smallint, and the user writes `a = 5`, then HIR inserts an implicit cast:
+    /// `smallint_to_integer(a) = 5`, which we invert to `a = 5`, where the `5` is a smallint
+    /// literal. For more details on the inversion, see `invert_casts_on_expr_eq_literal_inner`.
+    Usable(Vec<Row>, bool),
+    /// The index is unusable. However, there is a subset of key fields such that if the index would
+    /// be only on this subset, then it would be usable.
+    /// Note: this Vec is never empty. (If it were empty, then we'd get `UnusableNoSubset` instead.)
+    UnusableTooWide(Vec<MirScalarExpr>),
+    /// The index is unusable. Moreover, none of its key fields could be used as an alternate index
+    /// to speed up this filter.
+    UnusableNoSubset,
 }

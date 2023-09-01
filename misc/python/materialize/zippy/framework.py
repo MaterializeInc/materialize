@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import random
+from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import Optional, Sequence, TypeVar, Union
+from typing import TypeVar, Union
 
 from materialize.mzcompose import Composition
 
@@ -75,7 +76,7 @@ class Capabilities:
 
     def get_free_capability_name(
         self, capability: type[T], max_objects: int
-    ) -> Optional[str]:
+    ) -> str | None:
         all_object_names = [
             capability.format_str().format(i) for i in range(0, max_objects)
         ]
@@ -101,7 +102,7 @@ class Action:
         pass
 
     @classmethod
-    def requires(cls) -> Union[set[type[Capability]], list[set[type[Capability]]]]:
+    def requires(cls) -> set[type[Capability]] | list[set[type[Capability]]]:
         """Compute the capability classes that this action requires."""
         return set()
 
@@ -133,7 +134,7 @@ class ActionFactory:
         assert False
 
     @classmethod
-    def requires(cls) -> Union[set[type[Capability]], list[set[type[Capability]]]]:
+    def requires(cls) -> set[type[Capability]] | list[set[type[Capability]]]:
         """Compute the capability classes that this Action Factory requires."""
         return set()
 

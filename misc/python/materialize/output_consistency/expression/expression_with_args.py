@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -90,7 +90,7 @@ class ExpressionWithArgs(Expression):
 
         return self.return_type_spec.resolve_type_category(input_type_hints)
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         return self.operation.try_resolve_exact_data_type(self.args)
 
     def __str__(self) -> str:
@@ -147,7 +147,7 @@ class ExpressionWithArgs(Expression):
 
 
 def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
-    mutual_storage_layout: Optional[ValueStorageLayout] = None
+    mutual_storage_layout: ValueStorageLayout | None = None
 
     for arg in args:
         if (

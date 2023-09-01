@@ -10,7 +10,6 @@
 import random
 import threading
 from copy import copy
-from typing import Optional
 
 from materialize.parallel_workload.data_type import DATA_TYPES, DataType
 from materialize.parallel_workload.executor import Executor
@@ -36,7 +35,7 @@ class Column:
     data_type: type[DataType]
     db_object: "DBObject"
     nullable: bool
-    default: Optional[str]
+    default: str | None
     _name: str
 
     def __init__(
@@ -109,19 +108,19 @@ class Table(DBObject):
 class View(DBObject):
     view_id: int
     base_object: DBObject
-    base_object2: Optional[DBObject]
+    base_object2: DBObject | None
     columns: list[Column]
     source_columns: list[Column]
     materialized: bool
-    join_column: Optional[Column]
-    join_column2: Optional[Column]
+    join_column: Column | None
+    join_column2: Column | None
 
     def __init__(
         self,
         rng: random.Random,
         view_id: int,
         base_object: DBObject,
-        base_object2: Optional[DBObject],
+        base_object2: DBObject | None,
     ):
         self.view_id = view_id
         self.base_object = base_object
@@ -291,7 +290,7 @@ class Database:
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = rng.choice(self.tables)
-            base_object2: Optional[Table] = rng.choice(self.tables)
+            base_object2: Table | None = rng.choice(self.tables)
             if rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
             view = View(rng, i, base_object, base_object2)

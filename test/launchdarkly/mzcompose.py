@@ -11,7 +11,7 @@ from itertools import chain
 from os import environ
 from textwrap import dedent
 from time import sleep
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid1
 
 import launchdarkly_api  # type: ignore
@@ -279,8 +279,8 @@ class LaunchDarklyClient:
     def update_targeting(
         self,
         feature_flag_key: str,
-        on: Optional[bool] = None,
-        contextTargets: Optional[list[Any]] = None,
+        on: bool | None = None,
+        contextTargets: list[Any] | None = None,
     ) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)

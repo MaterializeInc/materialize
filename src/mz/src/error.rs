@@ -99,4 +99,7 @@ pub enum Error {
     /// but `pg_isready` fails
     #[error("The region is not ready to accept SQL statements. `pg_isready` failed.")]
     NotPgReadyError,
+    /// Error that occurs when attempting to find the home directory.
+    #[error("An error occurred while trying to find the home directory.")]
+    HomeDirNotFoundError,
 }

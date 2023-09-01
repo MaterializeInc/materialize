@@ -13,7 +13,6 @@ import time
 from datetime import datetime
 from textwrap import dedent
 from threading import Thread
-from typing import Optional
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -2040,7 +2039,7 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_initial_output_duration(self, collection_id: str) -> Optional[float]:
+    def get_initial_output_duration(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
         values = [
             v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k

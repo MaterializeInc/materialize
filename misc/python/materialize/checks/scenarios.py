@@ -8,21 +8,25 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import Optional
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import Executor
-from materialize.checks.mzcompose_actions import ConfigureMz
+from materialize.checks.mzcompose_actions import (
+    ConfigureMz,
+    KillClusterdCompute,
+    KillMz,
+    StartClusterdCompute,
+    StartMz,
+    UseClusterdCompute,
+)
 from materialize.checks.mzcompose_actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
-from materialize.checks.mzcompose_actions import KillClusterdCompute
 from materialize.checks.mzcompose_actions import (
     KillClusterdStorage as KillClusterdStorageAction,
 )
-from materialize.checks.mzcompose_actions import KillMz
 from materialize.checks.mzcompose_actions import (
     RestartCockroach as RestartCockroachAction,
 )
@@ -32,17 +36,12 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
 )
-from materialize.checks.mzcompose_actions import (
-    StartClusterdCompute,
-    StartMz,
-    UseClusterdCompute,
-)
 from materialize.util import MzVersion
 
 
 class Scenario:
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: Optional[str] = None
+        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
     ) -> None:
         self._checks = checks
         self.executor = executor

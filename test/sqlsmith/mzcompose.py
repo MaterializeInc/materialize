@@ -13,7 +13,7 @@ import random
 import time
 from datetime import datetime
 from threading import Thread
-from typing import Any, FrozenSet
+from typing import Any
 
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized
@@ -256,7 +256,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: dict[FrozenSet[tuple[str, Any]], list[dict[str, Any]]] = {}
+    new_errors: dict[frozenset[tuple[str, Any]], list[dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(

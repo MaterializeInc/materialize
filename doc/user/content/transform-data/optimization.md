@@ -294,6 +294,87 @@ The following are the possible index usage types:
 - `delta join lookup`: Materialize will use the index for a non-first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). This means that, in an ad hoc query, the join will perform only lookups into the index.
 - `fast path limit`: When a [fast path](/sql/explain/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
 
+## Query hints
+
+Materialize has at present one important [query hint]: the `EXPECTED GROUP SIZE`. This hint applies to indexed or materialized views that need to incrementally maintain [`MIN`], [`MAX`], or [Top K] queries, as specified, e.g., by `GROUP BY`, `LATERAL`, or `DISTINCT ON`. Maintaining these queries while delivering low latency result updates is demanding in terms of main memory. This is because Materialize builds a hierarchy of aggregations so that data can be physically partitioned into small groups. By having only small groups at each level of the hierarchy, we can make sure that recomputing aggregations is not slowed down by skew in the sizes of the original query groups.
+
+The number of levels needed in the hierarchical scheme is by default set assuming that there may be large query groups in the input data. By specifying the `EXPECTED GROUP SIZE`, it is possible to refine this assumption, allowing Materialize to build a hierarchy with fewer levels and lower memory consumption without sacrificing update latency.
+
+Consider the previous example with the collection `sections`. Maintenance of the maximum `course_id` per `teacher` can be achieved with a materialized view:
+
+```sql
+CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
+SELECT teacher_id, MAX(course_id)
+FROM sections
+GROUP BY teacher_id;
+```
+
+If the largest number of `course_id` values that are allocated to a single `teacher_id` is known, then this number can be provided as the `EXPECTED GROUP SIZE`. For the query above, it is possible to get an estimate for this number by:
+
+```sql
+SELECT MAX(course_count)
+FROM (
+  SELECT teacher_id, COUNT(*) course_count
+  FROM sections
+  GROUP BY teacher_id
+);
+```
+
+However, the estimate is based only on data that is already present in the system. So taking into account how much this largest number could expand is critical to avoid issues with update latency after tuning the `EXPECTED GROUP SIZE`.
+
+For our example, let's suppose that we determined the largest number of courses per teacher to be `1000`. Then, the original definition of `max_course_id_per_teacher` can be revised to include the `EXPECTED GROUP SIZE` query hint as follows:
+
+```sql
+CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
+SELECT teacher_id, MAX(course_id)
+FROM sections
+GROUP BY teacher_id
+OPTIONS (EXPECTED GROUP SIZE = 1000)
+```
+
+The same hint can be provided in [Top K] query patterns specified by `DISTINCT ON` or `LATERAL`. As examples, consider that we wish not to compute the maximum `course_id`, but rather the `id` of the section of this top course. This computation can be incrementally maintained by the following materialized view:
+
+```sql
+CREATE MATERIALIZED VIEW section_of_top_course_per_teacher AS
+SELECT DISTINCT ON(teacher_id) teacher_id, id AS section_id
+FROM sections
+OPTIONS (EXPECTED GROUP SIZE = 1000)
+ORDER BY teacher_id ASC, course_id DESC;
+```
+
+In the above examples, we see that the `EXPECTED GROUP SIZE` hint is always positioned in an `OPTIONS` clause after a `GROUP BY` clause, but before an `ORDER BY`, as captured by the [`SELECT` syntax]. However, in the case of Top K using a `LATERAL` subquery and `LIMIT`, the hint is specified in the subquery. For instance, the following materialized view illustrates how to incrementally maintain the top-3 section `id`s ranked by `course_id` for each teacher:
+
+```sql
+CREATE MATERIALIZED VIEW sections_of_top_3_courses_per_teacher AS
+SELECT id AS teacher_id, section_id
+FROM teachers grp,
+     LATERAL (SELECT id AS section_id
+              FROM sections
+              WHERE teacher_id = grp.id
+              OPTIONS (EXPECTED GROUP SIZE = 1000)
+              ORDER BY course_id DESC
+              LIMIT 3);
+```
+
+For indexed and materialized views that have already been created without specifying an `EXPECTED GROUP SIZE` query hint, Materialize includes an introspection view, [`mz_internal.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the `EXPECTED GROUP SIZE` could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
+
+```sql
+SELECT dataflow_name, region_name, levels, to_cut, hint
+FROM mz_internal.mz_expected_group_size_advice
+ORDER BY dataflow_name, region_name;
+```
+
+The column `hint` provides the estimated value to be provided to the `EXPECTED GROUP SIZE`.
+
 ## Learn more
 
 Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
+
+[query hint]: /sql/select/#query-hints
+[arrangements]: /get-started/arrangements/#arrangements
+[`MIN`]: /sql/functions/#min
+[`MAX`]: /sql/functions/#max
+[Top K]: /transform-data/patterns/top-k
+[`mz_internal.mz_expected_group_size_advice`]: /sql/system-catalog/mz_internal/#mz_expected_group_size_advice
+[dataflows]: /get-started/arrangements/#dataflows
+[`SELECT` syntax]: /sql/select/#syntax

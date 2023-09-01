@@ -152,6 +152,8 @@ impl Severity {
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
+            AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
+            AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
         }
     }
 }

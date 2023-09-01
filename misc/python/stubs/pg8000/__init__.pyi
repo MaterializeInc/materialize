@@ -7,20 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections import deque
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from ssl import SSLContext
 from types import TracebackType
-from typing import IO, Any, AnyStr, ContextManager, Deque, Optional, Sequence
+from typing import IO, Any, AnyStr
 
 class Connection:
     autocommit: bool
-    notices: Deque
+    notices: deque
     def cursor(self) -> Cursor: ...
     def close(self) -> None: ...
-    def run(self, sql: str, stream: Optional[IO[AnyStr]]) -> None: ...
+    def run(self, sql: str, stream: IO[AnyStr] | None) -> None: ...
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
 
-class Cursor(ContextManager):
+class Cursor(AbstractContextManager):
     rowcount: int
     connection: Connection
     _c: Connection
@@ -30,17 +33,17 @@ class Cursor(ContextManager):
     def fetchone(self) -> Sequence[Any]: ...
     def __exit__(
         self,
-        typ: Optional[type[BaseException]],
-        value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        typ: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None: ...
 
 def connect(
     host: str = ...,
     port: int = ...,
     user: str = ...,
-    database: Optional[str] = ...,
-    password: Optional[str] = ...,
-    timeout: Optional[int] = ...,
-    ssl_context: Optional[SSLContext] = ...,
+    database: str | None = ...,
+    password: str | None = ...,
+    timeout: int | None = ...,
+    ssl_context: SSLContext | None = ...,
 ) -> Connection: ...

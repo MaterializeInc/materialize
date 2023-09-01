@@ -34,7 +34,7 @@ use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -274,6 +274,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        variable_length_row_encoding: bool,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -306,7 +307,10 @@ where
         });
 
         let dummy_logging_config = Default::default();
-        instance.send(ComputeCommand::CreateInstance(dummy_logging_config));
+        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
+            logging_config: dummy_logging_config,
+            variable_length_row_encoding,
+        }));
 
         instance
     }
@@ -799,15 +803,15 @@ where
     /// Cancels an existing peek request.
     pub fn cancel_peek(&mut self, uuid: Uuid) {
         let Some(peek) = self.compute.peeks.get_mut(&uuid) else {
-                tracing::warn!("did not find pending peek for {uuid}");
-                return;
-            };
+            tracing::warn!("did not find pending peek for {uuid}");
+            return;
+        };
 
         // Canceled peeks should not be further responded to.
         let Some(otel_ctx) = peek.otel_ctx.take() else {
-                tracing::warn!("peek {uuid} has already been served");
-                return;
-            };
+            tracing::warn!("peek {uuid} has already been served");
+            return;
+        };
 
         let response = PeekResponse::Canceled;
         let duration = peek.requested_at.elapsed();
@@ -1133,14 +1137,14 @@ where
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
         let Ok(coll) = self.compute.collection(id) else {
-                tracing::warn!(
-                    ?replica_id,
-                    "Frontier update for unknown collection {id}: {:?}",
-                    new_frontier.elements(),
-                );
-                tracing::error!("Replica reported an untracked collection frontier");
-                return;
-            };
+            tracing::warn!(
+                ?replica_id,
+                "Frontier update for unknown collection {id}: {:?}",
+                new_frontier.elements(),
+            );
+            tracing::error!("Replica reported an untracked collection frontier");
+            return;
+        };
 
         if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
             if !PartialOrder::less_equal(old_frontier, &new_frontier) {

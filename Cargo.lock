@@ -2740,6 +2740,7 @@ dependencies = [
  "chrono",
  "http",
  "percent-encoding",
+ "schemars",
  "serde",
  "serde-value",
  "serde_json",
@@ -3012,9 +3013,8 @@ dependencies = [
 
 [[package]]
 name = "librocksdb-sys"
-version = "0.11.0+8.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3386f101bcb4bd252d8e9d2fb41ec3b0862a15a62b478c355b2982efa469e3e"
+version = "0.11.0+8.3.2"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -3351,7 +3351,6 @@ dependencies = [
 name = "mz"
 version = "0.1.3"
 dependencies = [
- "anyhow",
  "assert_cmd",
  "axum",
  "clap",
@@ -3458,6 +3457,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uncased",
+ "url",
  "uuid",
  "workspace-hack",
 ]
@@ -3695,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.68.0-dev"
+version = "0.69.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3847,7 +3847,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.68.0-dev"
+version = "0.69.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4402,7 +4402,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.68.0-dev"
+version = "0.69.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4658,6 +4658,7 @@ dependencies = [
  "anyhow",
  "bitflags 1.3.2",
  "bytes",
+ "cfg-if",
  "chrono",
  "chrono-tz",
  "columnation",
@@ -4719,6 +4720,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bincode",
+ "derivative",
  "itertools",
  "mz-ore",
  "mz-proto",
@@ -6794,8 +6796,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb6f170a4041d50a0ce04b0d2e14916d6ca863ea2e422689a5b694395d299ffe"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
 dependencies = [
  "libc",
  "librocksdb-sys",

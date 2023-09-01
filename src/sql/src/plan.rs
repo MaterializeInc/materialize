@@ -48,6 +48,7 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
+use mz_storage_client::types::connections::inline::ReferencedConnection;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -61,8 +62,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -115,6 +116,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
+    Comment(CommentPlan),
     DiscardTemp,
     DiscardAll,
     DropObjects(DropObjectsPlan),
@@ -217,6 +219,7 @@ impl Plan {
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
+            StatementKind::Comment => vec![PlanKind::Comment],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
@@ -293,6 +296,7 @@ impl Plan {
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
+            Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
             Plan::DropObjects(plan) => match plan.object_type {
@@ -586,7 +590,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -797,7 +801,6 @@ pub struct ExplainPlanPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
-    pub no_errors: bool,
     pub explainee: Explainee,
 }
 
@@ -808,11 +811,20 @@ pub enum Explainee {
     MaterializedView(GlobalId),
     /// An existing index.
     Index(GlobalId),
-    /// The object to be explained is a one-off query and may or may not served
-    /// using a dataflow.
+    /// The object to be explained is a one-off query and may or may not be
+    /// served using a dataflow.
+    /// The object to be explained is a one-off query.
+    ///
+    /// THe query may be served using a dataflow or using a FastPathPlan.
+    ///
+    /// Queries that have their `broken` flag set are expected to cause a panic
+    /// in the optimizer code. In this case, pipeline execution will stop, but
+    /// panic will be intercepted and will not propagate to the caller. This is
+    /// useful when debugging queries that cause panics.
     Query {
         raw_plan: HirRelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
+        broken: bool,
     },
 }
 
@@ -979,6 +991,7 @@ pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
     pub sql: String,
+    pub params: Params,
 }
 
 #[derive(Debug)]
@@ -1082,6 +1095,18 @@ pub struct ReassignOwnedPlan {
     pub reassign_ids: Vec<ObjectId>,
 }
 
+#[derive(Debug)]
+pub struct CommentPlan {
+    /// The object that this comment is associated with.
+    pub object_id: CommentObjectId,
+    /// A sub-component of the object that this comment is associated with, e.g. a column.
+    ///
+    /// TODO(parkmycar): Make this a newtype ColumnPos that accounts for SQL's 1-indexing.
+    pub sub_component: Option<usize>,
+    /// The comment itself. If `None` that indicates we should clear the existing comment.
+    pub comment: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
@@ -1106,12 +1131,15 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
-    Webhook(Option<WebhookValidation>),
+    Webhook {
+        validate_using: Option<WebhookValidation>,
+        headers: WebhookHeaders,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub struct Ingestion {
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<ReferencedConnection>,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
@@ -1131,6 +1159,30 @@ pub struct WebhookValidation {
     pub secrets: Vec<WebhookValidationSecret>,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaders {
+    /// Optionally include a column named `headers` whose content is possibly filtered.
+    pub header_column: Option<WebhookHeaderFilters>,
+    /// The column index to provide the specific request header, and whether to provide it as bytes.
+    pub mapped_headers: BTreeMap<usize, (String, bool)>,
+}
+
+impl WebhookHeaders {
+    /// Returns the number of columns needed to represent our headers.
+    pub fn num_columns(&self) -> usize {
+        let header_column = self.header_column.as_ref().map(|_| 1).unwrap_or(0);
+        let mapped_headers = self.mapped_headers.len();
+
+        header_column + mapped_headers
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaderFilters {
+    pub block: BTreeSet<String>,
+    pub allow: BTreeSet<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`GlobalId`].
@@ -1144,7 +1196,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]
@@ -1157,7 +1209,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 

@@ -10,6 +10,7 @@
 //! VpcEndpoint custom resource, to be reconciled into an AWS VPC Endpoint by the
 //! environment-controller.
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ pub mod v1 {
         // VPC Endpoint Service wrong, or we've otherwise failed to create the VPC Endpoint.
         pub vpc_endpoint_id: Option<String>,
         pub state: Option<VpcEndpointState>,
+        pub conditions: Option<Vec<Condition>>,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]

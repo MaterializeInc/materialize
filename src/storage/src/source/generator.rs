@@ -13,15 +13,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::{
-    Generator, GeneratorMessageType, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
-    SourceTimestamp,
+    Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -30,7 +29,6 @@ use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
-pub mod clock;
 mod counter;
 mod datums;
 mod marketing;
@@ -41,7 +39,6 @@ pub use counter::Counter;
 pub use datums::Datums;
 pub use tpch::Tpch;
 
-use self::clock::Clock;
 use self::marketing::Marketing;
 
 pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Generator> {
@@ -68,7 +65,6 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
             // completely.
             tick: Duration::from_micros(tick_micros.unwrap_or(0)),
         }),
-        LoadGenerator::Clock => Box::new(Clock),
     }
 }
 
@@ -114,42 +110,44 @@ impl SourceRender for LoadGeneratorSourceConnection {
                     .map(MzOffset::decode_row),
             );
 
-            let Some(mut offset) = resume_upper.into_option() else {
-                return
+            let Some(resume_offset) = resume_upper.into_option() else {
+                return;
             };
-            cap.downgrade(&offset);
 
-            let mut rows = as_generator(&self.load_generator, self.tick_micros)
-                .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
-
-            // Skip forward to the requested offset.
-            let tx_count = usize::cast_from(offset.offset);
-            let txns = rows
-                .by_ref()
-                .filter(|(_, typ, _, _)| matches!(typ, GeneratorMessageType::Finalized))
-                .take(tx_count)
-                .count();
-            assert_eq!(txns, tx_count, "produced wrong number of transactions");
+            let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(
+                mz_ore::now::SYSTEM_TIME.clone(),
+                None,
+                resume_offset,
+            );
 
             let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
 
-            while let Some((output, typ, value, diff)) = rows.next() {
-                let message = (
-                    output,
-                    Ok(SourceMessage {
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    }),
-                );
-
-                data_output.give(&cap, (message, offset, diff)).await;
-
-                if matches!(typ, GeneratorMessageType::Finalized) {
-                    offset += 1;
-                    cap.downgrade(&offset);
-                    tokio::time::sleep(tick).await;
+            while let Some((output, event)) = rows.next() {
+                match event {
+                    Event::Message(offset, (value, diff)) => {
+                        let message = (
+                            output,
+                            Ok(SourceMessage {
+                                upstream_time_millis: None,
+                                key: (),
+                                value,
+                                headers: None,
+                            }),
+                        );
+                        data_output.give(&cap, (message, offset, diff)).await;
+                    }
+                    Event::Progress(Some(offset)) => {
+                        cap.downgrade(&offset);
+                        // We only sleep if we have surpassed the resume offset so that we can
+                        // quickly go over any historical updates that a generator might choose to
+                        // emit.
+                        // TODO(petrosagg): Remove the sleep below and make generators return an
+                        // async stream so that they can drive the rate of production directly
+                        if resume_offset < offset {
+                            tokio::time::sleep(tick).await;
+                        }
+                    }
+                    Event::Progress(None) => return,
                 }
             }
         });

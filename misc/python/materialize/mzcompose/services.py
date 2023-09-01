@@ -10,7 +10,6 @@
 import os
 import random
 import tempfile
-from typing import Optional, Union
 
 import toml
 
@@ -46,8 +45,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "storage_persist_sink_minimum_batch_updates": "100",
     "persist_pubsub_push_diff_enabled": "true",
     "persist_pubsub_client_enabled": "true",
-    "persist_stats_filter_enabled": "true",
-    "persist_stats_collection_enabled": "true",
     "persist_stats_audit_percent": "100",
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
@@ -58,6 +55,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_disk_cluster_replicas": "true",
     "statement_logging_max_sample_rate": "1.0",
     "statement_logging_default_sample_rate": "1.0",
+    # This needs to be kept in sync with the --variable-length-row-encoding
+    # flag to testdrive.
+    "variable_length_row_encoding": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
@@ -85,24 +85,24 @@ class Materialized(Service):
     def __init__(
         self,
         name: str = "materialized",
-        image: Optional[str] = None,
+        image: str | None = None,
         environment_extra: list[str] = [],
         volumes_extra: list[str] = [],
         depends_on: list[str] = [],
-        memory: Optional[str] = None,
+        memory: str | None = None,
         options: list[str] = [],
-        persist_blob_url: Optional[str] = None,
+        persist_blob_url: str | None = None,
         default_size: int = Size.DEFAULT_SIZE,
-        environment_id: Optional[str] = None,
+        environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_cockroach: bool = False,
         external_minio: bool = False,
         unsafe_mode: bool = True,
-        restart: Optional[str] = None,
+        restart: str | None = None,
         use_default_volumes: bool = True,
-        ports: Optional[list[str]] = None,
-        system_parameter_defaults: Optional[dict[str, str]] = None,
-        additional_system_parameter_defaults: Optional[dict[str, str]] = None,
+        ports: list[str] | None = None,
+        system_parameter_defaults: dict[str, str] | None = None,
+        additional_system_parameter_defaults: dict[str, str] | None = None,
         soft_assertions: bool = True,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {
@@ -257,9 +257,9 @@ class Clusterd(Service):
     def __init__(
         self,
         name: str = "clusterd",
-        image: Optional[str] = None,
+        image: str | None = None,
         environment_extra: list[str] = [],
-        memory: Optional[str] = None,
+        memory: str | None = None,
         options: list[str] = [],
     ) -> None:
         environment = [
@@ -329,7 +329,7 @@ class Kafka(Service):
         name: str = "kafka",
         image: str = "confluentinc/cp-kafka",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        port: Union[str, int] = 9092,
+        port: str | int = 9092,
         allow_host_ports: bool = False,
         auto_create_topics: bool = False,
         broker_id: int = 1,
@@ -384,9 +384,9 @@ class Redpanda(Service):
         name: str = "redpanda",
         version: str = "v23.1.9",
         auto_create_topics: bool = False,
-        image: Optional[str] = None,
-        aliases: Optional[list[str]] = None,
-        ports: Optional[list[int]] = None,
+        image: str | None = None,
+        aliases: list[str] | None = None,
+        ports: list[int] | None = None,
     ) -> None:
         if image is None:
             image = f"vectorized/redpanda:{version}"
@@ -532,11 +532,11 @@ class Cockroach(Service):
         self,
         name: str = "cockroach",
         aliases: list[str] = ["cockroach"],
-        image: Optional[str] = None,
-        command: Optional[list[str]] = None,
+        image: str | None = None,
+        command: list[str] | None = None,
         setup_materialize: bool = True,
         in_memory: bool = False,
-        healthcheck: Optional[ServiceHealthcheck] = None,
+        healthcheck: ServiceHealthcheck | None = None,
         # Workaround for #19809, should be "no" otherwise
         restart: str = "on-failure:5",
     ):
@@ -587,7 +587,7 @@ class Postgres(Service):
         self,
         name: str = "postgres",
         mzbuild: str = "postgres",
-        image: Optional[str] = None,
+        image: str | None = None,
         port: int = 5432,
         command: list[str] = [
             "postgres",
@@ -806,23 +806,23 @@ class Testdrive(Service):
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
         materialize_params: dict[str, str] = {},
         kafka_url: str = "kafka:9092",
-        kafka_default_partitions: Optional[int] = None,
-        kafka_args: Optional[str] = None,
+        kafka_default_partitions: int | None = None,
+        kafka_args: str | None = None,
         schema_registry_url: str = "http://schema-registry:8081",
         no_reset: bool = False,
         default_timeout: str = "120s",
-        seed: Optional[int] = None,
+        seed: int | None = None,
         consistent_seed: bool = False,
-        validate_postgres_stash: Optional[str] = None,
-        entrypoint: Optional[list[str]] = None,
+        validate_postgres_stash: str | None = None,
+        entrypoint: list[str] | None = None,
         entrypoint_extra: list[str] = [],
-        environment: Optional[list[str]] = None,
+        environment: list[str] | None = None,
         volumes_extra: list[str] = [],
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
-        aws_region: Optional[str] = None,
-        aws_endpoint: Optional[str] = "http://localstack:4566",
+        aws_region: str | None = None,
+        aws_endpoint: str | None = "http://localstack:4566",
     ) -> None:
         if environment is None:
             environment = [
@@ -854,6 +854,7 @@ class Testdrive(Service):
                 f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
+                "--variable-length-row-encoding",
             ]
 
         if aws_region:
@@ -1002,7 +1003,7 @@ class SshBastionHost(Service):
     def __init__(
         self,
         name: str = "ssh-bastion-host",
-        max_startups: Optional[str] = None,
+        max_startups: str | None = None,
     ) -> None:
         setup_path = os.path.relpath(
             MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",

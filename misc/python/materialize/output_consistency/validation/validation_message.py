@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from enum import Enum
-from typing import Optional
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -28,7 +27,7 @@ class ValidationMessage:
     def __init__(
         self,
         message: str,
-        description: Optional[str] = None,
+        description: str | None = None,
     ):
         self.message = message
         self.description = description
@@ -38,8 +37,8 @@ class ValidationRemark(ValidationMessage):
     def __init__(
         self,
         message: str,
-        description: Optional[str] = None,
-        sql: Optional[str] = None,
+        description: str | None = None,
+        sql: str | None = None,
     ):
         super().__init__(message, description)
         self.sql = sql
@@ -54,9 +53,9 @@ class ValidationWarning(ValidationMessage):
     def __init__(
         self,
         message: str,
-        description: Optional[str] = None,
-        strategy: Optional[EvaluationStrategy] = None,
-        sql: Optional[str] = None,
+        description: str | None = None,
+        strategy: EvaluationStrategy | None = None,
+        sql: str | None = None,
     ):
         super().__init__(message, description)
         self.strategy = strategy
@@ -80,11 +79,11 @@ class ValidationError(ValidationMessage):
         strategy2: EvaluationStrategy,
         value1: str,
         value2: str,
-        sql1: Optional[str] = None,
-        sql2: Optional[str] = None,
-        description: Optional[str] = None,
-        col_index: Optional[int] = None,
-        location: Optional[str] = None,
+        sql1: str | None = None,
+        sql2: str | None = None,
+        description: str | None = None,
+        col_index: int | None = None,
+        location: str | None = None,
     ):
         super().__init__(message, description)
         self.query_execution = query_execution

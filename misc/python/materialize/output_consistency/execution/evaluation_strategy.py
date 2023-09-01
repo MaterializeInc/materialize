@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from enum import Enum
-from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
@@ -80,14 +79,14 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> list[str]:
         raise NotImplementedError
 
     def get_db_object_name(
         self,
         storage_layout: ValueStorageLayout,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> str:
         if storage_layout == ValueStorageLayout.ANY:
             raise RuntimeError(f"{storage_layout} has not been resolved to a real one")
@@ -130,7 +129,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout, override_db_object_name
@@ -169,7 +168,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout, override_db_object_name

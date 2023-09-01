@@ -31,13 +31,13 @@ for all processes of all extant cluster replicas.
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics -->
-| Field               | Type         | Meaning                                              |
-| ------------------- | ------------ | --------                                             |
-| `replica_id`        | [`text`]     | The ID of a cluster replica.                         |
-| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica. |
-| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core. |
-| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                     |
-| `disk_bytes`        | [`uint8`]    | Currently null. Reserved for later use.              |
+| Field               | Type         | Meaning                                                                                                                                                      |
+| ------------------- | ------------ | --------                                                                                                                                                     |
+| `replica_id`        | [`text`]     | The ID of a cluster replica.                                                                                                                                 |
+| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
+| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
+| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
 
 ### `mz_cluster_replica_sizes`
 
@@ -45,20 +45,20 @@ The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
 (e.g. "xlarge") to physical sizes (number of processes, and CPU and memory allocations per process).
 
 {{< warning >}}
-The values in this table may change at any time, and users should not rely on
-them for any kind of capacity planning.
+The values in this table may change at any time. You should not rely on them for
+any kind of capacity planning.
 {{< /warning >}}
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_sizes -->
-| Field                  | Type        | Meaning                                                       |
-|------------------------|-------------|---------------------------------------------------------------|
-| `size`                 | [`text`]    | The human-readable replica size.                              |
-| `processes`            | [`uint8`]   | The number of processes in the replica.                       |
-| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.            |
-| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core. |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core. |
-| `disk_bytes`           | [`uint8`]   | Currently null. Reserved for later use.                       |
-| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.              |
+| Field                  | Type        | Meaning                                                                                                                                                      |
+|------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
+| `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
+| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
+| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
+| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
+| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
 ### `mz_cluster_links`
 
@@ -102,13 +102,13 @@ for all processes of all extant cluster replicas, as a percentage of the total r
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_utilization -->
-| Field            | Type                 | Meaning                                                    |
-|------------------|----------------------|------------------------------------------------------------|
-| `replica_id`     | [`text`]             | The ID of a cluster replica.                               |
-| `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.       |
-| `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation. |
-| `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation. |
-| `disk_percent`   | [`double precision`] | Currently null. Reserved for later use.                    |
+| Field            | Type                 | Meaning                                                                                                                                                                                |
+|------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `replica_id`     | [`text`]             | The ID of a cluster replica.                                                                                                                                                           |
+| `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
+| `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
+| `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
 
 ### `mz_cluster_replica_heartbeats`
 
@@ -601,17 +601,18 @@ these statistics. They are occasionally reset to zero as internal components of
 the system are restarted.
 
 <!-- RELATION_SPEC mz_internal.mz_source_statistics -->
-| Field                  | Type        | Meaning                                                                                                                                                                                                                                                                             |
-| ---------------------- |-------------| --------                                                                                                                                                                                                                                                                            |
-| `id`                   | [`text`]    | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
-| `worker_id`            | [`uint8`]   | The ID of the worker thread.                                                                                                                                                                                                                                                        |
-| `snapshot_committed`   | [`boolean`] | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `messages_received`    | [`uint8`]   | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
-| `updates_staged`       | [`uint8`]   | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
-| `updates_committed`    | [`uint8`]   | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `bytes_received`       | [`uint8`]   | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
-| `envelope_state_bytes` | [`uint8`]   | The number of bytes stored in the source envelope state.                                                                       |
-| `envelope_state_count` | [`uint8`]   | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
+| -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
+| `id`                     | [`text`]    | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
+| `worker_id`              | [`uint8`]   | The ID of the worker thread.                                                                                                                                                                                                                                                        |
+| `snapshot_committed`     | [`boolean`] | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
+| `messages_received`      | [`uint8`]   | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `updates_staged`         | [`uint8`]   | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
+| `updates_committed`      | [`uint8`]   | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
+| `bytes_received`         | [`uint8`]   | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `envelope_state_bytes`   | [`uint8`]   | The number of bytes stored in the source envelope state.                                                                       |
+| `envelope_state_count`   | [`uint8`]   | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| `rehydration_latency_ms` | [`uint8`]   | The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. |
 
 ### `mz_source_statuses`
 
@@ -945,18 +946,19 @@ The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the
 The `mz_expected_group_size_advice` view provides advice on opportunities to set the `EXPECTED GROUP SIZE`
 [query hint]. This hint is applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns. The
 maintainance of these query patterns is implemented inside an operator scope, called a region, through a
-hierarchical scheme for either reduction or top-k computation.
+hierarchical scheme for either aggregation or Top K computations.
 
 <!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
-| Field           | Type        | Meaning                                                                                                             |
-|-----------------|-------------|---------------------------------------------------------------------------------------------------------------------|
-| `dataflow_id`   | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                        |
-| `dataflow_name` | [`text`]    | The internal name of the dataflow hosting the min/max reduction or top-k.                                           |
-| `region_id`     | [`uint8`] | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).               |
-| `region_name`   | [`text`]    | The internal name of the root operator scope for the min/max reduction or top-k.                                    |
-| `levels`        | [`bigint`] | The number of levels in the hierarchical scheme implemented by the region.                                           |
-| `to_cut`        | [`bigint`] | The number of levels that can be eliminated (cut) from the region's hierarchy.                                       |
-| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy.  |
+| Field           | Type                 | Meaning                                                                                                   |
+|-----------------|----------------------|-----------------------------------------------------------------------------------------------------------|
+| `dataflow_id`   | [`uint8`]            | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                              |
+| `dataflow_name` | [`text`]             | The internal name of the dataflow hosting the min/max aggregation or Top K.                               |
+| `region_id`     | [`uint8`]            | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).   |
+| `region_name`   | [`text`]             | The internal name of the root operator scope for the min/max aggregation or Top K.                        |
+| `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
+| `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
+| `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
+| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy. |
 
 ### `mz_message_counts`
 
@@ -1052,6 +1054,18 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
+
+### `mz_comments`
+
+The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+
+<!-- RELATION_SPEC mz_internal.mz_comments -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
+| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
+| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `comment`      | [`text`]    | The comment itself.                                                                          |
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

@@ -652,7 +652,7 @@ fn append_metadata_to_value<G: Scope>(
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
-                    RowPacker::for_existing_row(&mut val).extend(res.metadata.into_iter());
+                    RowPacker::for_existing_row(&mut val).extend(&*res.metadata);
                 }
                 val
             })

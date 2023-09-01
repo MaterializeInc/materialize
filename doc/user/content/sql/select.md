@@ -126,7 +126,7 @@ Hint | Value type | Description
 ------|------------|------------
 `EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions, and some [Top K patterns](/guides/top-k), more efficiently with this information.
 
-For an example, see [Using query hints](#using-query-hints).
+For examples, see the [Optimization](/transform-data/optimization/#query-hints) page.
 
 ### Column references
 
@@ -226,20 +226,6 @@ names, but the CTEs make the entire query simpler to understand.
 
 With regard to dataflows, this is similar to [ad hoc querying](#ad-hoc-querying)
 above: Materialize tears down the created dataflow after returning the results.
-
-### Using query hints
-
-```sql
-SELECT a,
-       min(b) AS min
-FROM example
-GROUP BY a
-OPTIONS (EXPECTED GROUP SIZE = 100)
-```
-
-Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs
-for each `a` value, and Materialize can optimize its dataflow rendering with that
-knowledge.
 
 ## Privileges
 

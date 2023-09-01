@@ -113,7 +113,7 @@ pub fn plan_root_query(
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing, _) = plan_query(&mut qcx, &query)?;
+    let (mut expr, scope, mut finishing, expected_group_size) = plan_query(&mut qcx, &query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -123,7 +123,7 @@ pub fn plan_root_query(
     try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
 
     if lifetime.is_maintained() {
-        expr.finish_maintained(&mut finishing);
+        expr.finish_maintained(&mut finishing, expected_group_size);
     }
 
     let typ = qcx.relation_type(&expr);
@@ -691,8 +691,8 @@ fn handle_mutation_using_clause(
     // statement's `FROM` target. This prevents `lateral` subqueries from
     // "seeing" the `FROM` target.
     let (mut using_rel_expr, using_scope) =
-        using.into_iter().fold(Ok(plan_join_identity()), |l, twj| {
-            let (left, left_scope) = l?;
+        using.into_iter().try_fold(plan_join_identity(), |l, twj| {
+            let (left, left_scope) = l;
             plan_join(
                 qcx,
                 left,
@@ -1013,7 +1013,12 @@ pub fn plan_webhook_validate_using(
             scalar_type,
             nullable: false,
         });
-        let ResolvedItemName::Item { id, full_name: FullItemName { item, .. }, .. } = secret else {
+        let ResolvedItemName::Item {
+            id,
+            full_name: FullItemName { item, .. },
+            ..
+        } = secret
+        else {
             return Err(PlanError::InvalidSecret(Box::new(secret)));
         };
 
@@ -1912,8 +1917,8 @@ fn plan_view_select(
 
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, mut from_scope) =
-        s.from.iter().fold(Ok(plan_join_identity()), |l, twj| {
-            let (left, left_scope) = l?;
+        s.from.iter().try_fold(plan_join_identity(), |l, twj| {
+            let (left, left_scope) = l;
             plan_join(
                 qcx,
                 left,
@@ -3515,7 +3520,7 @@ fn plan_using_constraint(
     let on = HirScalarExpr::variadic_and(
         vec![HirScalarExpr::literal_true()]
             .into_iter()
-            .chain(join_exprs.into_iter())
+            .chain(join_exprs)
             .collect(),
     );
 
