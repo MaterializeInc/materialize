@@ -67,7 +67,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 # Check that negative max cardinalities are rejected
 ! CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1)
-contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit found in string
+contains: unsupported max cardinality
 
 > CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0)
 

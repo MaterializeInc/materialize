@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::VecDeque;
 use std::fmt::Display;
 use std::iter;
 use std::ops::RangeInclusive;
@@ -19,13 +18,12 @@ use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
 use once_cell::sync::Lazy;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use timely::dataflow::operators::to_stream::Event;
 
 #[derive(Clone, Debug)]
 pub struct Tpch {
@@ -51,8 +49,7 @@ impl Generator for Tpch {
         &self,
         _: NowFn,
         seed: Option<u64>,
-        _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>> {
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
             tpch: self.clone(),
@@ -77,163 +74,197 @@ impl Generator for Tpch {
 
         // Some rows need to generate other rows from their values; hold those
         // here.
-        let mut pending = VecDeque::new();
+        let mut pending = Vec::new();
 
         // All orders and their lineitems, so they can be retracted during
         // streaming.
         let mut active_orders = Vec::new();
 
-        let mut offset = 0;
         Box::new(iter::from_fn(move || {
-            if let Some(pending) = pending.pop_front() {
+            if let Some(pending) = pending.pop() {
                 return Some(pending);
             }
-            if let Some((output, key)) = rows.next() {
-                let key_usize = usize::try_from(key).expect("key known to be non-negative");
-                let row = match output {
-                    SUPPLIER_OUTPUT => {
-                        let nation = rng.gen_range(0..count_nation);
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(&pad_nine("Supplier", key)),
-                            Datum::String(&v_string(&mut rng, 10, 40)), // address
-                            Datum::Int64(nation),
-                            Datum::String(&phone(&mut rng, nation)),
-                            Datum::Numeric(decimal(&mut rng, &mut ctx.cx, -999_99, 9_999_99, 100)), // acctbal
-                            // TODO: add customer complaints and recommends, see 4.2.3.
-                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 25, 100)),
-                        ])
-                    }
-                    PART_OUTPUT => {
-                        let name: String = PARTNAMES
-                            .choose_multiple(&mut rng, 5)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join("  ");
-                        let m = rng.gen_range(1..=5);
-                        let n = rng.gen_range(1..=5);
-                        for _ in 1..=4 {
-                            let suppkey = (key
-                                + (rng.gen_range(0..=3)
-                                    * ((ctx.tpch.count_supplier / 4)
-                                        + (key - 1) / ctx.tpch.count_supplier)))
-                                % ctx.tpch.count_supplier
-                                + 1;
-                            let row = Row::pack_slice(&[
+            rows.next()
+                .map(|(output, key)| {
+                    let key_usize = usize::try_from(key).expect("key known to be non-negative");
+                    let row = match output {
+                        SUPPLIER_OUTPUT => {
+                            let nation = rng.gen_range(0..count_nation);
+                            Row::pack_slice(&[
                                 Datum::Int64(key),
-                                Datum::Int64(suppkey),
-                                Datum::Int32(rng.gen_range(1..=9_999)), // availqty
-                                Datum::Numeric(decimal(&mut rng, &mut ctx.cx, 1_00, 1_000_00, 100)), // supplycost
+                                Datum::String(&pad_nine("Supplier", key)),
+                                Datum::String(&v_string(&mut rng, 10, 40)), // address
+                                Datum::Int64(nation),
+                                Datum::String(&phone(&mut rng, nation)),
+                                Datum::Numeric(decimal(
+                                    &mut rng,
+                                    &mut ctx.cx,
+                                    -999_99,
+                                    9_999_99,
+                                    100,
+                                )), // acctbal
+                                // TODO: add customer complaints and recommends, see 4.2.3.
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    25,
+                                    100,
+                                )),
+                            ])
+                        }
+                        PART_OUTPUT => {
+                            let name: String = PARTNAMES
+                                .choose_multiple(&mut rng, 5)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join("  ");
+                            let m = rng.gen_range(1..=5);
+                            let n = rng.gen_range(1..=5);
+                            for _ in 1..=4 {
+                                let suppkey = (key
+                                    + (rng.gen_range(0..=3)
+                                        * ((ctx.tpch.count_supplier / 4)
+                                            + (key - 1) / ctx.tpch.count_supplier)))
+                                    % ctx.tpch.count_supplier
+                                    + 1;
+                                let row = Row::pack_slice(&[
+                                    Datum::Int64(key),
+                                    Datum::Int64(suppkey),
+                                    Datum::Int32(rng.gen_range(1..=9_999)), // availqty
+                                    Datum::Numeric(decimal(
+                                        &mut rng,
+                                        &mut ctx.cx,
+                                        1_00,
+                                        1_000_00,
+                                        100,
+                                    )), // supplycost
+                                    Datum::String(text_string(
+                                        &mut rng,
+                                        &ctx.text_string_source,
+                                        49,
+                                        198,
+                                    )),
+                                ]);
+                                pending.push((
+                                    PARTSUPP_OUTPUT,
+                                    GeneratorMessageType::InProgress,
+                                    row,
+                                    1,
+                                ));
+                            }
+                            Row::pack_slice(&[
+                                Datum::Int64(key),
+                                Datum::String(&name),
+                                Datum::String(&format!("Manufacturer#{m}")),
+                                Datum::String(&format!("Brand#{m}{n}")),
+                                Datum::String(&syllables(&mut rng, TYPES)),
+                                Datum::Int32(rng.gen_range(1..=50)), // size
+                                Datum::String(&syllables(&mut rng, CONTAINERS)),
+                                Datum::Numeric(partkey_retailprice(key)),
                                 Datum::String(text_string(
                                     &mut rng,
                                     &ctx.text_string_source,
                                     49,
                                     198,
                                 )),
-                            ]);
-                            pending.push_back((
-                                PARTSUPP_OUTPUT,
-                                Event::Message(MzOffset::from(offset), (row, 1)),
-                            ));
+                            ])
                         }
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(&name),
-                            Datum::String(&format!("Manufacturer#{m}")),
-                            Datum::String(&format!("Brand#{m}{n}")),
-                            Datum::String(&syllables(&mut rng, TYPES)),
-                            Datum::Int32(rng.gen_range(1..=50)), // size
-                            Datum::String(&syllables(&mut rng, CONTAINERS)),
-                            Datum::Numeric(partkey_retailprice(key)),
-                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 49, 198)),
-                        ])
-                    }
-                    CUSTOMER_OUTPUT => {
-                        let nation = rng.gen_range(0..count_nation);
-                        Row::pack_slice(&[
-                            Datum::Int64(key),
-                            Datum::String(&pad_nine("Customer", key)),
-                            Datum::String(&v_string(&mut rng, 10, 40)), // address
-                            Datum::Int64(nation),
-                            Datum::String(&phone(&mut rng, nation)),
-                            Datum::Numeric(decimal(&mut rng, &mut ctx.cx, -999_99, 9_999_99, 100)), // acctbal
-                            Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
-                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 29, 116)),
-                        ])
-                    }
-                    ORDERS_OUTPUT => {
-                        let seed = rng.gen();
-                        let (order, lineitems) = ctx.order_row(seed, key);
-                        for row in lineitems {
-                            pending.push_back((
-                                LINEITEM_OUTPUT,
-                                Event::Message(MzOffset::from(offset), (row, 1)),
-                            ));
+                        CUSTOMER_OUTPUT => {
+                            let nation = rng.gen_range(0..count_nation);
+                            Row::pack_slice(&[
+                                Datum::Int64(key),
+                                Datum::String(&pad_nine("Customer", key)),
+                                Datum::String(&v_string(&mut rng, 10, 40)), // address
+                                Datum::Int64(nation),
+                                Datum::String(&phone(&mut rng, nation)),
+                                Datum::Numeric(decimal(
+                                    &mut rng,
+                                    &mut ctx.cx,
+                                    -999_99,
+                                    9_999_99,
+                                    100,
+                                )), // acctbal
+                                Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    29,
+                                    116,
+                                )),
+                            ])
                         }
-                        if !ctx.tpch.tick.is_zero() {
-                            active_orders.push((key, seed));
+                        ORDERS_OUTPUT => {
+                            let seed = rng.gen();
+                            let (order, lineitems) = ctx.order_row(seed, key);
+                            for row in lineitems {
+                                pending.push((
+                                    LINEITEM_OUTPUT,
+                                    GeneratorMessageType::InProgress,
+                                    row,
+                                    1,
+                                ));
+                            }
+                            if !ctx.tpch.tick.is_zero() {
+                                active_orders.push((key, seed));
+                            }
+                            order
                         }
-                        order
-                    }
-                    NATION_OUTPUT => {
-                        let (name, region) = NATIONS[key_usize];
-                        Row::pack_slice(&[
+                        NATION_OUTPUT => {
+                            let (name, region) = NATIONS[key_usize];
+                            Row::pack_slice(&[
+                                Datum::Int64(key),
+                                Datum::String(name),
+                                Datum::Int64(region),
+                                Datum::String(text_string(
+                                    &mut rng,
+                                    &ctx.text_string_source,
+                                    31,
+                                    114,
+                                )),
+                            ])
+                        }
+                        REGION_OUTPUT => Row::pack_slice(&[
                             Datum::Int64(key),
-                            Datum::String(name),
-                            Datum::Int64(region),
-                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 114)),
-                        ])
+                            Datum::String(REGIONS[key_usize]),
+                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
+                        ]),
+                        _ => unreachable!("{output}"),
+                    };
+                    let typ = if rows.peek().is_some() {
+                        GeneratorMessageType::InProgress
+                    } else {
+                        GeneratorMessageType::Finalized
+                    };
+                    (output, typ, row, 1)
+                })
+                .or_else(|| {
+                    if ctx.tpch.tick.is_zero() {
+                        return None;
                     }
-                    REGION_OUTPUT => Row::pack_slice(&[
-                        Datum::Int64(key),
-                        Datum::String(REGIONS[key_usize]),
-                        Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
-                    ]),
-                    _ => unreachable!("{output}"),
-                };
+                    let idx = rng.gen_range(0..active_orders.len());
+                    let (key, old_seed) = active_orders.swap_remove(idx);
+                    let (old_order, old_lineitems) = ctx.order_row(old_seed, key);
+                    // Fill pending with old lineitem retractions, new lineitem
+                    // additions, and finally the new order. Return the old
+                    // order to start the batch.
+                    for row in old_lineitems {
+                        pending.push((LINEITEM_OUTPUT, GeneratorMessageType::InProgress, row, -1));
+                    }
+                    let new_seed = rng.gen();
+                    let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
+                    for row in new_lineitems {
+                        pending.push((LINEITEM_OUTPUT, GeneratorMessageType::InProgress, row, 1));
+                    }
+                    pending.push((ORDERS_OUTPUT, GeneratorMessageType::Finalized, new_order, 1));
+                    active_orders.push((key, new_seed));
 
-                pending.push_back((output, Event::Message(MzOffset::from(offset), (row, 1))));
-                if rows.peek().is_none() {
-                    offset += 1;
-                    pending.push_back((output, Event::Progress(Some(MzOffset::from(offset)))));
-                }
-            } else {
-                if ctx.tpch.tick.is_zero() {
-                    return None;
-                }
-                let idx = rng.gen_range(0..active_orders.len());
-                let (key, old_seed) = active_orders.swap_remove(idx);
-                let (old_order, old_lineitems) = ctx.order_row(old_seed, key);
-                // Fill pending with old lineitem retractions, new lineitem
-                // additions, and finally the new order. Return the old
-                // order to start the batch.
-                for row in old_lineitems {
-                    pending.push_back((
-                        LINEITEM_OUTPUT,
-                        Event::Message(MzOffset::from(offset), (row, -1)),
-                    ));
-                }
-                let new_seed = rng.gen();
-                let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
-                for row in new_lineitems {
-                    pending.push_back((
-                        LINEITEM_OUTPUT,
-                        Event::Message(MzOffset::from(offset), (row, 1)),
-                    ));
-                }
-                pending.push_back((
-                    ORDERS_OUTPUT,
-                    Event::Message(MzOffset::from(offset), (old_order, -1)),
-                ));
-                pending.push_back((
-                    ORDERS_OUTPUT,
-                    Event::Message(MzOffset::from(offset), (new_order, 1)),
-                ));
-                offset += 1;
-                pending.push_back((ORDERS_OUTPUT, Event::Progress(Some(MzOffset::from(offset)))));
-                active_orders.push((key, new_seed));
-            }
-            pending.pop_front()
+                    Some((
+                        ORDERS_OUTPUT,
+                        GeneratorMessageType::InProgress,
+                        old_order,
+                        -1,
+                    ))
+                })
         }))
     }
 }
