@@ -1337,7 +1337,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnection<ReferencedConnection>,
+    pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 

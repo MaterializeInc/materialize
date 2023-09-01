@@ -2334,7 +2334,7 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
-            connection_builder,
+            connection: connection_builder,
             envelope,
         },
         with_snapshot,
