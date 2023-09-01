@@ -411,8 +411,7 @@ impl Coordinator {
                 ctx.retire(ret);
             }
             Plan::Declare(plan) => {
-                let param_types = vec![];
-                self.declare(ctx, plan.name, plan.stmt, plan.sql, param_types);
+                self.declare(ctx, plan.name, plan.stmt, plan.sql, plan.params);
             }
             Plan::Fetch(FetchPlan {
                 name,

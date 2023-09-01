@@ -991,6 +991,7 @@ pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
     pub sql: String,
+    pub params: Params,
 }
 
 #[derive(Debug)]

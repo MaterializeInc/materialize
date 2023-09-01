@@ -256,7 +256,7 @@ impl Client {
         const EMPTY_PORTAL: &str = "";
         session_client.start_transaction(Some(1))?;
         session_client
-            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string(), vec![])
+            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string())
             .await?;
         match session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
@@ -456,21 +456,11 @@ impl SessionClient {
         name: String,
         stmt: Statement<Raw>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         let catalog = self.catalog_snapshot().await;
-        self.declare_inner(&catalog, name, stmt, sql, param_types)
-    }
-
-    fn declare_inner(
-        &mut self,
-        catalog: &Catalog,
-        name: String,
-        stmt: Statement<Raw>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), AdapterError> {
-        let desc = Coordinator::describe(catalog, self.session(), Some(stmt.clone()), param_types)?;
+        let param_types = vec![];
+        let desc =
+            Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         let logging = self.session().mint_logging(sql);

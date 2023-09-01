@@ -12,7 +12,7 @@
 
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::StatementDesc;
+use mz_sql::plan::{Params, StatementDesc};
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
@@ -43,13 +43,12 @@ impl Coordinator {
         name: String,
         stmt: Statement<Raw>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
+        params: Params,
     ) {
         let catalog = self.owned_catalog();
         mz_ore::task::spawn(|| "coord::declare", async move {
-            let result =
-                Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, param_types)
-                    .map(|()| ExecuteResponse::DeclaredCursor);
+            let result = Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, params)
+                .map(|()| ExecuteResponse::DeclaredCursor);
             ctx.retire(result);
         });
     }
@@ -60,10 +59,15 @@ impl Coordinator {
         name: String,
         stmt: Statement<Raw>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
+        params: Params,
     ) -> Result<(), AdapterError> {
+        let param_types = params
+            .types
+            .iter()
+            .map(|ty| Some(ty.clone()))
+            .collect::<Vec<_>>();
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
-        let params = vec![];
+        let params = params.datums.into_iter().zip(params.types).collect();
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql);
         session.set_portal(
