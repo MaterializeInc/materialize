@@ -43,9 +43,9 @@ use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
-    SystemObjectId,
+    Aug, CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
+    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -1274,6 +1274,28 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+        }
+    }
+}
+
+impl From<CommentObjectId> for ObjectType {
+    fn from(value: CommentObjectId) -> ObjectType {
+        match value {
+            CommentObjectId::Table(_) => ObjectType::Table,
+            CommentObjectId::View(_) => ObjectType::View,
+            CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
+            CommentObjectId::Source(_) => ObjectType::Source,
+            CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::Index(_) => ObjectType::Index,
+            CommentObjectId::Func(_) => ObjectType::Func,
+            CommentObjectId::Connection(_) => ObjectType::Connection,
+            CommentObjectId::Type(_) => ObjectType::Type,
+            CommentObjectId::Secret(_) => ObjectType::Secret,
+            CommentObjectId::Role(_) => ObjectType::Role,
+            CommentObjectId::Database(_) => ObjectType::Database,
+            CommentObjectId::Schema(_) => ObjectType::Schema,
+            CommentObjectId::Cluster(_) => ObjectType::Cluster,
+            CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         }
     }
 }

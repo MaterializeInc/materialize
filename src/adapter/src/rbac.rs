@@ -382,11 +382,13 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan { replace, .. }) => replace
             .map(|id| vec![ObjectId::Item(id)])
             .unwrap_or_default(),
-        Plan::Comment(plan) => match plan.object_id {
-            CommentObjectId::Table(global_id) | CommentObjectId::View(global_id) => {
-                vec![ObjectId::Item(global_id)]
-            }
-        },
+        // Roles don't have owners, instead we require the current session to have the
+        // `CREATEROLE` privilege.
+        Plan::Comment(plan::CommentPlan {
+            object_id: CommentObjectId::Role(_),
+            ..
+        }) => vec![],
+        Plan::Comment(plan::CommentPlan { object_id, .. }) => vec![ObjectId::from(*object_id)],
         // Do not need ownership of descendant objects.
         Plan::DropObjects(plan) => plan.referenced_ids.clone(),
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan { id, .. })
@@ -1052,6 +1054,14 @@ fn generate_required_privileges(
                 }
             })
             .collect(),
+        Plan::Comment(plan::CommentPlan {
+            object_id: CommentObjectId::Role(_),
+            sub_component: _,
+            comment: _,
+        }) => vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+        // For comments on all other kinds of objects, we enforce that the current role owns that
+        // object.
+        Plan::Comment(_) => vec![],
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan {
             id: _,
             name: _,
@@ -1147,8 +1157,7 @@ fn generate_required_privileges(
             new_role: _,
             reassign_ids: _,
         })
-        | Plan::SideEffectingFunc(_)
-        | Plan::Comment(_) => Vec::new(),
+        | Plan::SideEffectingFunc(_) => vec![],
     }
 }
 

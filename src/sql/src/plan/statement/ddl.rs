@@ -5133,12 +5133,15 @@ pub fn plan_alter_role(
 
 pub fn describe_comment(
     _: &StatementContext,
-    _: CommentStatement,
+    _: CommentStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Result<Plan, PlanError> {
+pub fn plan_comment(
+    scx: &mut StatementContext,
+    stmt: CommentStatement<Aug>,
+) -> Result<Plan, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
     if !scx.catalog.system_vars().enable_comment() {
@@ -5160,22 +5163,82 @@ pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Resul
         }
     }
 
-    let name = match &object {
-        CommentObjectType::Table { name } | CommentObjectType::View { name } => name,
-        CommentObjectType::Column { relation_name, .. } => relation_name,
-    };
-    let name = normalize::unresolved_item_name(name.clone())?;
-    let item = scx.catalog.resolve_item(&name)?;
+    let (object_id, column_pos) = match &object {
+        com_ty @ CommentObjectType::Table { name }
+        | com_ty @ CommentObjectType::View { name }
+        | com_ty @ CommentObjectType::MaterializedView { name }
+        | com_ty @ CommentObjectType::Index { name }
+        | com_ty @ CommentObjectType::Func { name }
+        | com_ty @ CommentObjectType::Connection { name }
+        | com_ty @ CommentObjectType::Source { name }
+        | com_ty @ CommentObjectType::Sink { name }
+        | com_ty @ CommentObjectType::Type { name }
+        | com_ty @ CommentObjectType::Secret { name } => {
+            let name = normalize::unresolved_item_name(name.clone())?;
+            let item = scx.catalog.resolve_item(&name)?;
 
-    let (object_id, column_pos) = match (item.item_type(), object) {
-        (CatalogItemType::Table, CommentObjectType::Table { .. }) => {
-            (CommentObjectId::Table(item.id()), None)
+            match (com_ty, item.item_type()) {
+                (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
+                    (CommentObjectId::Table(item.id()), None)
+                }
+                (CommentObjectType::View { .. }, CatalogItemType::View) => {
+                    (CommentObjectId::View(item.id()), None)
+                }
+                (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
+                    (CommentObjectId::MaterializedView(item.id()), None)
+                }
+                (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
+                    (CommentObjectId::Index(item.id()), None)
+                }
+                (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
+                    (CommentObjectId::Func(item.id()), None)
+                }
+                (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
+                    (CommentObjectId::Connection(item.id()), None)
+                }
+                (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
+                    (CommentObjectId::Source(item.id()), None)
+                }
+                (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
+                    (CommentObjectId::Sink(item.id()), None)
+                }
+                (CommentObjectType::Type { .. }, CatalogItemType::Type) => {
+                    (CommentObjectId::Type(item.id()), None)
+                }
+                (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
+                    (CommentObjectId::Secret(item.id()), None)
+                }
+                (com_ty, cat_ty) => {
+                    let expected_type = match com_ty {
+                        CommentObjectType::Table { .. } => ObjectType::Table,
+                        CommentObjectType::View { .. } => ObjectType::View,
+                        CommentObjectType::MaterializedView { .. } => ObjectType::MaterializedView,
+                        CommentObjectType::Index { .. } => ObjectType::Index,
+                        CommentObjectType::Func { .. } => ObjectType::Func,
+                        CommentObjectType::Connection { .. } => ObjectType::Connection,
+                        CommentObjectType::Source { .. } => ObjectType::Source,
+                        CommentObjectType::Sink { .. } => ObjectType::Sink,
+                        CommentObjectType::Type { .. } => ObjectType::Type,
+                        CommentObjectType::Secret { .. } => ObjectType::Secret,
+                        _ => unreachable!("these are the only types we match on"),
+                    };
+
+                    return Err(PlanError::InvalidObjectType {
+                        expected_type: SystemObjectType::Object(expected_type),
+                        actual_type: SystemObjectType::Object(cat_ty.into()),
+                        object_name: item.name().item.clone(),
+                    });
+                }
+            }
         }
-        (CatalogItemType::View, CommentObjectType::View { .. }) => {
-            (CommentObjectId::View(item.id()), None)
-        }
-        (CatalogItemType::Table, CommentObjectType::Column { column_name, .. }) => {
-            let column_name = normalize::column_name(column_name);
+        CommentObjectType::Column {
+            relation_name,
+            column_name,
+        } => {
+            let name = normalize::unresolved_item_name(relation_name.clone())?;
+            let item = scx.catalog.resolve_item(&name)?;
+
+            let column_name = normalize::column_name(column_name.clone());
             let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
 
             // Check to make sure this column exists.
@@ -5186,28 +5249,43 @@ pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Resul
                 });
             };
 
-            (CommentObjectId::Table(item.id()), Some(pos + 1))
+            match item.item_type() {
+                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
+                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
+                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => {
+                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
+                }
+                r => {
+                    return Err(PlanError::Unsupported {
+                        feature: format!("Specifying comments on a column of {r}"),
+                        issue_no: Some(21465),
+                    });
+                }
+            }
         }
-        (ty, CommentObjectType::Table { .. }) => {
-            return Err(PlanError::InvalidObjectType {
-                expected_type: SystemObjectType::Object(ObjectType::Table),
-                actual_type: SystemObjectType::Object(ty.into()),
-                object_name: item.name().item.clone(),
-            })
+        CommentObjectType::Role { name } => {
+            let role = scx.catalog.resolve_role(name.as_str())?;
+            (CommentObjectId::Role(role.id()), None)
         }
-        (ty, CommentObjectType::View { .. }) => {
-            return Err(PlanError::InvalidObjectType {
-                expected_type: SystemObjectType::Object(ObjectType::View),
-                actual_type: SystemObjectType::Object(ty.into()),
-                object_name: item.name().item.clone(),
-            })
+        CommentObjectType::Database { name } => {
+            let database = scx.resolve_database(name)?;
+            (CommentObjectId::Database(database.id()), None)
         }
-        (ty, _) => {
-            return Err(PlanError::Unsupported {
-                feature: format!("COMMENT on {ty} not yet supported."),
-                // TODO(parkmycar): File an issue.
-                issue_no: None,
-            });
+        CommentObjectType::Schema { name } => {
+            let schema = scx.resolve_schema(name.clone())?;
+            (
+                CommentObjectId::Schema((*schema.database(), *schema.id())),
+                None,
+            )
+        }
+        CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
+        CommentObjectType::ClusterReplica { name } => {
+            let replica = scx.catalog.resolve_cluster_replica(name)?;
+            (
+                CommentObjectId::ClusterReplica((replica.cluster_id(), replica.replica_id())),
+                None,
+            )
         }
     };
 

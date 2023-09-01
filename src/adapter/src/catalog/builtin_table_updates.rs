@@ -27,9 +27,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItemType, CatalogSchema, CatalogType, TypeCategory,
-};
+use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -1541,13 +1539,27 @@ impl CatalogState {
         comment: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let (object_id_str, object_type_str) = match object_id {
-            CommentObjectId::Table(global_id) => {
-                (global_id.to_string(), CatalogItemType::Table.to_string())
-            }
-            CommentObjectId::View(global_id) => {
-                (global_id.to_string(), CatalogItemType::View.to_string())
-            }
+        // Use the audit log representation so it's easier to join against.
+        let object_type = mz_sql::catalog::ObjectType::from(object_id);
+        let audit_type = super::object_type_to_audit_object_type(object_type);
+        let object_type_str = audit_type.to_string();
+
+        let object_id_str = match object_id {
+            CommentObjectId::Table(global_id)
+            | CommentObjectId::View(global_id)
+            | CommentObjectId::MaterializedView(global_id)
+            | CommentObjectId::Source(global_id)
+            | CommentObjectId::Sink(global_id)
+            | CommentObjectId::Index(global_id)
+            | CommentObjectId::Func(global_id)
+            | CommentObjectId::Connection(global_id)
+            | CommentObjectId::Secret(global_id)
+            | CommentObjectId::Type(global_id) => global_id.to_string(),
+            CommentObjectId::Role(role_id) => role_id.to_string(),
+            CommentObjectId::Database(database_id) => database_id.to_string(),
+            CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),
+            CommentObjectId::Cluster(cluster_id) => cluster_id.to_string(),
+            CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
         };
         let column_pos_datum = match column_pos {
             Some(pos) => Datum::UInt64(CastFrom::cast_from(pos)),
