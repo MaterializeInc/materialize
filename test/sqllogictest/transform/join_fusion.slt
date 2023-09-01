@@ -181,8 +181,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
-  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
-  - materialize.public.fk_lineitem_orderkey (lookup)
+  - materialize.public.fk_lineitem_orderkey (*** full scan ***, lookup)
 
 EOF
 

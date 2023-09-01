@@ -553,6 +553,27 @@ id: {}, key: {:?}",
         }
     }
 
+    // Adjust FullScans to not introduce a new index dependency if there is also some non-FullScan
+    // request on the same id.
+    for (_id, index_reqs) in index_reqs_by_id.iter_mut() {
+        // Let's look for an arbitrary non-FullScan access. (The same better choices would be
+        // possible also here as in `pick_index_for_full_scan`, see comment there.)
+        if let Some(arbitrary_non_full_scan_key) = index_reqs.iter().find_map(|(key, usage_type)| {
+            match usage_type {
+                IndexUsageType::FullScan => None,
+                _ => Some(key.clone()),
+            }
+        }) {
+            // Modify all FullScans to use the above `arbitrary_non_full_scan_key`.
+            for (key, usage_type) in index_reqs {
+                match usage_type {
+                    IndexUsageType::FullScan => *key = arbitrary_non_full_scan_key.clone(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // Annotate index imports by their usage types
     for (
         index_id,
@@ -653,7 +674,10 @@ impl<'a> CollectIndexRequests<'a> {
 
             // If an index exists on `on_id`, this function picks an index to be fully scanned.
             let pick_index_for_full_scan = |on_id: &GlobalId| {
-                // Pick an arbitrary index
+                // Pick an arbitrary index.
+                // Note that the choice we make here might be modified later at the
+                // "Adjust FullScans to not introduce a new index dependency".
+                //
                 // TODO: There are various edge cases where a better than arbitrary choice would be
                 // possible:
                 // - Some indexes might be less skewed than others.
@@ -661,8 +685,6 @@ impl<'a> CollectIndexRequests<'a> {
                 //   https://github.com/MaterializeInc/materialize/issues/15557
                 // - Some indexes might have less extra data in their keys, which won't be used in a
                 //   full scan.
-                // - We might want to prefer using an index that we are already using elsewhere in this
-                //   same dataflow, to avoid adding dependencies to more indexes than necessary.
                 this.indexes_available.indexes_on(*on_id).next()
             };
 

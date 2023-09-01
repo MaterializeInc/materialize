@@ -1234,8 +1234,8 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.u_d (*** full scan ***, lookup)
-  - materialize.public.t_a_idx_1 (*** full scan ***, lookup)
-  - materialize.public.t_b_idx (lookup)
+  - materialize.public.t_a_idx_1 (lookup)
+  - materialize.public.t_b_idx (*** full scan ***, lookup)
 
 EOF
 

@@ -352,8 +352,7 @@ Source materialize.public.region
   filter=(like["EUROP%"](padchar(#1)))
 
 Used Indexes:
-  - materialize.public.fk_stock_warehouse (*** full scan ***)
-  - materialize.public.fk_stock_supplier (differential join)
+  - materialize.public.fk_stock_supplier (*** full scan ***, differential join)
   - materialize.public.fk_nation_regionkey (*** full scan ***, differential join)
   - materialize.public.fk_supplier_nationkey (*** full scan ***, differential join)
 
