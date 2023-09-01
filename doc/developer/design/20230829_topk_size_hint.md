@@ -470,6 +470,21 @@ The above query specifies both the `AGGREGATE INPUT GROUP SIZE` and the `LIMIT I
 `AGGREGATE INPUT GROUP SIZE` will thus only apply to the min/max reduction while the `LIMIT INPUT GROUP SIZE`
 will apply to the top-k operation.
 
+## Other Remarks
+
+This section captures a few more suggestions that came up during discussion of the proposal in this design doc.
+
+1. The three new hints are arguably more ergonomic and should be the preferred way to tune the `exp_group_size`
+of various operators. So we should update our documentation to primarily refer to the three new hints. Perhaps
+not even mentioning the old `EXPECTED GROUP SIZE` at all would allow us to create a path for syntax deprecation
+in the future (even though that process is not in scope for this design).
+
+2. Two follow-up items that are related improvements to usability of the hints include: (a) Producing errors
+when the hints do not apply (MaterializeInc/materialize#21528); (b) Moving the `OPTIONS` clause to a different
+position in the `SELECT` syntax and potentially renaming it (MaterializeInc/materialize#21531).
+These two additional improvements are considered out-of-scope for this design, but during implementation
+we will evaluate if opportunity arises to address them expediently (leaving them to future work otherwise).
+
 ## Alternatives
 
 ### Different hinting strategies
