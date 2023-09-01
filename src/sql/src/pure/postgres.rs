@@ -101,14 +101,14 @@ pub(super) async fn validate_requested_subsources(
         .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
         .collect();
 
-    mz_postgres_util::check_table_privileges(config, tables_to_check_permissions).await?;
+    privileges::check_table_privileges(config, tables_to_check_permissions).await?;
 
     let oids: Vec<_> = requested_subsources
         .iter()
         .map(|(_, _, table_desc)| table_desc.oid)
         .collect();
 
-    mz_postgres_util::validate::check_replica_identity_full(config, oids).await?;
+    replica_identity::check_replica_identity_full(config, oids).await?;
 
     Ok(())
 }
@@ -338,4 +338,204 @@ where
     targeted_subsources.sort();
 
     Ok((targeted_subsources, subsources))
+}
+
+mod privileges {
+
+    use anyhow::anyhow;
+    use postgres_array::{Array, Dimension};
+
+    use mz_postgres_util::{Config, PostgresError};
+
+    use crate::plan::PlanError;
+
+    async fn check_schema_privileges(config: &Config, schemas: Vec<&str>) -> Result<(), PlanError> {
+        let client = config.connect("check_schema_privileges").await?;
+
+        let schemas_len = schemas.len();
+
+        let schemas = Array::from_parts(
+            schemas,
+            vec![Dimension {
+                len: i32::try_from(schemas_len).expect("fewer than i32::MAX schemas"),
+                lower_bound: 0,
+            }],
+        );
+
+        let invalid_schema_privileges = client
+            .query(
+                "
+            SELECT
+                s, has_schema_privilege($2::text, s, 'usage') AS p
+            FROM
+                (SELECT unnest($1::text[])) AS o (s);",
+                &[
+                    &schemas,
+                    &config.get_user().expect("connection specifies user"),
+                ],
+            )
+            .await
+            .map_err(PostgresError::from)?
+            .into_iter()
+            .filter_map(|row| {
+                // Only get rows that do not have sufficient privileges.
+                let privileges: bool = row.get("p");
+                if !privileges {
+                    Some(row.get("s"))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<String>>();
+
+        if invalid_schema_privileges.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "user {} lacks USAGE privileges for schemas {}",
+                config.get_user().expect("connection specifies user"),
+                invalid_schema_privileges.join(", ")
+            )
+            .into())
+        }
+    }
+
+    /// Ensure that the user specified in `config` has:
+    ///
+    /// -`SELECT` privileges for the identified `tables`.
+    ///
+    ///  `tables`'s elements should be of the structure `[<schema name>, <table name>]`.
+    ///
+    /// - `USAGE` privileges on the schemas references in `tables`.
+    ///
+    /// # Panics
+    /// If `config` does not specify a user.
+    pub async fn check_table_privileges(
+        config: &Config,
+        tables: Vec<[&str; 2]>,
+    ) -> Result<(), PlanError> {
+        let schemas = tables.iter().map(|t| t[0]).collect();
+        check_schema_privileges(config, schemas).await?;
+
+        let client = config.connect("check_table_privileges").await?;
+
+        let tables_len = tables.len();
+
+        let tables = Array::from_parts(
+            tables.into_iter().map(|i| i.to_vec()).flatten().collect(),
+            vec![
+                Dimension {
+                    len: i32::try_from(tables_len).expect("fewer than i32::MAX tables"),
+                    lower_bound: 1,
+                },
+                Dimension {
+                    len: 2,
+                    lower_bound: 1,
+                },
+            ],
+        );
+
+        let mut invalid_table_privileges = client
+            .query(
+                "
+            WITH
+                data AS (SELECT $1::text[] AS arr)
+            SELECT
+                t, has_table_privilege($2::text, t, 'select') AS p
+            FROM
+                (
+                    SELECT
+                        format('%I.%I', arr[i][1], arr[i][2]) AS t
+                    FROM
+                        data, ROWS FROM (generate_subscripts((SELECT arr FROM data), 1)) AS i
+                )
+                    AS o (t);",
+                &[
+                    &tables,
+                    &config.get_user().expect("connection specifies user"),
+                ],
+            )
+            .await
+            .map_err(PostgresError::from)?
+            .into_iter()
+            .filter_map(|row| {
+                // Only get rows that do not have sufficient privileges.
+                let privileges: bool = row.get("p");
+                if !privileges {
+                    Some(row.get("t"))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<String>>();
+
+        invalid_table_privileges.sort();
+
+        if invalid_table_privileges.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "user {} lacks SELECT privileges for tables {}",
+                config.get_user().expect("connection specifies user"),
+                invalid_table_privileges.join(", ")
+            )
+            .into())
+        }
+    }
+}
+
+mod replica_identity {
+
+    use anyhow::anyhow;
+    use postgres_array::{Array, Dimension};
+    use tokio_postgres::types::Oid;
+
+    use mz_postgres_util::{Config, PostgresError};
+
+    /// Ensures that all provided OIDs are tables with `REPLICA IDENTITY FULL`.
+    pub async fn check_replica_identity_full(
+        config: &Config,
+        oids: Vec<Oid>,
+    ) -> Result<(), PostgresError> {
+        let client = config.connect("chec_replica_identity_full").await?;
+
+        let oids_len = oids.len();
+
+        let oids = Array::from_parts(
+            oids,
+            vec![Dimension {
+                len: i32::try_from(oids_len).expect("fewer than i32::MAX schemas"),
+                lower_bound: 0,
+            }],
+        );
+
+        let mut invalid_replica_identity = client
+            .query(
+                "
+            SELECT
+                input.oid::REGCLASS::TEXT AS name
+            FROM
+                (SELECT unnest($1::OID[]) AS oid) AS input
+                LEFT JOIN pg_class ON input.oid = pg_class.oid
+            WHERE
+                relreplident != 'f' OR relreplident IS NULL;",
+                &[&oids],
+            )
+            .await?
+            .into_iter()
+            .map(|row| row.get("name"))
+            .collect::<Vec<String>>();
+
+        if invalid_replica_identity.is_empty() {
+            Ok(())
+        } else {
+            invalid_replica_identity.sort();
+
+            Err(anyhow!(
+                "the following are not tables with REPLICA IDENTITY FULL: {}",
+                invalid_replica_identity.join(", ")
+            )
+            .into())
+        }
+    }
 }

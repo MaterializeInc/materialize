@@ -43,8 +43,6 @@ tunnel = [
     "openssh",
     "mz-ore",
 ]
-privileges = ["postgres_array"]
-validate = []
 
 [build-dependencies]
 prost-build = "0.11.2"
