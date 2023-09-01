@@ -33,10 +33,7 @@ mz-ore = { path = "../ore", features = ["chrono", "async"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
-mz-postgres-util = { path = "../postgres-util", features = [
-    "privileges",
-    "validate",
-] }
+mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
@@ -47,6 +44,7 @@ mz-stash = { path = "../stash" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 paste = "1.0"
+postgres_array = { version = "0.11.0" }
 protobuf-native = "0.2.1"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }

@@ -4973,6 +4973,7 @@ dependencies = [
  "mz-tracing",
  "once_cell",
  "paste",
+ "postgres_array",
  "proptest",
  "proptest-derive",
  "prost",

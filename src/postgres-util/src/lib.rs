@@ -93,10 +93,6 @@ macro_rules! bail_generic {
     };
 }
 
-#[cfg(feature = "privileges")]
-pub mod privileges;
-#[cfg(feature = "privileges")]
-pub use privileges::check_table_privileges;
 #[cfg(feature = "schemas")]
 pub mod desc;
 #[cfg(feature = "schemas")]
@@ -112,8 +108,6 @@ pub use tunnel::{
     DEFAULT_REPLICATION_KEEPALIVE_INTERVAL, DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
     DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
 };
-#[cfg(feature = "validate")]
-pub mod validate;
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]
