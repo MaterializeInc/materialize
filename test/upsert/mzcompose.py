@@ -18,6 +18,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -43,6 +44,7 @@ SERVICES = [
     Clusterd(
         name="clusterd1",
     ),
+    Redpanda(),
 ]
 
 
@@ -433,3 +435,104 @@ def workflow_autospill(c: Composition) -> None:
     ):
         c.up(*dependencies)
         c.run("testdrive", "autospill/bytes.td")
+
+
+# This should not be run on ci and is not added to workflow_default above!
+# This test is there to compare rehydration metrics with different configs.
+# Can be run locally with the command ./mzcompose run load-test
+def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
+    from string import ascii_lowercase
+    from textwrap import dedent
+
+    # Following variables can be updated to tweak how much data the kafka
+    # topic should be populated with and what should be the upsert state.
+    pad_len = 1024
+    string_pad = "x" * pad_len  # 1KB
+    repeat = 250 * 1024  # repeat * string_pad = 250MB upsert state size
+    updates_count = 4  # repeat * updates_count = 1GB total kafka topic size with multiple updates for the same key
+
+    backpressure_bytes = 100 * 1024 * 1024  # 100MB
+
+    c.down(destroy_volumes=True)
+    c.up("redpanda", "materialized", "clusterd1")
+    # initial hydration
+    with c.override(
+        Testdrive(no_reset=True, consistent_seed=True),
+        Materialized(
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults={
+                "disk_cluster_replicas_default": "true",
+                "enable_disk_cluster_replicas": "true",
+                # Force backpressure to be enabled.
+                "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
+            },
+            environment_extra=materialized_environment_extra,
+            memory="5Gb",
+        ),
+        Clusterd(
+            name="clusterd1",
+            options=[
+                "--scratch-directory=/scratch",
+                "--announce-memory-limit=1048376000",  # 1GiB
+            ],
+            memory="3.5Gb",
+        ),
+    ):
+        c.up("testdrive", persistent=True)
+        c.exec("testdrive", "load-test/setup.td")
+        c.testdrive(
+            dedent(
+                """
+                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                "AAA":"START MARKER"
+                """
+            )
+        )
+        for letter in ascii_lowercase[:updates_count]:
+            c.exec(
+                "testdrive",
+                f"--var=value={letter}{string_pad}",
+                f"--var=repeat={repeat}",
+                "load-test/insert.td",
+            )
+
+        c.testdrive(
+            dedent(
+                """
+                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                "ZZZ":"END MARKER"
+                """
+            )
+        )
+
+        c.testdrive(
+            dedent(
+                f"""
+                > select * from v1;
+                {repeat + 2}
+                """
+            )
+        )
+        c.kill("clusterd1")
+        c.up("clusterd1")
+
+        c.testdrive(
+            dedent(
+                f"""
+                > select * from v1;
+                {repeat + 2}
+                """
+            )
+        )
+
+        rehydration_latency_ms = c.sql_query(
+            """select max(rehydration_latency_ms)
+            from mz_internal.mz_source_statistics st
+            join mz_sources s on s.id = st.id
+            where name = 's1';"""
+        )[0]
+        print(f"It took {rehydration_latency_ms} minutes!")
