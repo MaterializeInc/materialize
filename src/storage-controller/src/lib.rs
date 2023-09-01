@@ -116,9 +116,9 @@ use mz_storage_client::client::{
     TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
-    CollectionDescription, CollectionState, CreateExportToken, DataSource, DataSourceOther,
-    ExportDescription, ExportState, IntrospectionType, MonotonicAppender, ReadPolicy,
-    SnapshotCursor, StorageController,
+    CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
+    ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
+    StorageController,
 };
 use mz_storage_client::healthcheck::{
     self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
@@ -928,66 +928,14 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn prepare_export(
-        &mut self,
-        id: GlobalId,
-        from_id: GlobalId,
-    ) -> Result<CreateExportToken<T>, StorageError> {
-        if let Ok(_export) = self.export(id) {
-            return Err(StorageError::SourceIdReused(id));
-        }
-
-        let dependency_since = self.determine_collection_since_joins(&[from_id])?;
-        self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
-
-        info!(
-            sink_id = id.to_string(),
-            from_id = from_id.to_string(),
-            acquired_since = ?dependency_since,
-            "prepare_export: sink acquired read holds"
-        );
-
-        Ok(CreateExportToken {
-            id,
-            from_id,
-            acquired_since: dependency_since,
-        })
-    }
-
-    fn cancel_prepare_export(
-        &mut self,
-        CreateExportToken {
-            id,
-            from_id,
-            acquired_since,
-        }: CreateExportToken<T>,
-    ) {
-        info!(
-            sink_id = id.to_string(),
-            from_id = from_id.to_string(),
-            acquired_since = ?acquired_since,
-            "cancel_prepare_export: sink releasing read holds",
-        );
-        self.remove_read_capabilities(acquired_since, &[from_id]);
-    }
-
     async fn create_exports(
         &mut self,
-        exports: Vec<(
-            CreateExportToken<Self::Timestamp>,
-            ExportDescription<Self::Timestamp>,
-        )>,
+        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
-        let mut dedup_hashmap = BTreeMap::<&_, &_>::new();
-        for (export, desc) in exports.iter() {
-            let CreateExportToken {
-                id,
-                from_id,
-                acquired_since: _,
-            } = export;
-
-            if dedup_hashmap.insert(id, desc).is_some() {
+        let mut dedup = BTreeMap::new();
+        for (id, desc) in exports.iter() {
+            if dedup.insert(id, desc).is_some() {
                 return Err(StorageError::SinkIdReused(*id));
             }
             if let Ok(export) = self.export(*id) {
@@ -995,21 +943,20 @@ where
                     return Err(StorageError::SinkIdReused(*id));
                 }
             }
-            if desc.sink.from != *from_id {
-                return Err(StorageError::InvalidUsage(format!(
-                    "sink {id} was prepared using from_id {from_id}, \
-                    but is now presented with from_id {}",
-                    desc.sink.from
-                )));
-            }
         }
 
-        for (export, description) in exports {
-            let CreateExportToken {
-                id,
-                from_id,
-                acquired_since,
-            } = export;
+        for (id, description) in exports {
+            let from_id = description.sink.from;
+
+            let dependency_since = self.determine_collection_since_joins(&[from_id])?;
+            self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
+
+            info!(
+                sink_id = id.to_string(),
+                from_id = from_id.to_string(),
+                acquired_since = ?dependency_since,
+                "prepare_export: sink acquired read holds"
+            );
 
             // It's worth adding a quick note on write frontiers here.
             //
@@ -1055,15 +1002,17 @@ where
                     .into_proto(),
                 )
                 .await?;
+
             let mut durable_export_data = DurableExportMetadata::from_proto(value)
                 .map_err(|e| StorageError::IOError(e.into()))?;
 
-            durable_export_data.initial_as_of.downgrade(&acquired_since);
+            durable_export_data
+                .initial_as_of
+                .downgrade(&dependency_since);
 
             info!(
                 sink_id = id.to_string(),
                 from_id = from_id.to_string(),
-                acquired_since = ?acquired_since,
                 initial_as_of = ?durable_export_data.initial_as_of,
                 "create_exports: creating sink"
             );
@@ -1072,7 +1021,7 @@ where
                 id,
                 ExportState::new(
                     description.clone(),
-                    acquired_since,
+                    dependency_since,
                     read_policy,
                     storage_dependencies,
                 ),
@@ -1127,7 +1076,7 @@ where
     }
 
     fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
-        // We don't explicitly call `remove_read_capabilities`! Downgrading the
+        // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
         let policies = identifiers
@@ -1152,8 +1101,9 @@ where
                 continue;
             }
 
-            // We don't explicitly call `remove_read_capabilities`! Downgrading the frontier of the
-            // sink to `[]` (the empty Antichain), will propagate to the storage dependencies.
+            // We don't explicitly remove read capabilities! Downgrading the
+            // frontier of the sink to `[]` (the empty Antichain), will
+            // propagate to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
@@ -2013,32 +1963,6 @@ where
         self.update_read_capabilities(&mut storage_read_updates);
 
         Ok(())
-    }
-
-    /// Removes read holds that were previously acquired via
-    /// `install_read_capabilities`.
-    ///
-    /// ## Panics
-    ///
-    /// This panics if there are no read capabilities at `capability` for all
-    /// depended-upon collections.
-    fn remove_read_capabilities(
-        &mut self,
-        capability: Antichain<T>,
-        storage_dependencies: &[GlobalId],
-    ) {
-        let mut changes = ChangeBatch::new();
-        for time in capability.iter() {
-            changes.update(time.clone(), -1);
-        }
-
-        // Remove holds for all dependencies, which we previously acquired.
-        let mut storage_read_updates = storage_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
-
-        self.update_read_capabilities(&mut storage_read_updates);
     }
 
     /// Opens a write and critical since handles for the given `shard`.

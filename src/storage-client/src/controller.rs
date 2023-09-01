@@ -168,23 +168,6 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub instance_id: StorageInstanceId,
 }
 
-/// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
-/// that compaction is being held back on `from_id` at least until `id` is created.  It should be
-/// held while the AS OF is determined.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateExportToken<T = mz_repr::Timestamp> {
-    pub id: GlobalId,
-    pub from_id: GlobalId,
-    pub acquired_since: Antichain<T>,
-}
-
-impl CreateExportToken {
-    /// Returns the ID of the export with which the token is associated.
-    pub fn id(&self) -> GlobalId {
-        self.id
-    }
-}
-
 /// A cursor over a snapshot, allowing us to read just part of a snapshot in its
 /// consolidated form.
 pub struct SnapshotCursor<T: Codec64 + Timestamp + Lattice> {
@@ -330,21 +313,8 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(
-            CreateExportToken<Self::Timestamp>,
-            ExportDescription<Self::Timestamp>,
-        )>,
+        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
-
-    /// Notify the storage controller to prepare for an export to be created
-    fn prepare_export(
-        &mut self,
-        id: GlobalId,
-        from_id: GlobalId,
-    ) -> Result<CreateExportToken<Self::Timestamp>, StorageError>;
-
-    /// Cancel the pending export
-    fn cancel_prepare_export(&mut self, token: CreateExportToken<Self::Timestamp>);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
