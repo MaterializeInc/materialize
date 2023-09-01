@@ -1480,7 +1480,7 @@ impl Coordinator {
                         .prepare_export(id, sink.from)
                         .unwrap_or_terminate("cannot fail to prepare export");
 
-                    self.create_storage_export(create_export_token, sink, sink.connection.clone())
+                    self.create_storage_export(create_export_token, sink)
                         .await
                         .unwrap_or_terminate("cannot fail to create exports");
                 }
