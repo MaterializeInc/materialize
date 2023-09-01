@@ -484,6 +484,10 @@ impl DynamicConfig {
         self.feature_flags[flag.name].load(DynamicConfig::LOAD_ORDERING)
     }
 
+    pub fn set_flag(&self, flag: PersistFlag, to: bool) {
+        self.feature_flags[flag.name].store(to, DynamicConfig::STORE_ORDERING);
+    }
+
     /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
     /// calls on previous ones finishing.
@@ -1066,7 +1070,7 @@ impl PersistParameters {
         }
         for flag in PersistFlag::ALL {
             if let Some(value) = feature_flags.get(flag.name) {
-                cfg.dynamic.feature_flags[flag.name].store(*value, DynamicConfig::STORE_ORDERING);
+                cfg.dynamic.set_flag(*flag, *value);
             }
         }
     }
