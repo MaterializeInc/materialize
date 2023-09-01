@@ -128,8 +128,8 @@ reductions and top-k operations even if they co-occur in the same query block.
 should ideally avoid operational complexity and eliminate issues with backwards compatibility.
 In other words, queries that currently use the `EXPECTED GROUP SIZE` query hint should not have
 to be rewritten to use a different hint. At the same time, a user could themself choose to exploit
-higher potential for memory savings with minimal changes to their SQL (i.e., by adding an extra
-hint to the `OPTIONS` clause).
+higher potential for memory savings with minimal changes to their SQL (i.e., by changing the
+hints in the `OPTIONS` clause).
 
 ## Out of Scope
 
@@ -234,20 +234,25 @@ EXPLAIN PLAN FOR MATERIALIZED VIEW nested_distinct_on_group_by_limit;
 
 To disambiguate the query hints when necessary, we argue for an approach with the
 following characteristics:
-1. Maintain backwards compatibility with `EXPECTED GROUP SIZE` whenever there is no ambiguity, i.e.,
-if only the `EXPECTED GROUP SIZE` is specified, it is attached to all instances of reductions and
-top-k operators.
-2. When there is ambiguity, allow for the specification of additional query hints that attach
-to specific clauses in the query block, overriding the `EXPECTED GROUP SIZE` (if any is given).
+1. Maintain backwards compatibility with `EXPECTED GROUP SIZE` by allowing users to use this
+hint with the exact same semantics it has today, i.e., if the `EXPECTED GROUP SIZE` is specified,
+it is attached to all instances of reductions and top-k operators originating from the query block.
+2. Introduce three additional query hints that attach to specific clauses in the query block,
+allowing the user to disambiguate the application of the hints to the reduction or to different
+instances of top-k operations in the query block. If these new hints are specified together with
+the `EXPECTED GROUP SIZE`, the statement will error out.
 
-To operationalize the above, two additional disambiguation hints are proposed:
+The error behavior advocated for in 2. above ensures that either the user will employ the new,
+more ergonomic hints, or alternatively rely on the backwards compatible `EXPECTED GROUP SIZE`.
+It eliminates any concerns regarding interactions between the new hints and the old one.
 
-1. `LIMIT GROUP SIZE`: This hint attaches to the `TopK` operator implementing the `LIMIT` clause.
-2. `DISTINCT ON GROUP SIZE`: This hint attaches to the `TopK` operator implementing the `DISTINCT ON` clause.
+To operationalize the above, the following new hints are proposed:
 
-As implied above, if no `EXPECTED GROUP SIZE` is given but one of `LIMIT GROUP SIZE` or
-`DISTINCT ON GROUP SIZE` are given, then the hints apply to their targeted clauses in the
-query block.
+1. `AGGREGATE INPUT GROUP SIZE`: This hint attaches to the `Reduce` operator implementing the aggregation
+in the query block.
+2. `DISTINCT ON INPUT GROUP SIZE`: This hint attaches to the `TopK` operator implementing the
+`DISTINCT ON` clause.
+3. `LIMIT INPUT GROUP SIZE`: This hint attaches to the `TopK` operator implementing the `LIMIT` clause.
 
 ## Minimal Viable Prototype
 
@@ -262,7 +267,7 @@ FROM (
     SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id) AS max_course_id
     FROM sections
     GROUP BY id, teacher_id
-    OPTIONS (EXPECTED GROUP SIZE = 1000, LIMIT GROUP SIZE = 50)
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000, LIMIT INPUT GROUP SIZE = 50)
     ORDER BY teacher_id, id
     LIMIT 2
 );
@@ -285,7 +290,7 @@ Expected Plan:
      cte l0 =                                                                            +
        Reduce aggregates=[sum(#0), sum(#1), sum(#2)]                                     +
          TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50  +
-           TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000   +
+           TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1                       +
              Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000           +
                Project (#0..=#2)                                                         +
                  Get materialize.public.sections                                         +
@@ -300,7 +305,7 @@ FROM (
     SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id) AS max_course_id
     FROM sections
     GROUP BY id, teacher_id
-    OPTIONS (LIMIT GROUP SIZE = 50, DISTINCT ON GROUP SIZE = 60)
+    OPTIONS (LIMIT INPUT GROUP SIZE = 50, DISTINCT ON INPUT GROUP SIZE = 60)
     ORDER BY teacher_id, id
     LIMIT 2
 );
@@ -331,6 +336,98 @@ Expected Plan:
 (1 row)
 ```
 
+```sql
+CREATE MATERIALIZED VIEW nested_distinct_on_group_by_limit AS
+SELECT SUM(id) AS sum_id, SUM(teacher_id) AS sum_teacher_id, SUM(max_course_id) AS sum_max_course_id
+FROM (
+    SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id) AS max_course_id
+    FROM sections
+    GROUP BY id, teacher_id
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000, DISTINCT ON INPUT GROUP SIZE = 60, LIMIT INPUT GROUP SIZE = 50)
+    ORDER BY teacher_id, id
+    LIMIT 2
+);
+
+Expected Plan:
+                                      Optimized Plan
+------------------------------------------------------------------------------------------
+ materialize.public.nested_distinct_on_group_by_limit:                                   +
+   Return                                                                                +
+     Union                                                                               +
+       Get l0                                                                            +
+       Map (null, null, null)                                                            +
+         Union                                                                           +
+           Negate                                                                        +
+             Project ()                                                                  +
+               Get l0                                                                    +
+           Constant                                                                      +
+             - ()                                                                        +
+   With                                                                                  +
+     cte l0 =                                                                            +
+       Reduce aggregates=[sum(#0), sum(#1), sum(#2)]                                     +
+         TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50  +
+           TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60     +
+             Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000           +
+               Project (#0..=#2)                                                         +
+                 Get materialize.public.sections                                         +
+
+(1 row)
+```
+
+```sql
+CREATE MATERIALIZED VIEW nested_distinct_on_group_by_limit AS
+SELECT SUM(id) AS sum_id, SUM(teacher_id) AS sum_teacher_id, SUM(max_course_id) AS sum_max_course_id
+FROM (
+    SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id) AS max_course_id
+    FROM sections
+    GROUP BY id, teacher_id
+    OPTIONS (LIMIT INPUT GROUP SIZE = 50, EXPECTED GROUP SIZE = 1000)
+    ORDER BY teacher_id, id
+    LIMIT 2
+);
+
+Expected Plan:
+ERROR: EXPECTED GROUP SIZE cannot be used in combination with LIMIT INPUT GROUP SIZE.
+```
+
+```sql
+CREATE MATERIALIZED VIEW nested_distinct_on_group_by_limit AS
+SELECT SUM(id) AS sum_id, SUM(teacher_id) AS sum_teacher_id, SUM(max_course_id) AS sum_max_course_id
+FROM (
+    SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id) AS max_course_id
+    FROM sections
+    GROUP BY id, teacher_id
+    OPTIONS (EXPECTED GROUP SIZE = 1000)
+    ORDER BY teacher_id, id
+    LIMIT 2
+);
+
+Expected Plan:
+                                      Optimized Plan
+------------------------------------------------------------------------------------------
+ materialize.public.nested_distinct_on_group_by_limit:                                   +
+   Return                                                                                +
+     Union                                                                               +
+       Get l0                                                                            +
+       Map (null, null, null)                                                            +
+         Union                                                                           +
+           Negate                                                                        +
+             Project ()                                                                  +
+               Get l0                                                                    +
+           Constant                                                                      +
+             - ()                                                                        +
+   With                                                                                  +
+     cte l0 =                                                                            +
+       Reduce aggregates=[sum(#0), sum(#1), sum(#2)]                                     +
+         TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=1000+
+           TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000   +
+             Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000           +
+               Project (#0..=#2)                                                         +
+                 Get materialize.public.sections                                         +
+
+(1 row)
+```
+
 We illustrate a few more queries with the usage of the new hints and variations of top-k patterns:
 
 ```sql
@@ -340,7 +437,7 @@ FROM teachers grp,
      LATERAL (SELECT id AS section_id
               FROM sections
               WHERE teacher_id = grp.id
-              OPTIONS (LIMIT GROUP SIZE = 1000)
+              OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
               ORDER BY course_id DESC
               LIMIT 3);
 ```
@@ -356,13 +453,13 @@ FROM teachers grp,
               FROM sections
               WHERE teacher_id = grp.id
               GROUP BY course_id
-              OPTIONS (EXPECTED GROUP SIZE = 1000, LIMIT GROUP SIZE = 20)
+              OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000, LIMIT INPUT GROUP SIZE = 20)
               ORDER BY course_id DESC
               LIMIT 3);
 ```
 
-The above query specifies both the `EXPECTED GROUP SIZE` and the `LIMIT GROUP SIZE` wherein the
-`EXPECTED GROUP SIZE` will thus only apply to the min/max reduction while the `LIMIT GROUP SIZE`
+The above query specifies both the `AGGREGATE INPUT GROUP SIZE` and the `LIMIT INPUT GROUP SIZE` wherein the
+`AGGREGATE INPUT GROUP SIZE` will thus only apply to the min/max reduction while the `LIMIT INPUT GROUP SIZE`
 will apply to the top-k operation.
 
 ## Alternatives
@@ -392,26 +489,23 @@ The suggestion in MaterializeInc/materialize#18883 to add an `EXPECTED GROUP COU
 proposal that follows a semantic hinting philosophy, but is higher-level in than the proposal
 in this design in that it does not refer to a specific SQL clause. Given the many variations
 that SQL syntax includes, we found it tricky to define an extensive hint set about semantic
-properties that would match the many syntactic variations for top-k. This is why this proposal
-focuses on attaching hints to the SQL syntax that encodes the top-k variants.
+properties that would match the many syntactic variations, especially for top-k. This is why
+this proposal focuses on attaching hints to the SQL syntax that encodes the reduction and
+top-k variants.
 
 ### Non-backward compatible changes
 
-The following changes were considered:
-
-1. Changing the current behavior of `EXPECTED GROUP SIZE`: For example, we could make the
+We considered changing the current behavior of `EXPECTED GROUP SIZE`. For example, we could make the
 `EXPECTED GROUP SIZE` apply only to the reduction in a single query block and force users to
-specify the other proposed hints for top-k constructs.
+specify the other proposed hints for top-k constructs. Additionally, `AGGREGATE INPUT GROUP SIZE` could
+be introdced as a synonym for `EXPECTED GROUP SIZE`, which would in turn be deprecated.
 
-2. Changing `EXPECTED GROUP SIZE` to `AGGREGATE GROUP SIZE`: If we were willing to change
-the behavior of `EXPECTED GROUP SIZE`, we could also change its name to reflect more clearly
-that it only applies to the reduction.
-
-The two changes above introduce operational complexity. Migration procedures would need to be
+However, such a change would introduce operational complexity. Migration procedures would need to be
 devised and implemented where we rewrite production queries to introduce the additional
 hints instead of only the `EXPECTED GROUP SIZE` in single block queries with multiple constructs.
 Additional migration procedures would need to rewrite indexed / materialized view definitions
-in the catalog to change `EXPECTED GROUP SIZE` to `AGGREGATE GROUP SIZE`.
+in the catalog to change `EXPECTED GROUP SIZE` to `AGGREGATE INPUT GROUP SIZE`. Finally, a syntax
+deprecation process would need to be followed.
 
 Given that the issue is one of better UX on the specific cases where hints need to be provided
 and only in the cases where there is ambiguity, the trade-off between operational complexity
@@ -419,8 +513,6 @@ and risk with the gain from the change leans on the direction of maintaining bac
 compatibility, as advocated by the proposal in this design document.
 
 ## Open questions
-
-* Are we OK with maintaining backwards compatibility?
 
 * Is there any other way at present to add even more top-k or min/max aggregates to the same SQL
 query block than envisioned in the design?
