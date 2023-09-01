@@ -34,9 +34,9 @@ use mz_sql::session::vars::{
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
-use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage_types::sinks::SinkAsOf;
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
 use timely::progress::Antichain;
@@ -818,10 +818,7 @@ impl Coordinator {
         &mut self,
         create_export_token: CreateExportToken,
         sink: &Sink,
-        connection: StorageSinkConnection<ReferencedConnection>,
     ) -> Result<(), AdapterError> {
-        let connection = connection.into_inline_connection(self.catalog().state());
-
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
@@ -860,7 +857,10 @@ impl Coordinator {
                 ))
                 .expect("indexes can only be built on items with descs")
                 .into_owned(),
-            connection,
+            connection: sink
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state()),
             envelope: Some(sink.envelope),
             as_of,
             status_id,
