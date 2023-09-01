@@ -778,7 +778,7 @@ impl Coordinator {
         }
     }
 
-    async fn create_storage_export(
+    pub(crate) async fn create_storage_export(
         &mut self,
         create_export_token: CreateExportToken,
         sink: &Sink,
@@ -842,60 +842,6 @@ impl Coordinator {
                 },
             )])
             .await?)
-    }
-
-    pub(crate) async fn handle_sink_connection_ready(
-        &mut self,
-        id: GlobalId,
-        oid: u32,
-        connection: StorageSinkConnection<ReferencedConnection>,
-        create_export_token: CreateExportToken,
-        session: Option<&Session>,
-    ) -> Result<(), AdapterError> {
-        // Update catalog entry with sink connection.
-        let entry = self.catalog().get_entry(&id);
-        let name = entry.name().clone();
-        let owner_id = entry.owner_id().clone();
-        let sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink.clone(),
-            _ => unreachable!(),
-        };
-
-        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
-        let mut ops = vec![catalog::Op::DropObject(ObjectId::Item(id))];
-
-        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
-        // for the following reasons:
-        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
-        //   if we're not able to actually create the sink for some reason
-        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
-        //   than it is rolling back a catalog change.
-        match self
-            .create_storage_export(create_export_token, &sink, connection)
-            .await
-        {
-            Ok(()) => {
-                ops.push(catalog::Op::CreateItem {
-                    id,
-                    oid,
-                    name,
-                    item: CatalogItem::Sink(sink.clone()),
-                    owner_id,
-                });
-                match self.catalog_transact(session, ops).await {
-                    Ok(()) => (),
-                    catalog_err @ Err(_) => {
-                        let () = self.drop_storage_sinks(vec![id]);
-                        catalog_err?
-                    }
-                }
-            }
-            storage_err @ Err(_) => match self.catalog_transact(session, ops).await {
-                Ok(()) => storage_err?,
-                catalog_err @ Err(_) => catalog_err?,
-            },
-        };
-        Ok(())
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is
