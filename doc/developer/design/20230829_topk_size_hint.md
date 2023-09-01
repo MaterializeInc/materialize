@@ -14,7 +14,7 @@ cost of extra memory usage.
 Memory usage can be reduced substantially for queries with min/max or top-k by tuning the
 `EXPECTED GROUP SIZE` query hint. The query hint informs Materialize about the maximum size of
 the query groups that are expected in the input to the min/max reduction or top-k operation. Based
-on this information, Materialize can size down the height of the hierarchy and allocate stack fewer
+on this information, Materialize can size down the height of the hierarchy and stack fewer
 arrangements.
 
 Currently, the `EXPECTED GROUP SIZE` controls the tuning of both min/max reductions and top-k computations.
@@ -88,10 +88,12 @@ FROM (
         GROUP BY l_orderkey
         OPTIONS (EXPECTED GROUP SIZE = 7)
     )
-    OPTIONS (EXPECTED GROUP SIZE = 150000)
+    OPTIONS (EXPECTED GROUP SIZE = 1500000)
     ORDER BY max_revenue DESC
     LIMIT 10
 );
+```
+```
                                    Optimized Plan
 -------------------------------------------------------------------------------------
  Explained Query:                                                                   +
@@ -108,7 +110,7 @@ FROM (
    With                                                                             +
      cte l0 =                                                                       +
        Reduce aggregates=[sum(#0)]                                                  +
-         TopK order_by=[#0 desc nulls_first] limit=10 exp_group_size=150000         +
+         TopK order_by=[#0 desc nulls_first] limit=10 exp_group_size=1500000        +
            Project (#1)                                                             +
              Reduce group_by=[#0] aggregates=[max((#1 * (1 - #2)))] exp_group_size=7+
                Project (#0, #5, #6)                                                 +
@@ -137,52 +139,53 @@ hints in the `OPTIONS` clause).
 out of scope to solve the problem above. In particular, sometimes the `EXPECTED GROUP SIZE` is
 useful even if a `GROUP BY` clause is not present in the query, e.g.:
 
-```sql
-SELECT max(l_orderkey) FROM lineitem
-OPTIONS (EXPECTED GROUP SIZE = 600000)
-```
+  ```sql
+  SELECT max(l_orderkey) FROM lineitem
+  OPTIONS (EXPECTED GROUP SIZE = 6000000)
+  ```
 
-```sql
-SELECT DISTINCT ON(l_orderkey) l_orderkey, l_linenumber
-FROM lineitem
-OPTIONS (EXPECTED GROUP SIZE = 7)
-ORDER BY l_orderkey, l_extendedprice DESC;
-```
+  ```sql
+  SELECT DISTINCT ON(l_orderkey) l_orderkey, l_linenumber
+  FROM lineitem
+  OPTIONS (EXPECTED GROUP SIZE = 7)
+  ORDER BY l_orderkey, l_extendedprice DESC;
+  ```
 
-In the queries above, users may be confused about what `GROUP` is referred to.
-We do not aim to solve this understandability issue with the existing hint as part of this design.
+  In the queries above, users may be confused about what `GROUP` is referred to.
+  We do not aim to solve this understandability issue with the existing hint as part of this design.
 
 * Presently, if a query hint is provided but not used, no notice nor error is produced. For example:
 
-```sql
-SELECT * FROM lineitem
-OPTIONS (EXPECTED GROUP SIZE = 600000)
-```
+  ```sql
+  SELECT * FROM lineitem
+  OPTIONS (EXPECTED GROUP SIZE = 6000000)
+  ```
 
-Above, the query will be executed by simply ignoring the `EXPECTED GROUP SIZE` hint.
-We deem out-of-scope to change this behavior.
+  Above, the query will be executed by simply ignoring the `EXPECTED GROUP SIZE` hint.
+  We deem out-of-scope to change this behavior.
 
 * An `EXPECTED GROUP SIZE` hint specification will be provided to reductions that do *not* include
 min/max aggregates in MIR, but will be subsequently be attached only to hierarchical reductions that
 employ bucketed plans in lowering to LIR and ignored otherwise. For example:
 
-```sql
-materialize=> EXPLAIN PLAN FOR
-SELECT l_linenumber, sum(l_extendedprice)
-FROM lineitem
-GROUP BY l_linenumber
-OPTIONS (EXPECTED GROUP SIZE = 86000);
-                          Optimized Plan
-------------------------------------------------------------------
- Explained Query:                                                +
-   Reduce group_by=[#0] aggregates=[sum(#1)] exp_group_size=86000+
-     Project (#3, #5)                                            +
-       Get materialize.public.lineitem                           +
+  ```sql
+  SELECT l_linenumber, sum(l_extendedprice)
+  FROM lineitem
+  GROUP BY l_linenumber
+  OPTIONS (EXPECTED GROUP SIZE = 860000);
+  ```
+  ```
+                            Optimized Plan
+  -------------------------------------------------------------------
+   Explained Query:                                                 +
+     Reduce group_by=[#0] aggregates=[sum(#1)] exp_group_size=860000+
+       Project (#3, #5)                                             +
+         Get materialize.public.lineitem                            +
 
-(1 row)
-```
+  (1 row)
+  ```
 
-We do not aim to change this current characteristic of the code.
+  We do not aim to change this current characteristic of the code.
 
 
 ## Solution Proposal
@@ -205,8 +208,8 @@ FROM (
     ORDER BY teacher_id, id
     LIMIT 2
 );
-
-EXPLAIN PLAN FOR MATERIALIZED VIEW nested_distinct_on_group_by_limit;
+```
+```
                                       Optimized Plan
 ------------------------------------------------------------------------------------------
  materialize.public.nested_distinct_on_group_by_limit:                                   +
@@ -271,7 +274,8 @@ FROM (
     ORDER BY teacher_id, id
     LIMIT 2
 );
-
+```
+```
 Expected Plan:
                                       Optimized Plan
 ------------------------------------------------------------------------------------------
@@ -309,7 +313,8 @@ FROM (
     ORDER BY teacher_id, id
     LIMIT 2
 );
-
+```
+```
 Expected Plan:
                                       Optimized Plan
 ------------------------------------------------------------------------------------------
@@ -347,7 +352,8 @@ FROM (
     ORDER BY teacher_id, id
     LIMIT 2
 );
-
+```
+```
 Expected Plan:
                                       Optimized Plan
 ------------------------------------------------------------------------------------------
@@ -385,7 +391,8 @@ FROM (
     ORDER BY teacher_id, id
     LIMIT 2
 );
-
+```
+```
 Expected Plan:
 ERROR: EXPECTED GROUP SIZE cannot be used in combination with LIMIT INPUT GROUP SIZE.
 ```
@@ -401,7 +408,8 @@ FROM (
     ORDER BY teacher_id, id
     LIMIT 2
 );
-
+```
+```
 Expected Plan:
                                       Optimized Plan
 ------------------------------------------------------------------------------------------
