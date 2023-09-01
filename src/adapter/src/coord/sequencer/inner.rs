@@ -74,7 +74,7 @@ use mz_storage_client::controller::{
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::StorageSinkConnectionBuilder;
+use mz_storage_types::sinks::StorageSinkConnection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
@@ -86,7 +86,7 @@ use tracing_core::callsite::rebuild_interest_cache;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
-    StorageSinkConnectionState, UpdatePrivilegeVariant,
+    UpdatePrivilegeVariant,
 };
 use crate::client::ConnectionId;
 use crate::command::{ExecuteResponse, Response};
@@ -714,8 +714,7 @@ impl Coordinator {
         );
 
         // Knowing that we're only handling kafka sinks here helps us simplify.
-        let StorageSinkConnectionBuilder::Kafka(connection_builder) =
-            sink.connection_builder.clone();
+        let StorageSinkConnection::Kafka(connection_builder) = sink.connection_builder.clone();
 
         // Then try to create a placeholder catalog item with an unknown
         // connection. If that fails, we're done, though if the client specified
@@ -727,9 +726,7 @@ impl Coordinator {
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
-            connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
-                connection_builder,
-            )),
+            connection: StorageSinkConnection::Kafka(connection_builder),
             envelope: sink.envelope,
             with_snapshot,
             resolved_ids,
@@ -791,39 +788,19 @@ impl Coordinator {
             ctx
         );
 
-        let referenced_builder = sink.connection_builder.clone();
-
-        // Now we're ready to create the sink connection. Arrange to notify the
-        // main coordinator thread when the future completes.
-        let connection_builder = sink
-            .connection_builder
-            .into_inline_connection(self.catalog().state());
-
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let connection_context = self.connection_context.clone();
-        task::spawn(
-            || format!("sink_connection_ready:{}", sink.from),
-            async move {
-                // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
-                let result =
-                    internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
-                        ctx: Some(ctx),
-                        id,
-                        oid,
-                        create_export_token,
-                        result: mz_storage_client::sink::build_sink_connection(
-                            connection_builder,
-                            referenced_builder,
-                            connection_context,
-                        )
-                        .await
-                        .map_err(Into::into),
-                    }));
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                }
-            },
-        );
+        // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+        let result = self
+            .internal_cmd_tx
+            .send(Message::SinkConnectionReady(SinkConnectionReady {
+                ctx: Some(ctx),
+                id,
+                oid,
+                create_export_token,
+                result: Ok(sink.connection_builder),
+            }));
+        if let Err(e) = result {
+            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        }
     }
 
     /// Validates that a view definition does not contain any expressions that may lead to

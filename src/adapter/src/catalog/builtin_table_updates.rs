@@ -40,8 +40,8 @@ use mz_storage_types::sources::{
 
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
-    Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
-    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink, Type,
+    View, SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
@@ -770,43 +770,40 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
-        if let Sink {
-            connection: StorageSinkConnectionState::Ready(connection),
-            ..
-        } = sink
-        {
-            match connection {
-                StorageSinkConnection::Kafka(KafkaSinkConnection { topic, .. }) => {
-                    updates.push(BuiltinTableUpdate {
-                        id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
-                        row: Row::pack_slice(&[
-                            Datum::String(&id.to_string()),
-                            Datum::String(topic.as_str()),
-                        ]),
-                        diff,
-                    });
-                }
-            };
+        match &sink.connection {
+            StorageSinkConnection::Kafka(KafkaSinkConnection {
+                topic: topic_name, ..
+            }) => {
+                updates.push(BuiltinTableUpdate {
+                    id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
+                    row: Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String(topic_name.as_str()),
+                    ]),
+                    diff,
+                });
+            }
+        };
 
-            let envelope = sink.envelope();
+        let envelope = sink.envelope();
 
-            updates.push(BuiltinTableUpdate {
-                id: self.resolve_builtin_table(&MZ_SINKS),
-                row: Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::UInt32(oid),
-                    Datum::String(&schema_id.to_string()),
-                    Datum::String(name),
-                    Datum::String(connection.name()),
-                    Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                    Datum::from(self.get_storage_object_size(id)),
-                    Datum::from(envelope),
-                    Datum::String(&sink.cluster_id.to_string()),
-                    Datum::String(&owner_id.to_string()),
-                ]),
-                diff,
-            });
-        }
+        updates.push(BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_SINKS),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                Datum::String(sink.connection.name()),
+                Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
+                Datum::from(self.get_storage_object_size(id)),
+                Datum::from(envelope),
+                Datum::String(&sink.cluster_id.to_string()),
+                Datum::String(&owner_id.to_string()),
+            ]),
+            diff,
+        });
+
         updates
     }
 

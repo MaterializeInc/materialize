@@ -3448,7 +3448,7 @@ impl Catalog {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
+                connection: sink.connection_builder,
                 envelope: sink.envelope,
                 with_snapshot,
                 resolved_ids,
