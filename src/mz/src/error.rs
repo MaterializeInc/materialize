@@ -16,7 +16,7 @@
 //! [`Error`](`enum@Error`) is a custom error type containing multiple variants
 //! for erros produced by the self crate, internal crates and external crates.
 
-use hyper::header::InvalidHeaderValue;
+use hyper::header::{InvalidHeaderValue, ToStrError};
 use thiserror::Error;
 use url::ParseError;
 
@@ -104,8 +104,8 @@ pub enum Error {
     #[error("The region is not ready to accept SQL statements. `pg_isready` failed.")]
     NotPgReadyError,
     /// Error that raises when parsing semver.
-    #[error("Error parsing semver.")]
-    SemVerParseError,
+    #[error("Error parsing semver. Description: {0}")]
+    SemVerParseError(semver::Error),
     /// Error that raises when fetching from the GitHub API.
     #[error("Error fetching from the GitHub API. Description: {0}")]
     GitHubFetchError(reqwest::Error),
@@ -123,4 +123,17 @@ pub enum Error {
     /// Error parsing a timestamp value as u64.
     #[error("Error parsing timestamp as u64.")]
     ParsingTimestampU64Error,
+    /// Error that raises when `dirs::cache_dir()` returns None.
+    #[error("Error. Cache dir not found")]
+    CacheDirNotFoundError,
+    /// Error that raises turning a Header value into str.
+    #[error("Error parsing a request header. Description: {0}")]
+    HeaderToStrError(ToStrError),
+    /// Error that raises when the redirect location is invalid.
+    #[error("Error parsing the location from the redirect request..")]
+    LocationInvalidError,
+    /// Error that raises when the request response
+    /// is invalid. Chances are that the request is not a 301.
+    #[error("Error the location from the redirect request was not found. Verify the request is redirecting.")]
+    MissingLocationError,
 }

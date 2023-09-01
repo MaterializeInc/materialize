@@ -9,31 +9,24 @@
 
 //! Command-line version checker.
 
-use axum::http::HeaderValue;
-use hyper::{
-    header::{ACCEPT, USER_AGENT},
-    HeaderMap,
-};
-use mz::{error::Error, ui::OutputFormatter, VERSION};
+use mz::{error::Error, ui::OutputFormatter};
 use mz_build_info::build_info;
-use serde::Deserialize;
+use reqwest::redirect::Policy;
+use reqwest::Client;
+use semver::Version;
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use std::{env, path::Path};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader},
 };
 
-/// This const variable represents a whole week in secs =
-/// (7 days * 24 hours * 60 minutes * 60 seconds)
-/// Chronos lib could fit very well here but I avoided
-/// to add an additional lib to the crate.
-const SECONDS_IN_A_WEEK: u64 = 7 * 24 * 60 * 60;
-const TEMP_FILE_NAME: &str = ".mz.ver";
-const MZ_V_PREFIX: &str = "mz-v";
+const CACHE_FILE_NAME: &str = ".mz.ver";
+const BINARIES_LATEST_VERSION_URL: &str =
+    "https://binaries.materialize.com/mz-latest-x86_64-unknown-linux-gnu.tar.gz";
 
 pub struct UpgradeChecker {
     no_color: bool,
@@ -45,182 +38,88 @@ impl UpgradeChecker {
     }
 
     /// Writes the current timestmap in the temp file.
-    fn update_temp_file(&self, (major, minor, patch): (u64, u64, u64)) -> Result<(), Error> {
-        let mut temp_path: PathBuf = env::temp_dir();
-        temp_path.push(TEMP_FILE_NAME);
+    fn update_cache_file(&self, version: &Version) -> Result<(), Error> {
+        let mut cache_path: PathBuf = dirs::cache_dir().ok_or(Error::CacheDirNotFoundError)?;
+        cache_path.push(CACHE_FILE_NAME);
 
-        let mut file = File::create(&temp_path)?;
-
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| Error::TimestampConversionError)?
-            .as_secs();
-
-        file.write_all(current_time.to_string().as_bytes())?;
-        file.write_all(format!("\n{}{}.{}.{}", MZ_V_PREFIX, major, minor, patch).as_bytes())?;
+        let mut file = File::create(&cache_path)?;
+        file.write_all(version.to_string().as_bytes())?;
 
         Ok(())
     }
 
     /// Checks if the last timestamp in the temp file has more than one week old.
-    fn is_cache_older_than_a_week(&self, stored_timestamp: u64) -> Result<bool, Error> {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+    fn is_cache_older_than_a_week(&self, stored_timestamp: SystemTime) -> Result<bool, Error> {
+        if SystemTime::now()
+            .duration_since(stored_timestamp)
             .map_err(|_| Error::TimestampConversionError)?
-            .as_secs();
-
-        if current_time >= stored_timestamp + SECONDS_IN_A_WEEK {
+            <= time::Duration::weeks(1)
+        {
             return Ok(true);
         }
 
         Ok(false)
     }
 
-    /// Returns the version as a tuple as follows:
-    /// (major, minor, patch)
-    fn strip_version(&self, name: String) -> Result<Option<(u64, u64, u64)>, Error> {
-        if let Some(version_part) = name.strip_prefix(MZ_V_PREFIX) {
-            // split into major, minor, patch
-            let parts: Vec<&str> = version_part.split('.').collect();
-            let parsed_parts = (
-                parts[0]
-                    .parse::<u64>()
-                    .map_err(|_err| Error::SemVerParseError)?,
-                parts[1]
-                    .parse::<u64>()
-                    .map_err(|_err| Error::SemVerParseError)?,
-                parts[2]
-                    .parse::<u64>()
-                    .map_err(|_err| Error::SemVerParseError)?,
-            );
+    fn get_cached_timpestamp_and_version(&self) -> Result<Option<(SystemTime, String)>, Error> {
+        let mut cache_path: PathBuf = dirs::cache_dir().ok_or(Error::CacheDirNotFoundError)?;
+        cache_path.push(CACHE_FILE_NAME);
 
-            return Ok(Some(parsed_parts));
-        }
-
-        Ok(None)
-    }
-
-    fn get_cached_timpestamp_and_version(&self) -> Result<Option<(u64, String)>, Error> {
-        let mut temp_path: PathBuf = env::temp_dir();
-        temp_path.push(TEMP_FILE_NAME);
-
-        if !Path::new(&temp_path).exists() {
+        if !Path::new(&cache_path).exists() {
             // Trigger the check if the file does not exist.
             return Ok(None);
         }
 
-        let file = OpenOptions::new().read(true).open(&temp_path)?;
+        let file = OpenOptions::new().read(true).open(&cache_path)?;
+        let modified_time = file.metadata()?.modified()?;
         let mut reader = BufReader::new(file);
-
-        let mut timestamp = String::new();
-        reader.read_line(&mut timestamp)?;
-
         let mut reg_version = String::new();
         reader.read_line(&mut reg_version)?;
 
-        let stored_timestamp: u64 = timestamp
-            .trim()
-            .parse()
-            .map_err(|_| Error::ParsingTimestampU64Error)?;
-
-        Ok(Some((stored_timestamp, reg_version)))
+        Ok(Some((modified_time, reg_version)))
     }
 
     /// Returns true if the installed version of `mz`
     /// is older than the version sent by parameter.
-    fn is_installed_version_older_than(&self, (major, minor, patch): (u64, u64, u64)) -> bool {
-        let local_version = build_info!().semver_version();
+    fn is_installed_version_older_than(&self, version: Version) -> bool {
+        let installed_version = build_info!().semver_version();
 
-        if major > local_version.major {
-            return true;
-        }
-
-        if minor > local_version.minor {
-            return true;
-        }
-
-        if major == local_version.major
-            && minor == local_version.minor
-            && patch > local_version.patch + 5
-        {
-            return true;
-        }
-
-        false
+        println!("inst: {} / lat: {}", installed_version, version);
+        installed_version > version
     }
 
     /// Fetches and returns the latest tag version from the Materialize repository
     /// using the GitHub public API.
-    async fn get_last_tag_version(&self) -> Result<Option<(u64, u64, u64)>, Error> {
-        #[derive(Deserialize, Debug)]
-        struct GithubTag {
-            name: String,
+    async fn get_latest_tag_version(&self) -> Result<Version, Error> {
+        // The policy must be set to None.
+        // Otherwise the client will handle the redirection.
+        let client = Client::builder().redirect(Policy::none()).build()?;
+
+        // Set an agent. Otherwise the response is not useful.
+        // let mut headers = HeaderMap::new();
+        // let user_agent = format!("mz/{}", VERSION.clone());
+        // headers.insert(
+        //     USER_AGENT,
+        //     HeaderValue::from_str(&user_agent).map_err(Error::HeaderParseError)?,
+        // );
+        let response = client
+            .get(BINARIES_LATEST_VERSION_URL)
+            // .headers(headers)
+            .send()
+            .await?;
+
+        // If the server returns a redirect, you can usually find the location header.
+        if let Some(location) = response.headers().get("location") {
+            let location_str = location.to_str().map_err(Error::HeaderToStrError)?;
+            let version = location_str.split("-").collect::<Vec<&str>>()[1]
+                .strip_prefix("v")
+                .ok_or(Error::LocationInvalidError)?;
+            let latest_version = Version::parse(&version).map_err(Error::SemVerParseError)?;
+            println!("Latest version: {}", latest_version);
+            return Ok(latest_version);
         }
 
-        // Headers recommended by GitHub: https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#list-repository-tags
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static("application/vnd.github+json"),
-        );
-        // The GitHub API endpoint requires setting the user agent; otherwise, it returns a 403.
-        let user_agent = format!("mz/{}", VERSION.clone());
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_str(&user_agent).map_err(Error::HeaderParseError)?,
-        );
-
-        let client = reqwest::Client::new();
-
-        // As of the creation date of this code, the last `mz-vx.y.z` tag is located on page 4 (last-one).
-        // I kept the first page in the event to avoid any issues.
-        let mut page = 1;
-
-        let last_tag = loop {
-            let url = format!(
-                "https://api.github.com/repos/materializeInc/materialize/tags?per_page=100&page={}",
-                page
-            );
-            let response = client
-                .get(url)
-                .headers(headers.clone())
-                .send()
-                .await
-                .map_err(Error::GitHubFetchError)?;
-
-            let tags: Vec<GithubTag> = response
-                .json()
-                .await
-                .map_err(Error::ReqwestJsonParseError)?;
-
-            if let Some(tag) = tags
-                .into_iter()
-                .find(|tag| tag.name.starts_with(MZ_V_PREFIX))
-            {
-                break tag;
-            }
-            page += 1;
-        };
-
-        let last_version = self.strip_version(last_tag.name)?;
-
-        Ok(last_version)
-    }
-
-    /// Formats and returns the update message depending on the user's operating system.
-    fn format_version_update_message(&self) -> String {
-        let os = std::env::consts::OS;
-
-        match os {
-            "linux" => {
-                "New version available. Update now: `apt install --only-upgrade materialize-cli`"
-            }
-            "macos" => {
-                "New version available. Update now: `brew upgrade materializeInc/materialize/mz`"
-            }
-            _ => "New version available. Update now.",
-        }
-        .to_string()
+        Err(Error::MissingLocationError)
     }
 
     /// Prints the warning message to update mz if the check result is true.
@@ -229,57 +128,68 @@ impl UpgradeChecker {
             Ok(check) => {
                 if check {
                     let of = OutputFormatter::new(mz::ui::OutputFormat::Text, self.no_color);
-                    let _ = of.output_warning(&self.format_version_update_message());
+
+                    // We can improve this, but I'm following a more KISS (Keep It Simple..) approach.
+                    // Previously, there was a proper message for each operating system on how to
+                    // apply the update, e.g., 'Run `brew upgrade ...`.'
+                    // By doing this, we had to differentiate if the user
+                    // installed `mz` through Brew or by curling the binary.
+                    // Displaying the version also requires making another
+                    // request to verify if it is the latest version or not.
+                    // This message is simple. It works. Nothing fancy.
+                    let _ = of.output_warning("New version available. Update now.");
                 }
             }
             _ => {}
         }
     }
 
-    /// This function checks if `mz` needs to update. The function
-    /// returns true if the installed version meets any
-    /// of the following conditions:
-    /// - Less than 5 patch versions from the latest version
-    /// - Less than 1 minor version from the latest version
-    /// - Less than 1 major version from the latest version
+    /// This function checks if `mz` needs an update. The function
+    /// returns true if the installed version is at least one version older.
     ///
     /// Additionally, the check caches the results for a week
     /// to avoid slowing down commands and
     /// sending excessive requests to GitHub.
     ///
     /// The cached results contains the timestamp and
-    /// version fetched in a file within the temp dir
-    /// using `env::temp_dir()`.
+    /// version fetched in a file within the cache dir
+    /// using `dirs::cache_dir()`.
     pub async fn check_version(&self) -> Result<bool, Error> {
         // Check cached data first
-        if let Some((cache_timestamp, cached_version)) = self.get_cached_timpestamp_and_version()? {
+        if let Some((last_modified_time, cached_version)) =
+            self.get_cached_timpestamp_and_version()?
+        {
+            println!(
+                "Cache mod: {:?} / version: {} ",
+                last_modified_time, cached_version
+            );
             // If the already cached version is greater than the local version
             // Warn the user and avoid querying GitHub
-            if let Some(stripped_version) = self.strip_version(cached_version)? {
-                if self.is_installed_version_older_than(stripped_version) {
-                    return Ok(true);
-                }
+            let cached_version =
+                Version::parse(&cached_version).map_err(Error::SemVerParseError)?;
+            if self.is_installed_version_older_than(cached_version) {
+                println!("Return true");
+                return Ok(true);
             }
 
             // If the cache is not older than a week then there
             // is no need to check new versions yet.
-            if !self.is_cache_older_than_a_week(cache_timestamp)? {
+            if !self.is_cache_older_than_a_week(last_modified_time)? {
+                println!("Return false");
                 return Ok(false);
             }
         }
 
         // Fetch the latest version from GitHub
-        match self.get_last_tag_version().await {
-            Ok(Some(tag_version)) => {
-                self.update_temp_file(tag_version)?;
+        match self.get_latest_tag_version().await {
+            Ok(tag_version) => {
+                self.update_cache_file(&tag_version)?;
                 if self.is_installed_version_older_than(tag_version) {
                     return Ok(true);
                 }
             }
-            Ok(None) => {
-                return Ok(false);
-            }
             Err(e) => {
+                println!("Error: {}", e);
                 return Err(e);
             }
         }
