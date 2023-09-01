@@ -582,17 +582,17 @@ pub enum IndexUsageType {
     DeltaJoin(bool),
     /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
     Lookup,
-    /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
-    /// situation that I know of when it occurs is if one index is used to build another index
-    /// without any transformations (but possibly with a different key). Note that we won't be able
-    /// to actually observe this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or
-    /// `EXPLAIN CREATE INDEX`. (`export_index` is what inserts this `ArrangeBy`.)
-    PlanRoot,
+    /// This is a rare case that happens when the user creates an index that is identical to an
+    /// existing one (i.e., on the same object, and with the same keys). We'll re-use the
+    /// arrangement of the existing index. The plan is an `ArrangeBy` + `Get`, where the `ArrangeBy`
+    /// is requesting the same key as an already existing index. (`export_index` is what inserts
+    /// this `ArrangeBy`.)
+    PlanRootNoArrangement,
     /// The index is used for directly writing to a sink. Can happen with a SUBSCRIBE to an indexed
     /// view.
     SinkExport,
-    /// The index is used for creating a new index. Currently, a `PlanRoot` usage will always
-    /// additionally be present together with an `IndexExport` usage.
+    /// The index is used for creating a new index. Note that either a `FullScan` or a
+    /// `PlanRootNoArrangement` usage will always accompany an `IndexExport` usage.
     IndexExport,
     /// When a fast path peek has a LIMIT, but no ORDER BY, then we read from the index only as many
     /// records (approximately), as the OFFSET + LIMIT needs.
@@ -626,7 +626,7 @@ impl std::fmt::Display for IndexUsageType {
                 // number of records anyway. In other words, something is always scanning new
                 // updates, but we can avoid scanning records again and again in snapshots.
                 IndexUsageType::DeltaJoin(false) => "delta join lookup",
-                IndexUsageType::PlanRoot => "plan root",
+                IndexUsageType::PlanRootNoArrangement => "plan root (no new arrangement)",
                 IndexUsageType::SinkExport => "sink export",
                 IndexUsageType::IndexExport => "index export",
                 IndexUsageType::FastPathLimit => "fast path limit",
@@ -646,7 +646,7 @@ impl RustType<ProtoIndexUsageType> for IndexUsageType {
                 IndexUsageType::Lookup => Lookup(()),
                 IndexUsageType::DifferentialJoin => DifferentialJoin(()),
                 IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
-                IndexUsageType::PlanRoot => PlanRoot(()),
+                IndexUsageType::PlanRootNoArrangement => PlanRootNoArrangement(()),
                 IndexUsageType::SinkExport => SinkExport(()),
                 IndexUsageType::IndexExport => IndexExport(()),
                 IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
@@ -667,7 +667,7 @@ impl RustType<ProtoIndexUsageType> for IndexUsageType {
             Lookup(()) => Ok(IndexUsageType::Lookup),
             DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
             DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
-            PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
+            PlanRootNoArrangement(()) => Ok(IndexUsageType::PlanRootNoArrangement),
             SinkExport(()) => Ok(IndexUsageType::SinkExport),
             IndexExport(()) => Ok(IndexUsageType::IndexExport),
             DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),

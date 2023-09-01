@@ -638,7 +638,7 @@ impl<'a> CollectIndexRequests<'a> {
         assert!(self.context_across_lets.is_empty());
         self.collect_index_reqs_inner(
             expr,
-            &IndexUsageContext::from_usage_type(IndexUsageType::PlanRoot),
+            &IndexUsageContext::from_usage_type(IndexUsageType::PlanRootNoArrangement),
         )?;
         assert!(self.context_across_lets.is_empty());
         Ok(())
@@ -726,26 +726,30 @@ impl<'a> CollectIndexRequests<'a> {
                         .entry(*global_id)
                         .or_insert_with(Vec::new);
                     // If the context is empty, it means we didn't see an operator that would
-                    // specifically want to use an index for this Get. However, let's still try to find
-                    // an index for a full scan.
+                    // specifically want to use an index for this Get. However, let's still try to
+                    // find an index for a full scan.
                     let mut try_full_scan = contexts.is_empty();
                     for context in contexts {
                         match &context.requested_keys {
                             None => {
                                 // We have some index usage context, but didn't see an `ArrangeBy`.
+                                try_full_scan = true;
                                 match context.usage_type {
                                     IndexUsageType::FullScan | IndexUsageType::SinkExport | IndexUsageType::IndexExport => {
                                         // Not possible, because these don't go through
                                         // IndexUsageContext at all.
                                         unreachable!()
                                     },
-                                    // You can find more info on why the following join cases shouldn't
-                                    // happen in comments of the Join lowering to LIR.
+                                    // You can find more info on why the following join cases
+                                    // shouldn't happen in comments of the Join lowering to LIR.
                                     IndexUsageType::Lookup => soft_panic_or_log!("CollectIndexRequests encountered an IndexedFilter join without an ArrangeBy"),
                                     IndexUsageType::DifferentialJoin => soft_panic_or_log!("CollectIndexRequests encountered a Differential join without an ArrangeBy"),
                                     IndexUsageType::DeltaJoin(_) => soft_panic_or_log!("CollectIndexRequests encountered a Delta join without an ArrangeBy"),
-                                    IndexUsageType::PlanRoot => {
-                                        // This is ok: happens when the entire query is a `Get`.
+                                    IndexUsageType::PlanRootNoArrangement => {
+                                        // This is ok: the entire plan is a `Get`, with not even an
+                                        // `ArrangeBy`. Note that if an index exists, the usage will
+                                        // be saved as `FullScan` (NOT as `PlanRootNoArrangement`),
+                                        // because we are going into the `try_full_scan` if.
                                     },
                                     IndexUsageType::FastPathLimit => {
                                         // These are created much later, not even inside
@@ -753,7 +757,7 @@ impl<'a> CollectIndexRequests<'a> {
                                         unreachable!()
                                     }
                                     IndexUsageType::DanglingArrangeBy => {
-                                        // Not possible, because we create IndexUsageType::Unknown
+                                        // Not possible, because we create `DanglingArrangeBy`
                                         // only when we see an `ArrangeBy`.
                                         unreachable!()
                                     },
@@ -762,7 +766,6 @@ impl<'a> CollectIndexRequests<'a> {
                                         unreachable!()
                                     }
                                 }
-                                try_full_scan = true;
                             }
                             Some(requested_keys) => {
                                 for requested_key in requested_keys {
@@ -777,27 +780,29 @@ impl<'a> CollectIndexRequests<'a> {
                                             .unwrap()
                                             .push((requested_key.clone(), context.usage_type.clone()));
                                     } else {
-                                        // If there is a key requested for which we don't have an index,
-                                        // then we might still be able to do a full scan of a
+                                        // If there is a key requested for which we don't have an
+                                        // index, then we might still be able to do a full scan of a
                                         // differently keyed index.
                                         try_full_scan = true;
                                     }
                                 }
                                 if requested_keys.is_empty() {
-                                    // It's a bit weird if an MIR ArrangeBy is not requesting any key,
-                                    // but let's try a full scan in that case anyhow.
+                                    // It's a bit weird if an MIR ArrangeBy is not requesting any
+                                    // key, but let's try a full scan in that case anyhow.
                                     try_full_scan = true;
                                 }
                             }
                         }
                     }
                     if try_full_scan {
-                        // TODO: Keep in mind that when having 2 contexts coming from 2 uses of a Let,
+                        // Keep in mind that when having 2 contexts coming from 2 uses of a Let,
                         // this code can't distinguish between the case when there is 1 ArrangeBy at the
                         // top of the Let, or when the 2 uses each have an `ArrangeBy`. In both cases,
                         // we'll add only 1 full scan, which would be wrong in the latter case. However,
                         // the latter case can't currently happen until we do
                         // https://github.com/MaterializeInc/materialize/issues/21145
+                        // Also note that currently we are deduplicating index usage types when
+                        // printing index usages in EXPLAIN.
                         if let Some(key) = pick_index_for_full_scan(global_id) {
                             this.index_reqs_by_id
                                 .get_mut(global_id)
@@ -918,8 +923,8 @@ impl IndexUsageContext {
         if contexts.is_empty() {
             // No join above us, and we are not at the root. Why does this ArrangeBy even exist?
             soft_panic_or_log!("CollectIndexRequests encountered a dangling ArrangeBy");
-            // Anyhow, let's create a context with an Unknown index usage, so that we have a place
-            // to note down the requested keys below.
+            // Anyhow, let's create a context with a `DanglingArrangeBy` index usage, so that we
+            // have a place to note down the requested keys below.
             contexts = IndexUsageContext::from_usage_type(IndexUsageType::DanglingArrangeBy);
         }
         for context in contexts.iter_mut() {
