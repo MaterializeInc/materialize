@@ -1032,6 +1032,7 @@ pub mod datadriven {
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
+    use crate::cfg::PersistFlag;
     use crate::fetch::{fetch_batch_part, Cursor};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
@@ -1069,6 +1070,14 @@ pub mod datadriven {
                 .cfg
                 .dynamic
                 .set_blob_target_size(PersistConfig::DEFAULT_BLOB_TARGET_SIZE);
+            client
+                .cfg
+                .dynamic
+                .set_flag(PersistFlag::STREAMING_COMPACTION, true);
+            client
+                .cfg
+                .dynamic
+                .set_flag(PersistFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
