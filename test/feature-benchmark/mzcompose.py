@@ -94,7 +94,11 @@ SERVICES = [
     Redpanda(),
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
-    Materialized(),
+    Materialized(
+        additional_system_parameter_defaults={
+            "variable_length_row_encoding": "true",
+        }
+    ),
     Testdrive(
         default_timeout=default_timeout,
         materialize_params={"statement_timeout": f"'{default_timeout}'"},
