@@ -2202,7 +2202,7 @@ impl From<CatalogEntry> for storage::Item {
         storage::Item {
             id: entry.id,
             name: entry.name,
-            definition: Catalog::to_serialized_item(entry.item),
+            definition: entry.item.into_serialized(),
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
         }
@@ -2899,6 +2899,92 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => false,
+        }
+    }
+
+    pub(crate) fn to_serialized(&self) -> SerializedCatalogItem {
+        match self {
+            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
+                create_sql: table.create_sql.clone(),
+            },
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    match source.data_source {
+                        DataSourceDesc::Introspection(_) => false,
+                        _ => true,
+                    },
+                    "cannot serialize introspection/builtin sources",
+                );
+                SerializedCatalogItem::V1 {
+                    create_sql: source.create_sql.clone(),
+                }
+            }
+            CatalogItem::View(view) => SerializedCatalogItem::V1 {
+                create_sql: view.create_sql.clone(),
+            },
+            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
+                create_sql: mview.create_sql.clone(),
+            },
+            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
+                create_sql: index.create_sql.clone(),
+            },
+            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
+                create_sql: sink.create_sql.clone(),
+            },
+            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
+                create_sql: typ.create_sql.clone(),
+            },
+            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
+                create_sql: secret.create_sql.clone(),
+            },
+            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
+                create_sql: connection.create_sql.clone(),
+            },
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        }
+    }
+
+    pub(crate) fn into_serialized(self) -> SerializedCatalogItem {
+        match self {
+            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
+                create_sql: table.create_sql,
+            },
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    match source.data_source {
+                        DataSourceDesc::Introspection(_) => false,
+                        _ => true,
+                    },
+                    "cannot serialize introspection/builtin sources",
+                );
+                SerializedCatalogItem::V1 {
+                    create_sql: source.create_sql,
+                }
+            }
+            CatalogItem::View(view) => SerializedCatalogItem::V1 {
+                create_sql: view.create_sql,
+            },
+            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
+                create_sql: mview.create_sql,
+            },
+            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
+                create_sql: index.create_sql,
+            },
+            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
+                create_sql: sink.create_sql,
+            },
+            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
+                create_sql: typ.create_sql,
+            },
+            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
+                create_sql: secret.create_sql,
+            },
+            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
+                create_sql: connection.create_sql,
+            },
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
 }
@@ -4783,7 +4869,7 @@ impl Catalog {
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
             let entry = self.get_entry(&id);
             let item = entry.item();
-            let serialized_item = Self::serialize_item(item);
+            let serialized_item = item.to_serialized();
             tx.insert_item(
                 id,
                 schema_id,
@@ -6517,7 +6603,7 @@ impl Catalog {
                             }
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
-                        let serialized_item = Self::serialize_item(&item);
+                        let serialized_item = item.to_serialized();
                         tx.insert_item(
                             id,
                             schema_id,
@@ -7823,92 +7909,6 @@ impl Catalog {
     }
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
-    }
-
-    pub(crate) fn serialize_item(item: &CatalogItem) -> SerializedCatalogItem {
-        match item {
-            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
-                create_sql: table.create_sql.clone(),
-            },
-            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-            CatalogItem::Source(source) => {
-                assert!(
-                    match source.data_source {
-                        DataSourceDesc::Introspection(_) => false,
-                        _ => true,
-                    },
-                    "cannot serialize introspection/builtin sources",
-                );
-                SerializedCatalogItem::V1 {
-                    create_sql: source.create_sql.clone(),
-                }
-            }
-            CatalogItem::View(view) => SerializedCatalogItem::V1 {
-                create_sql: view.create_sql.clone(),
-            },
-            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
-                create_sql: mview.create_sql.clone(),
-            },
-            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
-                create_sql: index.create_sql.clone(),
-            },
-            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
-                create_sql: sink.create_sql.clone(),
-            },
-            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
-                create_sql: typ.create_sql.clone(),
-            },
-            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
-                create_sql: secret.create_sql.clone(),
-            },
-            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
-                create_sql: connection.create_sql.clone(),
-            },
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-        }
-    }
-
-    pub(crate) fn to_serialized_item(item: CatalogItem) -> SerializedCatalogItem {
-        match item {
-            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
-                create_sql: table.create_sql,
-            },
-            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-            CatalogItem::Source(source) => {
-                assert!(
-                    match source.data_source {
-                        DataSourceDesc::Introspection(_) => false,
-                        _ => true,
-                    },
-                    "cannot serialize introspection/builtin sources",
-                );
-                SerializedCatalogItem::V1 {
-                    create_sql: source.create_sql,
-                }
-            }
-            CatalogItem::View(view) => SerializedCatalogItem::V1 {
-                create_sql: view.create_sql,
-            },
-            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
-                create_sql: mview.create_sql,
-            },
-            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
-                create_sql: index.create_sql,
-            },
-            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
-                create_sql: sink.create_sql,
-            },
-            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
-                create_sql: typ.create_sql,
-            },
-            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
-                create_sql: secret.create_sql,
-            },
-            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
-                create_sql: connection.create_sql,
-            },
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-        }
     }
 
     fn deserialize_item(
