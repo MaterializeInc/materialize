@@ -770,14 +770,7 @@ impl Coordinator {
 
         self.maybe_create_linked_cluster(id).await;
 
-        let create_export_token = return_if_err!(
-            self.controller
-                .storage
-                .prepare_export(id, catalog_sink.from),
-            ctx
-        );
-
-        self.create_storage_export(create_export_token, &catalog_sink)
+        self.create_storage_export(id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
 
