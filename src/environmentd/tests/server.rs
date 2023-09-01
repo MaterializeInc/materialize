@@ -130,6 +130,7 @@ fn test_persistence() {
 
     {
         let server = util::start_server(config.clone()).unwrap();
+        server.enable_feature_flags(&["enable_create_source"]);
         let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .batch_execute(&format!(
@@ -228,7 +229,8 @@ fn setup_statement_logging(
 #[mz_ore::test]
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 fn test_statement_logging_immediate() {
-    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    server.enable_feature_flags(&["enable_create_source"]);
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
@@ -622,6 +624,7 @@ fn test_statement_logging_unsampled_metrics() {
 #[mz_ore::test]
 fn test_source_sink_size_required() {
     let server = util::start_server(util::Config::default()).unwrap();
+    server.enable_feature_flags(&["enable_create_source"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Sources bail without an explicit size.
@@ -2138,7 +2141,7 @@ fn test_cancel_ws() {
 #[cfg_attr(miri, ignore)] // too slow
 fn smoketest_webhook_source() {
     let server = util::start_server(util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_create_source"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2325,7 +2328,7 @@ fn test_invalid_webhook_body() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_duplicate_headers() {
     let server = util::start_server(util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_create_source"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let http_client = Client::new();
@@ -2552,7 +2555,7 @@ fn test_http_metrics() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrent_actions() {
     let server = util::start_server(util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_create_source"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2712,6 +2715,7 @@ fn webhook_concurrency_limit() {
     let server = util::start_server(config).unwrap();
     // Note: we need enable_unstable_dependencies to use mz_sleep.
     server.enable_feature_flags(&[
+        "enable_create_source",
         "enable_webhook_sources",
         "enable_unstable_dependencies",
         "enable_dangerous_functions",
@@ -2786,7 +2790,7 @@ fn webhook_concurrency_limit() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_too_large_request() {
     let server = util::start_server(util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_create_source"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2836,7 +2840,7 @@ fn webhook_too_large_request() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_url_notice() {
     let server = util::start_server(util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
+    server.enable_feature_flags(&["enable_webhook_sources", "enable_create_source"]);
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server

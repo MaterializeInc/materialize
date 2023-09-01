@@ -1569,6 +1569,7 @@ feature_flags!(
         enable_connection_validation_syntax,
         "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax"
     ),
+    (enable_create_source, "executing CREATE SOURCE statements"),
     (
         enable_webhook_sources,
         "creating or pushing data to webhook sources"

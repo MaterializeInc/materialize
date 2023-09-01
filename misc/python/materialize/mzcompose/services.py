@@ -42,6 +42,7 @@ DEFAULT_MZ_VOLUMES = [
 DEFAULT_SYSTEM_PARAMETERS = {
     "persist_sink_minimum_batch_updates": "128",
     "enable_multi_worker_storage_persist_sink": "true",
+    "enable_create_source": "true",
     "storage_persist_sink_minimum_batch_updates": "100",
     "persist_pubsub_push_diff_enabled": "true",
     "persist_pubsub_client_enabled": "true",

@@ -171,6 +171,7 @@ fn test_no_block() {
     mz_ore::test::timeout(Duration::from_secs(120), || {
         println!("test_no_block: starting server");
         let server = util::start_server(util::Config::default()).unwrap();
+        server.enable_feature_flags(&["enable_create_source"]);
 
         server.runtime.block_on(async {
             println!("test_no_block: starting mock HTTP server");
@@ -245,6 +246,7 @@ fn test_no_block() {
 #[mz_ore::test]
 fn test_drop_connection_race() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    server.enable_feature_flags(&["enable_create_source"]);
     info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {
@@ -1785,6 +1787,7 @@ fn test_timeline_read_holds() {
     };
     let config = util::Config::default().with_now(now_fn).unsafe_mode();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_create_source"]);
     let mut mz_client = server.connect(postgres::NoTls).unwrap();
 
     let view_name = "v_hold";
@@ -1837,6 +1840,7 @@ fn test_linearizability() {
     };
     let config = util::Config::default().with_now(now_fn).unsafe_mode();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_create_source"]);
     let mut mz_client = server.connect(postgres::NoTls).unwrap();
 
     let view_name = "v_lin";
@@ -2093,6 +2097,7 @@ fn test_concurrent_writes() {
 #[mz_ore::test]
 fn test_load_generator() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    server.enable_feature_flags(&["enable_create_source"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
@@ -2704,7 +2709,10 @@ fn test_timelines_persist_after_failed_transaction() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
 
-    server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
+    server.enable_feature_flags(&[
+        "enable_create_source",
+        "enable_create_source_denylist_with_options",
+    ]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 

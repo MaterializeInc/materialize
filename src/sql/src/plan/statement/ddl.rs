@@ -565,6 +565,8 @@ pub fn plan_create_source(
         progress_subsource,
     } = &stmt;
 
+    scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE)?;
+
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     let allowed_with_options = vec![
