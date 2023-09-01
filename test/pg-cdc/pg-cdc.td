@@ -103,6 +103,7 @@ ALTER TABLE conflict_schema.conflict_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_schema.conflict_table VALUES ('234');
 
 CREATE TABLE "space table" ("space column" INTEGER);
+ALTER TABLE "space table" REPLICA IDENTITY FULL;
 
 CREATE TYPE an_enum AS ENUM ('var0', 'var1');
 CREATE TABLE enum_table (a an_enum);
@@ -228,6 +229,15 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
   );
 contains: must not specify DETAILS option in CREATE SOURCE
 
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "no_replica_identity",
+    "pk_table"
+  );
+contains:failed to connect to PostgreSQL database
+detail:the following are not tables with REPLICA IDENTITY FULL: no_replica_identity
+
 #
 # Establish direct replication
 #
@@ -235,11 +245,9 @@ contains: must not specify DETAILS option in CREATE SOURCE
 # Note: This implicitly tests that enum_table being part of the publication does not
 # prevent us from using other tables as subsources.
 #
-# TODO: This should produce an error because we included the `no_replica_identity` table
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (
-    "no_replica_identity",
     "pk_table",
     "nonpk_table",
     "types_table",
@@ -267,7 +275,6 @@ large_text            subsource <null>  <null>
 multipart_pk          subsource <null>  <null>
 mz_source             postgres  ${arg.default-storage-size}  materialize_public_mz_source
 mz_source_progress    progress  <null>  <null>
-no_replica_identity   subsource <null>  <null>
 nonpk_table           subsource <null>  <null>
 nulls_table           subsource <null>  <null>
 pk_table              subsource <null>  <null>
@@ -302,10 +309,6 @@ contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER 
 
 ! DROP SOURCE conflict_table CASCADE
 contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
-> SELECT * FROM no_replica_identity;
-1
-2
 
 #
 # Perform sanity checks of the initial snapshot

@@ -168,7 +168,8 @@ database_objects = [
             """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table (f1 TEXT);
-            INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
+            ALTER TABLE pg_table REPLICA IDENTITY FULL;
 
             > CREATE SOURCE obj
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

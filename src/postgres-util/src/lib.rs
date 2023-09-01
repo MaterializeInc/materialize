@@ -112,6 +112,8 @@ pub use tunnel::{
     DEFAULT_REPLICATION_KEEPALIVE_INTERVAL, DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
     DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
 };
+#[cfg(feature = "validate")]
+pub mod validate;
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]

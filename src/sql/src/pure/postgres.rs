@@ -103,6 +103,13 @@ pub(super) async fn validate_requested_subsources(
 
     mz_postgres_util::check_table_privileges(config, tables_to_check_permissions).await?;
 
+    let oids: Vec<_> = requested_subsources
+        .iter()
+        .map(|(_, _, table_desc)| table_desc.oid)
+        .collect();
+
+    mz_postgres_util::validate::check_replica_identity_full(config, oids).await?;
+
     Ok(())
 }
 
