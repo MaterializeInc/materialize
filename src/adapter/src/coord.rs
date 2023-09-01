@@ -107,12 +107,9 @@ use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, DataSourceOther,
-};
-use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
@@ -192,7 +189,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
-    SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -256,7 +252,6 @@ impl Message {
             ControllerReady => "controller_ready",
             PurifiedStatementReady(_) => "purified_statement_ready",
             CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            SinkConnectionReady(_) => "sink_connection_ready",
             WriteLockGrant(_) => "write_lock_grant",
             GroupCommitInitiate(..) => "group_commit_initiate",
             GroupCommitApply(..) => "group_commit_apply",
@@ -301,17 +296,6 @@ pub struct CreateConnectionValidationReady {
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
-}
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct SinkConnectionReady {
-    #[derivative(Debug = "ignore")]
-    pub ctx: Option<ExecuteContext>,
-    pub id: GlobalId,
-    pub oid: u32,
-    pub create_export_token: CreateExportToken,
-    pub result: Result<StorageSinkConnection<ReferencedConnection>, AdapterError>,
 }
 
 #[derive(Debug)]
@@ -1489,30 +1473,16 @@ impl Coordinator {
                     self.catalog_mut().set_physical_plan(entry.id(), df);
                 }
                 CatalogItem::Sink(sink) => {
-                    // Now we're ready to create the sink connection. Arrange to notify the
-                    // main coordinator thread when the future completes.
                     let id = entry.id();
-                    let oid = entry.oid();
-
                     let create_export_token = self
                         .controller
                         .storage
                         .prepare_export(id, sink.from)
                         .unwrap_or_terminate("cannot fail to prepare export");
 
-                    // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
-                    let result = self.internal_cmd_tx.send(Message::SinkConnectionReady(
-                        SinkConnectionReady {
-                            ctx: None,
-                            id,
-                            oid,
-                            create_export_token,
-                            result: Ok(sink.connection.clone()),
-                        },
-                    ));
-                    if let Err(e) = result {
-                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                    }
+                    self.create_storage_export(create_export_token, sink, sink.connection.clone())
+                        .await
+                        .unwrap_or_terminate("cannot fail to create exports");
                 }
                 CatalogItem::Connection(catalog_connection) => {
                     if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
