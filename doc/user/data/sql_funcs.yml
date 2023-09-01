@@ -348,6 +348,11 @@
       `needle`, in order. If `flags` is set to the string `i` matches
       case-insensitively.
 
+  - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
+    description: >-
+      Splits `text` by the regular expression `pattern` into an array.
+      If `flags` is set to the string `i` matches case-insensitively.
+
   - signature: 'repeat(s: str, n: int) -> str'
     description: Replicate the string `n` times.
 
@@ -618,6 +623,10 @@
     description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
+  - signature: 'regexp_split_to_table(text: str, pattern: str [, flags: str]]) -> Col<string>'
+    description: >-
+      Splits `text` by the regular expression `pattern`.
+      If `flags` is set to the string `i` matches case-insensitively.
   - signature: 'unnest(a: anyarray)'
     description: Expands the array `a` into a set of rows.
   - signature: 'unnest(l: anylist)'

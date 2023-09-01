@@ -3978,6 +3978,7 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr",
  "mz-proto",
+ "mz-regexp",
  "mz-repr",
  "mz-sql-parser",
  "num",
@@ -4648,6 +4649,18 @@ dependencies = [
  "tokio-postgres",
  "url",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-regexp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-repr",
+ "postgres",
+ "regex",
  "workspace-hack",
 ]
 
