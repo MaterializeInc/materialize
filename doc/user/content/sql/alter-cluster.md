@@ -6,7 +6,8 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER CLUSTER` changes the configuration of a cluster.
+`ALTER CLUSTER` changes the configuration of a cluster. (To rename a
+cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).)
 
 ## Syntax
 
@@ -68,6 +69,7 @@ The privileges required to execute this statement are:
 
 ## See also
 
+- [`ALTER ... RENAME`](/sql/alter-rename/)
 - [`CREATE CLUSTER`](/sql/create-cluster/)
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 - [`CREATE SINK`](/sql/create-sink/)
