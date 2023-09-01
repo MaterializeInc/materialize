@@ -94,7 +94,7 @@ async fn migrate_cluster_replicas(tx: &mut Transaction<'_>) -> Result<(), StashE
                 value: Some(new_id),
             }),
         };
-        let new_value = WireCompatible::convert(value.clone());
+        let new_value = WireCompatible::convert(value);
         MigrationAction::Update(key.clone(), (new_key, new_value))
     };
 

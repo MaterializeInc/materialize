@@ -49,9 +49,8 @@ pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
                         found_user_flag = true;
                     }
 
-                    let new_key: v36::ServerConfigurationKey = WireCompatible::convert(key.clone());
-                    let new_value: v36::ServerConfigurationValue =
-                        WireCompatible::convert(value.clone());
+                    let new_key: v36::ServerConfigurationKey = WireCompatible::convert(key);
+                    let new_value: v36::ServerConfigurationValue = WireCompatible::convert(value);
                     updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
                 }
 
