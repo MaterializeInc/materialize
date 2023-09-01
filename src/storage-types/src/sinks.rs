@@ -11,6 +11,7 @@
 
 use std::fmt::Debug;
 
+use mz_ore::cast::CastFrom;
 use mz_persist_client::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
@@ -235,7 +236,22 @@ impl RustType<proto::SinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkProgressConnection {
+    pub topic: String,
+}
+
+impl RustType<String> for KafkaSinkProgressConnection {
+    fn into_proto(&self) -> String {
+        self.topic.clone()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkProgressConnection { topic: proto })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSinkConnection<C>),
 }
@@ -250,6 +266,29 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
     }
 }
 
+impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
+    fn into_proto(&self) -> ProtoStorageSinkConnection {
+        use proto_storage_sink_connection::Kind::*;
+
+        ProtoStorageSinkConnection {
+            kind: Some(match self {
+                Self::Kafka(conn) => KafkaV2(conn.into_proto()),
+            }),
+        }
+    }
+    fn from_proto(proto: ProtoStorageSinkConnection) -> Result<Self, TryFromProtoError> {
+        use proto_storage_sink_connection::Kind::*;
+
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaConsistencyConfig::kind"))?;
+
+        Ok(match kind {
+            KafkaV2(proto) => Self::Kafka(proto.into_rust()?),
+        })
+    }
+}
+
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
     pub fn connection_id(&self) -> Option<GlobalId> {
@@ -261,105 +300,25 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
 
     /// Returns the name of the sink connection.
     pub fn name(&self) -> &'static str {
+        use StorageSinkConnection::*;
         match self {
-            StorageSinkConnection::Kafka(_) => "kafka",
+            Kafka(_) => "kafka",
         }
     }
 }
 
-impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
-    fn into_proto(&self) -> ProtoStorageSinkConnection {
-        use proto_storage_sink_connection::Kind;
-        ProtoStorageSinkConnection {
-            kind: Some(match self {
-                StorageSinkConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStorageSinkConnection) -> Result<Self, TryFromProtoError> {
-        use proto_storage_sink_connection::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
-        Ok(match kind {
-            Kind::Kafka(kafka) => StorageSinkConnection::Kafka(kafka.into_rust()?),
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkProgressConnection {
-    pub topic: String,
-}
-
-impl RustType<ProtoKafkaSinkProgressConnection> for KafkaSinkProgressConnection {
-    fn into_proto(&self) -> ProtoKafkaSinkProgressConnection {
-        ProtoKafkaSinkProgressConnection {
-            topic: self.topic.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkProgressConnection) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkProgressConnection { topic: proto.topic })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
-    pub connection: KafkaConnection<C>,
-    pub connection_id: GlobalId,
-    pub topic: String,
-    pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
-    pub relation_key_indices: Option<Vec<usize>>,
-    pub value_desc: RelationDesc,
-    pub published_schema_info: Option<PublishedSchemaInfo>,
-    pub progress: KafkaSinkProgressConnection,
-    // Maximum number of records the sink will attempt to send each time it is
-    // invoked
-    pub fuel: usize,
-}
-
-impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
-    for KafkaSinkConnection<ReferencedConnection>
+impl RustType<proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices>
+    for (RelationDesc, Vec<usize>)
 {
-    fn into_inline_connection(self, r: R) -> KafkaSinkConnection {
-        let KafkaSinkConnection {
-            connection,
-            connection_id,
-            topic,
-            key_desc_and_indices,
-            relation_key_indices,
-            value_desc,
-            published_schema_info,
-            progress,
-            fuel,
-        } = self;
-
-        KafkaSinkConnection {
-            connection: connection.into_inline_connection(r),
-            connection_id,
-            topic,
-            key_desc_and_indices,
-            relation_key_indices,
-            value_desc,
-            published_schema_info,
-            progress,
-            fuel,
-        }
-    }
-}
-
-impl RustType<proto_kafka_sink_connection::ProtoKeyDescAndIndices> for (RelationDesc, Vec<usize>) {
-    fn into_proto(&self) -> proto_kafka_sink_connection::ProtoKeyDescAndIndices {
-        proto_kafka_sink_connection::ProtoKeyDescAndIndices {
+    fn into_proto(&self) -> proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices {
+        proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices {
             desc: Some(self.0.into_proto()),
             indices: self.1.into_proto(),
         }
     }
 
     fn from_proto(
-        proto: proto_kafka_sink_connection::ProtoKeyDescAndIndices,
+        proto: proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices,
     ) -> Result<Self, TryFromProtoError> {
         Ok((
             proto
@@ -370,123 +329,53 @@ impl RustType<proto_kafka_sink_connection::ProtoKeyDescAndIndices> for (Relation
     }
 }
 
-impl RustType<proto_kafka_sink_connection::ProtoRelationKeyIndicesVec> for Vec<usize> {
-    fn into_proto(&self) -> proto_kafka_sink_connection::ProtoRelationKeyIndicesVec {
-        proto_kafka_sink_connection::ProtoRelationKeyIndicesVec {
+impl RustType<proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec> for Vec<usize> {
+    fn into_proto(&self) -> proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec {
+        proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec {
             relation_key_indices: self.into_proto(),
         }
     }
 
     fn from_proto(
-        proto: proto_kafka_sink_connection::ProtoRelationKeyIndicesVec,
+        proto: proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec,
     ) -> Result<Self, TryFromProtoError> {
         proto.relation_key_indices.into_rust()
     }
 }
 
-impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
-    fn into_proto(&self) -> ProtoKafkaSinkConnection {
-        ProtoKafkaSinkConnection {
-            connection: Some(self.connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            topic: self.topic.clone(),
-            key_desc_and_indices: self.key_desc_and_indices.into_proto(),
-            relation_key_indices: self.relation_key_indices.into_proto(),
-            value_desc: Some(self.value_desc.into_proto()),
-            published_schema_info: self.published_schema_info.into_proto(),
-            progress: Some(self.progress.into_proto()),
-            fuel: self.fuel.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkConnection {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoKafkaSinkConnection::connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoKafkaSinkConnection::connection_id")?,
-            topic: proto.topic,
-            key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
-            relation_key_indices: proto.relation_key_indices.into_rust()?,
-            value_desc: proto
-                .value_desc
-                .into_rust_if_some("ProtoKafkaSinkConnection::addrs")?,
-            published_schema_info: proto.published_schema_info.into_rust()?,
-            progress: proto
-                .progress
-                .into_rust_if_some("ProtoKafkaSinkConnection::progress")?,
-            fuel: proto.fuel.into_rust()?,
-        })
-    }
-}
-
-/// TODO(JLDLaughlin): Documentation.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PublishedSchemaInfo {
-    pub key_schema_id: Option<i32>,
-    pub value_schema_id: i32,
-}
-
-impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
-    fn into_proto(&self) -> ProtoPublishedSchemaInfo {
-        ProtoPublishedSchemaInfo {
-            key_schema_id: self.key_schema_id.clone(),
-            value_schema_id: self.value_schema_id,
-        }
-    }
-
-    fn from_proto(proto: ProtoPublishedSchemaInfo) -> Result<Self, TryFromProtoError> {
-        Ok(PublishedSchemaInfo {
-            key_schema_id: proto.key_schema_id,
-            value_schema_id: proto.value_schema_id,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum StorageSinkConnectionBuilder<C: ConnectionAccess = InlinedConnection> {
-    Kafka(KafkaSinkConnectionBuilder<C>),
-}
-
-impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnectionBuilder, R>
-    for StorageSinkConnectionBuilder<ReferencedConnection>
-{
-    fn into_inline_connection(self, r: R) -> StorageSinkConnectionBuilder {
-        match self {
-            Self::Kafka(conn) => {
-                StorageSinkConnectionBuilder::Kafka(conn.into_inline_connection(r))
-            }
-        }
-    }
-}
-
-impl<C: ConnectionAccess> StorageSinkConnectionBuilder<C> {
-    /// returns an option to not constrain ourselves in the future
-    pub fn connection_id(&self) -> Option<GlobalId> {
-        use StorageSinkConnectionBuilder::*;
-        match self {
-            Kafka(KafkaSinkConnectionBuilder { connection_id, .. }) => Some(*connection_id),
-        }
-    }
-
-    /// Returns the name of the sink connection.
-    pub fn name(&self) -> &'static str {
-        use StorageSinkConnectionBuilder::*;
-        match self {
-            Kafka(_) => "kafka",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaConsistencyConfig {
     Progress { topic: String },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnectionBuilder<C: ConnectionAccess = InlinedConnection> {
+impl RustType<ProtoKafkaConsistencyConfig> for KafkaConsistencyConfig {
+    fn into_proto(&self) -> ProtoKafkaConsistencyConfig {
+        use proto_kafka_consistency_config::Kind::*;
+        use proto_kafka_consistency_config::ProtoKafkaConsistencyConfigProgress;
+
+        ProtoKafkaConsistencyConfig {
+            kind: Some(match self {
+                Self::Progress { topic } => Progress(ProtoKafkaConsistencyConfigProgress {
+                    topic: topic.clone(),
+                }),
+            }),
+        }
+    }
+    fn from_proto(proto: ProtoKafkaConsistencyConfig) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_consistency_config::Kind::*;
+
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaConsistencyConfig::kind"))?;
+
+        Ok(match kind {
+            Progress(proto) => Self::Progress { topic: proto.topic },
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
     pub connection: KafkaConnection<C>,
     pub format: KafkaSinkFormat<C>,
@@ -495,7 +384,7 @@ pub struct KafkaSinkConnectionBuilder<C: ConnectionAccess = InlinedConnection> {
     /// The user-specified key for the sink.
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
-    pub topic_name: String,
+    pub topic: String,
     pub consistency_config: KafkaConsistencyConfig,
     pub partition_count: i32,
     pub replication_factor: i32,
@@ -503,32 +392,32 @@ pub struct KafkaSinkConnectionBuilder<C: ConnectionAccess = InlinedConnection> {
     pub retention: KafkaSinkConnectionRetention,
 }
 
-impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnectionBuilder, R>
-    for KafkaSinkConnectionBuilder<ReferencedConnection>
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
+    for KafkaSinkConnection<ReferencedConnection>
 {
-    fn into_inline_connection(self, r: R) -> KafkaSinkConnectionBuilder {
-        let KafkaSinkConnectionBuilder {
+    fn into_inline_connection(self, r: R) -> KafkaSinkConnection {
+        let KafkaSinkConnection {
             connection_id,
             connection,
             format,
             relation_key_indices,
             key_desc_and_indices,
             value_desc,
-            topic_name,
+            topic,
             consistency_config,
             partition_count,
             replication_factor,
             fuel,
             retention,
         } = self;
-        KafkaSinkConnectionBuilder {
+        KafkaSinkConnection {
             connection_id,
             connection: connection.into_inline_connection(&r),
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
             value_desc,
-            topic_name,
+            topic,
             consistency_config,
             partition_count,
             replication_factor,
@@ -538,20 +427,186 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnectionBuilder, R>
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
+    fn into_proto(&self) -> ProtoKafkaSinkConnectionV2 {
+        ProtoKafkaSinkConnectionV2 {
+            connection_id: Some(self.connection_id.into_proto()),
+            connection: Some(self.connection.into_proto()),
+            format: Some(self.format.into_proto()),
+            key_desc_and_indices: self.key_desc_and_indices.into_proto(),
+            relation_key_indices: self.relation_key_indices.into_proto(),
+            value_desc: Some(self.value_desc.into_proto()),
+            topic: self.topic.clone(),
+            consistency_config: Some(self.consistency_config.into_proto()),
+            partition_count: self.partition_count,
+            replication_factor: self.replication_factor,
+            fuel: u64::cast_from(self.fuel),
+            retention: Some(self.retention.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSinkConnectionV2) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkConnection {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::connection_id")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::connection")?,
+            format: proto
+                .format
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::format")?,
+            key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
+            relation_key_indices: proto.relation_key_indices.into_rust()?,
+            value_desc: proto
+                .value_desc
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
+            topic: proto.topic,
+            consistency_config: proto
+                .consistency_config
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::consistency_config")?,
+            partition_count: proto.partition_count,
+            replication_factor: proto.replication_factor,
+            fuel: proto.fuel.into_rust()?,
+            retention: proto
+                .retention
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
+        })
+    }
+}
+
+#[derive(Arbitrary, Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionRetention {
     pub duration: Option<i64>,
     pub bytes: Option<i64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
-    Avro {
+impl RustType<ProtoKafkaSinkConnectionRetention> for KafkaSinkConnectionRetention {
+    fn into_proto(&self) -> ProtoKafkaSinkConnectionRetention {
+        ProtoKafkaSinkConnectionRetention {
+            duration: self.duration,
+            bytes: self.bytes,
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSinkConnectionRetention) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkConnectionRetention {
+            duration: proto.duration,
+            bytes: proto.bytes,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
+    /// If we haven't yet communicated with the CSR, we don't yet know if we
+    /// have a schema and value ID. It's possible that this schema was already
+    /// published.
+    UnpublishedMaybe {
         key_schema: Option<String>,
         value_schema: String,
         csr_connection: CsrConnection<C>,
     },
+    /// After communicating with the CSR, the IDs we've been given for the
+    /// schemas.
+    Published {
+        key_schema_id: Option<i32>,
+        value_schema_id: i32,
+    },
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
+    for KafkaSinkAvroFormatState<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaSinkAvroFormatState {
+        match self {
+            Self::UnpublishedMaybe {
+                key_schema,
+                value_schema,
+                csr_connection,
+            } => KafkaSinkAvroFormatState::UnpublishedMaybe {
+                key_schema,
+                value_schema,
+                csr_connection: csr_connection.into_inline_connection(r),
+            },
+            Self::Published {
+                key_schema_id,
+                value_schema_id,
+            } => KafkaSinkAvroFormatState::Published {
+                key_schema_id,
+                value_schema_id,
+            },
+        }
+    }
+}
+
+impl RustType<proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState> for KafkaSinkAvroFormatState {
+    fn into_proto(&self) -> proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState {
+        use proto_kafka_sink_format::proto_kafka_sink_avro_format_state::{
+            Kind, ProtoPublished, ProtoUnpublishedMaybe,
+        };
+        use proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState;
+
+        ProtoKafkaSinkAvroFormatState {
+            kind: Some(match self {
+                KafkaSinkAvroFormatState::UnpublishedMaybe {
+                    key_schema,
+                    value_schema,
+                    csr_connection,
+                } => Kind::UnpublishedMaybe(ProtoUnpublishedMaybe {
+                    key_schema: key_schema.clone(),
+                    value_schema: value_schema.clone(),
+                    csr_connection: Some(csr_connection.into_proto()),
+                }),
+                KafkaSinkAvroFormatState::Published {
+                    key_schema_id,
+                    value_schema_id,
+                } => Kind::Published(ProtoPublished {
+                    key_schema_id: *key_schema_id,
+                    value_schema_id: *value_schema_id,
+                }),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_sink_format::proto_kafka_sink_avro_format_state::Kind;
+
+        let kind = proto.kind.ok_or_else(|| {
+            TryFromProtoError::missing_field("ProtoKafkaSinkAvroFormatState::kind")
+        })?;
+
+        Ok(match kind {
+            Kind::UnpublishedMaybe(proto) => Self::UnpublishedMaybe {
+                key_schema: proto.key_schema,
+                value_schema: proto.value_schema,
+                csr_connection: proto
+                    .csr_connection
+                    .into_rust_if_some("ProtoKafkaSinkAvroFormatState::csr_connection")?,
+            },
+            Kind::Published(proto) => Self::Published {
+                key_schema_id: proto.key_schema_id,
+                value_schema_id: proto.value_schema_id,
+            },
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
+    Avro(KafkaSinkAvroFormatState<C>),
     Json,
+}
+
+impl KafkaSinkFormat {
+    pub fn get_format_name(&self) -> &str {
+        match self {
+            Self::Avro(_) => "avro",
+            Self::Json => "json",
+        }
+    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
@@ -559,16 +614,32 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
 {
     fn into_inline_connection(self, r: R) -> KafkaSinkFormat {
         match self {
-            Self::Avro {
-                key_schema,
-                value_schema,
-                csr_connection,
-            } => KafkaSinkFormat::Avro {
-                key_schema,
-                value_schema,
-                csr_connection: csr_connection.into_inline_connection(r),
-            },
+            Self::Avro(avro) => KafkaSinkFormat::Avro(avro.into_inline_connection(r)),
             Self::Json => KafkaSinkFormat::Json,
         }
+    }
+}
+
+impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
+    fn into_proto(&self) -> ProtoKafkaSinkFormat {
+        use proto_kafka_sink_format::Kind;
+        ProtoKafkaSinkFormat {
+            kind: Some(match self {
+                Self::Avro(avro) => Kind::Avro(avro.into_proto()),
+                Self::Json => Kind::Json(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSinkFormat) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_sink_format::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaSinkFormat::kind"))?;
+
+        Ok(match kind {
+            Kind::Avro(avro) => Self::Avro(avro.into_rust()?),
+            Kind::Json(()) => Self::Json,
+        })
     }
 }

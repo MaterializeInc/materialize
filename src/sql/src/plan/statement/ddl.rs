@@ -47,8 +47,8 @@ use mz_storage_types::connections::{
     KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
+    KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2355,7 +2355,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<StorageSinkConnectionBuilder<ReferencedConnection>, PlanError> {
+) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let mut connection = match item.connection()? {
@@ -2474,11 +2474,11 @@ fn kafka_sink_builder(
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
 
-            KafkaSinkFormat::Avro {
+            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
                 key_schema,
                 value_schema,
                 csr_connection,
-            }
+            })
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
@@ -2518,22 +2518,20 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok(StorageSinkConnectionBuilder::Kafka(
-        KafkaSinkConnectionBuilder {
-            connection_id,
-            connection,
-            format,
-            topic_name,
-            consistency_config,
-            partition_count,
-            replication_factor,
-            fuel: 10000,
-            relation_key_indices,
-            key_desc_and_indices,
-            value_desc,
-            retention,
-        },
-    ))
+    Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
+        connection_id,
+        connection,
+        format,
+        topic: topic_name,
+        consistency_config,
+        partition_count,
+        replication_factor,
+        fuel: 10000,
+        relation_key_indices,
+        key_desc_and_indices,
+        value_desc,
+        retention,
+    }))
 }
 
 pub fn describe_create_index(

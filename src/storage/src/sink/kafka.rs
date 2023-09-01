@@ -38,8 +38,8 @@ use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
-    StorageSinkDesc,
+    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat,
+    MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use prometheus::core::AtomicU64;
@@ -51,11 +51,10 @@ use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, T
 use rdkafka::{Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Enter, Leave, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
@@ -412,7 +411,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
-        healthchecker: Option<Healthchecker>,
+        healthchecker: Option<Mutex<Healthchecker>>,
     ) -> Self {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -429,18 +428,12 @@ impl KafkaSinkState {
             inner: MzClientContext::default(),
         };
 
-        let healthchecker = healthchecker.map(Mutex::new);
-
         let producer = halt_on_err(
             &healthchecker,
             *sink_id,
             &internal_cmd_tx,
             #[allow(clippy::redundant_closure_call)]
             (|| async {
-                fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
-                    "synthetic error"
-                )));
-
                 connection
                     .connection
                     .create_with_context(
@@ -516,7 +509,9 @@ impl KafkaSinkState {
             pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
-            progress_topic: connection.progress.topic,
+            progress_topic: match connection.consistency_config {
+                KafkaConsistencyConfig::Progress { topic } => topic,
+            },
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
@@ -973,7 +968,6 @@ struct EncodedRow {
     count: usize,
 }
 
-// TODO@jldlaughlin: What guarantees does this sink support? #1728
 fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
@@ -996,49 +990,18 @@ where
 
     let shared_gate_ts = Rc::new(Cell::new(None));
 
-    let key_desc = connection
-        .key_desc_and_indices
-        .as_ref()
-        .map(|(desc, _indices)| desc.clone());
-    let value_desc = connection.value_desc.clone();
-
-    let encoded_stream = match connection.published_schema_info {
-        Some(PublishedSchemaInfo {
-            key_schema_id,
-            value_schema_id,
-        }) => {
-            let options = AvroSchemaOptions {
-                avro_key_fullname: None,
-                avro_value_fullname: None,
-                set_null_defaults: false,
-                is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
-            };
-            let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
-                .expect("avro schema validated");
-            let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
-            encode_stream(
-                stream,
-                as_of.clone(),
-                Rc::clone(&shared_gate_ts),
-                encoder,
-                &name,
-            )
-        }
-        None => {
-            let encoder = JsonEncoder::new(
-                key_desc,
-                value_desc,
-                matches!(envelope, Some(SinkEnvelope::Debezium)),
-            );
-            encode_stream(
-                stream,
-                as_of.clone(),
-                Rc::clone(&shared_gate_ts),
-                encoder,
-                &name,
-            )
-        }
-    };
+    let (encoded_stream, healthchecker_rx, encode_token) = encode_stream(
+        stream,
+        id,
+        as_of.clone(),
+        Rc::clone(&shared_gate_ts),
+        &name,
+        connection.clone(),
+        connection_context.clone(),
+        envelope.clone(),
+        healthchecker_args,
+        Rc::clone(&internal_cmd_tx),
+    );
 
     produce_to_kafka(
         encoded_stream,
@@ -1051,8 +1014,9 @@ where
         metrics,
         sink_statistics,
         connection_context,
-        healthchecker_args,
+        healthchecker_rx,
         internal_cmd_tx,
+        encode_token,
     )
 }
 
@@ -1078,8 +1042,9 @@ pub fn produce_to_kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-    healthchecker_args: HealthcheckerArgs,
+    healthchecker_rx: Option<oneshot::Receiver<Mutex<Healthchecker>>>,
     internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+    outer_tokens: Rc<dyn Any>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1103,20 +1068,12 @@ where
             return;
         }
 
-        let healthchecker = if let Some(status_shard_id) = healthchecker_args.status_shard_id {
-            let hc = Healthchecker::new(
-                id,
-                &healthchecker_args.persist_clients,
-                healthchecker_args.persist_location.clone(),
-                status_shard_id,
-                healthchecker_args.now_fn.clone(),
-            )
-            .await
-            .expect("error initializing healthchecker");
-            Some(hc)
-        } else {
-            None
+        // Wait for healthchecker to be initialized
+        let healthchecker = match healthchecker_rx {
+            None => None,
+            Some(rx) => Some(rx.await.expect("sender hung up")),
         };
+
         let mut s = KafkaSinkState::new(
             connection,
             name,
@@ -1216,6 +1173,7 @@ where
                             ts,
                             rows.len()
                         );
+
                         s.halt_on_err(
                             s.producer
                                 .retry_on_txn_error(|p| p.begin_transaction())
@@ -1333,7 +1291,7 @@ where
         }
     });
 
-    Rc::new(button.press_on_drop())
+    Rc::new((button.press_on_drop(), outer_tokens))
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
@@ -1355,37 +1313,149 @@ where
 /// changed.
 fn encode_stream<G>(
     input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
+    sink_id: GlobalId,
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
-    encoder: impl Encode + 'static,
     name_prefix: &str,
-) -> Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>
+    mut connection: KafkaSinkConnection,
+    connection_context: ConnectionContext,
+    envelope: Option<SinkEnvelope>,
+    healthchecker_args: HealthcheckerArgs,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+) -> (
+    Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
+    Option<oneshot::Receiver<Mutex<Healthchecker>>>,
+    Rc<dyn Any>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let name = format!("{}-{}_encode", name_prefix, encoder.get_format_name());
-    input_stream.scope().region_named(&name, |region| {
-        input_stream
-            .enter(region)
-            .flat_map(move |((key, value), time, diff)| {
-                let should_emit = if as_of.strict {
-                    as_of.frontier.less_than(&time)
-                } else {
-                    as_of.frontier.less_equal(&time)
-                };
-                let ts_gated = Some(time) <= shared_gate_ts.get();
+    let name = format!(
+        "{}-{}_encode",
+        name_prefix,
+        connection.format.get_format_name()
+    );
+    let worker_id = input_stream.scope().index();
+    let worker_count = input_stream.scope().peers();
+    let hashed_id = sink_id.hashed();
+    let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
 
-                if !should_emit || ts_gated {
-                    // Skip stale data for already published timestamps
-                    None
-                } else {
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), input_stream.scope());
+
+    // Construct the healthchecker in this operator in case building out the
+    // Kafka collateral fails; once it's been built, though, we can send it to
+    // the downstream operator where the connection is used.
+    let (healthchecker_tx, healthchecker_rx) =
+        if healthchecker_args.status_shard_id.is_some() && is_active_worker {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
+    let mut input = builder.new_input(input_stream, Exchange::new(move |_| hashed_id));
+    let (mut output, stream) = builder.new_output();
+
+    let button = builder.build(move |_capabilities| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let healthchecker = if let Some(status_shard_id) = healthchecker_args.status_shard_id {
+            let hc = Healthchecker::new(
+                sink_id,
+                &healthchecker_args.persist_clients,
+                healthchecker_args.persist_location,
+                status_shard_id,
+                healthchecker_args.now_fn.clone(),
+            )
+            .await
+            .expect("error initializing healthchecker");
+
+            Some(Mutex::new(hc))
+        } else {
+            None
+        };
+
+        // Ensure that Kafka collateral exists. While this looks somewhat
+        // innocuous, this step is why this must be an async operator.
+        //
+        // Also note that where this lies in the rendering cycle means that we
+        // will create the collateral topics each time the sink is rendered,
+        // e.g. even if the broker's admin deleted either of the topics. It
+        // remains to be seen if this is a problem for users or not.
+        let _ = halt_on_err(
+            &healthchecker,
+            sink_id,
+            &internal_cmd_tx,
+            mz_storage_client::sink::build_kafka(&mut connection, &connection_context).await,
+        )
+        .await;
+
+        healthchecker_tx
+            .map(|tx| tx.send(healthchecker.expect("tx is Some iff healthchecker is Some")));
+
+        let key_desc = connection
+            .key_desc_and_indices
+            .as_ref()
+            .map(|(desc, _indices)| desc.clone());
+        let value_desc = connection.value_desc.clone();
+
+        let encoder: Box<dyn Encode> = match connection.format {
+            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
+                key_schema_id,
+                value_schema_id,
+            }) => {
+                let options = AvroSchemaOptions {
+                    avro_key_fullname: None,
+                    avro_value_fullname: None,
+                    set_null_defaults: false,
+                    is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
+                };
+
+                let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
+                    .expect("avro schema validated");
+                Box::new(AvroEncoder::new(
+                    schema_generator,
+                    key_schema_id,
+                    value_schema_id,
+                ))
+            }
+            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe { .. }) => {
+                unreachable!("must have communicated with CSR")
+            }
+            KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
+                key_desc,
+                value_desc,
+                matches!(envelope, Some(SinkEnvelope::Debezium)),
+            )),
+        };
+
+        while let Some(event) = input.next_mut().await {
+            if let Event::Data(cap, rows) = event {
+                for ((key, value), time, diff) in rows.drain(..) {
+                    let should_emit = if as_of.strict {
+                        as_of.frontier.less_than(&time)
+                    } else {
+                        as_of.frontier.less_equal(&time)
+                    };
+                    let ts_gated = Some(time) <= shared_gate_ts.get();
+
+                    if !should_emit || ts_gated {
+                        // Skip stale data for already published timestamps
+                        continue;
+                    }
+
                     let key = key.map(|key| encoder.encode_key_unchecked(key));
                     let value = value.map(|value| encoder.encode_value_unchecked(value));
-                    Some(((key, value), time, diff))
+
+                    output.give(&cap, ((key, value), time, diff)).await;
                 }
-            })
-            .leave()
-    })
+            }
+        }
+    });
+
+    (stream, healthchecker_rx, Rc::new(button.press_on_drop()))
 }
 
 #[derive(Serialize, Deserialize)]
