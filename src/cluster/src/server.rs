@@ -303,7 +303,7 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 impl<Worker, C, R> GenericClient<C, R>
     for ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
 where
-    C: Send + Debug + crate::types::TryIntoTimelyConfig + 'static,
+    C: Send + Debug + mz_cluster_client::client::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,

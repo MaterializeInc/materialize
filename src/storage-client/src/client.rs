@@ -20,7 +20,7 @@ use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
@@ -748,6 +748,15 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
                 .frontier
                 .into_rust_if_some("ProtoCompaction::frontier")?,
         ))
+    }
+}
+
+impl TryIntoTimelyConfig for StorageCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            StorageCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
     }
 }
 

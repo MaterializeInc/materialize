@@ -9,7 +9,7 @@
 
 //! Compute protocol commands.
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -524,6 +524,15 @@ impl RustType<ProtoPeek> for Peek {
 
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
+impl TryIntoTimelyConfig for ComputeCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -176,6 +176,16 @@ impl TimelyConfig {
     }
 }
 
+/// A trait for specific cluster commands that can be unpacked into
+/// `CreateTimely` variants.
+pub trait TryIntoTimelyConfig {
+    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
+    /// fail and return `self` back.
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
+    where
+        Self: Sized;
+}
+
 /// Specifies the location of a cluster replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClusterReplicaLocation {
