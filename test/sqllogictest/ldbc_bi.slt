@@ -747,8 +747,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, delta join 1st input (full scan))
-  - materialize.public.message_messageid (*** full scan ***)
-  - materialize.public.message_creatorpersonid (differential join)
+  - materialize.public.message_creatorpersonid (*** full scan ***, differential join)
   - materialize.public.top100popularforumsq04_id (*** full scan ***)
 
 EOF
