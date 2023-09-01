@@ -50,7 +50,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
@@ -633,7 +633,7 @@ pub struct Sink {
     // TODO(benesch): this field duplicates information that could be derived
     // from the connection ID. Too hard to fix at the moment.
     #[serde(skip)]
-    pub connection: StorageSinkConnectionState,
+    pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub resolved_ids: ResolvedIds,
@@ -642,10 +642,7 @@ pub struct Sink {
 
 impl Sink {
     pub fn sink_type(&self) -> &str {
-        match &self.connection {
-            StorageSinkConnectionState::Pending(pending) => pending.name(),
-            StorageSinkConnectionState::Ready(ready) => ready.name(),
-        }
+        self.connection.name()
     }
 
     /// Envelope of the sink.
@@ -657,16 +654,13 @@ impl Sink {
     }
 
     pub fn connection_id(&self) -> Option<GlobalId> {
-        match &self.connection {
-            StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
-            StorageSinkConnectionState::Ready(ready) => ready.connection_id(),
-        }
+        self.connection.connection_id()
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub enum StorageSinkConnectionState {
-    Pending(StorageSinkConnectionBuilder<ReferencedConnection>),
+    Pending(StorageSinkConnection<ReferencedConnection>),
     Ready(StorageSinkConnection<ReferencedConnection>),
 }
 
@@ -819,27 +813,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
-        }
-    }
-
-    /// Indicates whether this item is a placeholder for a future item
-    /// or if it's actually a real item.
-    pub fn is_placeholder(&self) -> bool {
-        match self {
-            CatalogItem::Func(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::Table(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-            CatalogItem::Sink(s) => match s.connection {
-                StorageSinkConnectionState::Pending(_) => true,
-                StorageSinkConnectionState::Ready(_) => false,
-            },
         }
     }
 

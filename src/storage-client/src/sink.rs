@@ -13,33 +13,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::collections::CollectionExt;
-use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
-    KafkaSinkConnectionRetention, KafkaSinkFormat, KafkaSinkProgressConnection,
-    PublishedSchemaInfo, StorageSinkConnection, StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
+    KafkaSinkConnectionRetention, KafkaSinkFormat,
 };
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
 use tracing::warn;
-
-/// Build a sink connection.
-// N.B.: We don't want to use a `StorageError` here because some of those variants should not be
-// infinitely retried -- and we don't one to unintentionally be introduced in this function.
-pub async fn build_sink_connection(
-    builder: StorageSinkConnectionBuilder,
-    // TODO: The entire sink connection pipeline needs to be refactored and this
-    // will be removed as part of that.
-    referenced_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
-    connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
-    match (builder, referenced_builder) {
-        (StorageSinkConnectionBuilder::Kafka(k), StorageSinkConnectionBuilder::Kafka(rk)) => {
-            build_kafka(k, rk, connection_context).await
-        }
-    }
-}
 
 struct TopicConfigs {
     partition_count: i32,
@@ -225,82 +206,71 @@ async fn publish_kafka_schemas(
     Ok((key_schema_id, value_schema_id))
 }
 
-async fn build_kafka(
-    builder: KafkaSinkConnectionBuilder,
-    referenced_builder: KafkaSinkConnectionBuilder<ReferencedConnection>,
-    connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
+/// Ensures that the Kafka sink's data and consistency collateral exist.
+///
+/// Note that this function guarantees that the topics exist, even in the face
+/// of the user having previously deleted one or both of the topics. If a user
+/// does delete a sink's topics, we no longer make any guarantees about the
+/// sink's consistency.
+pub async fn build_kafka(
+    connection: &mut KafkaSinkConnection,
+    connection_cx: &ConnectionContext,
+) -> Result<(), anyhow::Error> {
     // Create Kafka topic.
-    let client: AdminClient<_> = builder
+    let client: AdminClient<_> = connection
         .connection
-        .create_with_context(
-            &connection_context,
-            MzClientContext::default(),
-            &BTreeMap::new(),
-        )
+        .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
         .await
         .context("creating admin client failed")?;
     ensure_kafka_topic(
         &client,
-        &builder.topic_name,
-        builder.partition_count,
-        builder.replication_factor,
-        builder.retention,
+        &connection.topic,
+        connection.partition_count,
+        connection.replication_factor,
+        connection.retention,
     )
     .await
     .context("error registering kafka topic for sink")?;
 
-    let published_schema_info = match builder.format {
-        KafkaSinkFormat::Avro {
+    match &connection.format {
+        KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
             key_schema,
             value_schema,
             csr_connection,
-            ..
-        } => {
-            let ccsr = csr_connection.connect(&connection_context).await?;
+        }) => {
+            let ccsr = csr_connection.connect(connection_cx).await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
-                &builder.topic_name,
+                &connection.topic,
                 key_schema.as_deref(),
                 Some(mz_ccsr::SchemaType::Avro),
-                &value_schema,
+                value_schema,
                 mz_ccsr::SchemaType::Avro,
             )
             .await
             .context("error publishing kafka schemas for sink")?;
-            Some(PublishedSchemaInfo {
+
+            connection.format = KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
                 key_schema_id,
                 value_schema_id,
             })
         }
-        KafkaSinkFormat::Json => None,
-    };
+        KafkaSinkFormat::Avro(_) | KafkaSinkFormat::Json => {}
+    }
 
-    let progress = match builder.consistency_config {
+    match &connection.consistency_config {
         KafkaConsistencyConfig::Progress { topic } => {
             ensure_kafka_topic(
                 &client,
-                &topic,
+                topic,
                 1,
-                builder.replication_factor,
+                connection.replication_factor,
                 KafkaSinkConnectionRetention::default(),
             )
             .await
             .context("error registering kafka consistency topic for sink")?;
-
-            KafkaSinkProgressConnection { topic }
         }
     };
 
-    Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
-        connection: referenced_builder.connection,
-        connection_id: builder.connection_id,
-        topic: builder.topic_name,
-        relation_key_indices: builder.relation_key_indices,
-        key_desc_and_indices: builder.key_desc_and_indices,
-        value_desc: builder.value_desc,
-        published_schema_info,
-        progress,
-        fuel: builder.fuel,
-    }))
+    Ok(())
 }
