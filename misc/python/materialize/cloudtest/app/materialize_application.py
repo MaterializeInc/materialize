@@ -30,7 +30,7 @@ from materialize.cloudtest.k8s.postgres import postgres_resources
 from materialize.cloudtest.k8s.redpanda import redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import ssh_resources
-from materialize.cloudtest.k8s.testdrive import Testdrive
+from materialize.cloudtest.k8s.testdrive import TestdrivePod
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.util.wait import wait
 
@@ -46,7 +46,7 @@ class MaterializeApplication(CloudtestApplicationBase):
         self.tag = tag
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
-        self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
+        self.testdrive = TestdrivePod(release_mode=release_mode, aws_region=aws_region)
         super().__init__(release_mode, aws_region, log_filter)
 
         # Register the VpcEndpoint CRD.

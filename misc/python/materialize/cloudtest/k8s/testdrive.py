@@ -16,23 +16,88 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
 
 
-class Testdrive(K8sPod):
+class TestdriveBase:
+    def __init__(
+        self,
+        aws_region: str | None = None,
+        materialize_url: str | None = None,
+        materialize_internal_url: str | None = None,
+        kafka_addr: str | None = None,
+        schema_registry_url: str | None = None,
+    ) -> None:
+        self.aws_region = aws_region
+        self.materialize_url = (
+            materialize_url
+            or "postgres://materialize:materialize@environmentd:6875/materialize"
+        )
+        self.materialize_internal_url = (
+            materialize_internal_url
+            or "postgres://mz_system@environmentd:6877/materialize"
+        )
+        self.kafka_addr = kafka_addr or "redpanda:9092"
+        self.schema_registry_url = schema_registry_url or "http://redpanda:8081"
+
+    def run(
+        self,
+        *args: str,
+        input: str | None = None,
+        no_reset: bool = False,
+        seed: int | None = None,
+        caller: Traceback | None = None,
+        default_timeout: str = "300s",
+        log_filter: str = "off",
+    ) -> None:
+        command: list[str] = [
+            "testdrive",
+            f"--materialize-url={self.materialize_url}",
+            f"--materialize-internal-url={self.materialize_internal_url}",
+            f"--kafka-addr={self.kafka_addr}",
+            f"--schema-registry-url={self.schema_registry_url}",
+            f"--default-timeout={default_timeout}",
+            f"--log-filter={log_filter}",
+            "--var=replicas=1",
+            "--var=default-storage-size=1",
+            "--var=default-replica-size=1",
+            *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
+            # S3 sources are not compatible with Minio unfortunately
+            # f"--aws-endpoint=http://minio-service.{self.namespace()}:9000",
+            # "--aws-access-key-id=minio",
+            # "--aws-secret-access-key=minio123",
+            *(["--no-reset"] if no_reset else []),
+            *([f"--seed={seed}"] if seed else []),
+            *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
+            *args,
+        ]
+
+        self._run_internal(
+            command,
+            input,
+        )
+
+    def _run_internal(self, command: list[str], input: str | None = None) -> None:
+        raise NotImplementedError
+
+
+class TestdrivePod(K8sPod, TestdriveBase):
     def __init__(
         self,
         release_mode: bool,
         aws_region: str | None = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
-        materialize_url: str = "postgres://materialize:materialize@environmentd:6875/materialize",
-        materialize_internal_url: str = "postgres://mz_system@environmentd:6877/materialize",
-        kafka_addr: str = "redpanda:9092",
-        schema_registry_url: str = "http://redpanda:8081",
+        materialize_url: str | None = None,
+        materialize_internal_url: str | None = None,
+        kafka_addr: str | None = None,
+        schema_registry_url: str | None = None,
     ) -> None:
-        super().__init__(namespace)
-        self.aws_region = aws_region
-        self.materialize_url = materialize_url
-        self.materialize_internal_url = materialize_internal_url
-        self.kafka_addr = kafka_addr
-        self.schema_registry_url = schema_registry_url
+        K8sPod.__init__(self, namespace)
+        TestdriveBase.__init__(
+            self,
+            aws_region=aws_region,
+            materialize_url=materialize_url,
+            materialize_internal_url=materialize_internal_url,
+            kafka_addr=kafka_addr,
+            schema_registry_url=schema_registry_url,
+        )
 
         metadata = V1ObjectMeta(name="testdrive", namespace=namespace)
 
@@ -56,40 +121,13 @@ class Testdrive(K8sPod):
         pod_spec = V1PodSpec(containers=[container])
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
-    def run(
-        self,
-        *args: str,
-        input: str | None = None,
-        no_reset: bool = False,
-        seed: int | None = None,
-        caller: Traceback | None = None,
-        default_timeout: str = "300s",
-        log_filter: str = "off",
-    ) -> None:
+    def _run_internal(self, command: list[str], input: str | None = None) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
             "exec",
             "-it",
             "testdrive",
             "--",
-            "testdrive",
-            f"--materialize-url={self.materialize_url}",
-            f"--materialize-internal-url={self.materialize_internal_url}",
-            f"--kafka-addr={self.kafka_addr}",
-            f"--schema-registry-url={self.schema_registry_url}",
-            f"--default-timeout={default_timeout}",
-            f"--log-filter={log_filter}",
-            "--var=replicas=1",
-            "--var=default-storage-size=1",
-            "--var=default-replica-size=1",
-            *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
-            # S3 sources are not compatible with Minio unfortunately
-            # f"--aws-endpoint=http://minio-service.{self.namespace()}:9000",
-            # "--aws-access-key-id=minio",
-            # "--aws-secret-access-key=minio123",
-            *(["--no-reset"] if no_reset else []),
-            *([f"--seed={seed}"] if seed else []),
-            *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
-            *args,
+            *command,
             input=input,
         )
