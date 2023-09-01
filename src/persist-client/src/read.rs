@@ -1123,15 +1123,17 @@ where
             contents.extend(iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)))
         }
 
-        // NB: we don't currently guarantee that encoding is deterministic, so we still need to
-        // consolidate the decoded outputs. However, let's complain if this isn't a noop.
+        // We don't currently guarantee that encoding is one-to-one, so we still need to
+        // consolidate the decoded outputs. However, let's report if this isn't a noop.
         let old_len = contents.len();
         consolidate_updates(&mut contents);
         if old_len != contents.len() {
-            warn!(
-                "nondeterministic serialization in shard {}",
-                self.machine.shard_id()
-            );
+            // TODO(bkirwi): do we need more / finer-grained metrics for this?
+            self.machine
+                .applier
+                .shard_metrics
+                .unconsolidated_snapshot
+                .inc();
         }
 
         Ok(contents)
