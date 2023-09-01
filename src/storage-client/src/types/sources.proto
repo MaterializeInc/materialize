@@ -222,7 +222,9 @@ message ProtoTestScriptSourceConnection {
 }
 
 message ProtoCounterLoadGenerator {
-    optional uint64 max_cardinality = 1;
+    // Must be non-negative,
+    // but kept as int64 to make downstream logic simpler
+    optional int64 max_cardinality = 1;
 }
 
 message ProtoTpchLoadGenerator {

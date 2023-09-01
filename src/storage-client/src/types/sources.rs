@@ -41,7 +41,6 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::to_stream::Event;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
@@ -2311,7 +2310,10 @@ pub enum LoadGenerator {
         /// How many values will be emitted
         /// before old ones are retracted, or `None` for
         /// an append-only collection.
-        max_cardinality: Option<u64>,
+        ///
+        /// This is verified by the planner to be nonnegative. We encode it as
+        /// an `i64` to make the code in `Counter::by_seed` simpler.
+        max_cardinality: Option<i64>,
     },
     Datums,
     Marketing,
@@ -2600,8 +2602,13 @@ pub trait Generator {
         &self,
         now: NowFn,
         seed: Option<u64>,
-        resume_offset: MzOffset,
-    ) -> Box<dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>>;
+    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum GeneratorMessageType {
+    InProgress,
+    Finalized,
 }
 
 impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
