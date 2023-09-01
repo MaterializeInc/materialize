@@ -162,7 +162,7 @@ impl Display for EnvelopeError {
 /// us to reconstruct their entry in the upsert map upon restart.
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct UpsertValueError {
-    /// The underlying error. Boxed because this is a recursive type.
+    /// The underlying error.
     pub inner: DecodeError,
     /// The (good) key associated with the errored value.
     pub for_key: Row,
@@ -432,18 +432,29 @@ mod columnation {
         type InnerRegion = DataflowErrorRegion;
     }
 
+    /// A region to store [`DataflowError`].
     #[derive(Default)]
     pub struct DataflowErrorRegion {
+        /// Stable location for [`DecodeError`] for inserting into a box.
         decode_error_region: StableRegion<DecodeError>,
+        /// Stable location for [`EnvelopeError`] for inserting into a box.
         envelope_error_region: StableRegion<EnvelopeError>,
+        /// Stable location for [`EvalError`] for inserting into a box.
         eval_error_region: StableRegion<EvalError>,
+        /// Region for storing rows.
         row_region: <Row as Columnation>::InnerRegion,
+        /// Stable location for [`SourceError`] for inserting into a box.
         source_error_region: StableRegion<SourceError>,
+        /// Region for storing strings.
         string_region: <String as Columnation>::InnerRegion,
+        /// Region for storing u8 vectors.
         u8_region: <Vec<u8> as Columnation>::InnerRegion,
     }
 
     impl DataflowErrorRegion {
+        /// Copy a decode error into its region, return an owned object.
+        ///
+        /// This is unsafe because the returned value must not be dropped.
         unsafe fn copy_decode_error(&mut self, decode_error: &DecodeError) -> DecodeError {
             DecodeError {
                 kind: match &decode_error.kind {
@@ -466,6 +477,17 @@ mod columnation {
         type Item = DataflowError;
 
         unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            // Unsafe Box::from_raw reasoning:
+            // Construct a box from a provided value. This is safe because a box is
+            // a pointer to a memory address, and the value is stored on the heap.
+            // Note that the box must not be dropped.
+
+            // SAFETY: When adding new enum variants, care must be taken that all types containing
+            // references are region-allocated, otherwise we'll leak memory.
+
+            // Types that are `Copy` should be asserted using `assert_copy`, or copied, to detect
+            // changes that introduce pointers.
+
             let err = match item {
                 DataflowError::DecodeError(err) => {
                     let err = self.copy_decode_error(&*err);
@@ -752,11 +774,13 @@ mod columnation {
                     DataflowError::EnvelopeError(boxed)
                 }
             };
+            // Debug-only check that we're returning an equal object.
             debug_assert_eq!(item, &err);
             err
         }
 
         fn clear(&mut self) {
+            // De-structure `self` to make sure we're clearing all regions.
             let Self {
                 decode_error_region,
                 envelope_error_region,
@@ -780,6 +804,7 @@ mod columnation {
             Self: 'a,
             I: Iterator<Item = &'a Self::Item> + Clone,
         {
+            // Reserve space on all stable regions.
             self.decode_error_region.reserve(
                 items
                     .clone()
@@ -810,6 +835,7 @@ mod columnation {
             Self: 'a,
             I: Iterator<Item = &'a Self> + Clone,
         {
+            // Reserve space on all region allocators.
             self.row_region
                 .reserve_regions(regions.clone().map(|r| &r.row_region));
             self.string_region
@@ -819,6 +845,7 @@ mod columnation {
         }
 
         fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            // De-structure `self` to make sure we're counting all regions.
             let Self {
                 decode_error_region,
                 envelope_error_region,
