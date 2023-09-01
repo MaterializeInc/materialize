@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
 use mz_compute_client::types::dataflows::{DataflowDesc, IndexImport};
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -477,6 +478,36 @@ fn prune_and_annotate_dataflow_index_imports(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
+    // Let's save the unique keys of the sources. This will inform which indexes to choose for full
+    // scans. (We can't get this info from `source_imports`, because `source_imports` only has those
+    // sources that are not getting an indexed read.)
+    let mut source_keys = BTreeMap::new();
+    for build_desc in dataflow.objects_to_build.iter() {
+        build_desc
+            .plan
+            .as_inner()
+            .visit_post(&mut |expr: &MirRelationExpr| match expr {
+                MirRelationExpr::Get {
+                    id: Id::Global(global_id),
+                    typ,
+                } => {
+                    source_keys.entry(*global_id).or_insert(
+                        typ.keys
+                            .iter()
+                            .map(|key| {
+                                key.iter()
+                                    // Convert the Vec<usize> key to Vec<MirScalarExpr>, so that
+                                    // later we can more easily compare index keys to these keys.
+                                    .map(|col_idx| MirScalarExpr::Column(*col_idx))
+                                    .collect()
+                            })
+                            .collect(),
+                    );
+                }
+                _ => {}
+            })?;
+    }
+
     // This will be a mapping of
     // (ids used by exports and objects to build) ->
     // (arrangement keys and usage types on that id that have been requested)
@@ -485,7 +516,7 @@ fn prune_and_annotate_dataflow_index_imports(
     // Go through the MIR plans of `objects_to_build` and collect which arrangements are requested
     // for which we also have an available index.
     for build_desc in dataflow.objects_to_build.iter_mut() {
-        CollectIndexRequests::new(indexes, &mut index_reqs_by_id)
+        CollectIndexRequests::new(&source_keys, indexes, &mut index_reqs_by_id)
             .collect_index_reqs(build_desc.plan.as_inner_mut())?;
     }
 
@@ -555,19 +586,23 @@ id: {}, key: {:?}",
 
     // Adjust FullScans to not introduce a new index dependency if there is also some non-FullScan
     // request on the same id.
-    for (_id, index_reqs) in index_reqs_by_id.iter_mut() {
-        // Let's look for an arbitrary non-FullScan access. (The same better choices would be
-        // possible also here as in `pick_index_for_full_scan`, see comment there.)
-        if let Some(arbitrary_non_full_scan_key) = index_reqs.iter().find_map(|(key, usage_type)| {
-            match usage_type {
-                IndexUsageType::FullScan => None,
-                _ => Some(key.clone()),
-            }
-        }) {
-            // Modify all FullScans to use the above `arbitrary_non_full_scan_key`.
+    for (id, index_reqs) in index_reqs_by_id.iter_mut() {
+        // Let's choose a non-FullScan access (if exists).
+        if let Some(picked_non_full_scan_key) = choose_index(
+            &source_keys,
+            id,
+            &index_reqs
+                .iter()
+                .filter_map(|(key, usage_type)| match usage_type {
+                    IndexUsageType::FullScan => None,
+                    _ => Some(key.clone()),
+                })
+                .collect_vec(),
+        ) {
+            // Found a non-FullScan access. Modify all FullScans to use the same index as that one.
             for (key, usage_type) in index_reqs {
                 match usage_type {
-                    IndexUsageType::FullScan => *key = arbitrary_non_full_scan_key.clone(),
+                    IndexUsageType::FullScan => *key = picked_non_full_scan_key.clone(),
                     _ => {}
                 }
             }
@@ -618,17 +653,47 @@ id: {}, key: {:?}",
     Ok(())
 }
 
+/// Pick an index from a given Vec of index keys.
+///
+/// Currently, we pick as follows:
+///  - If there is an index on a unique key, then we pick that. (It might be better distributed, and
+///    is less likely to get dropped than other indexes.)
+///  - Otherwise, we pick an arbitrary index.
+///
+/// TODO: There are various edge cases where a better choice would be possible:
+/// - Some indexes might be less skewed than others. (Although, picking a unique key tries to
+///   capture this already.)
+/// - Some indexes might have an error, while others don't.
+///   <https://github.com/MaterializeInc/materialize/issues/15557>
+/// - Some indexes might have more extra data in their keys (because of being on more complicated
+///   expressions than just column references), which won't be used in a full scan.
+fn choose_index(
+    source_keys: &BTreeMap<GlobalId, BTreeSet<Vec<MirScalarExpr>>>,
+    id: &GlobalId,
+    indexes: &Vec<Vec<MirScalarExpr>>,
+) -> Option<Vec<MirScalarExpr>> {
+    match source_keys.get(id) {
+        None => indexes.iter().next().cloned(), // pick an arbitrary index
+        Some(coll_keys) => match indexes.iter().find(|key| coll_keys.contains(*key)) {
+            Some(key) => Some(key.clone()),
+            None => indexes.iter().next().cloned(), // pick an arbitrary index
+        },
+    }
+}
+
 #[derive(Debug)]
 struct CollectIndexRequests<'a> {
-    // We were told about these indexes being available.
+    /// We were told about these unique keys on sources.
+    source_keys: &'a BTreeMap<GlobalId, BTreeSet<Vec<MirScalarExpr>>>,
+    /// We were told about these indexes being available.
     indexes_available: &'a dyn IndexOracle,
-    // We'll be collecting index requests here.
+    /// We'll be collecting index requests here.
     index_reqs_by_id: &'a mut BTreeMap<GlobalId, Vec<(Vec<MirScalarExpr>, IndexUsageType)>>,
-    // As we recurse down a MirRelationExpr, we'll need to keep track of the context of the
-    // current node (see docs on `IndexUsageContext` about what context we keep).
-    // Moreover, we need to propagate this context from cte uses to cte definitions.
-    // `context_across_lets` will keep track of the contexts that reached each use of a LocalId
-    // added together.
+    /// As we recurse down a MirRelationExpr, we'll need to keep track of the context of the
+    /// current node (see docs on `IndexUsageContext` about what context we keep).
+    /// Moreover, we need to propagate this context from cte uses to cte definitions.
+    /// `context_across_lets` will keep track of the contexts that reached each use of a LocalId
+    /// added together.
     context_across_lets: BTreeMap<LocalId, Vec<IndexUsageContext>>,
     recursion_guard: RecursionGuard,
 }
@@ -641,10 +706,12 @@ impl<'a> CheckedRecursion for CollectIndexRequests<'a> {
 
 impl<'a> CollectIndexRequests<'a> {
     fn new(
+        source_keys: &'a BTreeMap<GlobalId, BTreeSet<Vec<MirScalarExpr>>>,
         indexes_available: &'a dyn IndexOracle,
         index_reqs_by_id: &'a mut BTreeMap<GlobalId, Vec<(Vec<MirScalarExpr>, IndexUsageType)>>,
     ) -> CollectIndexRequests<'a> {
         CollectIndexRequests {
+            source_keys,
             indexes_available,
             index_reqs_by_id,
             context_across_lets: BTreeMap::new(),
@@ -674,18 +741,15 @@ impl<'a> CollectIndexRequests<'a> {
 
             // If an index exists on `on_id`, this function picks an index to be fully scanned.
             let pick_index_for_full_scan = |on_id: &GlobalId| {
-                // Pick an arbitrary index.
                 // Note that the choice we make here might be modified later at the
                 // "Adjust FullScans to not introduce a new index dependency".
-                //
-                // TODO: There are various edge cases where a better than arbitrary choice would be
-                // possible:
-                // - Some indexes might be less skewed than others.
-                // - Some indexes might have an error, while others don't.
-                //   https://github.com/MaterializeInc/materialize/issues/15557
-                // - Some indexes might have less extra data in their keys, which won't be used in a
-                //   full scan.
-                this.indexes_available.indexes_on(*on_id).next()
+                choose_index(
+                    this.source_keys,
+                    on_id,
+                    &this.indexes_available.indexes_on(*on_id).map(
+                        |key| key.iter().cloned().collect_vec()
+                    ).collect_vec()
+                )
             };
 
             // See comment on `IndexUsageContext`.

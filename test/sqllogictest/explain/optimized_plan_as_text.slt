@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (
   a int,
@@ -1316,5 +1321,35 @@ Used Indexes:
 Notices:
   - Notice: Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
     Hint: CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
+
+EOF
+
+# We should choose an index whose key is a unique key (if exists)
+statement ok
+CREATE TABLE t4(
+    a int,
+    b int primary key,
+    c int
+);
+
+statement ok
+CREATE INDEX t4_idx_a ON t4(a);
+
+statement ok
+CREATE INDEX t4_idx_b ON t4(b);
+
+statement ok
+CREATE INDEX t4_idx_c ON t4(c);
+
+query T multiline
+EXPLAIN
+SELECT * FROM t4;
+----
+Explained Query (fast path):
+  Project (#1, #0, #2)
+    ReadExistingIndex materialize.public.t4_idx_b
+
+Used Indexes:
+  - materialize.public.t4_idx_b (*** full scan ***)
 
 EOF
