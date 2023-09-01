@@ -989,11 +989,6 @@ impl Catalog {
             .cluster_replica_dependents(cluster_id, replica_id, &mut seen)
     }
 
-    pub(crate) fn item_dependents(&self, item_id: GlobalId) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        self.state.item_dependents(item_id, &mut seen)
-    }
-
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
@@ -3448,7 +3443,7 @@ impl Catalog {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection: sink.connection_builder,
+                connection: sink.connection,
                 envelope: sink.envelope,
                 with_snapshot,
                 resolved_ids,
