@@ -43,8 +43,7 @@ use timely::progress::Antichain;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
-    TransactionResult, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
 use crate::coord::read_policy::SINCE_GRANULARITY;
@@ -166,12 +165,9 @@ impl Coordinator {
                                 }
                             }
                         }
-                        CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
-                            StorageSinkConnectionState::Ready(_) => {
-                                storage_sinks_to_drop.push(*id);
-                            }
-                            StorageSinkConnectionState::Pending(_) => (),
-                        },
+                        CatalogItem::Sink(catalog::Sink { .. }) => {
+                            storage_sinks_to_drop.push(*id);
+                        }
                         CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
                             indexes_to_drop.push((*cluster_id, *id));
                         }
@@ -897,12 +893,8 @@ impl Coordinator {
         let name = entry.name().clone();
         let owner_id = entry.owner_id().clone();
         let sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink,
+            CatalogItem::Sink(sink) => sink.clone(),
             _ => unreachable!(),
-        };
-        let sink = catalog::Sink {
-            connection: StorageSinkConnectionState::Ready(connection.clone()),
-            ..sink.clone()
         };
 
         // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
