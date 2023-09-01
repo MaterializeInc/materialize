@@ -12,6 +12,7 @@ CREATE OR REPLACE MATERIALIZED VIEW City AS
     WHERE type = 'City'
 ;
 CREATE INDEX City_id ON City (id);
+CREATE INDEX City_PartOfCountryId ON City (PartOfCountryId);
 
 CREATE OR REPLACE MATERIALIZED VIEW Company AS
     SELECT id, name, url, LocationPlaceId AS LocatedInCountryId
@@ -34,11 +35,17 @@ CREATE OR REPLACE MATERIALIZED VIEW Message_hasTag_Tag AS
   UNION
   (SELECT creationDate, PostId as MessageId, TagId FROM Post_hasTag_Tag);
 
+CREATE INDEX Message_hasTag_Tag_MessageId ON Message_hasTag_Tag (MessageId);
+CREATE INDEX Message_hasTag_Tag_TagId ON Message_hasTag_Tag (TagId);
+
 -- Umbra manually materializes this using load_plm (queries.py)
 CREATE OR REPLACE MATERIALIZED VIEW Person_likes_Message AS
   (SELECT creationDate, PersonId, CommentId as MessageId FROM Person_likes_Comment)
   UNION
   (SELECT creationDate, PersonId, PostId as MessageId FROM Person_likes_Post);
+
+CREATE INDEX Person_likes_Message_PersonId ON Person_likes_Message (PersonId);
+CREATE INDEX Person_likes_Message_MessageId ON Person_likes_Message (MessageId);
 
 -- A recursive materialized view containing the root Post of each Message (for Posts, themselves, for Comments, traversing up the Message thread to the root Post of the tree)
 CREATE OR REPLACE MATERIALIZED VIEW Message AS
