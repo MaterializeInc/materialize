@@ -31,7 +31,7 @@ use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 use crate::catalog::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, Op, SerializedReplicaLocation,
 };
-use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
+use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
 
@@ -369,7 +369,7 @@ impl Coordinator {
             self.initialize_compute_read_policies(
                 introspection_source_ids,
                 cluster_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                Some(self.catalog().system_config().default_retention_timestamp()),
             )
             .await;
         }

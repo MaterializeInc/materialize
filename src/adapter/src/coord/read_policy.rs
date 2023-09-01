@@ -318,9 +318,7 @@ impl crate::coord::Coordinator {
         base_policies: Vec<(GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
     ) {
         let mut policies = Vec::with_capacity(base_policies.len());
-        tracing::info!("base_policies: {base_policies:?}");
         for (id, base_policy) in base_policies {
-            tracing::info!("processing id: {id:?}");
             let capability = self
                 .storage_read_capabilities
                 .get_mut(&id)
@@ -335,7 +333,6 @@ impl crate::coord::Coordinator {
         &mut self,
         mut base_policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
     ) {
-        tracing::info!("compute base_policies: {base_policies:?}");
         base_policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
         for (cluster_id, group) in &base_policies
             .into_iter()
@@ -351,7 +348,6 @@ impl crate::coord::Coordinator {
                     (id, capability.policy())
                 })
                 .collect::<Vec<_>>();
-            tracing::info!("compute group: {group:?}");
             self.controller
                 .active_compute()
                 .set_read_policy(cluster_id, group)

@@ -165,22 +165,6 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
-// TODO: We can have only two consts here, instead of three, once there exists a `const` way to
-// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently
-// unstable compiler features that would allow this are:
-// * `const_option`: https://github.com/rust-lang/rust/issues/67441
-// * `const_result`: https://github.com/rust-lang/rust/issues/82814
-// * `const_num_from_num`: https://github.com/rust-lang/rust/issues/87852
-// * `const_precise_live_drops`: https://github.com/rust-lang/rust/issues/73255
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
-/// The default is set to a second to track the default timestamp frequency for sources.
-const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
-    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -1022,7 +1006,6 @@ impl Coordinator {
         // Ultimately, it doesn't concretely matter today, because the type ends up just being
         // u64 anyway.
         let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
-        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         info!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
