@@ -1612,13 +1612,7 @@ impl Coordinator {
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
-                    let create_export_token = self
-                        .controller
-                        .storage
-                        .prepare_export(id, sink.from)
-                        .unwrap_or_terminate("cannot fail to prepare export");
-
-                    self.create_storage_export(create_export_token, sink)
+                    self.create_storage_export(id, sink)
                         .await
                         .unwrap_or_terminate("cannot fail to create exports");
                 }
