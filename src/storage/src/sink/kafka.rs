@@ -38,8 +38,8 @@ use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
-    StorageSinkDesc,
+    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat,
+    MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use prometheus::core::AtomicU64;
@@ -52,7 +52,7 @@ use rdkafka::{Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{Enter, Leave, Map};
+use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
@@ -439,10 +439,6 @@ impl KafkaSinkState {
             &healthchecker,
             #[allow(clippy::redundant_closure_call)]
             (|| async {
-                fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
-                    "synthetic error"
-                )));
-
                 connection
                     .connection
                     .create_with_context(
@@ -515,7 +511,9 @@ impl KafkaSinkState {
             pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
-            progress_topic: connection.progress.topic,
+            progress_topic: match connection.consistency_config {
+                KafkaConsistencyConfig::Progress { topic } => topic,
+            },
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
@@ -962,7 +960,6 @@ struct EncodedRow {
     count: usize,
 }
 
-// TODO@jldlaughlin: What guarantees does this sink support? #1728
 fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
@@ -983,49 +980,18 @@ where
 
     let shared_gate_ts = Rc::new(Cell::new(None));
 
-    let key_desc = connection
-        .key_desc_and_indices
-        .as_ref()
-        .map(|(desc, _indices)| desc.clone());
-    let value_desc = connection.value_desc.clone();
+    let (encoded_stream, encode_health_stream, encode_token) = encode_stream(
+        stream,
+        id,
+        as_of.clone(),
+        Rc::clone(&shared_gate_ts),
+        &name,
+        connection.clone(),
+        connection_context.clone(),
+        envelope.clone(),
+    );
 
-    let encoded_stream = match connection.published_schema_info {
-        Some(PublishedSchemaInfo {
-            key_schema_id,
-            value_schema_id,
-        }) => {
-            let options = AvroSchemaOptions {
-                is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
-                ..Default::default()
-            };
-            let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
-                .expect("avro schema validated");
-            let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
-            encode_stream(
-                stream,
-                as_of.clone(),
-                Rc::clone(&shared_gate_ts),
-                encoder,
-                &name,
-            )
-        }
-        None => {
-            let encoder = JsonEncoder::new(
-                key_desc,
-                value_desc,
-                matches!(envelope, Some(SinkEnvelope::Debezium)),
-            );
-            encode_stream(
-                stream,
-                as_of.clone(),
-                Rc::clone(&shared_gate_ts),
-                encoder,
-                &name,
-            )
-        }
-    };
-
-    produce_to_kafka(
+    let (produce_health_stream, produce_token) = produce_to_kafka(
         encoded_stream,
         id,
         name,
@@ -1036,6 +1002,11 @@ where
         metrics,
         sink_statistics,
         connection_context,
+    );
+
+    (
+        encode_health_stream.concat(&produce_health_stream),
+        Rc::new((encode_token, produce_token)),
     )
 }
 
@@ -1050,7 +1021,7 @@ where
 ///
 /// Updates that are not beyond the given [`SinkAsOf`] and/or the `gate_ts` in
 /// [`KafkaSinkConnection`] will be discarded without producing them.
-pub fn produce_to_kafka<G>(
+fn produce_to_kafka<G>(
     stream: Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
     id: GlobalId,
     name: String,
@@ -1079,8 +1050,11 @@ where
 
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
-    // The frontier of this output is never inspected, so we can just use a normal output,
-    // even if its frontier is connected to the input.
+    // The frontier of this output is never inspected, so we can just use a
+    // normal output, even if its frontier is connected to the input.
+    //
+    // n.b. each operator needs to have its own `HealthOutputHandle` and they
+    // cannot be shared between operators.
     let (health_output, health_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
@@ -1328,37 +1302,125 @@ where
 /// changed.
 fn encode_stream<G>(
     input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
+    sink_id: GlobalId,
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
-    encoder: impl Encode + 'static,
     name_prefix: &str,
-) -> Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>
+    mut connection: KafkaSinkConnection,
+    connection_context: ConnectionContext,
+    envelope: Option<SinkEnvelope>,
+) -> (
+    Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
+    Stream<G, HealthStatusMessage>,
+    Rc<dyn Any>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let name = format!("{}-{}_encode", name_prefix, encoder.get_format_name());
-    input_stream.scope().region_named(&name, |region| {
-        input_stream
-            .enter(region)
-            .flat_map(move |((key, value), time, diff)| {
-                let should_emit = if as_of.strict {
-                    as_of.frontier.less_than(&time)
-                } else {
-                    as_of.frontier.less_equal(&time)
-                };
-                let ts_gated = Some(time) <= shared_gate_ts.get();
+    let name = format!(
+        "{}-{}_encode",
+        name_prefix,
+        connection.format.get_format_name()
+    );
+    let worker_id = input_stream.scope().index();
+    let worker_count = input_stream.scope().peers();
+    let hashed_id = sink_id.hashed();
+    let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
 
-                if !should_emit || ts_gated {
-                    // Skip stale data for already published timestamps
-                    None
-                } else {
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), input_stream.scope());
+
+    let mut input = builder.new_input(input_stream, Exchange::new(move |_| hashed_id));
+    let (mut output, stream) = builder.new_output();
+
+    // The frontier of this output is never inspected, so we can just use a normal output,
+    // even if its frontier is connected to the input.
+    let (health_output, health_stream) = builder.new_output();
+
+    let button = builder.build(move |caps| async move {
+        let [output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
+        drop(output_cap);
+
+        if !is_active_worker {
+            return;
+        }
+
+        // Ensure that Kafka collateral exists. While this looks somewhat
+        // innocuous, this step is why this must be an async operator.
+        //
+        // Also note that where this lies in the rendering cycle means that we
+        // might create the collateral topics each time the sink is rendered,
+        // e.g. if the broker's admin deleted the progress and data topics. For
+        // more details, see `mz_storage_client::sink::build_kafka`.
+        let healthchecker = HealthOutputHandle {
+            health_cap,
+            handle: Mutex::new(health_output),
+        };
+
+        let _ = halt_on_err(
+            &healthchecker,
+            mz_storage_client::sink::build_kafka(&mut connection, &connection_context).await,
+        )
+        .await;
+
+        let key_desc = connection
+            .key_desc_and_indices
+            .as_ref()
+            .map(|(desc, _indices)| desc.clone());
+        let value_desc = connection.value_desc.clone();
+
+        let encoder: Box<dyn Encode> = match connection.format {
+            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
+                key_schema_id,
+                value_schema_id,
+            }) => {
+                let options = AvroSchemaOptions {
+                    is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
+                    ..Default::default()
+                };
+
+                let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
+                    .expect("avro schema validated");
+                Box::new(AvroEncoder::new(
+                    schema_generator,
+                    key_schema_id,
+                    value_schema_id,
+                ))
+            }
+            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe { .. }) => {
+                unreachable!("must have communicated with CSR")
+            }
+            KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
+                key_desc,
+                value_desc,
+                matches!(envelope, Some(SinkEnvelope::Debezium)),
+            )),
+        };
+
+        while let Some(event) = input.next_mut().await {
+            if let Event::Data(cap, rows) = event {
+                for ((key, value), time, diff) in rows.drain(..) {
+                    let should_emit = if as_of.strict {
+                        as_of.frontier.less_than(&time)
+                    } else {
+                        as_of.frontier.less_equal(&time)
+                    };
+                    let ts_gated = Some(time) <= shared_gate_ts.get();
+
+                    if !should_emit || ts_gated {
+                        // Skip stale data for already published timestamps
+                        continue;
+                    }
+
                     let key = key.map(|key| encoder.encode_key_unchecked(key));
                     let value = value.map(|value| encoder.encode_value_unchecked(value));
-                    Some(((key, value), time, diff))
+
+                    output.give(&cap, ((key, value), time, diff)).await;
                 }
-            })
-            .leave()
-    })
+            }
+        }
+    });
+
+    (stream, health_stream, Rc::new(button.press_on_drop()))
 }
 
 #[derive(Serialize, Deserialize)]

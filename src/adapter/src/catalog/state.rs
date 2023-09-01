@@ -757,7 +757,7 @@ impl CatalogState {
         owner_id: RoleId,
         privileges: PrivilegeMap,
     ) {
-        if !id.is_system() && !item.is_placeholder() {
+        if !id.is_system() {
             info!(
                 "create {} {} ({})",
                 item.typ(),
@@ -822,14 +822,12 @@ impl CatalogState {
     #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn drop_item(&mut self, id: GlobalId) {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        if !metadata.item().is_placeholder() {
-            info!(
-                "drop {} {} ({})",
-                metadata.item_type(),
-                self.resolve_full_name(metadata.name(), metadata.conn_id()),
-                id
-            );
-        }
+        info!(
+            "drop {} {} ({})",
+            metadata.item_type(),
+            self.resolve_full_name(metadata.name(), metadata.conn_id()),
+            id
+        );
         for u in &metadata.uses().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())

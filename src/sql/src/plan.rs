@@ -46,7 +46,7 @@ use mz_sql_parser::ast::{
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
@@ -1337,7 +1337,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
+    pub connection_builder: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 

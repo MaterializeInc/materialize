@@ -88,11 +88,10 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_assert_or_log, stack, task};
+use mz_ore::{soft_assert_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
@@ -111,7 +110,6 @@ use mz_storage_client::controller::{
 };
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::StorageError;
 use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -125,7 +123,7 @@ use uuid::Uuid;
 
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    ClusterReplicaSizeMap, DataSourceDesc, Source,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -1565,17 +1563,8 @@ impl Coordinator {
                     }
                 }
                 CatalogItem::Sink(sink) => {
-                    // Re-create the sink.
-                    let builder = match &sink.connection {
-                        StorageSinkConnectionState::Pending(builder) => builder.clone(),
-                        StorageSinkConnectionState::Ready(_) => {
-                            panic!("sink already initialized during catalog boot")
-                        }
-                    };
                     // Now we're ready to create the sink connection. Arrange to notify the
                     // main coordinator thread when the future completes.
-                    let internal_cmd_tx = self.internal_cmd_tx.clone();
-                    let connection_context = self.connection_context.clone();
                     let id = entry.id();
                     let oid = entry.oid();
 
@@ -1585,44 +1574,19 @@ impl Coordinator {
                         .prepare_export(id, sink.from)
                         .unwrap_or_terminate("cannot fail to prepare export");
 
-                    let referenced_builder = builder.clone();
-                    let builder = builder.into_inline_connection(self.catalog().state());
-
-                    task::spawn(
-                        || format!("sink_connection_ready:{}", sink.from),
-                        async move {
-                            let conn_result = Retry::default()
-                                .max_tries(usize::MAX)
-                                .clamp_backoff(Duration::from_secs(60 * 10))
-                                .retry_async(|_| async {
-                                    let referenced_builder = referenced_builder.clone();
-                                    let builder = builder.clone();
-                                    let connection_context = connection_context.clone();
-                                    mz_storage_client::sink::build_sink_connection(
-                                        builder,
-                                        referenced_builder,
-                                        connection_context,
-                                    )
-                                    .await
-                                })
-                                .await
-                                .map_err(StorageError::Generic)
-                                .map_err(AdapterError::from);
-                            // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
-                            let result = internal_cmd_tx.send(Message::SinkConnectionReady(
-                                SinkConnectionReady {
-                                    ctx: None,
-                                    id,
-                                    oid,
-                                    create_export_token,
-                                    result: conn_result,
-                                },
-                            ));
-                            if let Err(e) = result {
-                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                            }
+                    // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+                    let result = self.internal_cmd_tx.send(Message::SinkConnectionReady(
+                        SinkConnectionReady {
+                            ctx: None,
+                            id,
+                            oid,
+                            create_export_token,
+                            result: Ok(sink.connection.clone()),
                         },
-                    );
+                    ));
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
                 }
                 CatalogItem::Connection(catalog_connection) => {
                     if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
