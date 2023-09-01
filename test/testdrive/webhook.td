@@ -288,7 +288,7 @@ $ webhook-append name=webhook_text_headers_block_list
 foo
 
 > SELECT body, headers::text FROM webhook_text_headers_block_list
-foo "{content-length=>3,host=>materialized:6876}"
+foo "{content-length=>3,host=>environmentd:6876}"
 
 > CREATE SOURCE webhook_text_headers_allow_list IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
