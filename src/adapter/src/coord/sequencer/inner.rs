@@ -73,7 +73,6 @@ use mz_storage_client::controller::{
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::StorageSinkConnection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
@@ -105,7 +104,7 @@ use crate::coord::{
     peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
     PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -716,20 +715,10 @@ impl Coordinator {
             ctx
         );
 
-        // Knowing that we're only handling kafka sinks here helps us simplify.
-        let StorageSinkConnection::Kafka(connection_builder) = sink.connection_builder.clone();
-
-        // Then try to create a placeholder catalog item with an unknown
-        // connection. If that fails, we're done, though if the client specified
-        // `if_not_exists` we'll tell the client we succeeded.
-        //
-        // This placeholder catalog item reserves the name while we create
-        // the sink connection, which could take an arbitrarily long time.
-
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
-            connection: StorageSinkConnection::Kafka(connection_builder),
+            connection: sink.connection,
             envelope: sink.envelope,
             with_snapshot,
             resolved_ids,
@@ -791,19 +780,13 @@ impl Coordinator {
             ctx
         );
 
-        // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
-        let result = self
-            .internal_cmd_tx
-            .send(Message::SinkConnectionReady(SinkConnectionReady {
-                ctx: Some(ctx),
-                id,
-                oid,
-                create_export_token,
-                result: Ok(sink.connection_builder),
-            }));
-        if let Err(e) = result {
-            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-        }
+        self.create_storage_export(
+            create_export_token,
+            &catalog_sink,
+            catalog_sink.connection.clone(),
+        )
+        .await
+        .unwrap_or_terminate("cannot fail to create exports");
     }
 
     /// Validates that a view definition does not contain any expressions that may lead to
