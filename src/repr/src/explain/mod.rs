@@ -38,7 +38,6 @@ use std::fmt::Formatter;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
-use mz_proto::{RustType, TryFromProtoError};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -53,8 +52,6 @@ pub mod tracing;
 
 #[cfg(feature = "tracing_")]
 pub use crate::explain::tracing::trace_plan;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.explain.rs"));
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -634,46 +631,6 @@ impl std::fmt::Display for IndexUsageType {
                 IndexUsageType::Unknown => "*** INTERNAL ERROR (unknown usage) ***",
             }
         )
-    }
-}
-
-impl RustType<ProtoIndexUsageType> for IndexUsageType {
-    fn into_proto(&self) -> ProtoIndexUsageType {
-        use crate::explain::proto_index_usage_type::Kind::*;
-        ProtoIndexUsageType {
-            kind: Some(match self {
-                IndexUsageType::FullScan => FullScan(()),
-                IndexUsageType::Lookup => Lookup(()),
-                IndexUsageType::DifferentialJoin => DifferentialJoin(()),
-                IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
-                IndexUsageType::PlanRootNoArrangement => PlanRootNoArrangement(()),
-                IndexUsageType::SinkExport => SinkExport(()),
-                IndexUsageType::IndexExport => IndexExport(()),
-                IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
-                IndexUsageType::Unknown => Unknown(()),
-                IndexUsageType::FastPathLimit => FastPathLimit(()),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoIndexUsageType) -> Result<Self, TryFromProtoError> {
-        use crate::explain::proto_index_usage_type::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIndexUsageType::Kind"))?;
-
-        match kind {
-            FullScan(()) => Ok(IndexUsageType::FullScan),
-            Lookup(()) => Ok(IndexUsageType::Lookup),
-            DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
-            DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
-            PlanRootNoArrangement(()) => Ok(IndexUsageType::PlanRootNoArrangement),
-            SinkExport(()) => Ok(IndexUsageType::SinkExport),
-            IndexExport(()) => Ok(IndexUsageType::IndexExport),
-            DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),
-            Unknown(()) => Ok(IndexUsageType::Unknown),
-            FastPathLimit(()) => Ok(IndexUsageType::FastPathLimit),
-        }
     }
 }
 
