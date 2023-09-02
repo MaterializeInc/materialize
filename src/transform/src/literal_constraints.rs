@@ -273,7 +273,7 @@ impl LiteralConstraints {
 
         let index_matches = transform_ctx
             .indexes
-            .indexes_with_id_on(get_id)
+            .indexes_on(get_id)
             .map(|(index_id, key)| (index_id, key.to_owned(), match_index(key, &or_args)))
             .collect_vec();
 

@@ -527,7 +527,7 @@ fn prune_and_annotate_dataflow_index_imports(
     for (_sink_id, sink_desc) in dataflow.sink_exports.iter() {
         // First, let's see if there exists an index on the id that the sink wants. If not, there is
         // nothing we can do here.
-        if let Some(arbitrary_index_key) = indexes.indexes_on(sink_desc.from).next() {
+        if let Some((_idx_id, arbitrary_index_key)) = indexes.indexes_on(sink_desc.from).next() {
             // If yes, then we'll add a request of _some_ index: If we already collected an index
             // request on this id, then use that, otherwise use the above arbitrarily picked index.
             let requested_keys = index_reqs_by_id
@@ -545,7 +545,7 @@ fn prune_and_annotate_dataflow_index_imports(
     for (_id, (index_desc, _)) in dataflow.index_exports.iter() {
         // First, let's see if there exists an index on the id that the exported index is on. If
         // not, there is nothing we can do here.
-        if let Some(arbitrary_index_key) = indexes.indexes_on(index_desc.on_id).next() {
+        if let Some((_idx_id, arbitrary_index_key)) = indexes.indexes_on(index_desc.on_id).next() {
             // If yes, then we'll add an index request of some index: If we already collected an
             // index request on this id, then use that, otherwise use the above arbitrarily picked
             // index.
@@ -572,7 +572,7 @@ fn prune_and_annotate_dataflow_index_imports(
     for (id, index_reqs) in index_reqs_by_id.iter_mut() {
         if index_reqs.is_empty() {
             // Try to pick an arbitrary index to be fully scanned.
-            if let Some(key) = indexes.indexes_on(*id).next() {
+            if let Some((_idx_id, key)) = indexes.indexes_on(*id).next() {
                 soft_panic_or_log!(
                     "prune_and_annotate_dataflow_index_imports didn't find any index for an id, even though one exists
 id: {}, key: {:?}",
@@ -747,7 +747,7 @@ impl<'a> CollectIndexRequests<'a> {
                     this.source_keys,
                     on_id,
                     &this.indexes_available.indexes_on(*on_id).map(
-                        |key| key.iter().cloned().collect_vec()
+                        |(_idx_id, key)| key.iter().cloned().collect_vec()
                     ).collect_vec()
                 )
             };
@@ -858,7 +858,7 @@ impl<'a> CollectIndexRequests<'a> {
                                     if this
                                         .indexes_available
                                         .indexes_on(*global_id)
-                                        .find(|available_key| available_key == &requested_key)
+                                        .find(|(_idx_id, available_key)| available_key == &requested_key)
                                         .is_some()
                                     {
                                         this.index_reqs_by_id
