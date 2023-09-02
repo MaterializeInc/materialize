@@ -2077,8 +2077,15 @@ fn regexp_split_to_array<'a>(
     let regexp = regexp.unwrap_str();
     let flags = flags.unwrap_str();
     let regexp = build_regex(regexp, flags)?;
-    let found = mz_regexp::regexp_split_to_array(text, &regexp);
+    regexp_split_to_array_re(text, &regexp, temp_storage)
+}
 
+fn regexp_split_to_array_re<'a>(
+    text: &str,
+    regexp: &Regex,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let found = mz_regexp::regexp_split_to_array(text, regexp);
     let mut row = Row::default();
     let mut packer = row.packer();
     packer.push_array(
@@ -4638,7 +4645,8 @@ derive_unary!(
     AclItemGrantee,
     AclItemPrivileges,
     QuoteIdent,
-    TryParseMonotonicIso8601Timestamp
+    TryParseMonotonicIso8601Timestamp,
+    RegexpSplitToArray
 );
 
 impl UnaryFunc {
@@ -4966,6 +4974,9 @@ impl Arbitrary for UnaryFunc {
                 .boxed(),
             any_regex()
                 .prop_map(|regex| UnaryFunc::RegexpMatch(RegexpMatch(regex)))
+                .boxed(),
+            any_regex()
+                .prop_map(|regex| UnaryFunc::RegexpSplitToArray(RegexpSplitToArray(regex)))
                 .boxed(),
             ExtractInterval::arbitrary().prop_map_into().boxed(),
             ExtractTime::arbitrary().prop_map_into().boxed(),
@@ -5312,6 +5323,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::IsLikeMatch(pattern) => IsLikeMatch(pattern.0.into_proto()),
             UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch(regex.0.into_proto()),
             UnaryFunc::RegexpMatch(regex) => RegexpMatch(regex.0.into_proto()),
+            UnaryFunc::RegexpSplitToArray(regex) => RegexpSplitToArray(regex.0.into_proto()),
             UnaryFunc::ExtractInterval(func) => ExtractInterval(func.0.into_proto()),
             UnaryFunc::ExtractTime(func) => ExtractTime(func.0.into_proto()),
             UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp(func.0.into_proto()),
@@ -5729,6 +5741,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 IsLikeMatch(pattern) => Ok(impls::IsLikeMatch(pattern.into_rust()?).into()),
                 IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.into_rust()?).into()),
                 RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.into_rust()?).into()),
+                RegexpSplitToArray(regex) => {
+                    Ok(impls::RegexpSplitToArray(regex.into_rust()?).into())
+                }
                 ExtractInterval(units) => Ok(impls::ExtractInterval(units.into_rust()?).into()),
                 ExtractTime(units) => Ok(impls::ExtractTime(units.into_rust()?).into()),
                 ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.into_rust()?).into()),
