@@ -14,6 +14,7 @@ use mz_build_info::build_info;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use semver::Version;
+use serde::{Deserialize, Serialize};
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,7 +29,23 @@ const CACHE_FILE_NAME: &str = ".mz.ver";
 const BINARIES_LATEST_VERSION_URL: &str =
     "https://binaries.materialize.com/mz-latest-x86_64-unknown-linux-gnu.tar.gz";
 
+/// Represents the file structure stored in the cache.
+#[derive(Serialize, Deserialize)]
+struct CacheFile {
+    last_read_version: Version,
+}
+
+/// Represents the structure for `UpgradeChecker`.
+///
+/// The `UpgradeChecker` allows checking for available updates
+/// by inspecting the response headers from the latest release in S3.
+///
+/// No panics should occur within this code.
+/// All errors must be gracefully handled
+/// to prevent disruption of a command execution,
+/// and ensure a seamless experience.
 pub struct UpgradeChecker {
+    /// Formats the warning output color at `mz::ui::OutputFormatter`.
     no_color: bool,
 }
 
@@ -42,8 +59,13 @@ impl UpgradeChecker {
         let mut cache_path: PathBuf = dirs::cache_dir().ok_or(Error::CacheDirNotFoundError)?;
         cache_path.push(CACHE_FILE_NAME);
 
+        let cache_data = CacheFile {
+            last_read_version: version.clone(),
+        };
+
+        let serialized_data = serde_json::to_string(&cache_data)?;
         let mut file = File::create(&cache_path)?;
-        file.write_all(version.to_string().as_bytes())?;
+        file.write_all(serialized_data.as_bytes())?;
 
         Ok(())
     }
@@ -60,7 +82,9 @@ impl UpgradeChecker {
         Ok(false)
     }
 
-    fn get_cached_timpestamp_and_version(&self) -> Result<Option<(SystemTime, String)>, Error> {
+    /// Returns the modified date and the version from the cache file.
+    /// If the file does not exist, the function returns `Ok(None)`.
+    fn get_cached_timpestamp_and_version(&self) -> Result<Option<(SystemTime, Version)>, Error> {
         let mut cache_path: PathBuf = dirs::cache_dir().ok_or(Error::CacheDirNotFoundError)?;
         cache_path.push(CACHE_FILE_NAME);
 
@@ -71,11 +95,15 @@ impl UpgradeChecker {
 
         let file = OpenOptions::new().read(true).open(&cache_path)?;
         let modified_time = file.metadata()?.modified()?;
-        let mut reader = BufReader::new(file);
-        let mut reg_version = String::new();
-        reader.read_line(&mut reg_version)?;
 
-        Ok(Some((modified_time, reg_version)))
+        // Read cache file
+        let mut reader = BufReader::new(file);
+        let mut file_content = String::new();
+        reader.read_line(&mut file_content)?;
+
+        let cache_file: CacheFile = serde_json::from_str(&file_content)?;
+
+        Ok(Some((modified_time, cache_file.last_read_version)))
     }
 
     /// Returns true if the installed version of `mz`
@@ -107,16 +135,14 @@ impl UpgradeChecker {
             .await?;
 
         // If the server returns a redirect, you can usually find the location header.
-        if let Some(location) = response.headers().get("location") {
-            let location_str = location.to_str().map_err(Error::HeaderToStrError)?;
-            let version = location_str.split("-").collect::<Vec<&str>>()[1]
-                .strip_prefix("v")
-                .ok_or(Error::LocationInvalidError)?;
-            let latest_version = Version::parse(&version).map_err(Error::SemVerParseError)?;
+        if let Some(latest_version) = response.headers().get("mz-latest.version") {
+            let latest_version =
+                Version::parse(latest_version.to_str().map_err(Error::HeaderToStrError)?)
+                    .map_err(Error::SemVerParseError)?;
             return Ok(latest_version);
         }
 
-        Err(Error::MissingLocationError)
+        Err(Error::LatestVersionHeaderMissingError)
     }
 
     /// Prints the warning message to update mz if the check result is true.
@@ -158,8 +184,6 @@ impl UpgradeChecker {
         {
             // If the already cached version is greater than the local version
             // Warn the user and avoid querying GitHub
-            let cached_version =
-                Version::parse(&cached_version).map_err(Error::SemVerParseError)?;
             if self.is_installed_version_older_than(cached_version) {
                 return Ok(true);
             }
