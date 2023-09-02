@@ -355,7 +355,8 @@ SELECT generate_series(a, b) from t
 ----
 Explained Query:
   FlatMap generate_series(#0, #1, 1)
-    project=(#2)
+    mfp_after
+      project=(#2)
     input_key=#0
     Get::PassArrangements materialize.public.t
       raw=false
@@ -1201,8 +1202,9 @@ FROM t;
 ----
 Explained Query:
   FlatMap unnest_list(#0)
-    project=(#2)
-    map=(record_get[0](#1))
+    mfp_after
+      project=(#2)
+      map=(record_get[0](#1))
     input_key=
     Reduce::Basic
       aggr=(0, lag[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1, 3, -5)))))
@@ -1228,8 +1230,9 @@ FROM t;
 ----
 Explained Query:
   FlatMap unnest_list(#0)
-    project=(#2)
-    map=(record_get[0](#1))
+    mfp_after
+      project=(#2)
+      map=(record_get[0](#1))
     Mfp
       project=(#2)
       input_key=#0, #1

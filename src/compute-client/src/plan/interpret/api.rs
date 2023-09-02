@@ -350,7 +350,7 @@ where
                     input,
                     func,
                     exprs,
-                    mfp,
+                    mfp_after: mfp,
                     input_key,
                 } => {
                     // Descend recursively into all children.
@@ -612,7 +612,7 @@ where
                     input,
                     func,
                     exprs,
-                    mfp,
+                    mfp_after: mfp,
                     input_key,
                 } => {
                     // Descend recursively into all children.

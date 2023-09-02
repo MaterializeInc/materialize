@@ -877,7 +877,7 @@ where
                 input,
                 func,
                 exprs,
-                mfp,
+                mfp_after: mfp,
                 input_key,
             } => {
                 let input = self.render_plan(*input);

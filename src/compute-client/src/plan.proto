@@ -105,7 +105,7 @@ message ProtoPlan {
         ProtoPlan input = 1;
         mz_expr.relation.ProtoTableFunc func = 2;
         repeated mz_expr.scalar.ProtoMirScalarExpr exprs = 3;
-        mz_expr.linear.ProtoMapFilterProject mfp = 4;
+        mz_expr.linear.ProtoMapFilterProject mfp_after = 4;
         ProtoPlanInputKey input_key = 5;
    }
 

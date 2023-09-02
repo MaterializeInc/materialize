@@ -1411,7 +1411,7 @@ SELECT generate_series(a, b) from t
               ]
             }
           ],
-          "mfp": {
+          "mfp_after": {
             "expressions": [],
             "predicates": [],
             "projection": [
