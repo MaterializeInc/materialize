@@ -102,6 +102,7 @@ pub enum Statement<T: AstInfo> {
     AlterDefaultPrivileges(AlterDefaultPrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
+    Comment(CommentStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -168,6 +169,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterDefaultPrivileges(stmt) => f.write_node(stmt),
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
             Statement::ValidateConnection(stmt) => f.write_node(stmt),
+            Statement::Comment(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -237,6 +239,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterDefaultPrivileges => "alter_default_privileges",
         StatementKind::ReassignOwned => "reassign_owned",
         StatementKind::ValidateConnection => "validate_connection",
+        StatementKind::Comment => "comment",
     }
 }
 
@@ -664,7 +667,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub if_not_exists: bool,
     pub body_format: Format<T>,
-    pub include_headers: bool,
+    pub include_headers: CreateWebhookSourceIncludeHeaders,
     pub validate_using: Option<CreateWebhookSourceCheck<T>>,
     pub in_cluster: T::ClusterName,
 }
@@ -685,9 +688,7 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         f.write_str("BODY FORMAT ");
         f.write_node(&self.body_format);
 
-        if self.include_headers {
-            f.write_str(" INCLUDE HEADERS");
-        }
+        f.write_node(&self.include_headers);
 
         if let Some(validate) = &self.validate_using {
             f.write_str(" ");
@@ -827,6 +828,79 @@ impl AstDisplay for CreateWebhookSourceBody {
 }
 
 impl_display!(CreateWebhookSourceBody);
+
+/// `INCLUDE [HEADER | HEADERS]`
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceIncludeHeaders {
+    /// Mapping individual header names to columns in the source.
+    pub mappings: Vec<CreateWebhookSourceMapHeader>,
+    /// Whether or not to include the `headers` column, and any filtering we might want to do.
+    pub column: Option<Vec<CreateWebhookSourceFilterHeader>>,
+}
+
+impl AstDisplay for CreateWebhookSourceIncludeHeaders {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if !self.mappings.is_empty() {
+            f.write_str(" ");
+        }
+        f.write_node(&display::separated(&self.mappings[..], " "));
+
+        if let Some(column) = &self.column {
+            f.write_str(" INCLUDE HEADERS");
+
+            if !column.is_empty() {
+                f.write_str(" ");
+                f.write_str("(");
+                f.write_node(&display::comma_separated(&column[..]));
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceIncludeHeaders);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceFilterHeader {
+    pub block: bool,
+    pub header_name: String,
+}
+
+impl AstDisplay for CreateWebhookSourceFilterHeader {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if self.block {
+            f.write_str("NOT ");
+        }
+        f.write_node(&display::escaped_string_literal(&self.header_name));
+    }
+}
+
+impl_display!(CreateWebhookSourceFilterHeader);
+
+/// `INCLUDE HEADER <name> [AS <alias>] [BYTES]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateWebhookSourceMapHeader {
+    pub header_name: String,
+    pub column_name: Ident,
+    pub use_bytes: bool,
+}
+
+impl AstDisplay for CreateWebhookSourceMapHeader {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("INCLUDE HEADER ");
+
+        f.write_node(&display::escaped_string_literal(&self.header_name));
+
+        f.write_str(" AS ");
+        f.write_node(&self.column_name);
+
+        if self.use_bytes {
+            f.write_str(" BYTES");
+        }
+    }
+}
+
+impl_display!(CreateWebhookSourceMapHeader);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2638,7 +2712,6 @@ pub struct ExplainPlanStatement<T: AstInfo> {
     pub stage: ExplainStage,
     pub config_flags: Vec<Ident>,
     pub format: ExplainFormat,
-    pub no_errors: bool,
     pub explainee: Explainee<T>,
 }
 
@@ -2654,9 +2727,6 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
         f.write_str(" AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
-        if self.no_errors {
-            f.write_str("BROKEN ");
-        }
         f.write_node(&self.explainee);
     }
 }
@@ -2952,7 +3022,7 @@ impl<T: AstInfo> AstDisplay for Assignment<T> {
 }
 impl_display_t!(Assignment);
 
-/// Specifies what [Statement::ExplainPlan] is actually explaining The new API
+/// Specifies what [Statement::ExplainPlan] is actually explained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExplainStage {
     /// The mz_sql::HirRelationExpr after parsing
@@ -2997,7 +3067,8 @@ impl_display!(ExplainStage);
 pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
-    Query(Query<T>),
+    Index(T::ItemName),
+    Query(Query<T>, bool),
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -3011,7 +3082,16 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_str("MATERIALIZED VIEW ");
                 f.write_node(name);
             }
-            Self::Query(query) => f.write_node(query),
+            Self::Index(name) => {
+                f.write_str("INDEX ");
+                f.write_node(name);
+            }
+            Self::Query(query, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(query);
+            }
         }
     }
 }
@@ -3701,3 +3781,69 @@ impl<T: AstInfo> AstDisplay for ReassignOwnedStatement<T> {
     }
 }
 impl_display_t!(ReassignOwnedStatement);
+
+/// `COMMENT ON ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CommentStatement {
+    pub object: CommentObjectType,
+    pub comment: Option<String>,
+}
+
+impl AstDisplay for CommentStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("COMMENT ON ");
+        f.write_node(&self.object);
+
+        f.write_str(" IS ");
+        match &self.comment {
+            Some(s) => {
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(s));
+                f.write_str("'");
+            }
+            None => f.write_str("NULL"),
+        }
+    }
+}
+impl_display!(CommentStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CommentObjectType {
+    Table {
+        name: UnresolvedItemName,
+    },
+    View {
+        name: UnresolvedItemName,
+    },
+    Column {
+        relation_name: UnresolvedItemName,
+        column_name: Ident,
+    },
+}
+
+impl AstDisplay for CommentObjectType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        use CommentObjectType::*;
+
+        match self {
+            Table { name } => {
+                f.write_str("TABLE ");
+                f.write_node(name);
+            }
+            View { name } => {
+                f.write_str("VIEW ");
+                f.write_node(name);
+            }
+            Column {
+                relation_name,
+                column_name,
+            } => {
+                f.write_str("COLUMN ");
+                f.write_node(relation_name);
+                f.write_str(".");
+                f.write_node(column_name);
+            }
+        }
+    }
+}
+impl_display!(CommentObjectType);

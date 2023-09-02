@@ -11,7 +11,6 @@ import os
 import time
 from argparse import Namespace
 from textwrap import dedent
-from typing import Union
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
@@ -36,7 +35,7 @@ td_test = os.environ.pop("TD_TEST", "*")
 
 
 def start_deps(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
 
     if isinstance(args_or_parser, Namespace):
@@ -58,7 +57,7 @@ def start_deps(
 
 
 def workflow_kafka_sources(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
     start_deps(c, args_or_parser)
 
@@ -87,7 +86,7 @@ def workflow_kafka_sources(
 
 
 def workflow_user_tables(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
     start_deps(c, args_or_parser)
 

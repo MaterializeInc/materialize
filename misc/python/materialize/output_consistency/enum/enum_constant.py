@@ -8,8 +8,6 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import List, Optional, Set
-
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.enum.enum_data_type import EnumDataType
@@ -42,7 +40,7 @@ class EnumConstant(Expression):
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         return ENUM_RETURN_TYPE_SPEC
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         return EnumDataType()
 
     def is_leaf(self) -> bool:
@@ -53,7 +51,7 @@ class EnumConstant(Expression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         return set()
 
     def __str__(self) -> str:
@@ -62,5 +60,5 @@ class EnumConstant(Expression):
     def to_sql(self, is_root_level: bool) -> str:
         return self.value
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         return []

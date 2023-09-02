@@ -7,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable
 
 from materialize.mzcompose import Composition, ServiceHealthcheck
 from materialize.mzcompose.services import Cockroach, Materialized, Testdrive

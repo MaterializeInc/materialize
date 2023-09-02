@@ -53,6 +53,14 @@ enabled_roles
 VIEW
 materialize
 information_schema
+key_column_usage
+VIEW
+materialize
+information_schema
+referential_constraints
+VIEW
+materialize
+information_schema
 role_table_grants
 VIEW
 materialize
@@ -62,6 +70,10 @@ VIEW
 materialize
 information_schema
 schemata
+VIEW
+materialize
+information_schema
+table_constraints
 VIEW
 materialize
 information_schema
@@ -299,6 +311,10 @@ materialize
 mz_internal
 mz_cluster_replica_utilization
 VIEW
+materialize
+mz_internal
+mz_comments
+BASE TABLE
 materialize
 mz_internal
 mz_compute_delays_histogram
@@ -674,6 +690,10 @@ BASE TABLE
 materialize
 mz_internal
 mz_subscriptions
+BASE TABLE
+materialize
+mz_internal
+mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal

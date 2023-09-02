@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -17,7 +16,7 @@ from materialize.output_consistency.operation.operation_param import OperationPa
 
 
 class EnumConstantOperationParam(OperationParam):
-    def __init__(self, values: Set[str], add_quotes: bool, optional: bool = False):
+    def __init__(self, values: set[str], add_quotes: bool, optional: bool = False):
         super().__init__(
             DataTypeCategory.ENUM,
             optional=optional,
@@ -28,7 +27,7 @@ class EnumConstantOperationParam(OperationParam):
         self.add_quotes = add_quotes
 
     def supports_type(
-        self, data_type: DataType, previous_args: List[Expression]
+        self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return isinstance(data_type, EnumDataType)
 

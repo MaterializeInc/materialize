@@ -81,4 +81,12 @@ impl ExprHumanizer for TestCatalog {
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
     }
+
+    fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
+        None
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.names.get(&id).is_some()
+    }
 }

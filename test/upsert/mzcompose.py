@@ -130,8 +130,9 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
 
+        junit_report = ci_util.junit_report_filename(c.name)
+
         try:
-            junit_report = ci_util.junit_report_filename(c.name)
             c.run(
                 "testdrive",
                 f"--junit-report={junit_report}",
@@ -172,6 +173,9 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
+                    # Enabling shrinking buffers
+                    "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+                    "storage_shrink_upsert_unused_buffers_by_ratio": "4",
                 },
                 environment_extra=materialized_environment_extra,
             ),

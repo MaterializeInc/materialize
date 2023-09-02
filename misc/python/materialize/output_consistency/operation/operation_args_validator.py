@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, List, Optional, Set
+from collections.abc import Callable
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -18,16 +18,16 @@ from materialize.output_consistency.expression.expression_characteristics import
 class OperationArgsValidator:
     """Validator that performs heuristic checks to determine if a database error is to be expected"""
 
-    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         raise NotImplementedError
 
     def index_of(
         self,
-        args: List[Expression],
+        args: list[Expression],
         match_argument_fn: Callable[
-            [Expression, Set[ExpressionCharacteristics], int], bool
+            [Expression, set[ExpressionCharacteristics], int], bool
         ],
-        skip_argument_indices: Optional[Set[int]] = None,
+        skip_argument_indices: set[int] | None = None,
     ) -> int:
         if skip_argument_indices is None:
             skip_argument_indices = set()
@@ -43,13 +43,13 @@ class OperationArgsValidator:
 
     def index_of_characteristic_combination(
         self,
-        args: List[Expression],
-        characteristic_combination: Set[ExpressionCharacteristics],
-        skip_argument_indices: Optional[Set[int]] = None,
+        args: list[Expression],
+        characteristic_combination: set[ExpressionCharacteristics],
+        skip_argument_indices: set[int] | None = None,
     ) -> int:
         def match_fn(
             _arg: Expression,
-            arg_characteristics: Set[ExpressionCharacteristics],
+            arg_characteristics: set[ExpressionCharacteristics],
             _index: int,
         ) -> bool:
             return len(characteristic_combination & arg_characteristics) == len(

@@ -257,8 +257,8 @@ pub enum Explainee {
     ///
     /// This variant is deprecated and will be removed in #18089.
     Dataflow(GlobalId),
-    /// The object to be explained is a one-off query and may or may not served
-    /// using a dataflow.
+    /// The object to be explained is a one-off query and may or may not be
+    /// served using a dataflow.
     Query,
 }
 
@@ -296,7 +296,7 @@ pub trait Explain<'a>: 'a {
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
-    /// implementation should silently ignore this paramter and
+    /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     fn explain(
         &'a mut self,
@@ -426,7 +426,7 @@ impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
 pub trait ExprHumanizer: fmt::Debug {
-    /// Attempts to return the a human-readable string for the relation
+    /// Attempts to return a human-readable string for the relation
     /// identified by `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
 
@@ -436,7 +436,7 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Returns a human-readable name for the specified scalar type.
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
 
-    /// Returns a human-readable name for the specified scalar type.
+    /// Returns a human-readable name for the specified column type.
     fn humanize_column_type(&self, typ: &ColumnType) -> String {
         format!(
             "{}{}",
@@ -444,6 +444,12 @@ pub trait ExprHumanizer: fmt::Debug {
             if typ.nullable { "?" } else { "" }
         )
     }
+
+    /// Returns a vector of column names for the relation identified by `id`.
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>>;
+
+    /// Returns whether the specified id exists.
+    fn id_exists(&self, id: GlobalId) -> bool;
 }
 
 /// A bare-minimum implementation of [`ExprHumanizer`].
@@ -468,6 +474,14 @@ impl ExprHumanizer for DummyHumanizer {
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
+    }
+
+    fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
+        None
+    }
+
+    fn id_exists(&self, _id: GlobalId) -> bool {
+        false
     }
 }
 

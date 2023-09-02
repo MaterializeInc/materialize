@@ -448,8 +448,8 @@ where
 
             while let Some(event) = input.next().await {
                 let AsyncEvent::Data(cap, data) = event else {
-                continue;
-            };
+                    continue;
+                };
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;

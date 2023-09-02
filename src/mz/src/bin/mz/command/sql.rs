@@ -26,6 +26,9 @@ use crate::mixin::ProfileArg;
 pub struct SqlCommand {
     #[clap(flatten)]
     profile: ProfileArg,
+    #[clap(long, env = "MZ_CLUSTER")]
+    /// Use the specified cluster
+    cluster: Option<String>,
     /// Additional arguments to pass to `psql`.
     psql_args: Vec<String>,
 }
@@ -37,6 +40,7 @@ pub async fn run(cx: Context, cmd: SqlCommand) -> Result<(), Error> {
     mz::command::sql::run(
         &mut cx,
         RunArgs {
+            cluster: cmd.cluster,
             psql_args: cmd.psql_args,
         },
     )

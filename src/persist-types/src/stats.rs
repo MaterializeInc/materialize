@@ -1780,7 +1780,8 @@ mod tests {
             let stats: ProtoJsonStats = RustType::into_proto(&JsonStats::Maps(cols));
             let ProtoJsonStats {
                 kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-            } = stats else {
+            } = stats
+            else {
                 panic!("serialized produced wrong type!");
             };
 
@@ -1864,7 +1865,8 @@ mod tests {
         let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
         let ProtoJsonStats {
             kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-        } = stats else {
+        } = stats
+        else {
             panic!("serialized produced wrong type!");
         };
 
@@ -1880,7 +1882,10 @@ mod tests {
         assert!(elements.remove("a").is_some());
 
         let context = elements.remove("context").expect("trimmed too much");
-        let Some(ProtoJsonStats { kind: Some(proto_json_stats::Kind::Maps(context)) }) = context.stats else {
+        let Some(ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(context)),
+        }) = context.stats
+        else {
             panic!("serialized produced wrong type!")
         };
 
@@ -1894,7 +1899,8 @@ mod tests {
         let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
         let ProtoJsonStats {
             kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-        } = stats else {
+        } = stats
+        else {
             panic!("serialized produced wrong type!");
         };
 
@@ -1906,7 +1912,10 @@ mod tests {
         assert_eq!(stats.elements.len(), 1);
         assert_eq!(stats.elements[0].name, "context");
 
-        let Some(ProtoJsonStats { kind: Some(proto_json_stats::Kind::Maps(context)) }) = &stats.elements[0].stats else {
+        let Some(ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(context)),
+        }) = &stats.elements[0].stats
+        else {
             panic!("serialized produced wrong type!")
         };
 

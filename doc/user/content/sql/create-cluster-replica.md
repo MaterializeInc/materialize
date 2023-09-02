@@ -72,6 +72,43 @@ Valid `size` options are:
 - `5xlarge`
 - `6xlarge`
 
+The [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes) table lists the CPU, memory, and disk allocation for each replica size.
+
+{{< warning >}}
+The values in the `mz_internal.mz_cluster_replica_sizes` may change at any time.
+You should not rely on them for any kind of capacity planning.
+{{< /warning >}}
+
+### Disk-attached replicas
+
+{{< private-preview />}}
+
+{{< warning >}}
+**Pricing for this feature is likely to change.**
+
+Disk-attached replicas currently consume credits at the same rate as
+non-disk-attached replicas. In the future, disk-attached replicas will likely
+consume credits at a faster rate.
+{{< /warning >}}
+
+The `DISK` option attaches a disk to the replica.
+
+Attaching a disk allows you to trade off performance for cost. A replica of a
+given size has access to several times more disk than memory, allowing the
+processing of larger data sets at that replica size. Operations on a disk,
+however, are much slower than operations in memory, and so a workload that
+spills to disk will perform more slowly than a workload that does not. Note that
+exact storage medium for the attached disk is not specified, and its performance
+characteristics are subject to change.
+
+Consider attaching a disk to replicas that contain sources that use the
+[upsert envelope](/sql/create-source/#upsert-envelope) or the
+[Debezium envelope](/sql/create-source/#debezium-envelope). When you place
+these sources on a replica with an attached disk, they will automatically spill
+state to disk. These sources will therefore use less memory but may ingest
+data more slowly. See [Sizing a source](/sql/create-source/#sizing-a-source) for details.
+
+
 ### Deployment options
 
 Materialize is an active-replication-based system, which means you expect each

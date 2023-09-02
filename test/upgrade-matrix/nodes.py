@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.mzcompose_actions import ConfigureMz, KillMz, StartMz
@@ -16,7 +15,7 @@ from materialize.util import MzVersion
 
 
 class Node:
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         return []
 
 
@@ -31,13 +30,13 @@ class EndUpgradeScenario(Node):
 
 
 class BeginVersion(Node):
-    def __init__(self, version: Optional[MzVersion]):
+    def __init__(self, version: MzVersion | None):
         self.version = version
 
     def __repr__(self) -> str:
         return f"BeginVersion({self.version})"
 
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         # As this action may need start very old Mz versions,
         # we do not use any bootstrap_systme_parameters
         return [
@@ -47,13 +46,13 @@ class BeginVersion(Node):
 
 
 class EndVersion(Node):
-    def __init__(self, version: Optional[MzVersion]):
+    def __init__(self, version: MzVersion | None):
         self.version = version
 
     def __repr__(self) -> str:
         return f"EndVersion({self.version})"
 
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         return [KillMz()]
 
 
@@ -61,7 +60,7 @@ class ChecksInitialize(Node):
     def __repr__(self) -> str:
         return "ChecksInitialize"
 
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         return [Initialize(scenario)]
 
 
@@ -69,7 +68,7 @@ class ChecksManipulate1(Node):
     def __repr__(self) -> str:
         return "ChecksManipulate(#1)"
 
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         return [Manipulate(scenario, phase=1)]
 
 
@@ -77,7 +76,7 @@ class ChecksManipulate2(Node):
     def __repr__(self) -> str:
         return "ChecksManipulate(#2)"
 
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         return [Manipulate(scenario, phase=2)]
 
 
@@ -85,5 +84,5 @@ class ChecksValidate(Node):
     def __repr__(self) -> str:
         return "ChecksValidate"
 
-    def actions(self, scenario: Scenario) -> List[Action]:
+    def actions(self, scenario: Scenario) -> list[Action]:
         return [Validate(scenario)]

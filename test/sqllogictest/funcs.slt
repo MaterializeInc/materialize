@@ -1517,12 +1517,12 @@ NULL
 query IIII
 SELECT pg_column_size(1::int4), pg_column_size(2::int8), pg_column_size('a'), pg_column_size('ab')
 ----
-5 9 3 4
+2 2 3 4
 
 query I
 SELECT pg_column_size((1, 2))
 ----
-19
+13
 
 statement ok
 CREATE TABLE col_size (a INT, b INT, c TEXT)
@@ -1533,7 +1533,7 @@ INSERT INTO col_size VALUES (1, 2, 'some string longer than 32 chars.'), (NULL, 
 query IIIIII
 SELECT a, b, pg_column_size(col_size.*), pg_column_size(col_size.a), pg_column_size(col_size.b), pg_column_size(col_size.c) FROM col_size ORDER BY a
 ----
-1  2  54  5  5  35
+1  2  48  2  2  35
 NULL  NULL  12  NULL  NULL  NULL
 
 statement error mz_row_size requires a record type
@@ -1549,12 +1549,12 @@ NULL
 query III
 SELECT mz_row_size((1, 2)), mz_row_size((1, 2, 3, 4)), mz_row_size((1, 2, 3, 4, 5))
 ----
-32  32  57
+32  32  32
 
 query III
 SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 ----
-1  2  77
+1  2  71
 NULL  NULL  32
 
 query error mz_errored
@@ -1651,3 +1651,9 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_dangerous_functions = true
 ----
 COMPLETE 0
+
+query error function textrecv\(\) does not exist
+SELECT textrecv()
+
+query error cannot call function with arguments of type internal
+SELECT textrecv('abc')

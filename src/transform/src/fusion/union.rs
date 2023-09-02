@@ -26,7 +26,7 @@ impl crate::Transform for Union {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: crate::TransformArgs,
+        _: &mut crate::TransformCtx,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);

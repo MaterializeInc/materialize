@@ -18,7 +18,7 @@ use itertools::zip_eq;
 use mz_expr::{Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Hoist projections through operators.
 #[derive(Debug)]
@@ -50,7 +50,7 @@ impl crate::Transform for ProjectionLifting {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(relation, &mut BTreeMap::new());
         mz_repr::explain::trace_plan(&*relation);

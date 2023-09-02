@@ -13,7 +13,7 @@ import sys
 import time
 from concurrent import futures
 from math import floor, sqrt
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
@@ -38,7 +38,7 @@ SERVICES = [Materialized(image="materialize/materialized:latest"), Postgres()]
 
 
 def execute_operation(
-    args: Tuple[Workload, int, Operation, Cursor, int, int]
+    args: tuple[Workload, int, Operation, Cursor, int, int]
 ) -> dict[str, Any]:
     workload, concurrency, operation, cursor, i1, i2 = args
 
@@ -61,7 +61,7 @@ def run_with_concurrency(
     workload: Workload,
     concurrency: int,
     count: int,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     endpoint.up()
 
     init_sqls = schema.init_sqls()
@@ -178,6 +178,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--target",
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
         action="append",
+        default=[],
     )
 
     parser.add_argument(
@@ -211,6 +212,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         default=512,
         help="Number of individual operations to benchmark at concurrency 1 (and COUNT * SQRT(concurrency) for higher concurrencies)",
+    )
+
+    parser.add_argument(
+        "--object-count",
+        metavar="COUNT",
+        type=int,
+        default=1,
+        help="Number of database objects",
     )
 
     parser.add_argument(
@@ -249,7 +258,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     endpoints: list[Endpoint] = []
     for i, target in enumerate(args.target):
-        endpoint: Optional[Endpoint] = None
+        endpoint: Endpoint | None = None
         if target == "local":
             endpoint = MaterializeLocal()
         if target == "remote":
@@ -276,6 +285,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         create_index=args.create_index,
         transaction_isolation=args.transaction_isolation,
         cluster_name=args.cluster_name,
+        object_count=args.object_count,
     )
 
     workload_names = [workload.__name__ for workload in workloads]

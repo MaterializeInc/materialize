@@ -26,12 +26,11 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
-    CatalogSchema, ObjectType, RoleAttributes,
+    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes,
 };
 use mz_sql::names::{
-    DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
-    SchemaSpecifier,
+    CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
+    SchemaId, SchemaSpecifier,
 };
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
@@ -45,7 +44,7 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
-    self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
+    is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
     SerializedReplicaLocation, SerializedReplicaLogging, SystemObjectMapping,
 };
@@ -56,7 +55,7 @@ pub mod stash;
 
 pub use stash::{
     AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
     DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
     SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
     SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
@@ -76,9 +75,7 @@ const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-) -> Result<(), catalog::error::Error> {
+fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -113,7 +110,7 @@ fn add_new_builtin_clusters_migration(
 fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     bootstrap_args: &BootstrapArgs,
-) -> Result<(), catalog::error::Error> {
+) -> Result<(), Error> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .clusters
         .items()
@@ -642,6 +639,22 @@ impl Connection {
             .collect()
     }
 
+    /// Load all comments.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub async fn load_comments(
+        &mut self,
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+        let comments = COMMENTS_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v): (CommentKey, CommentValue)| (k.object_id, k.sub_component, v.comment))
+            .collect::<Result<_, _>>()?;
+
+        Ok(comments)
+    }
+
     /// Persist mapping from system objects to global IDs and fingerprints.
     ///
     /// Panics if provided id is not a system id.
@@ -905,6 +918,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         schemas,
         roles,
         items,
+        comments,
         clusters,
         cluster_replicas,
         introspection_sources,
@@ -925,6 +939,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
                     tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
+                    tx.peek_one(tx.collection(COMMENTS_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
                     tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
                     tx.peek_one(
@@ -956,6 +971,7 @@ async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error>
         items: TableTransaction::new(items, |a: &ItemValue, b| {
             a.schema_id == b.schema_id && a.name == b.name
         })?,
+        comments: TableTransaction::new(comments, |a: &CommentValue, b| a.comment == b.comment)?,
         roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
         clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
         cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
@@ -982,6 +998,7 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
+    comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
@@ -1496,20 +1513,21 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub(crate) fn update_item(
-        &mut self,
-        id: GlobalId,
-        entry: &catalog::CatalogEntry,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
-                let definition = Catalog::serialize_item(entry.item());
+                let item = item.clone();
+                // Schema IDs cannot change.
+                assert_eq!(
+                    SchemaId::from(item.name.qualifiers.schema_spec),
+                    v.schema_id
+                );
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: entry.name().item.clone(),
-                    definition,
-                    owner_id: *entry.owner_id(),
-                    privileges: entry.privileges().all_values_owned().collect(),
+                    name: item.name.item,
+                    definition: item.definition,
+                    owner_id: item.owner_id,
+                    privileges: item.privileges,
                 })
             } else {
                 None
@@ -1533,6 +1551,11 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
+                // Schema IDs cannot change.
+                assert_eq!(
+                    SchemaId::from(item.name.qualifiers.schema_spec),
+                    v.schema_id
+                );
                 Some(ItemValue {
                     schema_id: v.schema_id,
                     name: item.name.item.clone(),
@@ -1562,10 +1585,11 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub(crate) fn update_role(&mut self, id: RoleId, role: catalog::Role) -> Result<(), Error> {
+    pub(crate) fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
-                Some(RoleValue::from(role.clone()))
+                let role = role.clone();
+                Some(RoleValue::from(role))
             } else {
                 None
             }
@@ -1618,19 +1642,16 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
     /// DO NOT call this function in a loop.
-    pub(crate) fn update_cluster(
-        &mut self,
-        id: ClusterId,
-        cluster: &catalog::Cluster,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), Error> {
         let n = self.clusters.update(|k, _v| {
             if k.id == id {
+                let cluster = cluster.clone();
                 Some(ClusterValue {
-                    name: cluster.name().to_string(),
-                    linked_object_id: cluster.linked_object_id(),
+                    name: cluster.name,
+                    linked_object_id: cluster.linked_object_id,
                     owner_id: cluster.owner_id,
-                    privileges: cluster.privileges().all_values_owned().collect(),
-                    config: cluster.config.clone(),
+                    privileges: cluster.privileges,
+                    config: cluster.config,
                 })
             } else {
                 None
@@ -1654,14 +1675,15 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        replica: &catalog::ClusterReplica,
+        replica: ClusterReplica,
     ) -> Result<(), Error> {
         let n = self.cluster_replicas.update(|k, _v| {
             if k.id == replica_id {
+                let replica = replica.clone();
                 Some(ClusterReplicaValue {
                     cluster_id,
-                    name: replica.name.clone(),
-                    config: replica.config.clone().into(),
+                    name: replica.name,
+                    config: replica.serialized_config,
                     owner_id: replica.owner_id,
                 })
             } else {
@@ -1685,14 +1707,15 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_database(
         &mut self,
         id: DatabaseId,
-        database: &catalog::Database,
+        database: Database,
     ) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
             if id == k.id {
+                let database = database.clone();
                 Some(DatabaseValue {
-                    name: database.name().to_string(),
+                    name: database.name,
                     owner_id: database.owner_id,
-                    privileges: database.privileges().all_values_owned().collect(),
+                    privileges: database.privileges,
                 })
             } else {
                 None
@@ -1716,15 +1739,16 @@ impl<'a> Transaction<'a> {
         &mut self,
         database_id: Option<DatabaseId>,
         schema_id: SchemaId,
-        schema: &catalog::Schema,
+        schema: Schema,
     ) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
             if schema_id == k.id {
+                let schema = schema.clone();
                 Some(SchemaValue {
                     database_id,
-                    name: schema.name().schema.clone(),
+                    name: schema.name,
                     owner_id: schema.owner_id,
-                    privileges: schema.privileges().all_values_owned().collect(),
+                    privileges: schema.privileges,
                 })
             } else {
                 None
@@ -1773,6 +1797,34 @@ impl<'a> Transaction<'a> {
             acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
         )?;
         Ok(())
+    }
+
+    pub(crate) fn update_comment(
+        &mut self,
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
+    ) -> Result<(), Error> {
+        let key = CommentKey {
+            object_id,
+            sub_component,
+        };
+        let value = comment.map(|c| CommentValue { comment: c });
+        self.comments.set(key, value)?;
+
+        Ok(())
+    }
+
+    pub(crate) fn drop_comments(
+        &mut self,
+        object_id: CommentObjectId,
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+        let deleted = self.comments.delete(|k, _v| k.object_id == object_id);
+        let deleted = deleted
+            .into_iter()
+            .map(|(k, v)| (k.object_id, k.sub_component, v.comment))
+            .collect();
+        Ok(deleted)
     }
 
     /// Upserts persisted system configuration `name` to `value`.
@@ -1851,6 +1903,7 @@ impl<'a> Transaction<'a> {
         let databases = Arc::new(self.databases.pending());
         let schemas = Arc::new(self.schemas.pending());
         let items = Arc::new(self.items.pending());
+        let comments = Arc::new(self.comments.pending());
         let roles = Arc::new(self.roles.pending());
         let clusters = Arc::new(self.clusters.pending());
         let cluster_replicas = Arc::new(self.cluster_replicas.pending());
@@ -1874,6 +1927,7 @@ impl<'a> Transaction<'a> {
                     add_batch(&tx, &mut batches, &DATABASES_COLLECTION, &databases).await?;
                     add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &schemas).await?;
                     add_batch(&tx, &mut batches, &ITEM_COLLECTION, &items).await?;
+                    add_batch(&tx, &mut batches, &COMMENTS_COLLECTION, &comments).await?;
                     add_batch(&tx, &mut batches, &ROLES_COLLECTION, &roles).await?;
                     add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &clusters).await?;
                     add_batch(
@@ -1943,6 +1997,7 @@ impl<'a> Transaction<'a> {
 
 // Structs used to pass information to outside modules.
 
+#[derive(Debug, Clone)]
 pub struct Database {
     pub id: DatabaseId,
     pub name: String,
@@ -1950,6 +2005,7 @@ pub struct Database {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Schema {
     pub id: SchemaId,
     pub name: String,
@@ -1958,6 +2014,7 @@ pub struct Schema {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Role {
     pub id: RoleId,
     pub name: String,
@@ -1965,6 +2022,7 @@ pub struct Role {
     pub membership: RoleMembership,
 }
 
+#[derive(Debug, Clone)]
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
@@ -1974,6 +2032,7 @@ pub struct Cluster {
     pub config: ClusterConfig,
 }
 
+#[derive(Debug, Clone)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
@@ -1982,7 +2041,7 @@ pub struct ClusterReplica {
     pub owner_id: RoleId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
@@ -2103,6 +2162,17 @@ pub struct ItemValue {
     privileges: Vec<MzAclItem>,
 }
 
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct CommentKey {
+    object_id: CommentObjectId,
+    sub_component: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+pub struct CommentValue {
+    comment: String,
+}
+
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
 pub struct RoleKey {
     id: RoleId,
@@ -2115,8 +2185,8 @@ pub struct RoleValue {
     membership: RoleMembership,
 }
 
-impl From<catalog::Role> for RoleValue {
-    fn from(role: catalog::Role) -> Self {
+impl From<Role> for RoleValue {
+    fn from(role: Role) -> Self {
         RoleValue {
             name: role.name,
             attributes: role.attributes,

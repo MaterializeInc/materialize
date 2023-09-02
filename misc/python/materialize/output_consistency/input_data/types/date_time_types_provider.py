@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -20,7 +19,7 @@ class DateTimeDataType(DataType):
         type_name: str,
         min_value: str,
         max_value: str,
-        further_values: List[str],
+        further_values: list[str],
         has_time_zone: bool = False,
     ):
         super().__init__(identifier, type_name, DataTypeCategory.DATE_TIME)
@@ -72,7 +71,7 @@ INTERVAL_TYPE = DateTimeDataType(
     ["2 years 3 months 4 days 11:22:33.456789", "100 months 100 days", "44:45:45"],
 )
 
-DATE_TIME_DATA_TYPES: List[DateTimeDataType] = [
+DATE_TIME_DATA_TYPES: list[DateTimeDataType] = [
     DATE_TYPE,
     TIME_TYPE,
     TIMESTAMP_TYPE,

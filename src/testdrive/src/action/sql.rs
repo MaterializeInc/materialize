@@ -162,7 +162,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                         .collect::<Vec<_>>()
                         .join("\n");
 
-                    bail!("the on-disk state of the catalog does not match its in-memory state:\n{diff}");
+                    bail!("the in-memory state of the catalog does not match its on-disk state:\n{diff}");
                 }
             }
         }

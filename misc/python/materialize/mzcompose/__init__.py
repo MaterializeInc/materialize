@@ -28,6 +28,8 @@ import subprocess
 import sys
 import time
 import traceback
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
@@ -35,19 +37,9 @@ from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
     Literal,
-    Optional,
-    OrderedDict,
-    Sequence,
-    Tuple,
     TypedDict,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -77,7 +69,7 @@ class Composition:
     @dataclass
     class TestResult:
         duration: float
-        error: Optional[str]
+        error: str | None
 
     def __init__(
         self,
@@ -86,7 +78,7 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
-        project_name: Optional[str] = None,
+        project_name: str | None = None,
     ):
         self.name = name
         self.description = None
@@ -94,7 +86,7 @@ class Composition:
         self.preserve_ports = preserve_ports
         self.project_name = project_name
         self.silent = silent
-        self.workflows: Dict[str, Callable[..., None]] = {}
+        self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
 
         if name in self.repo.compositions:
@@ -164,7 +156,7 @@ class Composition:
         self._write_compose()
 
     def _munge_services(
-        self, services: List[Tuple[str, dict]]
+        self, services: list[tuple[str, dict]]
     ) -> mzbuild.DependencySet:
         images = []
 
@@ -240,7 +232,7 @@ class Composition:
         *args: str,
         capture: bool = False,
         capture_stderr: bool = False,
-        stdin: Optional[str] = None,
+        stdin: str | None = None,
         check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
@@ -291,7 +283,7 @@ class Composition:
                 print(e.stdout)
             raise UIError(f"running docker compose failed (exit status {e.returncode})")
 
-    def port(self, service: str, private_port: Union[int, str]) -> int:
+    def port(self, service: str, private_port: int | str) -> int:
         """Get the public port for a service's private port.
 
         Delegates to `docker compose port`. See that command's help for details.
@@ -440,8 +432,8 @@ class Composition:
         self,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
     ) -> Connection:
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
@@ -453,8 +445,8 @@ class Composition:
         self,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
         conn = self.sql_connection(service, user, port, password)
@@ -465,8 +457,8 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
         print_statement: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
@@ -483,8 +475,8 @@ class Composition:
         sql: str,
         service: str = "materialized",
         user: str = "materialize",
-        port: Optional[int] = None,
-        password: Optional[str] = None,
+        port: int | None = None,
+        password: str | None = None,
     ) -> Any:
         """Execute and return results of a SQL query."""
         with self.sql_cursor(
@@ -499,11 +491,11 @@ class Composition:
         *args: str,
         detach: bool = False,
         rm: bool = False,
-        env_extra: Dict[str, str] = {},
+        env_extra: dict[str, str] = {},
         capture: bool = False,
         capture_stderr: bool = False,
-        stdin: Optional[str] = None,
-        entrypoint: Optional[str] = None,
+        stdin: str | None = None,
+        entrypoint: str | None = None,
         check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
@@ -548,9 +540,9 @@ class Composition:
         detach: bool = False,
         capture: bool = False,
         capture_stderr: bool = False,
-        stdin: Optional[str] = None,
+        stdin: str | None = None,
         check: bool = True,
-        workdir: Optional[str] = None,
+        workdir: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -582,7 +574,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: List[str]) -> None:
+    def pull_if_variable(self, services: list[str]) -> None:
         """Pull fresh service images in case the tag indicates thee underlying image may change over time.
 
         Args:
@@ -631,7 +623,7 @@ class Composition:
         )
 
         if persistent:
-            self.compose = old_compose
+            self.compose = old_compose  # type: ignore
             self._write_compose()
 
     def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
@@ -789,8 +781,8 @@ class Composition:
         input: str,
         service: str = "testdrive",
         persistent: bool = True,
-        args: List[str] = [],
-        caller: Optional[Traceback] = None,
+        args: list[str] = [],
+        caller: Traceback | None = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -815,7 +807,7 @@ class ServiceHealthcheck(TypedDict, total=False):
     """Configuration for a check to determine whether the containers for this
     service are healthy."""
 
-    test: Union[List[str], str]
+    test: list[str] | str
     """A specification of a command to run."""
 
     interval: str
@@ -892,51 +884,51 @@ class ServiceConfig(TypedDict, total=False):
     By default, the name of the service is used as the hostname.
     """
 
-    extra_hosts: List[str]
+    extra_hosts: list[str]
     """Additional hostname mappings."""
 
-    entrypoint: List[str]
+    entrypoint: list[str]
     """Override the entrypoint specified in the image."""
 
-    command: List[str]
+    command: list[str]
     """Override the command specified in the image."""
 
     init: bool
     """Whether to run an init process in the container."""
 
-    ports: Sequence[Union[int, str]]
+    ports: Sequence[int | str]
     """Service ports to expose to the host."""
 
-    environment: List[str]
+    environment: list[str]
     """Additional environment variables to set.
 
     Each entry must be in the form `NAME=VALUE`.
 
-    TODO(benesch): this should accept a `Dict[str, str]` instead.
+    TODO(benesch): this should accept a `dict[str, str]` instead.
     """
 
-    depends_on: Union[List[str], Dict[str, ServiceDependency]]
+    depends_on: list[str] | dict[str, ServiceDependency]
     """The list of other services that must be started before this one."""
 
-    tmpfs: List[str]
+    tmpfs: list[str]
     """Paths at which to mount temporary file systems inside the container."""
 
-    volumes: List[str]
+    volumes: list[str]
     """Volumes to attach to the service."""
 
-    networks: Dict[str, Dict[str, List[str]]]
+    networks: dict[str, dict[str, list[str]]]
     """Additional networks to join.
 
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    deploy: Dict[str, Dict[str, Dict[str, str]]]
+    deploy: dict[str, dict[str, dict[str, str]]]
     """Additional deployment configuration, like resource limits.
 
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    ulimits: Dict[str, Any]
+    ulimits: dict[str, Any]
     """Override the default ulimits for a container."""
 
     working_dir: str
@@ -972,15 +964,15 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
     the arguments that the user provided to the workflow.
     """
 
-    def __init__(self, name: str, description: Optional[str], args: List[str]):
+    def __init__(self, name: str, description: str | None, args: list[str]):
         self.args = args
         super().__init__(prog=f"mzcompose run {name}", description=description)
 
     def parse_known_args(
         self,
-        args: Optional[Sequence[str]] = None,
-        namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> tuple[argparse.Namespace, list[str]]:
         if args is None:
             args = self.args
         return super().parse_known_args(args, namespace)
@@ -988,8 +980,8 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
 
 # TODO(benesch): replace with Docker health checks.
 def _check_tcp(
-    cmd: List[str], host: str, port: int, timeout_secs: int, kind: str = ""
-) -> List[str]:
+    cmd: list[str], host: str, port: int, timeout_secs: int, kind: str = ""
+) -> list[str]:
     cmd.extend(
         [
             "timeout",
@@ -1019,10 +1011,10 @@ def _wait_for_pg(
     port: int,
     host: str,
     user: str,
-    password: Optional[str],
-    expected: Union[Iterable[Any], Literal["any"]],
+    password: str | None,
+    expected: Iterable[Any] | Literal["any"],
     print_result: bool = False,
-    ssl_context: Optional[SSLContext] = None,
+    ssl_context: SSLContext | None = None,
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
     obfuscated_password = password[0:1] if password is not None else ""

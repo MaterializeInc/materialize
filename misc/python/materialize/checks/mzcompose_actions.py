@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
@@ -28,9 +28,9 @@ class MzcomposeAction(Action):
 class StartMz(MzcomposeAction):
     def __init__(
         self,
-        tag: Optional[MzVersion] = None,
-        environment_extra: List[str] = [],
-        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        tag: MzVersion | None = None,
+        environment_extra: list[str] = [],
+        system_parameter_defaults: dict[str, str] | None = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
@@ -67,7 +67,7 @@ class StartMz(MzcomposeAction):
 
 class ConfigureMz(MzcomposeAction):
     def __init__(self, scenario: "Scenario") -> None:
-        self.handle: Optional[Any] = None
+        self.handle: Any | None = None
 
     def execute(self, e: Executor) -> None:
         input = dedent(
@@ -185,7 +185,7 @@ class KillClusterdCompute(MzcomposeAction):
 
 
 class StartClusterdCompute(MzcomposeAction):
-    def __init__(self, tag: Optional[MzVersion] = None) -> None:
+    def __init__(self, tag: MzVersion | None = None) -> None:
         self.tag = tag
 
     def execute(self, e: Executor) -> None:

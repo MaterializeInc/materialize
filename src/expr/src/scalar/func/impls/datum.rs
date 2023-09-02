@@ -38,7 +38,10 @@ sqlfunc!(
         match a {
             Datum::Null => Ok(None),
             datum => {
-                let sz = mz_repr::datum_size(&datum);
+                // This will undercount sizes for installations that aren't in the
+                // `variable_length_row_encoding` treatment, but
+                // functions need to be determinstic, so there's no better we can do.
+                let sz = mz_repr::datum_size_deterministic::<true>(&datum);
                 i32::try_from(sz)
                     .map(Some)
                     .or(Err(EvalError::Int32OutOfRange(sz.to_string())))
@@ -48,8 +51,13 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    // TODO[btv] - if we plan to keep changing row format,
+    // should we make this unmaterializable?
     fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
-        let sz = mz_repr::row_size(a.iter());
+        // This will undercount sizes for installations that aren't in the
+        // `variable_length_row_encoding` treatment, but
+        // functions need to be determinstic, so there's no better we can do.
+        let sz = mz_repr::row_size_deterministic::<_, true>(a.iter());
         i32::try_from(sz).or(Err(EvalError::Int32OutOfRange(sz.to_string())))
     }
 );

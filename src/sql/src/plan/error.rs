@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fmt, io};
 
 use itertools::Itertools;
@@ -63,6 +64,10 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    TooManyColumns {
+        max_num_columns: usize,
+        req_num_columns: usize,
+    },
     AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
@@ -209,6 +214,16 @@ pub enum PlanError {
     WebhookValidationDoesNotUseColumns,
     WebhookValidationNonDeterministic,
     PgSourceUserSpecifiedDetails,
+    InternalFunctionCall,
+    CommentTooLong {
+        length: usize,
+        max_size: usize,
+    },
+    InvalidTimestampInterval {
+        min: Duration,
+        max: Duration,
+        requested: Duration,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -263,6 +278,7 @@ impl PlanError {
                     itertools::join(items, ", ")
                 ))
             }
+            Self::InternalFunctionCall => Some("This function is for the internal use of the database system and cannot be called directly.".into()),
             _ => None,
         }
     }
@@ -386,6 +402,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::TooManyColumns { max_num_columns, req_num_columns } => write!(
+                f,
+                "attempt to create relation with too many columns, {} max: {}",
+                req_num_columns, max_num_columns
             ),
             Self::AmbiguousTable(table) => write!(
                 f,
@@ -564,6 +585,13 @@ impl fmt::Display for PlanError {
             Self::PgSourceUserSpecifiedDetails => f.write_str(
                 "must not specify DETAILS option in CREATE SOURCE"
             ),
+            Self::InternalFunctionCall => f.write_str("cannot call function with arguments of type internal"),
+            Self::CommentTooLong { length, max_size } => {
+                write!(f, "provided comment was {length} bytes long, max size is {max_size} bytes")
+            }
+            Self::InvalidTimestampInterval { min, max, requested } => {
+                write!(f, "invalid timestamp interval of {}ms, must be in the range [{}ms, {}ms]", requested.as_millis(), min.as_millis(), max.as_millis())
+            }
         }
     }
 }

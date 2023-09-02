@@ -932,7 +932,7 @@ impl RowPacker<'_> {
                     })
                     .collect::<Vec<_>>();
                 match x.elements.as_ref() {
-                    None => self.push_array(&dims, vec![].iter()),
+                    None => self.push_array(&dims, [].iter()),
                     Some(elements) => {
                         // TODO: Could we avoid this Row alloc if we made a
                         // push_array_with?

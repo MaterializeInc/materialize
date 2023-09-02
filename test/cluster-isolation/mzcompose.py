@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -125,7 +125,7 @@ def validate(c: Composition) -> None:
         """
 # Dataflows
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=\\d{13} replacement=<TIMESTAMP>
 
 > SET cluster=cluster2
 

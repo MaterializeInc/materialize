@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import time
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
@@ -21,7 +20,7 @@ class CockroachStart(Action):
     def run(self, c: Composition) -> None:
         c.up("cockroach")
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [CockroachIsRunning()]
 
 
@@ -29,7 +28,7 @@ class CockroachRestart(Action):
     """Restart the CockroachDB instance."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning}
 
     def run(self, c: Composition) -> None:

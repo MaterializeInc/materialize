@@ -12,7 +12,7 @@ import re
 import tempfile
 from contextlib import closing
 from pathlib import Path
-from typing import Optional, cast
+from typing import cast
 
 import click
 import numpy as np
@@ -113,7 +113,7 @@ def init(
     db_port: int,
     db_host: str,
     db_user: str,
-    db_pass: Optional[str],
+    db_pass: str | None,
     db_require_ssl: bool,
 ) -> None:
     """Initialize the DB under test for the given scenario."""
@@ -178,7 +178,7 @@ def run(
     db_port: int,
     db_host: str,
     db_user: str,
-    db_pass: Optional[str],
+    db_pass: str | None,
     db_require_ssl: bool,
 ) -> None:
     """Run benchmark in the DB under test for a given scenario."""

@@ -8,6 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
-def load(path: Path) -> Dict[Any, Any]: ...
+def load(path: Path) -> dict[Any, Any]: ...

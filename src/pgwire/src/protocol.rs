@@ -35,9 +35,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
-use mz_sql::session::user::{
-    ExternalUserMetadata, User, INTERNAL_USER_NAMES, INTROSPECTION_USER, SUPPORT_USER,
-};
+use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
@@ -126,7 +124,7 @@ where
             .await;
     }
 
-    let mut user = params.remove("user").unwrap_or_else(String::new);
+    let user = params.remove("user").unwrap_or_else(String::new);
 
     if internal {
         // The internal server can only be used to connect to the internal users.
@@ -198,7 +196,10 @@ where
                     conn.conn_id().clone(),
                     User {
                         name: response.claims.email.clone(),
-                        external_metadata: Some(ExternalUserMetadata::from(&response.claims)),
+                        external_metadata: Some(ExternalUserMetadata {
+                            user_id: response.claims.user_id,
+                            admin: response.claims.is_admin,
+                        }),
                     },
                 );
 
@@ -208,7 +209,10 @@ where
                 let is_expired =
                     frontegg.continuously_revalidate_api_token_response(response, move |claims| {
                         // Ignore error if client has hung up.
-                        let _ = external_metadata_tx.send(ExternalUserMetadata::from(claims));
+                        let _ = external_metadata_tx.send(ExternalUserMetadata {
+                            user_id: claims.user_id,
+                            admin: claims.is_admin,
+                        });
                     });
 
                 Ok((session, is_expired))
@@ -225,11 +229,6 @@ where
             }
         }
     } else {
-        // TODO: remove once mz_introspection is no longer used
-        if user == INTROSPECTION_USER.name {
-            adapter_client.metrics().introspection_logins.inc();
-            user = SUPPORT_USER.name.clone();
-        }
         let session = adapter_client.new_session(
             conn.conn_id().clone(),
             User {
@@ -599,11 +598,10 @@ where
     async fn one_query(&mut self, stmt: Statement<Raw>, sql: String) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
-        let param_types = vec![];
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .adapter_client
-            .declare(EMPTY_PORTAL.to_string(), stmt, sql, param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
             return self
@@ -1706,7 +1704,7 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
-            | ExecuteResponse::CreatedWebhookSource
+            | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll

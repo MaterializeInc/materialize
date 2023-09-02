@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import sys
-from typing import Iterable, List, Optional, Type
+from collections.abc import Iterable
 
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
@@ -23,12 +23,12 @@ class Benchmark:
     def __init__(
         self,
         mz_id: int,
-        scenario: Type[Scenario],
+        scenario: type[Scenario],
         executor: Executor,
         filter: Filter,
-        termination_conditions: List[TerminationCondition],
-        aggregation_class: Type[Aggregation],
-        scale: Optional[str] = None,
+        termination_conditions: list[TerminationCondition],
+        aggregation_class: type[Aggregation],
+        scale: str | None = None,
         measure_memory: bool = True,
     ) -> None:
         self._scale = scale
@@ -43,7 +43,7 @@ class Benchmark:
         if measure_memory:
             self._memory_aggregation = aggregation_class()
 
-    def run(self) -> List[Aggregation]:
+    def run(self) -> list[Aggregation]:
         scale = self._scenario.SCALE
 
         if self._scale and not self._scenario.FIXED_SCALE:
@@ -85,8 +85,9 @@ class Benchmark:
         for i in range(sys.maxsize):
             # Run the before() section once for each measurement
             before = scenario.before()
-            for before_item in before if isinstance(before, list) else [before]:
-                before_item.run(executor=self._executor)
+            if before is not None:
+                for before_item in before if isinstance(before, list) else [before]:
+                    before_item.run(executor=self._executor)
 
             # Collect timestamps from any part of the workload being benchmarked
             timestamps = []
@@ -150,7 +151,7 @@ class Benchmark:
 
 class Report:
     def __init__(self) -> None:
-        self._comparisons: List[Comparator] = []
+        self._comparisons: list[Comparator] = []
 
     def append(self, comparison: Comparator) -> None:
         self._comparisons.append(comparison)

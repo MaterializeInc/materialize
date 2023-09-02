@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from enum import Enum
-from typing import List, Optional
 
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
@@ -54,7 +53,7 @@ class EvaluationStrategy:
         self.object_name_base = object_name_base
         self.simple_db_object_name = simple_db_object_name
 
-    def generate_sources(self, input_data: ConsistencyTestInputData) -> List[str]:
+    def generate_sources(self, input_data: ConsistencyTestInputData) -> list[str]:
         statements = []
         statements.extend(
             self.generate_source_for_storage_layout(
@@ -80,14 +79,14 @@ class EvaluationStrategy:
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: Optional[str] = None,
-    ) -> List[str]:
+        override_db_object_name: str | None = None,
+    ) -> list[str]:
         raise NotImplementedError
 
     def get_db_object_name(
         self,
         storage_layout: ValueStorageLayout,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> str:
         if storage_layout == ValueStorageLayout.ANY:
             raise RuntimeError(f"{storage_layout} has not been resolved to a real one")
@@ -111,7 +110,7 @@ class DummyEvaluation(EvaluationStrategy):
     def generate_sources(
         self,
         input_data: ConsistencyTestInputData,
-    ) -> List[str]:
+    ) -> list[str]:
         return []
 
 
@@ -130,8 +129,8 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: Optional[str] = None,
-    ) -> List[str]:
+        override_db_object_name: str | None = None,
+    ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout, override_db_object_name
         )
@@ -169,8 +168,8 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         storage_layout: ValueStorageLayout,
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
-        override_db_object_name: Optional[str] = None,
-    ) -> List[str]:
+        override_db_object_name: str | None = None,
+    ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout, override_db_object_name
         )
@@ -197,7 +196,7 @@ def _create_column_specs(
     storage_layout: ValueStorageLayout,
     include_type: bool,
     table_column_selection: TableColumnByNameSelection,
-) -> List[str]:
+) -> list[str]:
     column_specs = []
 
     # row index as first column (also for horizontal layout helpful to simplify aggregate functions with order spec)
@@ -226,7 +225,7 @@ def _create_value_rows(
     storage_layout: ValueStorageLayout,
     row_selection: DataRowSelection,
     table_column_selection: TableColumnByNameSelection,
-) -> List[str]:
+) -> list[str]:
     if storage_layout == ValueStorageLayout.HORIZONTAL:
         return [
             __create_horizontal_value_row(
@@ -245,7 +244,7 @@ def _create_value_rows(
 
 
 def __create_horizontal_value_row(
-    data_type_with_values: List[DataTypeWithValues],
+    data_type_with_values: list[DataTypeWithValues],
     table_column_selection: TableColumnByNameSelection,
 ) -> str:
     row_values = []
@@ -262,11 +261,11 @@ def __create_horizontal_value_row(
 
 
 def __create_vertical_value_rows(
-    data_type_with_values: List[DataTypeWithValues],
+    data_type_with_values: list[DataTypeWithValues],
     row_count: int,
     row_selection: DataRowSelection,
     table_column_selection: TableColumnByNameSelection,
-) -> List[str]:
+) -> list[str]:
     """Creates table rows with the values of each type in a column. For types with fewer values, values are repeated."""
     rows = []
 

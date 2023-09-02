@@ -24,18 +24,18 @@ import webbrowser
 from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import IO, Any, DefaultDict, Dict, List, Optional, Set, Tuple
+from typing import IO, Any
 
 import click
 import toml
 
 from materialize import MZ_ROOT, spawn
 
-DepBuilder = DefaultDict[str, List[str]]
-DepMap = Dict[str, List[str]]
+DepBuilder = defaultdict[str, list[str]]
+DepMap = dict[str, list[str]]
 
 
-def split_list(items: str) -> List[str]:
+def split_list(items: str) -> list[str]:
     if items:
         return items.split(",")
     return []
@@ -58,7 +58,7 @@ def split_list(items: str) -> List[str]:
     default=None,
     help="The diagram file to generate. Default is 'crates{roots}.svg'",
 )
-def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
+def main(show: bool, diagram_file: str | None, roots: list[str]) -> None:
     if diagram_file is None:
         if roots:
             diagram_file = "crates-{}.svg".format("-".join(sorted(roots)))
@@ -70,7 +70,7 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
         data = toml.load(fh)
 
     members = set()
-    areas: DefaultDict[str, List[str]] = defaultdict(list)
+    areas: defaultdict[str, list[str]] = defaultdict(list)
     member_meta = {}
     all_deps = {}
     for member_path in data["workspace"]["members"]:
@@ -133,8 +133,8 @@ def main(show: bool, diagram_file: Optional[str], roots: List[str]) -> None:
 
 
 def filter_to_roots(
-    areas: DepBuilder, local_deps: DepMap, roots: List[str]
-) -> Tuple[DepMap, DepBuilder]:
+    areas: DepBuilder, local_deps: DepMap, roots: list[str]
+) -> tuple[DepMap, DepBuilder]:
     new_deps = defaultdict(set)
 
     try:
@@ -158,7 +158,7 @@ def filter_to_roots(
 
 
 def add_deps(
-    deps: DepMap, new_deps: DefaultDict[str, Set[str]], roots: List[str]
+    deps: DepMap, new_deps: defaultdict[str, set[str]], roots: list[str]
 ) -> None:
     for root in roots:
         for dep in deps[root]:
@@ -167,9 +167,9 @@ def add_deps(
 
 
 def write_dot_graph(
-    member_meta: Dict[str, Dict[str, str]],
+    member_meta: dict[str, dict[str, str]],
     local_deps: DepMap,
-    areas: Dict[str, List[str]],
+    areas: dict[str, list[str]],
     out: IO,
 ) -> None:
     def disp(val: str, out: IO = out, **kwargs: Any) -> None:
@@ -203,7 +203,7 @@ def write_dot_graph(
 
 def add_hover_style(diagram_file: Path | str) -> None:
     found_svg = False
-    with open(diagram_file, "r") as fh:
+    with open(diagram_file) as fh:
         lines = fh.readlines()
         for i, line in enumerate(lines):
             if "<svg" in line:

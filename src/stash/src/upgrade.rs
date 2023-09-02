@@ -39,6 +39,8 @@
 
 use std::collections::BTreeMap;
 
+use paste::paste;
+
 use crate::objects::proto::{ConfigKey, ConfigValue};
 use crate::objects::WireCompatible;
 use crate::{
@@ -55,6 +57,22 @@ pub(crate) mod v30_to_v31;
 pub(crate) mod v31_to_v32;
 pub(crate) mod v32_to_v33;
 pub(crate) mod v33_to_v34;
+pub(crate) mod v34_to_v35;
+pub(crate) mod v35_to_v36;
+
+macro_rules! objects {
+    ( $( $x:ident ),* ) => {
+        paste! {
+            $(
+                pub(crate) mod [<objects_ $x>] {
+                    include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
+                }
+            )*
+        }
+    }
+}
+
+objects!(v27, v28, v29, v31, v32, v33, v34, v35, v36);
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.

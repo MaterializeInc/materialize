@@ -15,7 +15,6 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
-from typing import DefaultDict, List, Optional, Type
 
 import pg8000
 
@@ -48,8 +47,8 @@ def run(
     runtime: int,
     complexity: Complexity,
     scenario: Scenario,
-    num_threads: Optional[int],
-    composition: Optional[Composition],
+    num_threads: int | None,
+    composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
@@ -96,9 +95,9 @@ def run(
 
     workers = []
     threads = []
+    worker_rng = random.Random(rng.randrange(SEED_RANGE))
     for i in range(num_threads):
-        worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        weights: List[float]
+        weights: list[float]
         if complexity == Complexity.DDL:
             weights = [60, 30, 30, 30, 10]
         elif complexity == Complexity.DML:
@@ -216,7 +215,7 @@ def run(
         database.drop(Executor(rng, cur))
     conn.close()
 
-    ignored_errors: DefaultDict[str, Counter[Type[Action]]] = defaultdict(Counter)
+    ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
     for worker in workers:
         for action_class, counter in worker.ignored_errors.items():

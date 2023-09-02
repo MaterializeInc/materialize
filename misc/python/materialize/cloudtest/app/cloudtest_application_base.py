@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from typing import List, Optional
 
 from materialize import MZ_ROOT, mzbuild
 from materialize.cloudtest.app.application import Application
@@ -19,8 +18,8 @@ class CloudtestApplicationBase(Application):
     def __init__(
         self,
         release_mode: bool = True,
-        aws_region: Optional[str] = None,
-        log_filter: Optional[str] = None,
+        aws_region: str | None = None,
+        log_filter: str | None = None,
     ) -> None:
         super().__init__()
         self.release_mode = release_mode
@@ -34,10 +33,10 @@ class CloudtestApplicationBase(Application):
         self.create_resources()
         self.wait_resource_creation_completed()
 
-    def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
+    def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         raise NotImplementedError
 
-    def get_images(self) -> List[str]:
+    def get_images(self) -> list[str]:
         raise NotImplementedError
 
     def wait_resource_creation_completed(self) -> None:

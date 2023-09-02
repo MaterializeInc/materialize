@@ -19,7 +19,7 @@ from typing import Any, List, Optional
 
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
-from dbt.adapters.materialize import MaterializeConnectionManager
+from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
@@ -27,6 +27,7 @@ from dbt.contracts.graph.nodes import ConstraintType
 from dbt.dataclass_schema import ValidationError, dbtClassMixin
 
 
+# types in ./misc/dbt-materialize need to import generic types from typing
 @dataclass
 class MaterializeIndexConfig(dbtClassMixin):
     columns: Optional[List[str]] = None

@@ -110,6 +110,13 @@ pub enum AdapterNotice {
     },
     PlanNotice(PlanNotice),
     UnknownSessionDatabase(String),
+    OptimizerNotice {
+        notice: String,
+        hint: Option<String>,
+    },
+    WebhookSourceCreated {
+        url: url::Url,
+    },
 }
 
 impl AdapterNotice {
@@ -146,6 +153,7 @@ impl AdapterNotice {
                  List available databases with SHOW DATABASES."
                     .into(),
             ),
+            AdapterNotice::OptimizerNotice { notice: _, hint } => hint.clone(),
             _ => None
         }
     }
@@ -187,6 +195,8 @@ impl AdapterNotice {
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
         }
     }
 }
@@ -327,6 +337,10 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::PlanNotice(plan) => plan.fmt(f),
             AdapterNotice::UnknownSessionDatabase(name) => {
                 write!(f, "session database {} does not exist", name.quoted())
+            }
+            AdapterNotice::OptimizerNotice { notice, hint: _ } => notice.fmt(f),
+            AdapterNotice::WebhookSourceCreated { url } => {
+                write!(f, "URL to POST data is '{url}'")
             }
         }
     }

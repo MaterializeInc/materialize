@@ -30,7 +30,9 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, WebhookValidation, WebhookValidationSecret};
+use mz_sql::plan::{
+    ExecuteTimeout, Plan, PlanKind, WebhookHeaders, WebhookValidation, WebhookValidationSecret,
+};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
@@ -423,7 +425,7 @@ impl AppendWebhookValidator {
 pub struct AppendWebhookResponse {
     pub tx: MonotonicAppender,
     pub body_ty: ColumnType,
-    pub header_ty: Option<ColumnType>,
+    pub header_tys: WebhookHeaders,
     pub validator: Option<AppendWebhookValidator>,
 }
 
@@ -432,7 +434,7 @@ impl fmt::Debug for AppendWebhookResponse {
         f.debug_struct("AppendWebhookResponse")
             .field("tx", &self.tx)
             .field("body_ty", &self.body_ty)
-            .field("header_ty", &self.header_ty)
+            .field("header_tys", &self.header_tys)
             .field("validate_expr", &"(...)")
             .finish()
     }
@@ -457,6 +459,8 @@ pub enum ExecuteResponse {
     Canceled,
     /// The requested cursor was closed.
     ClosedCursor,
+    /// The provided comment was created.
+    Comment,
     CopyTo {
         format: mz_sql::plan::CopyFormat,
         resp: Box<ExecuteResponse>,
@@ -485,8 +489,6 @@ pub enum ExecuteResponse {
     CreatedSecret,
     /// The requested sink was created.
     CreatedSink,
-    /// The requested HTTP source was created.
-    CreatedWebhookSource,
     /// The requested source was created.
     CreatedSource,
     /// The requested table was created.
@@ -645,6 +647,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             }
             ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
             ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
+            ExecuteResponseKind::Comment => Ok(ExecuteResponse::Comment),
             ExecuteResponseKind::CopyTo => Err(()),
             ExecuteResponseKind::CopyFrom => Err(()),
             ExecuteResponseKind::CreatedConnection => Ok(ExecuteResponse::CreatedConnection),
@@ -658,7 +661,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
-            ExecuteResponseKind::CreatedWebhookSource => Ok(ExecuteResponse::CreatedWebhookSource),
             ExecuteResponseKind::CreatedSource => Ok(ExecuteResponse::CreatedSource),
             ExecuteResponseKind::CreatedTable => Ok(ExecuteResponse::CreatedTable),
             ExecuteResponseKind::CreatedView => Ok(ExecuteResponse::CreatedView),
@@ -708,6 +710,7 @@ impl ExecuteResponse {
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
+            Comment => Some("COMMENT".into()),
             CopyTo { .. } => None,
             CopyFrom { .. } => None,
             CreatedConnection { .. } => Some("CREATE CONNECTION".into()),
@@ -719,7 +722,6 @@ impl ExecuteResponse {
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
-            CreatedWebhookSource { .. } => Some("CREATE SOURCE".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
             CreatedView { .. } => Some("CREATE VIEW".into()),
@@ -797,6 +799,7 @@ impl ExecuteResponse {
             }
             Close => vec![ClosedCursor],
             PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
+            PlanKind::Comment => vec![ExecuteResponseKind::Comment],
             CommitTransaction => vec![TransactionCommitted, TransactionRolledBack],
             CreateConnection => vec![CreatedConnection],
             CreateDatabase => vec![CreatedDatabase],

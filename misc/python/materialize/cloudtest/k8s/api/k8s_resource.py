@@ -7,15 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import subprocess
-from textwrap import dedent
-from typing import Optional
 
 from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
 from kubernetes.config import new_client_from_config  # type: ignore
 
 from materialize import MZ_ROOT, mzbuild, ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
+from materialize.cloudtest.util.common import run_process_with_error_information
 from materialize.cloudtest.util.wait import wait
 
 
@@ -23,32 +21,17 @@ class K8sResource:
     def __init__(self, namespace: str):
         self.selected_namespace = namespace
 
-    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
-        try:
-            cmd = [
-                "kubectl",
-                "--context",
-                self.context(),
-                "--namespace",
-                self.namespace(),
-                *args,
-            ]
+    def kubectl(self, *args: str, input: str | None = None) -> None:
+        cmd = [
+            "kubectl",
+            "--context",
+            self.context(),
+            "--namespace",
+            self.namespace(),
+            *args,
+        ]
 
-            return subprocess.run(
-                cmd, text=True, input=input, check=True, stdout=subprocess.PIPE
-            ).stdout
-        except subprocess.CalledProcessError as e:
-            print(
-                dedent(
-                    f"""
-                    cmd: {e.cmd}
-                    returncode: {e.returncode}
-                    stdout: {e.stdout}
-                    stderr: {e.stderr}
-                    """
-                )
-            )
-            raise e
+        run_process_with_error_information(cmd, input)
 
     def api(self) -> CoreV1Api:
         api_client = new_client_from_config(context=self.context())
@@ -75,7 +58,7 @@ class K8sResource:
         assert False
 
     def image(
-        self, service: str, tag: Optional[str] = None, release_mode: bool = True
+        self, service: str, tag: str | None = None, release_mode: bool = True
     ) -> str:
         if tag is not None:
             return f"materialize/{service}:{tag}"

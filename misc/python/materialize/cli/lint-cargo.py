@@ -11,7 +11,6 @@
 
 import sys
 from pprint import pprint
-from typing import Dict, List, Optional
 
 from materialize import MZ_ROOT
 from materialize.cargo import Workspace
@@ -21,7 +20,7 @@ def check_rust_versions(workspace: Workspace) -> bool:
     """Checks that every crate has a minimum specified rust version, and furthermore,
     that they are all the same."""
 
-    rust_version_to_crate_name: Dict[Optional[str], List[str]] = {}
+    rust_version_to_crate_name: dict[str | None, list[str]] = {}
     for name, crate in workspace.crates.items():
         rust_version_to_crate_name.setdefault(crate.rust_version, []).append(name)
     success = (

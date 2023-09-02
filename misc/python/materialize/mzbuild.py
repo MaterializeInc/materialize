@@ -28,26 +28,15 @@ import stat
 import subprocess
 import sys
 from collections import OrderedDict
-from functools import lru_cache
+from collections.abc import Iterable, Iterator, Sequence
+from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import (
-    IO,
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    cast,
-)
+from typing import IO, Any, cast
 
 import boto3
 import yaml
 from botocore.exceptions import NoCredentialsError
-from typing_extensions import Self
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.elf import get_build_id
@@ -94,14 +83,14 @@ class RepositoryDetails:
         self.stable = stable
 
     def cargo(
-        self, subcommand: str, rustflags: List[str], channel: Optional[str] = None
-    ) -> List[str]:
+        self, subcommand: str, rustflags: list[str], channel: str | None = None
+    ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
             arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags
         )
 
-    def tool(self, name: str) -> List[str]:
+    def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
         return xcompile.tool(self.arch, name)
 
@@ -123,7 +112,7 @@ class RepositoryDetails:
             return path
 
 
-def docker_images() -> Set[str]:
+def docker_images() -> set[str]:
     """List the Docker images available on the local machine."""
     return set(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
@@ -167,7 +156,7 @@ class PreImage:
         self.path = path
 
     @classmethod
-    def prepare_batch(cls, instances: list[Self]) -> None:
+    def prepare_batch(cls, instances: list["PreImage"]) -> None:
         """Prepare a batch of actions.
 
         This is useful for `PreImage` actions that are more efficient when
@@ -179,7 +168,7 @@ class PreImage:
         """Perform the action."""
         pass
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         """Return the files which are considered inputs to the action."""
         raise NotImplementedError
 
@@ -198,7 +187,7 @@ class Copy(PreImage):
     specified by the `matching` argument.
     """
 
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
 
         self.source = config.pop("source", None)
@@ -218,7 +207,7 @@ class Copy(PreImage):
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.rd.root / src, dst)
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
 
 
@@ -247,7 +236,7 @@ class S3UploadDebuginfo(PreImage):
 
     """
 
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
 
         bin = config.pop("bin", None)
@@ -310,14 +299,14 @@ class S3UploadDebuginfo(PreImage):
                     env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
                 )
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         return {self.exe_path, self.dbg_path}
 
 
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         return {
             "ci/builder",
             "Cargo.toml",
@@ -331,7 +320,7 @@ class CargoPreImage(PreImage):
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether coverage is
         # enabled.
-        flags: List[str] = []
+        flags: list[str] = []
         if self.rd.release_mode:
             flags += "release"
         if self.rd.coverage:
@@ -343,7 +332,7 @@ class CargoPreImage(PreImage):
 class CargoBuild(CargoPreImage):
     """A pre-image action that builds individual binaries with Cargo."""
 
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
         bin = config.pop("bin", [])
         self.bins = bin if isinstance(bin, list) else [bin]
@@ -358,9 +347,9 @@ class CargoBuild(CargoPreImage):
     @staticmethod
     def generate_cargo_build_command(
         rd: RepositoryDetails,
-        bins: List[str],
-        examples: List[str],
-    ) -> List[str]:
+        bins: list[str],
+        examples: list[str],
+    ) -> list[str]:
         rustflags = rustc_flags.coverage if rd.coverage else []
 
         cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
@@ -376,20 +365,21 @@ class CargoBuild(CargoPreImage):
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list[Self]) -> None:
+    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> None:
         super().prepare_batch(cargo_builds)
 
         if not cargo_builds:
             return
 
-        # Building all binaries and exmaples in the same `cargo build` command
+        # Building all binaries and examples in the same `cargo build` command
         # allows Cargo to link in parallel with other work, which can
         # meaningfully speed up builds.
 
-        rd: Optional[RepositoryDetails] = None
+        rd: RepositoryDetails | None = None
+        builds = cast(list[CargoBuild], cargo_builds)
         bins = set()
         examples = set()
-        for build in cargo_builds:
+        for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
@@ -491,7 +481,7 @@ class CargoBuild(CargoPreImage):
         super().run()
         self.build()
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         deps = set()
 
         for bin in self.bins:
@@ -529,12 +519,12 @@ class Image:
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
-        self.pre_images: List[PreImage] = []
+        self.pre_images: list[PreImage] = []
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
             self.publish: bool = data.pop("publish", True)
-            self.description: Optional[str] = data.pop("description", None)
+            self.description: str | None = data.pop("description", None)
             self.mainline: bool = data.pop("mainline", True)
             for pre_image in data.pop("pre-image", []):
                 typ = pre_image.pop("type", None)
@@ -702,7 +692,7 @@ class ResolvedImage:
             return True
         return False
 
-    def run(self, args: List[str] = [], docker_args: List[str] = []) -> None:
+    def run(self, args: list[str] = [], docker_args: list[str] = []) -> None:
         """Run a command in the image.
 
         Creates a container from the image and runs the command described by
@@ -721,7 +711,7 @@ class ResolvedImage:
             ]
         )
 
-    def list_dependencies(self, transitive: bool = False) -> Set[str]:
+    def list_dependencies(self, transitive: bool = False) -> set[str]:
         out = set()
         for dep in self.dependencies.values():
             out.add(dep.name)
@@ -729,7 +719,7 @@ class ResolvedImage:
                 out |= dep.list_dependencies(transitive)
         return out
 
-    def inputs(self, transitive: bool = False) -> Set[str]:
+    def inputs(self, transitive: bool = False) -> set[str]:
         """List the files tracked as inputs to the image.
 
         These files are used to compute the fingerprint for the image. See
@@ -754,7 +744,7 @@ class ResolvedImage:
                 paths |= dep.inputs(transitive)
         return paths
 
-    @lru_cache(maxsize=None)
+    @cache
     def fingerprint(self) -> Fingerprint:
         """Fingerprint the inputs to the image.
 
@@ -817,7 +807,7 @@ class DependencySet:
 
         The provided `dependencies` must be topologically sorted.
         """
-        self._dependencies: Dict[str, ResolvedImage] = {}
+        self._dependencies: dict[str, ResolvedImage] = {}
         known_images = docker_images()
         for d in dependencies:
             image = ResolvedImage(
@@ -827,7 +817,7 @@ class DependencySet:
             image.acquired = image.spec() in known_images
             self._dependencies[d.name] = image
 
-    def _prepare_batch(self, images: List[ResolvedImage]) -> None:
+    def _prepare_batch(self, images: list[ResolvedImage]) -> None:
         pre_images = collections.defaultdict(list)
         for image in images:
             for pre_image in image.image.pre_images:
@@ -915,8 +905,8 @@ class Repository:
         stable: bool = False,
     ):
         self.rd = RepositoryDetails(root, arch, release_mode, coverage, stable)
-        self.images: Dict[str, Image] = {}
-        self.compositions: Dict[str, Path] = {}
+        self.images: dict[str, Image] = {}
+        self.compositions: dict[str, Path] = {}
         for path, dirs, files in os.walk(self.root, topdown=True):
             if path == str(root / "misc"):
                 dirs.remove("python")
@@ -1024,7 +1014,7 @@ class Repository:
         resolved = OrderedDict()
         visiting = set()
 
-        def visit(image: Image, path: List[str] = []) -> None:
+        def visit(image: Image, path: list[str] = []) -> None:
             if image.name in resolved:
                 return
             if image.name in visiting:

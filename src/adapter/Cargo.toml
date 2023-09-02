@@ -52,8 +52,8 @@ mz-transform = { path = "../transform" }
 mz-cloud-resources = { path = "../cloud-resources" }
 opentelemetry = { version = "0.20.0", features = ["rt-tokio", "trace"] }
 prometheus = { version = "0.13.3", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"]}
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 qcell = "0.5"
 rand = "0.8.5"
@@ -75,6 +75,7 @@ tracing-opentelemetry = { version = "0.20.0" }
 tracing-subscriber = "0.3.16"
 thiserror = "1.0.37"
 uncased = "0.9.7"
+url = "2.3.1"
 uuid = { version = "1.2.2", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 

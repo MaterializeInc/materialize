@@ -73,7 +73,9 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     pub fn is_single_time(&self) -> bool {
         // TODO: this would be much easier to check if `until` was a strict lower bound,
         // and we would be testing that `until == as_of`.
-        let Some(as_of) = self.as_of.as_ref() else { return false; };
+        let Some(as_of) = self.as_of.as_ref() else {
+            return false;
+        };
         !as_of.is_empty()
             && as_of
                 .as_option()
@@ -231,7 +233,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             r(plan)?;
         }
         for (source_instance_desc, _) in self.source_imports.values_mut() {
-            let Some(mfp) =  source_instance_desc.arguments.operators.as_mut() else {
+            let Some(mfp) = source_instance_desc.arguments.operators.as_mut() else {
                 continue;
             };
             for expr in mfp.expressions.iter_mut() {

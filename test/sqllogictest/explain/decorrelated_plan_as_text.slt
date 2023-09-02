@@ -21,13 +21,18 @@ CREATE VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 statement ok
-CREATE DEFAULT INDEX ON v
+CREATE INDEX v_a_idx ON v(a)
 
 statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 mode cockroach
+
+# EXPLAIN INDEX is not supported for decorrelated plans
+statement error cannot EXPLAIN DECORRELATED PLAN FOR INDEX
+EXPLAIN DECORRELATED PLAN AS TEXT FOR
+INDEX v_a_idx
 
 # Test constant error.
 query T multiline

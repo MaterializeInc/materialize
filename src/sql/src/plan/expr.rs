@@ -1675,7 +1675,11 @@ impl HirRelationExpr {
     /// Instead of directly applying the given `RowSetFinishing`, it converts the `RowSetFinishing`
     /// to a `TopK`, which it then places at the top of `self`. Additionally, it turns the given
     /// finishing into a trivial finishing.
-    pub fn finish_maintained(&mut self, finishing: &mut RowSetFinishing) {
+    pub fn finish_maintained(
+        &mut self,
+        finishing: &mut RowSetFinishing,
+        expected_group_size: Option<u64>,
+    ) {
         if !finishing.is_trivial(self.arity()) {
             let old_finishing =
                 mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
@@ -1691,7 +1695,7 @@ impl HirRelationExpr {
                 order_key: old_finishing.order_by,
                 limit: old_finishing.limit,
                 offset: old_finishing.offset,
-                expected_group_size: None,
+                expected_group_size,
             }
             .project(old_finishing.project)
         }

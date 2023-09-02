@@ -16,7 +16,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -2725,6 +2725,15 @@ impl<'a> ScalarType {
                 Datum::Int16(i16::MIN),
                 Datum::Int16(i16::MIN + 1),
                 Datum::Int16(i16::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                //
+                // TODO[btv]: Add more datums around
+                // boundaries in VLE (e.g. negatives) if `test_smoketest_all_builtins` is
+                // fixed to be faster.
+                Datum::Int16(127),
+                Datum::Int16(128),
             ])
         });
         static INT32: Lazy<Row> = Lazy::new(|| {
@@ -2735,6 +2744,11 @@ impl<'a> ScalarType {
                 Datum::Int32(i32::MIN),
                 Datum::Int32(i32::MIN + 1),
                 Datum::Int32(i32::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int32(32767),
+                Datum::Int32(32768),
             ])
         });
         static INT64: Lazy<Row> = Lazy::new(|| {
@@ -2745,6 +2759,11 @@ impl<'a> ScalarType {
                 Datum::Int64(i64::MIN),
                 Datum::Int64(i64::MIN + 1),
                 Datum::Int64(i64::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int64(2147483647),
+                Datum::Int64(2147483648),
             ])
         });
         static UINT16: Lazy<Row> = Lazy::new(|| {
@@ -2785,18 +2804,25 @@ impl<'a> ScalarType {
             ])
         });
         static NUMERIC: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[
-                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
-            ])
+            cfg_if::cfg_if! {
+                // Numerics can't currently be instantiated under Miri
+                if #[cfg(miri)] {
+                    Row::pack_slice(&[])
+                } else {
+                    Row::pack_slice(&[
+                        Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
+                    ])
+                }
+            }
         });
         static DATE: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2832,6 +2858,16 @@ impl<'a> ScalarType {
                         .unwrap()
                         .try_into()
                         .unwrap(),
+                ),
+                // Leap second
+                Datum::Timestamp(
+                    CheckedTimestamp::from_timestamplike(
+                        NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
+                            .unwrap()
+                            .and_hms_milli_opt(14, 32, 11, 1234)
+                            .unwrap(),
+                    )
+                    .unwrap(),
                 ),
             ])
         });

@@ -8,9 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, List, Optional, Protocol
+from typing import Protocol
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -126,7 +127,7 @@ class KafkaDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
@@ -239,7 +240,7 @@ class PgDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
@@ -335,7 +336,7 @@ class PgDisruption:
         )
 
 
-disruptions: List[Disruption] = [
+disruptions: list[Disruption] = [
     KafkaDisruption(
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),

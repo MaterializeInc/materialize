@@ -9,7 +9,7 @@
 
 import random
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING
 
 import pg8000
 
@@ -52,7 +52,7 @@ class Action:
     def run(self, exe: Executor) -> None:
         raise NotImplementedError
 
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         result = [
             "permission denied for",
             "must be owner of",
@@ -87,7 +87,7 @@ class Action:
 
 
 class FetchAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         result = super().errors_to_ignore()
         if self.db.complexity == Complexity.DDL:
             result.extend(
@@ -98,7 +98,7 @@ class FetchAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
         table = self.rng.choice(tables_views)
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
@@ -116,7 +116,7 @@ class FetchAction(Action):
 
 
 class SelectAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         result = super().errors_to_ignore()
         if self.db.complexity in (Complexity.DML, Complexity.DDL):
             result.extend(
@@ -133,7 +133,7 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
         table = self.rng.choice(tables_views)
         column = self.rng.choice(table.columns)
         table2 = self.rng.choice(tables_views)
@@ -185,7 +185,7 @@ class InsertAction(Action):
 
 
 class UpdateAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore()
@@ -208,7 +208,7 @@ class UpdateAction(Action):
 
 
 class DeleteAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore()
@@ -231,13 +231,13 @@ class DeleteAction(Action):
 
 
 class CreateIndexAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "already exists",  # TODO: Investigate
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
-        tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
         table = self.rng.choice(tables_views)
         columns = self.rng.sample(table.columns, len(table.columns))
         columns_str = "_".join(column.name() for column in columns)
@@ -278,7 +278,7 @@ class CreateTableAction(Action):
 
 
 class DropTableAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore()
@@ -332,7 +332,7 @@ class CreateViewAction(Action):
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = self.rng.choice(self.db.tables)
-            base_object2: Optional[Table] = self.rng.choice(self.db.tables)
+            base_object2: Table | None = self.rng.choice(self.db.tables)
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
             view = View(self.rng, view_id, base_object, base_object2)
@@ -341,7 +341,7 @@ class CreateViewAction(Action):
 
 
 class DropViewAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "still depended upon by",
         ] + super().errors_to_ignore()
@@ -373,7 +373,7 @@ class CreateRoleAction(Action):
 
 
 class DropRoleAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "cannot be dropped because some objects depend on it",
             "current role cannot be dropped",
@@ -409,7 +409,7 @@ class CreateClusterAction(Action):
 
 
 class DropClusterAction(Action):
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "cannot drop cluster with active objects",
         ] + super().errors_to_ignore()
@@ -478,7 +478,7 @@ class GrantPrivilegesAction(Action):
                 return
             role = self.rng.choice(self.db.roles)
             privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-            tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+            tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
             table = self.rng.choice(tables_views)
             query = f"GRANT {privilege} ON {table} TO {role}"
             exe.execute(query)
@@ -491,7 +491,7 @@ class RevokePrivilegesAction(Action):
                 return
             role = self.rng.choice(self.db.roles)
             privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-            tables_views: List[DBObject] = [*self.db.tables, *self.db.views]
+            tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
             table = self.rng.choice(tables_views)
             query = f"REVOKE {privilege} ON {table} FROM {role}"
             exe.execute(query)
@@ -555,9 +555,9 @@ class ReconnectAction(Action):
 
 
 class CancelAction(Action):
-    workers: List["Worker"]
+    workers: list["Worker"]
 
-    def errors_to_ignore(self) -> List[str]:
+    def errors_to_ignore(self) -> list[str]:
         return [
             "must be a member of",
         ] + super().errors_to_ignore()
@@ -566,7 +566,7 @@ class CancelAction(Action):
         self,
         rng: random.Random,
         db: Database,
-        workers: List["Worker"],
+        workers: list["Worker"],
     ):
         super().__init__(rng, db)
         self.workers = workers
@@ -609,12 +609,12 @@ class KillAction(Action):
 
 
 class ActionList:
-    action_classes: List[Type[Action]]
-    weights: List[float]
+    action_classes: list[type[Action]]
+    weights: list[float]
     autocommit: bool
 
     def __init__(
-        self, action_classes_weights: List[Tuple[Type[Action], int]], autocommit: bool
+        self, action_classes_weights: list[tuple[type[Action], int]], autocommit: bool
     ):
         self.action_classes = [action[0] for action in action_classes_weights]
         self.weights = [action[1] for action in action_classes_weights]

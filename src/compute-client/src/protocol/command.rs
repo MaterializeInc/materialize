@@ -35,6 +35,15 @@ include!(concat!(
     "/mz_compute_client.protocol.command.rs"
 ));
 
+/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
+/// if the controller attempt to reconcile them with different values
+/// for anything in this struct.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InstanceConfig {
+    pub logging_config: LoggingConfig,
+    pub variable_length_row_encoding: bool,
+}
+
 /// Compute protocol commands, sent by the compute controller to replicas.
 ///
 /// Command sequences sent by the compute controller must be valid according to the [Protocol
@@ -73,7 +82,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// dataflows according to the given [`LoggingConfig`].
     ///
     /// [Creation Stage]: super#creation-stage
-    CreateInstance(LoggingConfig),
+    CreateInstance(InstanceConfig),
 
     /// `InitializationComplete` informs the replica about the end of the [Initialization Stage].
     /// Upon receiving this command, the replica should perform a reconciliation process, to ensure
@@ -88,7 +97,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// given [`ComputeParameters`].
     ///
     /// Parameter updates transmitted through this command must be applied by the replica as soon
-    /// as it receives the command, and they must be apply globally to all replica state, even
+    /// as it receives the command, and they must be applied globally to all replica state, even
     /// dataflows and pending peeks that were created before the parameter update. This property
     /// allows the replica to hoist `UpdateConfiguration` commands during reconciliation.
     ///
@@ -231,7 +240,13 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     config: Some(config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
-                ComputeCommand::CreateInstance(logging) => CreateInstance(logging.into_proto()),
+                ComputeCommand::CreateInstance(InstanceConfig {
+                    logging_config,
+                    variable_length_row_encoding,
+                }) => CreateInstance(ProtoInstanceConfig {
+                    logging_config: Some(logging_config.into_proto()),
+                    variable_length_row_encoding: *variable_length_row_encoding,
+                }),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
@@ -259,9 +274,14 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
                 })
             }
-            Some(CreateInstance(logging)) => {
-                Ok(ComputeCommand::CreateInstance(logging.into_rust()?))
-            }
+            Some(CreateInstance(ProtoInstanceConfig {
+                logging_config,
+                variable_length_row_encoding,
+            })) => Ok(ComputeCommand::CreateInstance(InstanceConfig {
+                logging_config: logging_config
+                    .into_rust_if_some("ProtoCreateInstance::logging_config")?,
+                variable_length_row_encoding,
+            })),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
@@ -292,8 +312,13 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            any::<LoggingConfig>()
-                .prop_map(ComputeCommand::CreateInstance)
+            (any::<LoggingConfig>(), any::<bool>())
+                .prop_map(|(logging_config, variable_length_row_encoding)| {
+                    ComputeCommand::CreateInstance(InstanceConfig {
+                        logging_config,
+                        variable_length_row_encoding,
+                    })
+                })
                 .boxed(),
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)

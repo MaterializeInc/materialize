@@ -79,11 +79,7 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                     "Literal": [
                       {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       },
                       {
@@ -111,11 +107,8 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                 "Literal": [
                   {
                     "data": [
-                      4,
-                      1,
-                      0,
-                      0,
-                      0
+                      42,
+                      1
                     ]
                   },
                   {
@@ -130,11 +123,8 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
             "Literal": [
               {
                 "data": [
-                  4,
-                  4,
-                  0,
-                  0,
-                  0
+                  42,
+                  4
                 ]
               },
               {
@@ -168,11 +158,8 @@ SELECT * FROM generate_series(1, 7)
         "Literal": [
           {
             "data": [
-              4,
-              1,
-              0,
-              0,
-              0
+              42,
+              1
             ]
           },
           {
@@ -185,11 +172,8 @@ SELECT * FROM generate_series(1, 7)
         "Literal": [
           {
             "data": [
-              4,
-              7,
-              0,
-              0,
-              0
+              42,
+              7
             ]
           },
           {
@@ -202,11 +186,8 @@ SELECT * FROM generate_series(1, 7)
         "Literal": [
           {
             "data": [
-              4,
-              1,
-              0,
-              0,
-              0
+              42,
+              1
             ]
           },
           {
@@ -1186,11 +1167,8 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
             "Literal": [
               {
                 "data": [
-                  4,
-                  1,
-                  0,
-                  0,
-                  0
+                  42,
+                  1
                 ]
               },
               {
@@ -1238,11 +1216,7 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                     "Literal": [
                       {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       },
                       {

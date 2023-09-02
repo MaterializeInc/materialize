@@ -10,7 +10,6 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
@@ -24,7 +23,7 @@ class CreatePostgresCdcTable(Action):
     """Creates a Postgres CDC source in Materialized."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -81,5 +80,5 @@ class CreatePostgresCdcTable(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.postgres_cdc_table] if self.new_postgres_cdc_table else []

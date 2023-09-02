@@ -7,7 +7,6 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
 axum = { version = "0.6.20" }
 clap = { version = "3.2.24", features = [ "derive" ] }
 csv = "1.2.1"
@@ -38,7 +37,6 @@ thiserror = "1.0.37"
 uuid = "1.2.2"
 url = "2.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-postgres-protocol = "0.6.4"
 
 [dev-dependencies]
 assert_cmd = "2.0.5"

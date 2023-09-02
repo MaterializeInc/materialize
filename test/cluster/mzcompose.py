@@ -13,7 +13,6 @@ import time
 from datetime import datetime
 from textwrap import dedent
 from threading import Thread
-from typing import Dict, Optional, Tuple
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -252,7 +251,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.up("clusterd1")
 
     # helper function to get command history metrics
-    def find_command_history_metrics(c: Composition) -> Tuple[int, int, int, int]:
+    def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
         controller_metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -439,7 +438,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
 
-    def extract_frontiers(output: str) -> Tuple[int, int]:
+    def extract_frontiers(output: str) -> tuple[int, int]:
         j = json.loads(output)
         (upper,) = j["determination"]["upper"]["elements"]
         (since,) = j["determination"]["since"]["elements"]
@@ -1594,7 +1593,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Helper function to get reconciliation metrics for clusterd.
-    def fetch_reconciliation_metrics() -> Tuple[int, int]:
+    def fetch_reconciliation_metrics() -> tuple[int, int]:
         metrics = c.exec(
             "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -1801,7 +1800,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """Stop a susbscribe started with `start_subscribe`."""
         cursor.execute("ROLLBACK")
 
-    def check_mz_subscriptions(expected: Tuple) -> None:
+    def check_mz_subscriptions(expected: tuple) -> None:
         """
         Check that the expected subscribes exist in mz_subscriptions.
         We identify subscribes by user, cluster, and target table only.
@@ -2019,7 +2018,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
 
 
 class Metrics:
-    metrics: Dict[str, str]
+    metrics: dict[str, str]
 
     def __init__(self, raw: str) -> None:
         self.metrics = {}
@@ -2027,7 +2026,7 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
-    def with_name(self, metric_name: str) -> Dict[str, float]:
+    def with_name(self, metric_name: str) -> dict[str, float]:
         items = {}
         for key, value in self.metrics.items():
             if key.startswith(metric_name):
@@ -2040,7 +2039,7 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_initial_output_duration(self, collection_id: str) -> Optional[float]:
+    def get_initial_output_duration(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
         values = [
             v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
@@ -2163,7 +2162,7 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     # Generally, metrics tables are indexed in `mz_introspection` and
     # not indexed in the `default` cluster, so we can use that to
     # collect the `since` frontiers we want.
-    def collect_sinces() -> Tuple[int, int]:
+    def collect_sinces() -> tuple[int, int]:
         explain = c.sql_query(
             "SET cluster = default;"
             "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"

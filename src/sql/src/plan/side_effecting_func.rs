@@ -133,8 +133,9 @@ fn extract_sef_call(
                 offset: None,
             },
         as_of: None,
-    } = select else {
-        return Ok(None)
+    } = select
+    else {
+        return Ok(None);
     };
     if !ctes.is_empty() || !order_by.is_empty() {
         return Ok(None);
@@ -147,7 +148,8 @@ fn extract_sef_call(
         group_by,
         having: None,
         options,
-    } = &**body else {
+    } = &**body
+    else {
         return Ok(None);
     };
     if !from.is_empty() || !group_by.is_empty() || !options.is_empty() || projection.len() != 1 {
@@ -163,7 +165,8 @@ fn extract_sef_call(
                 distinct: false,
             }),
         alias: None,
-    }] = &projection[..] else {
+    }] = &projection[..]
+    else {
         return Ok(None);
     };
     if !order_by.is_empty() {
@@ -173,7 +176,10 @@ fn extract_sef_call(
     // Check if the called function is a scalar function with exactly one
     // implementation. All side-effecting functions have only a single
     // implementation.
-    let Ok(func) = scx.get_item_by_resolved_name(name).and_then(|item| item.func().err_into()) else {
+    let Ok(func) = scx
+        .get_item_by_resolved_name(name)
+        .and_then(|item| item.func().err_into())
+    else {
         return Ok(None);
     };
     let func_impl = match func {

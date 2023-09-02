@@ -473,7 +473,7 @@ class KafkaSinks(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
+        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -520,7 +520,7 @@ class KafkaSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
+        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1185,7 +1185,7 @@ class ArrayAgg(Generator):
         slt = dedent(
             f"""
             > CREATE TABLE t ({
-                f", ".join(
+                ", ".join(
                     ", ".join([
                         f"a{i} STRING",
                         f"b{i} STRING",
@@ -1199,7 +1199,7 @@ class ArrayAgg(Generator):
             > INSERT INTO t DEFAULT VALUES;
 
             > CREATE MATERIALIZED VIEW v2 AS SELECT {
-                f", ".join(
+                ", ".join(
                     f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
                     for i in cls.all()
                 )
@@ -1236,7 +1236,7 @@ class FilterSubqueries(Generator):
             $ set-sql-timeout duration=600s
 
             > SELECT * FROM t1 AS a1 WHERE {
-                f" AND ".join(
+                " AND ".join(
                     f"f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})"
                     for i in cls.all()
                 )

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import List, Optional
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
@@ -16,7 +15,7 @@ from materialize.util import MzVersion
 
 
 class Check:
-    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
         self.rng = rng
 
@@ -26,7 +25,7 @@ class Check:
     def initialize(self) -> Testdrive:
         return Testdrive("")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         assert False
 
     def validate(self) -> Testdrive:
@@ -67,7 +66,7 @@ class Check:
 
 
 class CheckDisabled(Check):
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [Testdrive(""), Testdrive("")]
 
     def validate(self) -> Testdrive:

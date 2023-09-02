@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 from collections import OrderedDict
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import junit_xml
 
@@ -23,7 +23,7 @@ from materialize import MZ_ROOT, ci_util
 # - Positive values indicate that the line can be covered and how often is has
 #   been covered in end-to-end tests.
 # - Negative values indicate that the line has only been covered in unit tests.
-Coverage = Dict[str, OrderedDict[int, Optional[int]]]
+Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )
@@ -110,6 +110,7 @@ def mark_covered_lines(
         if line == "end_of_record":
             continue
         method, content = tuple(line.strip().split(":", 1))
+        file = "__SENTINEL_VERY_UNLIKELY_TO_MATCH_ANY_FILE_NAME"
         # SF:/var/lib/buildkite-agent/builds/buildkite-builders-d43b1b5-i-0193496e7aec9a4e3-1/materialize/coverage/src/transform/src/lib.rs
         if method == "SF":
             if content.startswith("src/"):  # for unit tests
@@ -134,7 +135,7 @@ def mark_covered_lines(
 
 
 def get_report(
-    coverage: Coverage, fn: Callable[[OrderedDict[int, Optional[int]], int, str], bool]
+    coverage: Coverage, fn: Callable[[OrderedDict[int, int | None], int, str], bool]
 ) -> str:
     """
     Remove uncovered lines in real files and print a git diff, then restore to

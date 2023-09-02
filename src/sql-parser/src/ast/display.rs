@@ -201,6 +201,7 @@ impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
         }
     }
 }
+
 impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.to_ast_string())
@@ -209,4 +210,24 @@ impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
 
 pub fn escape_single_quote_string(s: &str) -> EscapeSingleQuoteString<'_> {
     EscapeSingleQuoteString(s)
+}
+
+pub struct EscapedStringLiteral<'a>(&'a str);
+
+impl<'a> AstDisplay for EscapedStringLiteral<'a> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("'");
+        f.write_node(&escape_single_quote_string(self.0));
+        f.write_str("'");
+    }
+}
+
+impl<'a> fmt::Display for EscapedStringLiteral<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.to_ast_string())
+    }
+}
+
+pub fn escaped_string_literal(s: &str) -> EscapedStringLiteral<'_> {
+    EscapedStringLiteral(s)
 }

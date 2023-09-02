@@ -2750,6 +2750,7 @@ dependencies = [
  "chrono",
  "http",
  "percent-encoding",
+ "schemars",
  "serde",
  "serde-value",
  "serde_json",
@@ -3022,9 +3023,8 @@ dependencies = [
 
 [[package]]
 name = "librocksdb-sys"
-version = "0.11.0+8.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3386f101bcb4bd252d8e9d2fb41ec3b0862a15a62b478c355b2982efa469e3e"
+version = "0.11.0+8.3.2"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -3361,7 +3361,6 @@ dependencies = [
 name = "mz"
 version = "0.1.3"
 dependencies = [
- "anyhow",
  "assert_cmd",
  "axum",
  "clap",
@@ -3378,7 +3377,6 @@ dependencies = [
  "once_cell",
  "open",
  "openssl-probe",
- "postgres-protocol",
  "reqwest",
  "rpassword",
  "security-framework",
@@ -3471,6 +3469,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uncased",
+ "url",
  "uuid",
  "workspace-hack",
 ]
@@ -3708,7 +3707,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.68.0-dev"
+version = "0.69.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3860,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.68.0-dev"
+version = "0.69.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3991,6 +3990,7 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr",
  "mz-proto",
+ "mz-regexp",
  "mz-repr",
  "mz-sql-parser",
  "num",
@@ -4051,13 +4051,16 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64 0.13.1",
  "derivative",
  "jsonwebtoken",
  "mz-ore",
- "mz-sql",
  "reqwest",
+ "reqwest-middleware",
+ "reqwest-retry",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
@@ -4412,7 +4415,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.68.0-dev"
+version = "0.69.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4662,12 +4665,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-regexp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-repr",
+ "postgres",
+ "regex",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-repr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "bitflags 1.3.2",
  "bytes",
+ "cfg-if",
  "chrono",
  "chrono-tz",
  "columnation",
@@ -4729,6 +4745,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bincode",
+ "derivative",
  "itertools",
  "mz-ore",
  "mz-proto",
@@ -6709,6 +6726,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "once_cell",
  "percent-encoding",
@@ -6727,10 +6745,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest-middleware"
+version = "0.2.3"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest",
+ "serde",
+ "task-local-extensions",
+ "thiserror",
+]
+
+[[package]]
+name = "reqwest-retry"
+version = "0.2.2"
+source = "git+https://github.com/MaterializeInc/reqwest-middleware.git#1c44c7ddbf4954cc2d4de73a760b9a8d84827349"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "http",
+ "hyper",
+ "reqwest",
+ "reqwest-middleware",
+ "retry-policies",
+ "task-local-extensions",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "retain_mut"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4389f1d5789befaf6029ebd9f7dac4af7f7e3d61b69d4f30e2ac02b57e7712b0"
+
+[[package]]
+name = "retry-policies"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e09bbcb5003282bcb688f0bae741b278e9c7e8f378f561522c9806c58e075d9b"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rand",
+]
 
 [[package]]
 name = "ring"
@@ -6759,8 +6821,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb6f170a4041d50a0ce04b0d2e14916d6ca863ea2e422689a5b694395d299ffe"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
 dependencies = [
  "libc",
  "librocksdb-sys",
@@ -7685,6 +7746,15 @@ dependencies = [
  "filetime",
  "libc",
  "xattr",
+]
+
+[[package]]
+name = "task-local-extensions"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba323866e5d033818e3240feeb9f7db2c4296674e4d9e16b97b7bf8f490434e8"
+dependencies = [
+ "pin-utils",
 ]
 
 [[package]]
@@ -8940,6 +9010,7 @@ dependencies = [
  "log",
  "lru",
  "memchr",
+ "mime_guess",
  "native-tls",
  "nix",
  "nom",

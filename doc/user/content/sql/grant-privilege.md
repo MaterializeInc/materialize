@@ -14,8 +14,6 @@ Privileges are cumulative: revoking a privilege from `PUBLIC` does not mean all
 roles have lost that privilege, if certain roles were explicitly granted that
 privilege.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "grant-privilege.svg" >}}

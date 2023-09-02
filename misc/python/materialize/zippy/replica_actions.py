@@ -9,7 +9,6 @@
 
 import random
 from textwrap import dedent
-from typing import List, Optional, Set, Type
 
 from materialize.mzcompose import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
@@ -21,7 +20,7 @@ class DropDefaultReplica(Action):
     """Drops the default replica."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
@@ -41,7 +40,7 @@ class CreateReplica(Action):
     """Creates a replica on the default cluster."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -96,17 +95,17 @@ class CreateReplica(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.replica] if self.new_replica else []
 
 
 class DropReplica(Action):
     """Drops a replica from the default cluster."""
 
-    replica: Optional[ReplicaExists]
+    replica: ReplicaExists | None
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, ReplicaExists}
 
     def __init__(self, capabilities: Capabilities) -> None:

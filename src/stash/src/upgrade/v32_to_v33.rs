@@ -9,15 +9,8 @@
 
 use crate::objects::wire_compatible;
 use crate::upgrade::MigrationAction;
+use crate::upgrade::{objects_v32, objects_v33};
 use crate::{StashError, Transaction, TypedCollection};
-
-pub mod objects_v32 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v32.rs"));
-}
-
-pub mod objects_v33 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v33.rs"));
-}
 
 wire_compatible!(objects_v32::RoleKey with objects_v33::RoleKey);
 wire_compatible!(objects_v32::RoleValue with objects_v33::RoleValue);

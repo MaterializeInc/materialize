@@ -9,7 +9,7 @@
 
 import re
 import time
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
 
 from materialize.feature_benchmark.executor import Executor
 
@@ -18,12 +18,12 @@ Timestamp = float
 
 class MeasurementSource:
     def __init__(self) -> None:
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
-    ) -> Union[None, Timestamp, List[Timestamp]]:
+        executor: Executor | None = None,
+    ) -> None | Timestamp | list[Timestamp]:
         assert False
 
 
@@ -43,12 +43,12 @@ class Td(MeasurementSource):
 
     def __init__(self, td_str: str) -> None:
         self._td_str = td_str
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
-    ) -> List[Timestamp]:
+        executor: Executor | None = None,
+    ) -> list[Timestamp]:
         assert not (executor is not None and self._executor is not None)
         executor = executor or self._executor
         assert executor
@@ -70,9 +70,7 @@ class Td(MeasurementSource):
 
         return timestamps
 
-    def _get_time_for_marker(
-        self, lines: List[str], marker: str
-    ) -> Union[None, Timestamp]:
+    def _get_time_for_marker(self, lines: list[str], marker: str) -> None | Timestamp:
         matched_line_id = None
         for id, line in enumerate(lines):
             if f"/* {marker} */" in line:
@@ -101,7 +99,7 @@ class Lambda(MeasurementSource):
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> Timestamp:
         e = executor or self._executor
         assert e is not None

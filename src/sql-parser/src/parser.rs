@@ -445,6 +445,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(VALIDATE) => Ok(self
                     .parse_validate()
                     .map_parser_err(StatementKind::ValidateConnection)?),
+                Token::Keyword(COMMENT) => Ok(self
+                    .parse_comment()
+                    .map_parser_err(StatementKind::Comment)?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -2845,7 +2848,38 @@ impl<'a> Parser<'a> {
             BYTES => Format::Bytes,
             _ => unreachable!(),
         };
-        let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
+
+        let mut include_headers = CreateWebhookSourceIncludeHeaders::default();
+        while self.parse_keyword(INCLUDE) {
+            match self.expect_one_of_keywords(&[HEADER, HEADERS])? {
+                HEADER => {
+                    let header_name = self.parse_literal_string()?;
+                    self.expect_keyword(AS)?;
+                    let column_name = self.parse_identifier()?;
+                    let use_bytes = self.parse_keyword(BYTES);
+
+                    include_headers.mappings.push(CreateWebhookSourceMapHeader {
+                        header_name,
+                        column_name,
+                        use_bytes,
+                    });
+                }
+                HEADERS => {
+                    let header_filters = include_headers.column.get_or_insert_with(Vec::default);
+                    if self.consume_token(&Token::LParen) {
+                        let filters = self.parse_comma_separated(|f| {
+                            let block = f.parse_keyword(NOT);
+                            let header_name = f.parse_literal_string()?;
+                            Ok(CreateWebhookSourceFilterHeader { block, header_name })
+                        })?;
+                        header_filters.extend(filters);
+
+                        self.expect_token(&Token::RParen)?;
+                    }
+                }
+                k => unreachable!("programming error, didn't expect {k}"),
+            }
+        }
 
         let validate_using = if self.parse_keyword(CHECK) {
             self.expect_token(&Token::LParen)?;
@@ -3037,14 +3071,13 @@ impl<'a> Parser<'a> {
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
                 let generator = match self
-                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, CLOCK])?
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS])?
                 {
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
                     TPCH => LoadGenerator::Tpch,
                     DATUMS => LoadGenerator::Datums,
                     MARKETING => LoadGenerator::Marketing,
-                    CLOCK => LoadGenerator::Clock,
                     _ => unreachable!(),
                 };
                 let options = if self.consume_token(&Token::LParen) {
@@ -6698,7 +6731,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
         let stage = match self.parse_one_of_keywords(&[
@@ -6708,7 +6741,6 @@ impl<'a> Parser<'a> {
             OPTIMIZED,
             PHYSICAL,
             OPTIMIZER,
-            QUERY,
         ]) {
             Some(PLAN) => {
                 // EXPLAIN PLAN = EXPLAIN OPTIMIZED PLAN
@@ -6767,22 +6799,22 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        let no_errors = self.parse_keyword(BROKEN);
-
-        // VIEW name | MATERIALIZED VIEW name | query
+        // VIEW name | MATERIALIZED VIEW name | INDEX name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
         } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
             Explainee::MaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keyword(INDEX) {
+            Explainee::Index(self.parse_raw_name()?)
         } else {
-            Explainee::Query(self.parse_query()?)
+            let broken = self.parse_keyword(BROKEN);
+            Explainee::Query(self.parse_query()?, broken)
         };
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
-            no_errors,
             explainee,
         }))
     }
@@ -7435,6 +7467,48 @@ impl<'a> Parser<'a> {
             old_roles,
             new_role,
         }))
+    }
+
+    fn parse_comment(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(ON)?;
+
+        let object = match self.expect_one_of_keywords(&[TABLE, VIEW, COLUMN])? {
+            TABLE => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Table { name }
+            }
+            VIEW => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::View { name }
+            }
+            COLUMN => {
+                let start = self.peek_pos();
+                let mut identifiers = self.parse_identifiers()?;
+                if identifiers.len() < 2 {
+                    return Err(ParserError::new(
+                        start,
+                        "need to specify a relation and a column",
+                    ));
+                }
+
+                // The last identifier specifies the column of a relation.
+                let column_name = identifiers.pop().expect("checked length above");
+                CommentObjectType::Column {
+                    relation_name: UnresolvedItemName(identifiers),
+                    column_name,
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        self.expect_keyword(IS)?;
+        let comment = match self.next_token() {
+            Some(Token::Keyword(NULL)) => None,
+            Some(Token::String(s)) => Some(s),
+            other => return self.expected(self.peek_prev_pos(), "NULL or literal string", other),
+        };
+
+        Ok(Statement::Comment(CommentStatement { object, comment }))
     }
 }
 

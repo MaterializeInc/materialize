@@ -123,4 +123,7 @@ pub enum Error {
     /// is invalid. Chances are that the request is not a 301.
     #[error("Error the latest version header from the redirect request was not found. Verify the request is redirecting.")]
     LatestVersionHeaderMissingError,
+    /// Error that occurs when attempting to find the home directory.
+    #[error("An error occurred while trying to find the home directory.")]
+    HomeDirNotFoundError
 }

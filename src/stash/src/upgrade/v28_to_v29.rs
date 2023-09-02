@@ -7,17 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::upgrade::MigrationAction;
-use crate::{StashError, Transaction, TypedCollection};
 use std::collections::BTreeSet;
 
-pub mod objects_v28 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v28.rs"));
-}
-
-pub mod objects_v29 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v29.rs"));
-}
+use crate::upgrade::MigrationAction;
+use crate::upgrade::{objects_v28, objects_v29};
+use crate::{StashError, Transaction, TypedCollection};
 
 /// Remove dangling references from default privileges.
 ///

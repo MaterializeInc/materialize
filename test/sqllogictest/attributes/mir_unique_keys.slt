@@ -134,6 +134,10 @@ Source materialize.public.u
 Used Indexes:
   - materialize.public.v_primary_idx (*** full scan ***)
 
+Notices:
+  - Notice: Index materialize.public.v_primary_idx on v(c, d) is too wide to use for literal equalities `c = 1`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (c).
+
 EOF
 
 query T multiline

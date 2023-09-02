@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Callable, Optional, Type
+from collections.abc import Callable
+from typing import Any
 
 from pg8000.native import literal
 
@@ -24,7 +25,7 @@ def formatted_value(value: Any) -> str:
 
 class Field:
     name: str
-    data_type: Type[DataType]
+    data_type: type[DataType]
     is_key: bool
     # value_fn can be used to encode a value which is stored in this field, for example:
     # import uuid
@@ -35,9 +36,9 @@ class Field:
     def __init__(
         self,
         name: str,
-        data_type: Type[DataType],
+        data_type: type[DataType],
         is_key: bool,
-        value_fn: Optional[Callable[[Any], Any]] = None,
+        value_fn: Callable[[Any], Any] | None = None,
     ):
         self.name = name
         self.data_type = data_type

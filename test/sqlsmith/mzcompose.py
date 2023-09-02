@@ -13,7 +13,7 @@ import random
 import time
 from datetime import datetime
 from threading import Thread
-from typing import Any, Dict, FrozenSet, List, Tuple
+from typing import Any
 
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
 from materialize.mzcompose.services import Materialized
@@ -166,7 +166,7 @@ def is_known_error(e: str) -> bool:
     return False
 
 
-def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
+def run_sqlsmith(c: Composition, cmd: str, aggregate: dict[str, Any]) -> None:
     result = c.run(
         *cmd,
         capture=True,
@@ -233,8 +233,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     killer = Thread(target=kill_sqlsmith_with_delay)
     killer.start()
 
-    threads: List[Thread] = []
-    aggregate: Dict[str, Any] = {"errors": [], "version": "", "queries": 0}
+    threads: list[Thread] = []
+    aggregate: dict[str, Any] = {"errors": [], "version": "", "queries": 0}
     for i in range(args.num_sqlsmith):
         cmd = [
             "sqlsmith",
@@ -256,7 +256,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: Dict[FrozenSet[Tuple[str, Any]], List[Dict[str, Any]]] = {}
+    new_errors: dict[frozenset[tuple[str, Any]], list[dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(

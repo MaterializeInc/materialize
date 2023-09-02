@@ -171,37 +171,34 @@ impl Client {
         let uuid = session.uuid();
         let application_name = session.application_name().into();
         let notice_tx = session.retain_notice_transmitter();
+
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::Startup {
+            cancel_tx: Arc::clone(&cancel_tx),
+            tx,
+            set_setting_keys,
+            user,
+            conn_id,
+            secret_key,
+            uuid,
+            application_name,
+            notice_tx,
+        });
+
+        // When startup fails, no need to call terminate (handle_startup does this). Delay creating
+        // the client until after startup to sidestep the panic in its `Drop` implementation.
+        let response = rx.await.expect("sender dropped")?;
+
+        // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
+        // handle termination.
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
-            cancel_tx: Arc::clone(&cancel_tx),
+            cancel_tx,
             cancel_rx,
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
-        };
-        let response = client
-            .send_without_session(|tx| Command::Startup {
-                cancel_tx,
-                tx,
-                set_setting_keys,
-                user,
-                conn_id,
-                secret_key,
-                uuid,
-                application_name,
-                notice_tx,
-            })
-            .await;
-        let response = match response {
-            Ok(response) => response,
-            Err(e) => {
-                // When startup fails, no need to call terminate. Remove the
-                // session from the client to sidestep the panic in the `Drop`
-                // implementation.
-                client.session.take();
-                return Err(e);
-            }
         };
 
         let StartupResponse {
@@ -242,7 +239,7 @@ impl Client {
     }
 
     /// Executes a single SQL statement that returns rows as the
-    /// `mz_introspection` user.
+    /// `mz_support` user.
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
@@ -259,7 +256,7 @@ impl Client {
         const EMPTY_PORTAL: &str = "";
         session_client.start_transaction(Some(1))?;
         session_client
-            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string(), vec![])
+            .declare(EMPTY_PORTAL.into(), stmt, sql.to_string())
             .await?;
         match session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
@@ -357,7 +354,8 @@ impl SessionClient {
         let Some(statement_kind) = parse_error.statement else {
             return;
         };
-        let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind) else {
+        let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind)
+        else {
             return;
         };
         let event_type = StatementFailureType::ParseFailure;
@@ -458,21 +456,11 @@ impl SessionClient {
         name: String,
         stmt: Statement<Raw>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
         let catalog = self.catalog_snapshot().await;
-        self.declare_inner(&catalog, name, stmt, sql, param_types)
-    }
-
-    fn declare_inner(
-        &mut self,
-        catalog: &Catalog,
-        name: String,
-        stmt: Statement<Raw>,
-        sql: String,
-        param_types: Vec<Option<ScalarType>>,
-    ) -> Result<(), AdapterError> {
-        let desc = Coordinator::describe(catalog, self.session(), Some(stmt.clone()), param_types)?;
+        let param_types = vec![];
+        let desc =
+            Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
         let logging = self.session().mint_logging(sql);

@@ -10,7 +10,6 @@
 import os
 import time
 from datetime import datetime, timedelta
-from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
@@ -31,7 +30,7 @@ from materialize.cloudtest.k8s.postgres import postgres_resources
 from materialize.cloudtest.k8s.redpanda import redpanda_resources
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
 from materialize.cloudtest.k8s.ssh import ssh_resources
-from materialize.cloudtest.k8s.testdrive import Testdrive
+from materialize.cloudtest.k8s.testdrive import TestdrivePod
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.util.wait import wait
 
@@ -40,14 +39,14 @@ class MaterializeApplication(CloudtestApplicationBase):
     def __init__(
         self,
         release_mode: bool = True,
-        tag: Optional[str] = None,
-        aws_region: Optional[str] = None,
-        log_filter: Optional[str] = None,
+        tag: str | None = None,
+        aws_region: str | None = None,
+        log_filter: str | None = None,
     ) -> None:
         self.tag = tag
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
-        self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
+        self.testdrive = TestdrivePod(release_mode=release_mode, aws_region=aws_region)
         super().__init__(release_mode, aws_region, log_filter)
 
         # Register the VpcEndpoint CRD.
@@ -57,7 +56,7 @@ class MaterializeApplication(CloudtestApplicationBase):
 
         self.create_resources_and_wait()
 
-    def get_resources(self, log_filter: Optional[str]) -> List[K8sResource]:
+    def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
             *cockroach_resources(),
             *postgres_resources(),
@@ -79,7 +78,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             self.testdrive,
         ]
 
-    def get_images(self) -> List[str]:
+    def get_images(self) -> list[str]:
         return ["environmentd", "clusterd", "testdrive", "postgres"]
 
     def register_vpc_endpoint(self) -> None:

@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Set
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -34,7 +33,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
     def __init__(self, input_data: ConsistencyTestInputData):
         self.input_data = input_data
 
-    def print_reproduction_code(self, errors: List[ValidationError]) -> None:
+    def print_reproduction_code(self, errors: list[ValidationError]) -> None:
         for error in errors:
             self.__print_reproduction_code_of_error(error)
 
@@ -124,7 +123,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self,
         query_template: QueryTemplate,
         query_column_selection: QueryColumnByIndexSelection,
-    ) -> Set[str]:
+    ) -> set[str]:
         column_names = set()
 
         for index, expression in enumerate(query_template.select_expressions):
@@ -146,8 +145,8 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self,
         query_template: QueryTemplate,
         query_column_selection: QueryColumnByIndexSelection,
-    ) -> Set[ExpressionCharacteristics]:
-        all_involved_characteristics: Set[ExpressionCharacteristics] = set()
+    ) -> set[ExpressionCharacteristics]:
+        all_involved_characteristics: set[ExpressionCharacteristics] = set()
 
         for index, expression in enumerate(query_template.select_expressions):
             if not query_column_selection.is_included(index):

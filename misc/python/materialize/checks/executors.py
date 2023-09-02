@@ -10,7 +10,7 @@
 import random
 import threading
 from inspect import Traceback
-from typing import Any, Optional, Set
+from typing import Any
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mzcompose import Composition
@@ -27,9 +27,9 @@ class Executor:
     # All the system settings we have already set in previous Mz versions. No
     # need to set them again in a future version since they should be
     # persisted.
-    system_settings: Set[str] = set()
+    system_settings: set[str] = set()
 
-    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
+    def testdrive(self, input: str, caller: Traceback | None = None) -> Any:
         assert False
 
     def mzcompose_composition(self) -> Composition:
@@ -49,21 +49,21 @@ class MzcomposeExecutor(Executor):
     def mzcompose_composition(self) -> Composition:
         return self.composition
 
-    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+    def testdrive(self, input: str, caller: Traceback | None = None) -> None:
         self.composition.testdrive(input, caller=caller)
 
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
-        self.exception: Optional[BaseException] = None
+        self.exception: BaseException | None = None
 
-    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> Any:
+    def testdrive(self, input: str, caller: Traceback | None = None) -> Any:
         thread = threading.Thread(target=self._testdrive, args=[input, caller])
         thread.start()
         return thread
 
-    def _testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+    def _testdrive(self, input: str, caller: Traceback | None = None) -> None:
         try:
             self.composition.testdrive(input, caller=caller)
         except BaseException as e:
@@ -85,7 +85,7 @@ class CloudtestExecutor(Executor):
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application
 
-    def testdrive(self, input: str, caller: Optional[Traceback] = None) -> None:
+    def testdrive(self, input: str, caller: Traceback | None = None) -> None:
         self.application.testdrive.run(
             input=input, no_reset=True, seed=self.seed, caller=caller
         )

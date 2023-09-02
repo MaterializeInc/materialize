@@ -36,7 +36,7 @@ use itertools::zip_eq;
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Pushes projections down through other operators.
 #[derive(Debug, Default)]
@@ -53,7 +53,7 @@ impl crate::Transform for ProjectionPushdown {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(
             relation,

@@ -79,7 +79,7 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 "Explained Query (fast path):  ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT key1, key2 FROM t1 GROUP BY key1, key2 HAVING key1 = 'a';
-"Explained Query (fast path):  Project (#3, #1)    Filter (#0 = \"a\")      Map (\"a\")        ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Project (#3, #1)    Filter (#0 = \"a\")      Map (\"a\")        ReadExistingIndex t1_primary_idxUsed Indexes:  - t1_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_primary_idx on t1(key1, key2) is too wide to use for literal equalities `key1 = \"a\"`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (key1)."
 
 # Optimization not possible - explicit distinct is present in planFor certain types of tests the 
 
@@ -189,7 +189,7 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema}
 "Explained Query (fast path):  ReadExistingIndex t1_pkne_primary_idxUsed Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT key1, key2 FROM t1_pkne GROUP BY key1, key2 HAVING key1 = 'a';
-"Explained Query (fast path):  Project (#3, #1)    Filter (#0 = \"a\")      Map (\"a\")        ReadExistingIndex t1_pkne_primary_idxUsed Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Project (#3, #1)    Filter (#0 = \"a\")      Map (\"a\")        ReadExistingIndex t1_pkne_primary_idxUsed Indexes:  - t1_pkne_primary_idx (*** full scan ***)Notices:  - Notice: Index t1_pkne_primary_idx on t1_pkne(key1, key2) is too wide to use for literal equalities `key1 = \"a\"`.    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (key1)."
 
 # Optimization not possible - explicit distinct is present in plan
 

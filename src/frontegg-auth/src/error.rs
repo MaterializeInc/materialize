@@ -19,6 +19,8 @@ pub enum Error {
     InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
     #[error("authentication token exchange failed: {0}")]
     ReqwestError(#[from] reqwest::Error),
+    #[error("middleware programming error: {0}")]
+    MiddlewareError(anyhow::Error),
     #[error("authentication token expired")]
     TokenExpired,
     #[error("unauthorized organization")]
@@ -27,4 +29,13 @@ pub enum Error {
     WrongEmail,
     #[error("request timeout")]
     Timeout(#[from] tokio::time::error::Elapsed),
+}
+
+impl From<reqwest_middleware::Error> for Error {
+    fn from(value: reqwest_middleware::Error) -> Self {
+        match value {
+            reqwest_middleware::Error::Middleware(e) => Error::MiddlewareError(e),
+            reqwest_middleware::Error::Reqwest(e) => Error::ReqwestError(e),
+        }
+    }
 }

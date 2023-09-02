@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import Optional
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
@@ -111,7 +110,7 @@ def workflow_source_resumption(c: Composition) -> None:
         # )
 
 
-def find_source_resume_upper(c: Composition, partition_id: str) -> Optional[int]:
+def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
     metrics = c.exec("clusterd", "curl", "localhost:6878/metrics", capture=True).stdout
 
     if metrics is None:

@@ -65,13 +65,14 @@ Character
 Characteristics
 Check
 Client
-Clock
 Close
 Cluster
 Clusters
 Coalesce
 Collate
+Column
 Columns
+Comment
 Commit
 Committed
 Compaction

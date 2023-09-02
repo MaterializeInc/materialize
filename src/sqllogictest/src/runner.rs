@@ -954,6 +954,7 @@ impl<'a> RunnerInner<'a> {
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
+        let host_name = format!("localhost:{}", listeners.http_local_addr().port());
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -1012,6 +1013,7 @@ impl<'a> RunnerInner<'a> {
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
+            http_host_name: Some(host_name),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1600,7 +1602,7 @@ impl<'a> RunnerInner<'a> {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let addr = if matches!(user, Some("mz_system") | Some("mz_introspection")) {
+                    let addr = if matches!(user, Some("mz_system") | Some("mz_support")) {
                         self.internal_server_addr
                     } else {
                         self.server_addr
@@ -2234,7 +2236,9 @@ fn generate_view_sql(
 /// so we may end up deriving `None` for the number of attributes
 /// as a conservative approximation.
 fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
-    let Some((projection, _)) = find_projection(body) else { return None };
+    let Some((projection, _)) = find_projection(body) else {
+        return None;
+    };
     derive_num_attributes_from_projection(projection)
 }
 
@@ -2256,7 +2260,9 @@ fn derive_order_by(
     Vec<SelectItem<Raw>>,
     Option<Distinct<Raw>>,
 ) {
-    let Some((projection, distinct)) = find_projection(body) else { return (vec![], vec![], None) };
+    let Some((projection, distinct)) = find_projection(body) else {
+        return (vec![], vec![], None);
+    };
     let (view_order_by, extra_columns) = derive_order_by_from_projection(projection, order_by);
     (view_order_by, extra_columns, distinct.clone())
 }
@@ -2284,7 +2290,9 @@ fn find_projection(body: &SetExpr<Raw>) -> Option<(&Vec<SelectItem<Raw>>, &Optio
 fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
     let mut num_attributes = 0usize;
     for item in projection.iter() {
-        let SelectItem::Expr { expr, .. } = item else { return None };
+        let SelectItem::Expr { expr, .. } = item else {
+            return None;
+        };
         match expr {
             Expr::QualifiedWildcard(..) | Expr::WildcardAccess(..) => {
                 return None;

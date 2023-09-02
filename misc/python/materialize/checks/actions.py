@@ -9,7 +9,7 @@
 
 import time
 from inspect import getframeinfo, stack
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from materialize.checks.executors import Executor
 
@@ -32,7 +32,7 @@ class Testdrive(Action):
 
     def __init__(self, input: str) -> None:
         self.input = input
-        self.handle: Optional[Any] = None
+        self.handle: Any | None = None
         self.caller = getframeinfo(stack()[1][0])
 
     def execute(self, e: Executor) -> None:
@@ -73,7 +73,7 @@ class Manipulate(Action):
     def __init__(
         self,
         scenario: "Scenario",
-        phase: Optional[int] = None,
+        phase: int | None = None,
     ) -> None:
         assert phase is not None
         self.phase = phase - 1

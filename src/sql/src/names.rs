@@ -18,6 +18,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_proto::ProtoType;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
@@ -1127,6 +1128,41 @@ impl SystemObjectId {
 impl From<ObjectId> for SystemObjectId {
     fn from(id: ObjectId) -> Self {
         SystemObjectId::Object(id)
+    }
+}
+
+/// Comments can be applied to multiple kinds of objects (e.g. Tables and Role), so we need a way
+/// to represent these different types and their IDs (e.g. [`GlobalId`] and [`RoleId`]), as well as
+/// the inner kind of object that is represented, e.g. [`GlobalId`] is used to identify both Tables
+/// and Views. No other kind of ID encapsulates all of this, hence this new "*Id" type.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum CommentObjectId {
+    Table(GlobalId),
+    View(GlobalId),
+}
+
+impl RustType<proto::comment_key::Object> for CommentObjectId {
+    fn into_proto(&self) -> proto::comment_key::Object {
+        match self {
+            CommentObjectId::Table(global_id) => {
+                proto::comment_key::Object::Table(global_id.into_proto())
+            }
+            CommentObjectId::View(global_id) => {
+                proto::comment_key::Object::View(global_id.into_proto())
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::comment_key::Object) -> Result<Self, TryFromProtoError> {
+        let id = match proto {
+            proto::comment_key::Object::Table(global_id) => {
+                CommentObjectId::Table(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::View(global_id) => {
+                CommentObjectId::View(global_id.into_rust()?)
+            }
+        };
+        Ok(id)
     }
 }
 

@@ -5076,19 +5076,21 @@ EOF
 
 query IIT
 SELECT 1 + lag(a, 1, 0) OVER (ORDER BY a), *
-FROM foo;
+FROM foo
+ORDER BY a;
 ----
+1  0  zero
 1  1  one
 2  2  two
-1  0  zero
 3  3  three
 
 query IT
 SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
-FROM foo;
+FROM foo
+ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a);
 ----
-2  two
 0  zero
+2  two
 3  three
 
 query IIT nosort
@@ -5250,11 +5252,12 @@ ORDER BY lag(a) OVER (ORDER BY a);
 
 query ITI
 SELECT a, b, lag(a) OVER (ORDER BY lag(a) OVER (ORDER BY a))
-FROM foo;
+FROM foo
+ORDER BY a;
 ----
+0  zero  3
 1  one  NULL
 2  two  1
-0  zero  3
 3  three  2
 
 # Window function inside CASE WHEN
@@ -5296,11 +5299,12 @@ SELECT
     ELSE
       42
     END
-FROM bools;
+FROM bools
+ORDER BY x;
 ----
+true  0  2
 false  1  42
 false  2  42
-true  0  2
 
 statement ok
 CREATE TABLE tcm(
@@ -5450,18 +5454,20 @@ ORDER BY length(b);
 5  3  0
 
 query III
-(SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
+SELECT * FROM
+((SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
  FROM foo
  GROUP BY length(b))
 UNION
 (SELECT length(b), sum(a), lag(sum(a)) OVER (ORDER BY length(b))
  FROM foo
- GROUP BY length(b));
+ GROUP BY length(b))) r(x, y, z)
+ORDER BY x, y, z;
 ----
-3  3  NULL
-4  0  NULL
 3  3  0
+3  3  NULL
 4  0  3
+4  0  NULL
 5  3  0
 5  3  3
 

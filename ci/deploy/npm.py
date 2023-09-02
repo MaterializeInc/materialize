@@ -15,7 +15,6 @@ import shutil
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import requests
 from semver.version import VersionInfo
@@ -39,7 +38,7 @@ class Version:
 
 
 def generate_version(
-    crate_version: VersionInfo, build_identifier: Optional[int]
+    crate_version: VersionInfo, build_identifier: int | None
 ) -> Version:
     node_version = str(crate_version)
     is_development = False
@@ -76,7 +75,7 @@ def build_package(version: Version, crate_path: Path) -> Path:
 
 
 def release_package(version: Version, package_path: Path) -> None:
-    with open(package_path / "package.json", "r") as package_file:
+    with open(package_path / "package.json") as package_file:
         package = json.load(package_file)
     name = package["name"]
     dist_tag = "dev" if version.is_development else "latest"

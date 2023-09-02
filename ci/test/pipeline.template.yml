@@ -659,7 +659,9 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
-          args: [--scenario=KafkaUpsertUnique]
+          args:
+            - --scenario=KafkaUpsertUnique
+            - --this-params=variable_length_row_encoding=false
     coverage: skip
 
   - id: deploy-website
@@ -717,6 +719,8 @@ steps:
     if: build.tag != "" && build.branch != "main" && build.branch !~ /^v.*\..*\$/
 
     inputs:
+      # Changes to dependencies
+      - Cargo.lock
       # Changes to the SQL syntax
       - src/sql-parser/src
       - src/expr-parser/src

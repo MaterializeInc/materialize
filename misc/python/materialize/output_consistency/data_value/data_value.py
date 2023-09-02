@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -29,7 +28,7 @@ class DataValue(LeafExpression):
         value: str,
         data_type: DataType,
         value_identifier: str,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ):
         column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
         super().__init__(
@@ -53,7 +52,7 @@ class DataValue(LeafExpression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
 
     def __str__(self) -> str:

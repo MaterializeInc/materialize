@@ -125,6 +125,7 @@ impl TypeCategory {
             | ParamType::ListAny
             | ParamType::ListAnyCompatible
             | ParamType::ListElementAnyCompatible
+            | ParamType::Internal
             | ParamType::NonVecAny
             | ParamType::MapAny
             | ParamType::MapAnyCompatible
@@ -618,7 +619,7 @@ impl ParamList {
             ParamList::Exact(p) => p.iter().map(|p| p.name()).collect::<Vec<_>>(),
             ParamList::Variadic { leading, trailing } => leading
                 .iter()
-                .chain([trailing].into_iter())
+                .chain([trailing])
                 .map(|p| p.name())
                 .collect::<Vec<_>>(),
         }
@@ -717,6 +718,9 @@ pub enum ParamType {
     /// this type into generating non-existent range types (e.g. ranges of
     /// floats) that will panic.
     RangeAnyCompatible,
+    /// A psuedotype indicating that the function is only meant to be called
+    /// internally by the database system.
+    Internal,
 }
 
 impl ParamType {
@@ -732,6 +736,7 @@ impl ParamType {
             MapAny | MapAnyCompatible => matches!(t, Map { .. }),
             RangeAny | RangeAnyCompatible => matches!(t, Range { .. }),
             NonVecAny => !t.is_vec(),
+            Internal => false,
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
             RecordAny => matches!(t, Record { .. }),
         }
@@ -785,7 +790,7 @@ impl ParamType {
             | RecordAny
             | RangeAny
             | RangeAnyCompatible => true,
-            Any | Plain(_)  => false,
+            Any | Internal | Plain(_)  => false,
         }
     }
 
@@ -803,6 +808,7 @@ impl ParamType {
             ParamType::AnyElement => "anyelement",
             ParamType::ArrayAny => "anyarray",
             ParamType::ArrayAnyCompatible => "anycompatiblearray",
+            ParamType::Internal => "internal",
             ParamType::ListAny => "list",
             ParamType::ListAnyCompatible => "anycompatiblelist",
             // ListElementAnyCompatible is not identical to AnyCompatible, but reusing its ID appears harmless
@@ -1552,6 +1558,7 @@ fn coerce_args_to_types(
                 _ => cexpr.type_as_any(ecx)?,
             },
             Plain(ty) => do_convert(cexpr, ty)?,
+            Internal => return Err(PlanError::InternalFunctionCall),
             p => {
                 let target = polymorphic_solution
                     .target_for_param_type(p)
@@ -2715,6 +2722,99 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!() => UnmaterializableFunc::Version => String, 89;
         },
 
+        // Internal conversion stubs.
+        "boolrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("boolrecv")) => Bool, 2436;
+        },
+        "textrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("textrecv")) => String, 2414;
+        },
+        "anyarray_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("anyarray_recv")) => ArrayAny, 2502;
+        },
+        "bytearecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("bytearecv")) => Bytes, 2412;
+        },
+        "bpcharrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("bpcharrecv")) => Char, 2430;
+        },
+        "charrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("charrecv")) => PgLegacyChar, 2434;
+        },
+        "date_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("date_recv")) => Date, 2468;
+        },
+        "float4recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("float4recv")) => Float32, 2424;
+        },
+        "float8recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("float8recv")) => Float64, 2426;
+        },
+        "int4recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("int4recv")) => Int32, 2406;
+        },
+        "int8recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("int8recv")) => Int64, 2408;
+        },
+        "interval_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("interval_recv")) => Interval, 2478;
+        },
+        "jsonb_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("jsonb_recv")) => Jsonb, 3805;
+        },
+        "namerecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("namerecv")) => PgLegacyName, 2422;
+        },
+        "numeric_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("numeric_recv")) => Numeric, 2460;
+        },
+        "oidrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("oidrecv")) => Oid, 2418;
+        },
+        "record_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("recordrerecord_recvcv")) => RecordAny, 2402;
+        },
+        "regclassrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("regclassrecv")) => RegClass, 2452;
+        },
+        "regprocrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("regprocrecv")) => RegProc, 2444;
+        },
+        "regtyperecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("regtyperecv")) => RegType, 2454;
+        },
+        "int2recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("int2recv")) => Int16, 2404;
+        },
+        "time_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("time_recv")) => Time, 2470;
+        },
+        "timestamp_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("timestamp_recv")) => Timestamp, 2474;
+        },
+        "timestamptz_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("timestamptz_recv")) => TimestampTz, 2476;
+        },
+        "uuid_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("uuid_recv")) => Uuid, 2961;
+        },
+        "varcharrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("varcharrecv")) => VarChar, 2432;
+        },
+        "int2vectorrecv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("int2vectorrecv")) => Int2Vector, 2410;
+        },
+        "anycompatiblearray_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("anycompatiblearray_recv")) => ArrayAnyCompatible, 5090;
+        },
+        "array_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("array_recv")) => ArrayAny, 2400;
+        },
+        "range_recv" => Scalar {
+            params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("range_recv")) => RangeAny, 3836;
+        },
+
+
         // Aggregates.
         "array_agg" => Aggregate {
             params!(NonVecAny) => Operation::unary_ordered(|ecx, e, order_by| {
@@ -3108,6 +3208,24 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "decode" => Scalar {
             params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
+        },
+        "regexp_split_to_array" => Scalar {
+            params!(String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2767;
+            params!(String, String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2768;
+        },
+        "regexp_split_to_table" => Table {
+            params!(String, String) => sql_impl_table_func("
+                SELECT unnest(regexp_split_to_array($1, $2))
+            ") => ReturnType::set_of(String.into()), 2765;
+            params!(String, String, String) => sql_impl_table_func("
+                SELECT unnest(regexp_split_to_array($1, $2, $3))
+            ") => ReturnType::set_of(String.into()), 2766;
+        },
+        "regexp_replace" => Scalar {
+            params!(String, String, String) => VariadicFunc::RegexpReplace => String, 2284;
+            params!(String, String, String, String) => VariadicFunc::RegexpReplace => String, 2285;
+            // TODO: PostgreSQL supports additional five and six argument forms of this function which
+            // allow controlling where to start the replacement and how many replacements to make.
         }
     };
 

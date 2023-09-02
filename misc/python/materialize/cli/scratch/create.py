@@ -11,7 +11,7 @@ import argparse
 import datetime
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any
 
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
@@ -28,7 +28,7 @@ from materialize.scratch import (
 MAX_AGE_DAYS = 1.5
 
 
-def multi_json(s: str) -> List[Dict[Any, Any]]:
+def multi_json(s: str) -> list[dict[Any, Any]]:
     """Read zero or more JSON objects from a string,
     without requiring each of them to be on its own line.
 

@@ -13,7 +13,6 @@ import sys
 import time
 import uuid
 from textwrap import dedent
-from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -43,10 +42,8 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach
-from materialize.mzcompose.services import Kafka as KafkaService
-from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
+    Cockroach,
     Materialized,
     Minio,
     Postgres,
@@ -55,6 +52,8 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
+from materialize.mzcompose.services import Kafka as KafkaService
+from materialize.mzcompose.services import Kgen as KgenService
 from materialize.version_list import VersionsFromDocs
 
 #
@@ -70,7 +69,7 @@ def make_filter(args: argparse.Namespace) -> Filter:
         return FilterFirst()
 
 
-def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCondition]:
+def make_termination_conditions(args: argparse.Namespace) -> list[TerminationCondition]:
     return [
         NormalDistributionOverlap(threshold=0.95),
         ProbForMin(threshold=0.90),
@@ -78,7 +77,7 @@ def make_termination_conditions(args: argparse.Namespace) -> List[TerminationCon
     ]
 
 
-def make_aggregation_class() -> Type[Aggregation]:
+def make_aggregation_class() -> type[Aggregation]:
     return MinAggregation
 
 
@@ -106,8 +105,8 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario: Type[Scenario], args: argparse.Namespace
-) -> List[Comparator]:
+    c: Composition, scenario: type[Scenario], args: argparse.Namespace
+) -> list[Comparator]:
     name = scenario.__name__
     print(f"--- Now benchmarking {name} ...")
 

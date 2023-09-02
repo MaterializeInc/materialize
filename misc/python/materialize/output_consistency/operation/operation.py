@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Dict, List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
@@ -35,11 +34,11 @@ class DbOperationOrFunction:
 
     def __init__(
         self,
-        params: List[OperationParam],
+        params: list[OperationParam],
         min_param_count: int,
         max_param_count: int,
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
@@ -55,7 +54,7 @@ class DbOperationOrFunction:
         self.min_param_count = min_param_count
         self.max_param_count = max_param_count
         self.return_type_spec = return_type_spec
-        self.args_validators: Set[OperationArgsValidator] = args_validators
+        self.args_validators: set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
         self.is_enabled = is_enabled
@@ -74,18 +73,18 @@ class DbOperationOrFunction:
             )
 
     def derive_characteristics(
-        self, args: List[Expression]
-    ) -> Set[ExpressionCharacteristics]:
+        self, args: list[Expression]
+    ) -> set[ExpressionCharacteristics]:
         # a non-trivial implementation will be helpful for nested expressions
         return set()
 
     def __str__(self) -> str:
         raise NotImplementedError
 
-    def try_resolve_exact_data_type(self, args: List[Expression]) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self, args: list[Expression]) -> DataType | None:
         return None
 
-    def is_expected_to_cause_db_error(self, args: List[Expression]) -> bool:
+    def is_expected_to_cause_db_error(self, args: list[Expression]) -> bool:
         """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
         data_type)
         """
@@ -111,9 +110,9 @@ class DbOperation(DbOperationOrFunction):
     def __init__(
         self,
         pattern: str,
-        params: List[OperationParam],
+        params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
     ):
@@ -149,9 +148,9 @@ class DbFunction(DbOperationOrFunction):
     def __init__(
         self,
         function_name: str,
-        params: List[OperationParam],
+        params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
@@ -170,7 +169,7 @@ class DbFunction(DbOperationOrFunction):
         )
         self.function_name_in_lower_case = function_name.lower()
 
-    def validate_params(self, params: List[OperationParam]) -> None:
+    def validate_params(self, params: list[OperationParam]) -> None:
         optional_param_seen = False
 
         for param in params:
@@ -180,7 +179,7 @@ class DbFunction(DbOperationOrFunction):
             if param.optional:
                 optional_param_seen = True
 
-    def get_min_param_count(self, params: List[OperationParam]) -> int:
+    def get_min_param_count(self, params: list[OperationParam]) -> int:
         for index, param in enumerate(params):
             if param.optional:
                 return index
@@ -200,10 +199,10 @@ class DbFunctionWithCustomPattern(DbFunction):
     def __init__(
         self,
         function_name: str,
-        pattern_per_param_count: Dict[int, str],
-        params: List[OperationParam],
+        pattern_per_param_count: dict[int, str],
+        params: list[OperationParam],
         return_type_spec: ReturnTypeSpec,
-        args_validators: Optional[Set[OperationArgsValidator]] = None,
+        args_validators: set[OperationArgsValidator] | None = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,

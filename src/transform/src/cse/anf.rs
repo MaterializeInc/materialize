@@ -27,7 +27,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 #[derive(Default, Debug)]
 pub struct ANF;
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 impl crate::Transform for ANF {
     #[tracing::instrument(
@@ -39,7 +39,7 @@ impl crate::Transform for ANF {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _args: TransformArgs,
+        _ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.transform_without_trace(relation);
         mz_repr::explain::trace_plan(&*relation);

@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from datetime import datetime
-from typing import List, Optional
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -46,7 +45,7 @@ class QueryExecutionManager:
 
     def __init__(
         self,
-        evaluation_strategies: List[EvaluationStrategy],
+        evaluation_strategies: list[EvaluationStrategy],
         config: ConsistencyTestConfiguration,
         executor: SqlExecutor,
         comparator: ResultComparator,
@@ -62,7 +61,7 @@ class QueryExecutionManager:
     def setup_database_objects(
         self,
         input_data: ConsistencyTestInputData,
-        evaluation_strategies: List[EvaluationStrategy],
+        evaluation_strategies: list[EvaluationStrategy],
     ) -> None:
         self.output_printer.start_section("Setup code", collapsed=True)
         for strategy in evaluation_strategies:
@@ -145,8 +144,8 @@ class QueryExecutionManager:
         query_template: QueryTemplate,
         query_index: int,
         query_id_prefix: str,
-        evaluation_strategies: List[EvaluationStrategy],
-    ) -> List[ValidationOutcome]:
+        evaluation_strategies: list[EvaluationStrategy],
+    ) -> list[ValidationOutcome]:
         query_no = query_index + 1
         query_id = f"{query_id_prefix}{query_no}"
         query_execution = QueryExecution(query_template, query_id)
@@ -212,8 +211,8 @@ class QueryExecutionManager:
         self,
         original_query_template: QueryTemplate,
         query_id: str,
-        evaluation_strategies: List[EvaluationStrategy],
-    ) -> List[ValidationOutcome]:
+        evaluation_strategies: list[EvaluationStrategy],
+    ) -> list[ValidationOutcome]:
         args_count = len(original_query_template.select_expressions)
 
         if args_count < 2:
@@ -263,7 +262,7 @@ class QueryExecutionManager:
         query_id: str,
         query_execution: QueryExecution,
         collapsed: bool,
-        status: Optional[str] = None,
+        status: str | None = None,
         flush: bool = False,
     ) -> None:
         status = "" if status is None else f" ({status})"
@@ -313,7 +312,7 @@ class QueryExecutionManager:
         )
 
         duration_info = ", ".join(
-            "{:.3f}".format(duration) for duration in query_execution.durations
+            f"{duration:.3f}" for duration in query_execution.durations
         )
         self.output_printer.print_info(f"Durations: {duration_info}")
 

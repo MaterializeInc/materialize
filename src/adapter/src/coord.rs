@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -111,9 +111,11 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
 };
+use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
@@ -298,7 +300,7 @@ pub struct SinkConnectionReady {
     pub id: GlobalId,
     pub oid: u32,
     pub create_export_token: CreateExportToken,
-    pub result: Result<StorageSinkConnection, AdapterError>,
+    pub result: Result<StorageSinkConnection<ReferencedConnection>, AdapterError>,
 }
 
 #[derive(Debug)]
@@ -325,6 +327,7 @@ pub enum RealTimeRecencyContext {
         in_immediate_multi_stmt_txn: bool,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
+        dataflow_metainfo: DataflowMetainfo,
     },
 }
 
@@ -395,6 +398,7 @@ pub struct PeekStageTimestamp {
     in_immediate_multi_stmt_txn: bool,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
+    dataflow_metainfo: DataflowMetainfo,
 }
 
 #[derive(Debug)]
@@ -414,6 +418,7 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
+    dataflow_metainfo: DataflowMetainfo,
 }
 
 /// An enum describing which cluster to run a statement on.
@@ -499,6 +504,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
 }
 
@@ -986,6 +992,9 @@ pub struct Coordinator {
 
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
+
+    /// Whether to start replicas with the new variable-length row encoding scheme.
+    variable_length_row_encoding: bool,
 }
 
 impl Coordinator {
@@ -1029,6 +1038,7 @@ impl Coordinator {
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
                 },
+                self.variable_length_row_encoding,
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let role = instance.role();
@@ -1178,15 +1188,20 @@ impl Coordinator {
         let mut collections_to_create = Vec::new();
 
         fn source_desc<T>(
+            catalog: &Catalog,
             source_status_collection_id: Option<GlobalId>,
             source: &Source,
         ) -> CollectionDescription<T> {
             let (data_source, status_collection_id) = match &source.data_source {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => (
-                    DataSource::Ingestion(ingestion.clone()),
-                    source_status_collection_id,
-                ),
+                DataSourceDesc::Ingestion(ingestion) => {
+                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+
+                    (
+                        DataSource::Ingestion(ingestion.clone()),
+                        source_status_collection_id,
+                    )
+                }
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (
                     DataSource::Other(DataSourceOther::Source),
@@ -1208,33 +1223,34 @@ impl Coordinator {
             }
         }
 
+        let migratable_collections = entries
+            .iter()
+            .filter_map(|entry| match entry.item() {
+                CatalogItem::Source(source) => Some((
+                    entry.id(),
+                    source_desc(self.catalog(), source_status_collection_id, source),
+                )),
+                CatalogItem::Table(table) => {
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
+                    Some((entry.id(), collection_desc))
+                }
+                CatalogItem::MaterializedView(mview) => {
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
+                    Some((entry.id(), collection_desc))
+                }
+                _ => None,
+            })
+            .collect();
+
         self.controller
             .storage
-            .migrate_collections(
-                entries
-                    .iter()
-                    .filter_map(|entry| match entry.item() {
-                        CatalogItem::Source(source) => {
-                            Some((entry.id(), source_desc(source_status_collection_id, source)))
-                        }
-                        CatalogItem::Table(table) => {
-                            let collection_desc = CollectionDescription::from_desc(
-                                table.desc.clone(),
-                                DataSourceOther::TableWrites,
-                            );
-                            Some((entry.id(), collection_desc))
-                        }
-                        CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = CollectionDescription::from_desc(
-                                mview.desc.clone(),
-                                DataSourceOther::Compute,
-                            );
-                            Some((entry.id(), collection_desc))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-            )
+            .migrate_collections(migratable_collections)
             .await?;
 
         // Do a first pass looking for collections to create so we can call
@@ -1254,8 +1270,10 @@ impl Coordinator {
                 // User sources can have dependencies, so do avoid them in the
                 // batch.
                 CatalogItem::Source(source) if entry.id().is_system() => {
-                    collections_to_create
-                        .push((entry.id(), source_desc(source_status_collection_id, source)));
+                    collections_to_create.push((
+                        entry.id(),
+                        source_desc(self.catalog(), source_status_collection_id, source),
+                    ));
                 }
                 _ => {
                     // No collections to create.
@@ -1296,7 +1314,8 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // System sources were created above, add others here.
                     if !entry.id().is_system() {
-                        let source_desc = source_desc(source_status_collection_id, source);
+                        let source_desc =
+                            source_desc(self.catalog(), source_status_collection_id, source);
                         self.controller
                             .storage
                             .create_collections(vec![(entry.id(), source_desc)])
@@ -1328,15 +1347,28 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        let mut dataflow = self
+                        let (mut df, df_metainfo) = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
+
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_index_dataflow` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+
                         let as_of = self.bootstrap_index_as_of(
-                            &dataflow,
+                            &df,
                             idx.cluster_id,
                             idx.is_retained_metrics_object,
                         );
-                        dataflow.set_as_of(as_of);
+                        df.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
@@ -1344,11 +1376,14 @@ impl Coordinator {
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
-                            .extend(dataflow.export_ids());
-                        let dataflow_plan = self.must_finalize_dataflow(dataflow, idx.cluster_id);
+                            .extend(df.export_ids());
+
+                        let df = self.must_finalize_dataflow(df, idx.cluster_id);
+                        self.catalog_mut().set_physical_plan(entry.id(), df.clone());
+
                         self.controller
                             .active_compute()
-                            .create_dataflow(idx.cluster_id, dataflow_plan)
+                            .create_dataflow(idx.cluster_id, df)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
@@ -1379,7 +1414,7 @@ impl Coordinator {
                         .to_string();
 
                     let mut builder = self.dataflow_builder(mview.cluster_id);
-                    let mut df = builder.build_materialized_view(
+                    let (mut df, df_metainfo) = builder.build_materialized_view(
                         entry.id(),
                         internal_view_id,
                         debug_name,
@@ -1392,10 +1427,12 @@ impl Coordinator {
                     // parse_item).
                     //
                     // However, it's not clear how exactly to change
-                    // `load_catalog_items` to accomodate for the
+                    // `load_catalog_items` to accommodate for the
                     // `build_materialized_view` call above.
                     self.catalog_mut()
                         .set_optimized_plan(entry.id(), df.clone());
+                    self.catalog_mut()
+                        .set_dataflow_metainfo(entry.id(), df_metainfo);
 
                     // The 'as_of' field of the dataflow changes after restart
                     let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
@@ -1425,6 +1462,9 @@ impl Coordinator {
                         .prepare_export(id, sink.from)
                         .unwrap_or_terminate("cannot fail to prepare export");
 
+                    let referenced_builder = builder.clone();
+                    let builder = builder.into_inline_connection(self.catalog().state());
+
                     task::spawn(
                         || format!("sink_connection_ready:{}", sink.from),
                         async move {
@@ -1432,10 +1472,12 @@ impl Coordinator {
                                 .max_tries(usize::MAX)
                                 .clamp_backoff(Duration::from_secs(60 * 10))
                                 .retry_async(|_| async {
+                                    let referenced_builder = referenced_builder.clone();
                                     let builder = builder.clone();
                                     let connection_context = connection_context.clone();
                                     mz_storage_client::sink::build_sink_connection(
                                         builder,
+                                        referenced_builder,
                                         connection_context,
                                     )
                                     .await
@@ -1953,6 +1995,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
+        http_host_name,
         tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
@@ -2007,6 +2050,7 @@ pub async fn serve(
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
+            http_host_name,
         })
         .await?;
     let session_id = catalog.config().session_id;
@@ -2044,6 +2088,11 @@ pub async fn serve(
             }
 
             let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+            let variable_length_row_encoding = catalog
+                .system_config()
+                .variable_length_row_encoding_DANGEROUS();
+            mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+                .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
@@ -2077,6 +2126,7 @@ pub async fn serve(
                 metrics,
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
+                variable_length_row_encoding,
             };
             let bootstrap = handle.block_on(async {
                 coord

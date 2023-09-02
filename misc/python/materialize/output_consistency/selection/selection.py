@@ -7,13 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, Optional, Set, TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
 
 class SelectionByKey(Generic[T]):
-    def __init__(self, keys: Optional[Set[T]] = None):
+    def __init__(self, keys: set[T] | None = None):
         self.keys = keys
 
     def includes_all(self) -> bool:
@@ -36,7 +36,7 @@ class SelectionByKey(Generic[T]):
 class DataRowSelection(SelectionByKey[int]):
     """A selection of table rows, useful when collecting involved characteristics in vertical storage layout"""
 
-    def __init__(self, row_indices: Optional[Set[int]] = None):
+    def __init__(self, row_indices: set[int] | None = None):
         """
         :param row_indices: index of selected rows; all rows if not specified
         """
@@ -44,7 +44,7 @@ class DataRowSelection(SelectionByKey[int]):
 
 
 class QueryColumnByIndexSelection(SelectionByKey[int]):
-    def __init__(self, column_indices: Optional[Set[int]] = None):
+    def __init__(self, column_indices: set[int] | None = None):
         """
         :param column_indices: name of selected columns; all columns if not specified
         """
@@ -52,7 +52,7 @@ class QueryColumnByIndexSelection(SelectionByKey[int]):
 
 
 class TableColumnByNameSelection(SelectionByKey[str]):
-    def __init__(self, column_names: Optional[Set[str]] = None):
+    def __init__(self, column_names: set[str] | None = None):
         """
         :param column_names: name of selected columns; all columns if not specified
         """

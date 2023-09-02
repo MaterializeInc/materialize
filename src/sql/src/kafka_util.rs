@@ -103,6 +103,8 @@ pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
 
 impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
     type Error = PlanError;
+    // We are in a macro, so allow calling a closure immediately.
+    #[allow(clippy::redundant_closure_call)]
     fn try_from(
         KafkaConfigOptionExtracted {
             acks,

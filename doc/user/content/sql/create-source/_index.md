@@ -217,7 +217,7 @@ Debezium may produce duplicate records if the connector is interrupted. Material
 
 ### Sizing a source
 
-Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU and memory available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
+Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU, memory, and disk available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
 
 It's a good idea to size up a source when:
 
@@ -227,9 +227,13 @@ It's a good idea to size up a source when:
 
   * You are using the [upsert envelope](#upsert-envelope) or [Debezium
     envelope](#debezium-envelope), and your source contains **many unique
-    keys**. These envelopes must keep in-memory state proportional to the number
-    of unique keys in the upstream external system. Larger sizes can store more
-    unique keys.
+    keys**. These envelopes maintain state proportional to the number of unique
+    keys in the upstream external system. Larger sizes can store more unique
+    keys.
+
+    In this case, it's also possible to enable _spill to disk_ to accommodate
+    larger state sizes without sizing up. See [`Disk-attached replicas`](/sql/create-cluster-replica#disk-attached-replicas)
+    for more details.
 
 Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Set
+from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -27,7 +27,7 @@ class Expression:
 
     def __init__(
         self,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
         is_aggregate: bool,
         is_expect_error: bool,
@@ -47,23 +47,23 @@ class Expression:
     def resolve_return_type_category(self) -> DataTypeCategory:
         raise NotImplementedError
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         raise NotImplementedError
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
+    ) -> set[ExpressionCharacteristics]:
         """Get all involved characteristics through recursion"""
         raise NotImplementedError
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         raise NotImplementedError
 
     def __str__(self) -> str:
         raise NotImplementedError
 
     def has_all_characteristics(
-        self, characteristics: Set[ExpressionCharacteristics]
+        self, characteristics: set[ExpressionCharacteristics]
     ) -> bool:
         """True if this expression itself exhibits all characteristics. Child expressions are not considered."""
         overlap = self.own_characteristics & characteristics
@@ -71,7 +71,7 @@ class Expression:
 
     def has_any_characteristic(
         self,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> bool:
         """True if this expression itself exhibits any of the characteristics. Child expressions are not considered."""
         overlap = self.own_characteristics & characteristics
@@ -99,7 +99,7 @@ class LeafExpression(Expression):
         self,
         column_name: str,
         data_type: DataType,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
         is_aggregate: bool,
         is_expect_error: bool,
@@ -111,7 +111,7 @@ class LeafExpression(Expression):
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         return self.data_type
 
     def to_sql(self, is_root_level: bool) -> str:
@@ -120,7 +120,7 @@ class LeafExpression(Expression):
     def to_sql_as_column(self) -> str:
         return self.column_name
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         return [self]
 
     def is_leaf(self) -> bool:

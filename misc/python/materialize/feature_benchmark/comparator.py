@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, List, Optional, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType
 
@@ -19,7 +19,7 @@ class Comparator(Generic[T]):
         self.name = name
         self.type = type
         self.threshold = threshold
-        self._points: List[T] = []
+        self._points: list[T] = []
 
     def append(self, point: T) -> None:
         self._points.append(point)
@@ -45,7 +45,7 @@ class Comparator(Generic[T]):
     def is_regression(self) -> bool:
         assert False
 
-    def ratio(self) -> Optional[float]:
+    def ratio(self) -> float | None:
         assert False
 
     def human_readable(self) -> str:
@@ -57,8 +57,8 @@ class SuccessComparator(Comparator[float]):
         return False
 
 
-class RelativeThresholdComparator(Comparator[Optional[float]]):
-    def ratio(self) -> Optional[float]:
+class RelativeThresholdComparator(Comparator[float | None]):
+    def ratio(self) -> float | None:
         if self._points[0] is None or self._points[1] is None:
             return None
         else:
