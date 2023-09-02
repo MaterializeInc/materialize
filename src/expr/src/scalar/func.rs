@@ -11,6 +11,7 @@
 // source code is subject to the terms of the PostgreSQL license, a copy of
 // which can be found in the LICENSE file at the root of this repository.
 
+use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
@@ -2088,6 +2089,33 @@ fn regexp_split_to_array<'a>(
         found.into_iter().map(Datum::String),
     )?;
     Ok(temp_storage.push_unary_row(row))
+}
+
+fn regexp_replace<'a>(
+    source: Datum<'a>,
+    pattern: Datum<'a>,
+    replacement: Datum<'a>,
+    flags: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let source = source.unwrap_str();
+    let pattern = pattern.unwrap_str();
+    let replacement = replacement.unwrap_str();
+    let flags = flags.unwrap_str();
+    // 'g' means to replace all instead of the first. Use a Cow to avoid allocating in the fast
+    // path. We could switch build_regex to take an iter which would also achieve that.
+    let (n, flags) = if flags.contains('g') {
+        let flags = flags.replace('g', "");
+        (0, Cow::Owned(flags))
+    } else {
+        (1, Cow::Borrowed(flags))
+    };
+    let regexp = build_regex(pattern, &flags)?;
+    let replaced = match regexp.replacen(source, n, replacement) {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(s) => temp_storage.push_string(s),
+    };
+    Ok(Datum::String(replaced))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -7305,6 +7333,7 @@ pub enum VariadicFunc {
     },
     TimezoneTime,
     RegexpSplitToArray,
+    RegexpReplace,
 }
 
 impl VariadicFunc {
@@ -7405,6 +7434,14 @@ impl VariadicFunc {
                 };
                 regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
             }
+            VariadicFunc::RegexpReplace => {
+                let flags = if ds.len() == 3 {
+                    Datum::String("")
+                } else {
+                    ds[3]
+                };
+                regexp_replace(ds[0], ds[1], ds[2], flags, temp_storage)
+            }
         }
     }
 
@@ -7449,7 +7486,8 @@ impl VariadicFunc {
             | VariadicFunc::ArrayPosition
             | VariadicFunc::ArrayFill { .. }
             | VariadicFunc::TimezoneTime
-            | VariadicFunc::RegexpSplitToArray => false,
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::RegexpReplace => false,
         }
     }
 
@@ -7533,6 +7571,7 @@ impl VariadicFunc {
             RegexpSplitToArray => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
             }
+            RegexpReplace => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -7601,7 +7640,8 @@ impl VariadicFunc {
             | ArrayPosition
             | ArrayFill { .. }
             | TimezoneTime
-            | RegexpSplitToArray => false,
+            | RegexpSplitToArray
+            | RegexpReplace => false,
             Coalesce
             | Greatest
             | Least
@@ -7705,7 +7745,8 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffDate
             | VariadicFunc::DateDiffTime
             | VariadicFunc::TimezoneTime
-            | VariadicFunc::RegexpSplitToArray => false,
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::RegexpReplace => false,
         }
     }
 }
@@ -7761,6 +7802,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
             VariadicFunc::TimezoneTime => f.write_str("timezonet"),
             VariadicFunc::RegexpSplitToArray => f.write_str("regexp_split_to_array"),
+            VariadicFunc::RegexpReplace => f.write_str("regexp_replace"),
         }
     }
 }
@@ -7878,6 +7920,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
             VariadicFunc::TimezoneTime => TimezoneTime(()),
             VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
+            VariadicFunc::RegexpReplace => RegexpReplace(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7940,6 +7983,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 }),
                 TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
                 RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
+                RegexpReplace(()) => Ok(VariadicFunc::RegexpReplace),
             }
         } else {
             Err(TryFromProtoError::missing_field(
