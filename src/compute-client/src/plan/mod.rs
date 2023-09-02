@@ -808,7 +808,9 @@ impl RustType<ProtoPlan> for Plan {
                 input: proto.input.into_rust_if_some("ProtoPlanFlatMap::input")?,
                 func: proto.func.into_rust_if_some("ProtoPlanFlatMap::func")?,
                 exprs: proto.exprs.into_rust()?,
-                mfp_after: proto.mfp_after.into_rust_if_some("ProtoPlanFlatMap::mfp_after")?,
+                mfp_after: proto
+                    .mfp_after
+                    .into_rust_if_some("ProtoPlanFlatMap::mfp_after")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
             Join(proto) => Plan::Join {

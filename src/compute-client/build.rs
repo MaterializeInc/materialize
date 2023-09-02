@@ -104,7 +104,6 @@ fn main() {
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
-        .extern_path(".mz_repr.explain", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .extern_path(".mz_cluster_client", "::mz_cluster_client")

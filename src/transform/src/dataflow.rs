@@ -93,7 +93,7 @@ pub fn optimize_dataflow(
 
     optimize_dataflow_monotonic(dataflow)?;
 
-    prune_and_annotate_dataflow_index_imports(dataflow, indexes)?;
+    prune_and_annotate_dataflow_index_imports(dataflow, indexes, &mut dataflow_metainfo)?;
 
     mz_repr::explain::trace_plan(dataflow);
 
@@ -460,8 +460,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 }
 
 /// Restricts the indexes imported by `dataflow` to only the ones it needs.
-/// Additionally, it annotates each index import by how the index will be used, i.e., it fills in
-/// `IndexImport::usage_types`.
+/// It also adds to the `DataflowMetainfo` how each index will be used.
 ///
 /// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
@@ -477,6 +476,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 fn prune_and_annotate_dataflow_index_imports(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
+    dataflow_metainfo: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
     // Let's save the unique keys of the sources. This will inform which indexes to choose for full
     // scans. (We can't get this info from `source_imports`, because `source_imports` only has those
@@ -610,13 +610,13 @@ id: {}, key: {:?}",
     }
 
     // Annotate index imports by their usage types
+    dataflow_metainfo.index_usage_types = BTreeMap::new();
     for (
         index_id,
         IndexImport {
             desc: index_desc,
             typ: _,
             monotonic: _,
-            usage_types,
         },
     ) in dataflow.index_imports.iter_mut()
     {
@@ -637,16 +637,17 @@ id: {}, key: {:?}",
                 }
             }
         }
-        *usage_types = Some(new_usage_types);
+        if !new_usage_types.is_empty() {
+            dataflow_metainfo
+                .index_usage_types
+                .insert(*index_id, new_usage_types);
+        }
     }
 
     // Prune index imports to only those that are used
     dataflow
         .index_imports
-        .retain(|_, index_import| match &index_import.usage_types {
-            None => false,
-            Some(usage_types) => !usage_types.is_empty(),
-        });
+        .retain(|id, _index_import| dataflow_metainfo.index_usage_types.contains_key(id));
 
     mz_repr::explain::trace_plan(dataflow);
 
@@ -796,8 +797,8 @@ impl<'a> CollectIndexRequests<'a> {
                         }
                         JoinImplementation::Unimplemented => {
                             soft_panic_or_log!(
-                            "CollectIndexRequests encountered an Unimplemented join"
-                        );
+                                "CollectIndexRequests encountered an Unimplemented join"
+                            );
                         }
                     }
                 }
@@ -1034,12 +1035,16 @@ pub struct DataflowMetainfo {
     /// Notices that the optimizer wants to show to users.
     /// For pushing a new element, use `push_optimizer_notice_dedup`.
     pub optimizer_notices: Vec<OptimizerNotice>,
+    /// What kind of operation (full scan, lookup, ...) will access each index. Computed by
+    /// `prune_and_annotate_dataflow_index_imports`.
+    pub index_usage_types: BTreeMap<GlobalId, Vec<IndexUsageType>>,
 }
 
 impl Default for DataflowMetainfo {
     fn default() -> Self {
         DataflowMetainfo {
             optimizer_notices: Vec::new(),
+            index_usage_types: BTreeMap::new(),
         }
     }
 }

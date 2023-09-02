@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::explain::IndexUsageType;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_client::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
@@ -40,14 +39,14 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
     pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
-    /// (id of new index, description of index, relationtype of base source/view, monotonic)
+    /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
     /// dependencies of later objects on prior identifiers.
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
-    /// (id of new index, description of index, relationtype of base source/view)
+    /// (id of new index, description of index, relationtype of base source/view/table)
     pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
@@ -118,7 +117,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 desc,
                 typ,
                 monotonic,
-                usage_types: None,
             },
         );
     }
@@ -441,7 +439,6 @@ impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
                 desc,
                 typ,
                 monotonic,
-                usage_types,
             },
         ): (&'a GlobalId, &'a IndexImport),
     ) -> Self {
@@ -450,8 +447,6 @@ impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
             index_desc: Some(desc.into_proto()),
             typ: Some(typ.into_proto()),
             monotonic: monotonic.into_proto(),
-            usage_types: usage_types.as_ref().unwrap_or(&Vec::new()).into_proto(),
-            has_usage_types: usage_types.is_some(),
         }
     }
 
@@ -464,11 +459,6 @@ impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
                     .into_rust_if_some("ProtoIndexImport::index_desc")?,
                 typ: self.typ.into_rust_if_some("ProtoIndexImport::typ")?,
                 monotonic: self.monotonic.into_rust()?,
-                usage_types: if !self.has_usage_types.into_rust()? {
-                    None
-                } else {
-                    Some(self.usage_types.into_rust()?)
-                },
             },
         ))
     }
@@ -574,9 +564,8 @@ proptest::prop_compose! {
         desc in any::<IndexDesc>(),
         typ in any::<RelationType>(),
         monotonic in any::<bool>(),
-        usage_types in any::<Option<Vec<IndexUsageType>>>(),
     ) -> (GlobalId, IndexImport) {
-        (id, IndexImport {desc, typ, monotonic, usage_types})
+        (id, IndexImport {desc, typ, monotonic})
     }
 }
 
@@ -629,9 +618,6 @@ pub struct IndexImport {
     pub typ: RelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
-    /// What kind of operation (full scan, lookup, ...) will access the index. Filled by
-    /// `prune_and_annotate_dataflow_index_imports`.
-    pub usage_types: Option<Vec<IndexUsageType>>,
 }
 
 /// An association of a global identifier to an expression.
