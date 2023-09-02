@@ -1984,7 +1984,7 @@ pub struct Schema {
 }
 
 impl Schema {
-    fn to_durable_schema(self, database_id: Option<DatabaseId>) -> storage::Schema {
+    fn into_durable_schema(self, database_id: Option<DatabaseId>) -> storage::Schema {
         storage::Schema {
             id: self.id.into(),
             name: self.name.schema,
@@ -7115,7 +7115,7 @@ impl Catalog {
                                 tx.update_schema(
                                     database_id,
                                     schema_id,
-                                    schema.clone().to_durable_schema(database_id.clone()),
+                                    schema.clone().into_durable_schema(database_id),
                                 )?;
                                 builtin_table_updates.push(state.pack_schema_update(
                                     database_spec,
@@ -7540,9 +7540,9 @@ impl Catalog {
                                 ResolvedDatabaseSpecifier::Id(id) => Some(id),
                             };
                             tx.update_schema(
-                                database_id.cloned(),
+                                database_id.copied(),
                                 schema_id,
-                                schema.clone().to_durable_schema(database_id.cloned()),
+                                schema.clone().into_durable_schema(database_id.copied()),
                             )?;
                             builtin_table_updates.push(state.pack_schema_update(
                                 database_spec,
