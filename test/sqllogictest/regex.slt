@@ -455,3 +455,23 @@ query T
 SELECT regexp_split_to_table('no match', 'nope')
 ----
 no match
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X')
+----
+fooXbaz
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X', 'g')
+----
+fooXX
+
+query T
+SELECT regexp_replace('foobarbaz', 'b(..)', 'X${1}Y', 'g')
+----
+fooXarYXazY
+
+query T
+SELECT regexp_replace('foobarbaz', 'no match', 'X')
+----
+foobarbaz

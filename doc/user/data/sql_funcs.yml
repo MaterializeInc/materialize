@@ -348,6 +348,17 @@
       `needle`, in order. If `flags` is set to the string `i` matches
       case-insensitively.
 
+  - signature: 'regexp_replace(source: str, pattern: str, replacement: str [, flags: str]]) -> str'
+    description: >-
+      Replaces the first occurrence of `pattern` with `replacement` in `source`.
+      No match will return `source` unchanged.
+      If `flags` contains the string `g` all occurrences are replaced.
+      If `flags` contains the string `i` matches case-insensitively.
+      `$N` or `$name` in `replacement` can be used to match capture groups.
+      `${N}` must be used to disambiguate capture group indexes from names if other characters follow `N`.
+      A `$$` in `replacement` will write a literal `$`.
+      See the [rust regex docs](https://docs.rs/regex/latest/regex/struct.Regex.html#method.replace) for more details about replacement.
+
   - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
     description: >-
       Splits `text` by the regular expression `pattern` into an array.

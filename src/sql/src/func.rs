@@ -3220,6 +3220,12 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String, String) => sql_impl_table_func("
                 SELECT unnest(regexp_split_to_array($1, $2, $3))
             ") => ReturnType::set_of(String.into()), 2766;
+        },
+        "regexp_replace" => Scalar {
+            params!(String, String, String) => VariadicFunc::RegexpReplace => String, 2284;
+            params!(String, String, String, String) => VariadicFunc::RegexpReplace => String, 2285;
+            // TODO: PostgreSQL supports additional five and six argument forms of this function which
+            // allow controlling where to start the replacement and how many replacements to make.
         }
     };
 
