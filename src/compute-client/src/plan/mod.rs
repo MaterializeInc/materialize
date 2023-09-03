@@ -1321,7 +1321,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let (plan, missing) = match implementation {
-                    IndexedFilter(_id, key, _val) => {
+                    IndexedFilter(_coll_id, _idx_id, key, _val) => {
                         // Start with the constant input. (This used to be important before #14059
                         // was fixed.)
                         let start: usize = 1;

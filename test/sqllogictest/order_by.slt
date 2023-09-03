@@ -892,7 +892,7 @@ EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10) LIMIT 8;
 ----
 Explained Query (fast path):
   Finish limit=8 output=[#0, #1]
-    ReadExistingIndex materialize.public.t_idx
+    ReadIndex on=materialize.public.t t_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_idx (fast path limit)
@@ -1001,7 +1001,7 @@ EXPLAIN SELECT * FROM (SELECT * FROM (SELECT * FROM t LIMIT 8) LIMIT 10) LIMIT 6
 ----
 Explained Query (fast path):
   Finish limit=6 output=[#0, #1]
-    ReadExistingIndex materialize.public.t_idx
+    ReadIndex on=materialize.public.t t_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_idx (fast path limit)

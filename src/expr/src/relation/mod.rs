@@ -1636,7 +1636,7 @@ impl MirRelationExpr {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_, index_key, _) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
                         for k in index_key {
                             f(k)?;
                         }
@@ -2757,8 +2757,13 @@ pub enum JoinImplementation {
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
     /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
-    /// Consists of (`<view id>`, `<keys of index>`, `<constants>`)
-    IndexedFilter(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Vec<Row>),
+    /// Consists of (`<coll_id>`, `<index_id>`, `<index_key>`, `<constants>`)
+    IndexedFilter(
+        GlobalId,
+        GlobalId,
+        Vec<MirScalarExpr>,
+        #[mzreflect(ignore)] Vec<Row>,
+    ),
     /// No implementation yet selected.
     Unimplemented,
 }

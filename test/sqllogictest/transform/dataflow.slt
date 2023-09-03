@@ -42,7 +42,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * from foo3
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.foo2_primary_idx lookup_value=(6)
+    ReadIndex on=materialize.public.foo2 foo2_primary_idx=[lookup value=(6)]
 
 Used Indexes:
   - materialize.public.foo2_primary_idx (lookup)

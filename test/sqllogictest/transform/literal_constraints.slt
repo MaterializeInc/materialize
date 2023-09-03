@@ -42,7 +42,7 @@ WHERE a IN (1, 1+1)
 ----
 Explained Query (fast path):
   Filter ((#0 = 1) OR (#0 = 2))
-    ReadExistingIndex materialize.public.idx_t1_a_b
+    ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
@@ -74,7 +74,7 @@ WHERE a IN (1, 1+1)
 ----
 Explained Query (fast path):
   Project (#0, #1)
-    ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2)]
+    ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2)]]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -97,7 +97,7 @@ WHERE a = 2 AND b = 'l2'
 ----
 Explained Query (fast path):
   Project (#0, #1)
-    ReadExistingIndex materialize.public.idx_t1_a_b lookup_value=(2, "l2")
+    ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -131,7 +131,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)] // { arity: 1 }
         Project () // { arity: 0 }
-          ReadExistingIndex materialize.public.t1 lookup_values=[(2, "l2"); (3, "l3")] // { arity: 4 }
+          ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(2, "l2"); (3, "l3")]] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -209,7 +209,7 @@ WHERE a = NULL OR a = 2
 ----
 Explained Query (fast path):
   Filter (null OR (#0 = 2))
-    ReadExistingIndex materialize.public.idx_t1_a_b
+    ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
@@ -230,7 +230,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a = 1 FROM t1 WHERE a = 1;
 Explained Query (fast path):
   Project (#3)
     Map (true)
-      ReadExistingIndex materialize.public.idx_t1_a lookup_value=(1)
+      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(1)]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -252,7 +252,7 @@ WHERE (a,b) IN ((1,'l1'), (2,'l2'))
 ----
 Explained Query (fast path):
   Project (#0, #1)
-    ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2")]
+    ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2")]]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -274,7 +274,7 @@ WHERE (a,b) IN ((1, 'l1'), (1, 'a'))
 ----
 Explained Query (fast path):
   Project (#0, #1)
-    ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "a"); (1, "l1")]
+    ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "a"); (1, "l1")]]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -305,7 +305,7 @@ WHERE (a,b,c) IN ((1,2,3), (1,4,5), (1,4,7))
 ----
 Explained Query (fast path):
   Project (#0..=#2)
-    ReadExistingIndex materialize.public.idx_t2_a_b_c lookup_values=[(1, 2, 3); (1, 4, 5); (1, 4, 7)]
+    ReadIndex on=materialize.public.t2 idx_t2_a_b_c=[lookup values=[(1, 2, 3); (1, 4, 5); (1, 4, 7)]]
 
 Used Indexes:
   - materialize.public.idx_t2_a_b_c (lookup)
@@ -337,7 +337,7 @@ WHERE (a = 1) OR (a = 3 AND b = 'l3')
 Explained Query (fast path):
   Project (#0, #1)
     Filter ((#0 = 1) OR ((#0 = 3) AND (#1 = "l3")))
-      ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (3)]
+      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (3)]]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -360,7 +360,7 @@ WHERE a IN (1, a+a)
 ----
 Explained Query (fast path):
   Filter ((#0 = 1) OR (#0 = (#0 + #0)))
-    ReadExistingIndex materialize.public.idx_t1_a_b
+    ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
@@ -386,7 +386,7 @@ WHERE a+a = 2
 ----
 Explained Query (fast path):
   Project (#1)
-    ReadExistingIndex materialize.public.idx_t1_aa lookup_value=(2)
+    ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup value=(2)]
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
@@ -408,7 +408,7 @@ WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 ----
 Explained Query (fast path):
   Project (#1)
-    ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(-1); (1); (2); (3); (6); (7); (9)]
+    ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup values=[(-1); (1); (2); (3); (6); (7); (9)]]
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
@@ -434,7 +434,7 @@ WHERE a+a IN (2, 6);
 Explained Query (fast path):
   Project (#4)
     Map ((#1 + #1))
-      ReadExistingIndex materialize.public.idx_t1_aa lookup_values=[(2); (6)]
+      ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup values=[(2); (6)]]
 
 Used Indexes:
   - materialize.public.idx_t1_aa (lookup)
@@ -462,7 +462,7 @@ WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
 Explained Query (fast path):
   Project (#0..=#2)
     Filter (((#0 = 1) AND (#1 = (4 * #0))) OR ((#0 = 2) AND (#1 = (5 * #0))) OR ((#0 = 3) AND (#1 = (#0 + 20))))
-      ReadExistingIndex materialize.public.idx_t2_a lookup_values=[(1); (2); (3)]
+      ReadIndex on=materialize.public.t2 idx_t2_a=[lookup values=[(1); (2); (3)]]
 
 Used Indexes:
   - materialize.public.idx_t2_a (lookup)
@@ -515,7 +515,7 @@ WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 Explained Query (fast path):
   Project (#1)
     Filter ((#1 < 3) OR (#1 > 0))
-      ReadExistingIndex materialize.public.idx_t1_b lookup_values=[("l1"); ("l2"); ("l3"); ("l9")]
+      ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l1"); ("l2"); ("l3"); ("l9")]]
 
 Used Indexes:
   - materialize.public.idx_t1_b (lookup)
@@ -539,7 +539,7 @@ WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l
 Explained Query (fast path):
   Project (#1)
     Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)) AND (like["l%"](#0) OR (#1 > 5))
-      ReadExistingIndex materialize.public.idx_t1_b lookup_values=[("l1"); ("l2"); ("l3"); ("l9")]
+      ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l1"); ("l2"); ("l3"); ("l9")]]
 
 Used Indexes:
   - materialize.public.idx_t1_b (lookup)
@@ -560,7 +560,7 @@ WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b 
 Explained Query (fast path):
   Project (#0, #1)
     Filter (like["nonono"](#1) OR (like["l%"](#1) AND (#0 < 10)))
-      ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2")]
+      ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2")]]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -584,7 +584,7 @@ Explained Query (fast path):
   Project (#0)
     Filter ((#4 = 0) OR (#4 = 1))
       Map ((#0 % 3))
-        ReadExistingIndex materialize.public.idx_t1_a_b lookup_values=[(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]
+        ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]]
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -617,7 +617,7 @@ WHERE (
 Explained Query (fast path):
   Project (#0)
     Filter (like["aaa"](#1) OR like["l%"](#1)) AND ((#0 = 2) OR (like["nope"](#1) AND (#0 = 1)))
-      ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2)]
+      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2)]]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -652,7 +652,7 @@ WHERE (a = 4 AND a = 7) OR (a = 9)
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.idx_t1_a lookup_value=(9)
+    ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(9)]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -665,7 +665,7 @@ WHERE a IN (1,2) AND a IN (2,3,4)
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.idx_t1_a lookup_value=(2)
+    ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(2)]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -708,7 +708,7 @@ Explained Query:
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")] // { arity: 3 }
+          ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
@@ -743,7 +743,7 @@ Explained Query:
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadExistingIndex materialize.public.t1 lookup_value=("l2") // { arity: 3 }
+          ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
@@ -779,10 +779,10 @@ Explained Query:
       %0:t1[×]e » %1:t2[×]e
     ArrangeBy keys=[[]] // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
-        ReadExistingIndex materialize.public.t1 lookup_value=(2, "l2") // { arity: 4 }
+        ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")] // { arity: 4 }
     ArrangeBy keys=[[]] // { arity: 1 }
       Project (#2) // { arity: 1 }
-        ReadExistingIndex materialize.public.t2 lookup_value=(2) // { arity: 4 }
+        ReadIndex on=materialize.public.t2 idx_t2_a=[lookup value=(2)] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -815,7 +815,7 @@ WHERE a = 0 AND b = 1 AND c = 2 AND v = 'xxx';
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex materialize.public.foo_primary_idx lookup_value=(0, 1, 2, "xxx")
+    ReadIndex on=materialize.public.foo foo_primary_idx=[lookup value=(0, 1, 2, "xxx")]
 
 Used Indexes:
   - materialize.public.foo_primary_idx (lookup)
@@ -828,7 +828,7 @@ WHERE 0 = a AND 1 = b AND 2 = c AND 'xxx' = v;
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex materialize.public.foo_primary_idx lookup_value=(0, 1, 2, "xxx")
+    ReadIndex on=materialize.public.foo foo_primary_idx=[lookup value=(0, 1, 2, "xxx")]
 
 Used Indexes:
   - materialize.public.foo_primary_idx (lookup)
@@ -852,7 +852,7 @@ WHERE a = 0 AND a = 0::SMALLINT;
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.idx_foo_a lookup_value=(0)
+    ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(0)]
 
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
@@ -874,7 +874,7 @@ WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.idx_foo_a lookup_value=(3)
+    ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(3)]
 
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
@@ -896,7 +896,7 @@ WHERE a = 3::SMALLINT;
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.idx_foo_a lookup_value=(3)
+    ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(3)]
 
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
@@ -923,7 +923,7 @@ WHERE a = 0;
 ----
 Explained Query (fast path):
   Project (#1..=#4)
-    ReadExistingIndex materialize.public.idx_foo_a_cast lookup_value=(0)
+    ReadIndex on=materialize.public.foo idx_foo_a_cast=[lookup value=(0)]
 
 Used Indexes:
   - materialize.public.idx_foo_a_cast (lookup)
@@ -947,7 +947,7 @@ WHERE v = 'xxx';
 ----
 Explained Query (fast path):
   Project (#1..=#4)
-    ReadExistingIndex materialize.public.idx_foo_v_cast lookup_value=("xxx")
+    ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:
   - materialize.public.idx_foo_v_cast (lookup)
@@ -972,7 +972,7 @@ WHERE a = 0;
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex materialize.public.idx_foo_a lookup_value=(0)
+    ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(0)]
 
 Used Indexes:
   - materialize.public.idx_foo_a (lookup)
@@ -997,7 +997,7 @@ WHERE v = 'xxx';
 ----
 Explained Query (fast path):
   Project (#1..=#3, #0)
-    ReadExistingIndex materialize.public.idx_foo_v lookup_value=("xxx")
+    ReadIndex on=materialize.public.foo idx_foo_v=[lookup value=("xxx")]
 
 Used Indexes:
   - materialize.public.idx_foo_v (lookup)
@@ -1037,7 +1037,7 @@ Explained Query (fast path):
   Project (#0..=#2)
     Filter (#3 = 5) AND (#4 = 4) AND ((#0 = #3) OR (#0 = #4) OR (#0 = 6))
       Map ((#0 + #1), (#0 + #2))
-        ReadExistingIndex materialize.public.idx_t2_a_b_c
+        ReadIndex on=materialize.public.t2 idx_t2_a_b_c=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.idx_t2_a_b_c (*** full scan ***)
@@ -1058,7 +1058,7 @@ EXPLAIN SELECT * FROM bar WHERE (b AND a) = TRUE;
 ----
 Explained Query (fast path):
   Project (#1, #2)
-    ReadExistingIndex materialize.public.bar_expr_idx lookup_value=(true)
+    ReadIndex on=materialize.public.bar bar_expr_idx=[lookup value=(true)]
 
 Used Indexes:
   - materialize.public.bar_expr_idx (lookup)
@@ -1084,7 +1084,7 @@ SELECT * FROM t3 WHERE NOT (((t3.c0)::INT != 0));
 ----
 Explained Query (fast path):
   Filter (0 = double_to_integer(#0))
-    ReadExistingIndex materialize.public.t3i0
+    ReadIndex on=materialize.public.t3 t3i0=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t3i0 (*** full scan ***)
@@ -1107,7 +1107,7 @@ SELECT * FROM t3 WHERE NOT ((t3.c0 != 0.6) AND (t3.c0 != -0.1) AND (t3.c0 != 0.1
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.t3i0 lookup_values=[(0.6); (0.1); (-0.1)]
+    ReadIndex on=materialize.public.t3 t3i0=[lookup values=[(0.6); (0.1); (-0.1)]]
 
 Used Indexes:
   - materialize.public.t3i0 (lookup)
@@ -1129,7 +1129,7 @@ SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.t3i0 lookup_values=[(1); (-0.1)]
+    ReadIndex on=materialize.public.t3 t3i0=[lookup values=[(1); (-0.1)]]
 
 Used Indexes:
   - materialize.public.t3i0 (lookup)
@@ -1176,7 +1176,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
         Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadExistingIndex materialize.public.t4 lookup_values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
+          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
 
 Used Indexes:
   - materialize.public.idx_t4_a_b_c (lookup)
@@ -1238,7 +1238,7 @@ Explained Query:
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
                   Project (#0)
-                    ReadExistingIndex materialize.public.t5 lookup_values=[(0); (2); (8)]
+                    ReadIndex on=materialize.public.t5 idx_t5_f1=[lookup values=[(0); (2); (8)]]
                 ArrangeBy keys=[[]]
                   Get l0
 
@@ -1259,7 +1259,7 @@ LIMIT 1;
 Explained Query (fast path):
   Finish limit=1 output=[#0, #1]
     Project (#0, #1)
-      ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2); (3); (4)]
+      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -1287,7 +1287,7 @@ Explained Query (fast path):
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] limit=3 output=[#0, #1]
     Project (#0, #1, #3)
       Map (-(#0))
-        ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2); (3); (4)]
+        ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -1317,7 +1317,7 @@ Explained Query (fast path):
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] limit=3 offset=1 output=[#0, #1]
     Project (#0, #1, #3)
       Map (-(#0))
-        ReadExistingIndex materialize.public.idx_t1_a lookup_values=[(1); (2); (3); (4)]
+        ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
   - materialize.public.idx_t1_a (lookup)
@@ -1351,7 +1351,7 @@ WHERE x=5;
 ----
 Explained Query (fast path):
   Filter (#0 = 5)
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
@@ -1374,7 +1374,7 @@ WHERE x=5;
 ----
 Explained Query (fast path):
   Filter (#0 = 5)
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
@@ -1396,7 +1396,7 @@ WHERE x=5 AND y=6;
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex materialize.public.t6_idx_x_y lookup_value=(5, 6)
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[lookup value=(5, 6)]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (lookup)
@@ -1412,7 +1412,7 @@ WHERE x=5 AND y=6 AND z=7;
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex materialize.public.t6_idx_x_y_z lookup_value=(5, 6, 7)
+    ReadIndex on=materialize.public.t6 t6_idx_x_y_z=[lookup value=(5, 6, 7)]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y_z (lookup)
@@ -1431,7 +1431,7 @@ WHERE x=5;
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex materialize.public.t6_idx_x lookup_value=(5)
+    ReadIndex on=materialize.public.t6 t6_idx_x=[lookup value=(5)]
 
 Used Indexes:
   - materialize.public.t6_idx_x (lookup)
@@ -1447,7 +1447,7 @@ WHERE y=6;
 ----
 Explained Query (fast path):
   Filter (#1 = 6)
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
@@ -1470,7 +1470,7 @@ WHERE x=5 AND z=7;
 Explained Query (fast path):
   Project (#0..=#3)
     Filter (#2 = 7)
-      ReadExistingIndex materialize.public.t6_idx_x lookup_value=(5)
+      ReadIndex on=materialize.public.t6 t6_idx_x=[lookup value=(5)]
 
 Used Indexes:
   - materialize.public.t6_idx_x (lookup)
@@ -1486,7 +1486,7 @@ WHERE z=7;
 ----
 Explained Query (fast path):
   Filter (#2 = 7)
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
@@ -1531,7 +1531,7 @@ WHERE y=4 OR y=8;
 ----
 Explained Query (fast path):
   Filter ((#1 = 4) OR (#1 = 8))
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
@@ -1553,7 +1553,7 @@ WHERE (y=5 AND z=7) OR (y=2 AND z=3);
 ----
 Explained Query (fast path):
   Filter (((#1 = 2) AND (#2 = 3)) OR ((#1 = 5) AND (#2 = 7)))
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
@@ -1575,7 +1575,7 @@ WHERE z=9 AND w='árvíztűrő tükörfúrógép';
 ----
 Explained Query (fast path):
   Filter (#2 = 9) AND (#3 = "árvíztűrő tükörfúrógép")
-    ReadExistingIndex materialize.public.t6_idx_x_y
+    ReadIndex on=materialize.public.t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)

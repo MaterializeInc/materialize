@@ -617,7 +617,7 @@ impl MirRelationExpr {
                                     Ok(())
                                 })?;
                             }
-                            JoinImplementation::IndexedFilter(_, _, _) => {
+                            JoinImplementation::IndexedFilter(_, _, _, _) => {
                                 unreachable!() // because above we matched the other implementations
                             }
                             JoinImplementation::Unimplemented => {}
@@ -634,7 +634,8 @@ impl MirRelationExpr {
                 })?;
             }
             Join {
-                implementation: JoinImplementation::IndexedFilter(id, _key, literal_constraints),
+                implementation:
+                    JoinImplementation::IndexedFilter(coll_id, idx_id, _key, literal_constraints),
                 inputs,
                 ..
             } => {
@@ -649,7 +650,14 @@ impl MirRelationExpr {
                     }
                     _ => None,
                 };
-                Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()), cse_id)?;
+                Self::fmt_indexed_filter(
+                    f,
+                    ctx,
+                    coll_id,
+                    idx_id,
+                    Some(literal_constraints.clone()),
+                    cse_id,
+                )?;
                 self.fmt_attributes(f, ctx)?;
             }
             Reduce {
@@ -790,38 +798,53 @@ impl MirRelationExpr {
     pub fn fmt_indexed_filter<'b, C>(
         f: &mut fmt::Formatter<'_>,
         ctx: &mut C,
-        id: &GlobalId,               // The id of the index
+        coll_id: &GlobalId, // The id of the collection that the index is on
+        idx_id: &GlobalId,  // The id of the index
         constants: Option<Vec<Row>>, // The values that we are looking up
-        cse_id: Option<&LocalId>,    // Sometimes, RelationCSE pulls out the const input
+        cse_id: Option<&LocalId>, // Sometimes, RelationCSE pulls out the const input
     ) -> fmt::Result
     where
-        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain::ExprHumanizer>,
+        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn ExprHumanizer>,
     {
+        let humanized_coll = ctx
+            .as_ref()
+            .humanize_id(*coll_id)
+            .unwrap_or_else(|| coll_id.to_string());
         let humanized_index = ctx
             .as_ref()
-            .humanize_id(*id)
-            .unwrap_or_else(|| id.to_string());
+            .humanize_id_unqualified(*idx_id)
+            .unwrap_or_else(|| idx_id.to_string());
         if let Some(constants) = constants {
             write!(
                 f,
-                "{}ReadExistingIndex {} lookup_",
+                "{}ReadIndex on={} {}=[{} ",
                 ctx.as_mut(),
-                humanized_index
+                humanized_coll,
+                humanized_index,
+                IndexUsageType::Lookup,
             )?;
             if let Some(cse_id) = cse_id {
                 // If we were to simply print `constants` here, then the EXPLAIN output would look
                 // weird: It would look like as if there was a dangling cte, because we (probably)
                 // wouldn't be printing any Get that refers to that cte.
-                write!(f, "values=<Get {}>", cse_id)?;
+                write!(f, "values=<Get {}>]", cse_id)?;
             } else {
                 if constants.len() == 1 {
-                    write!(f, "value={}", constants.get(0).unwrap())?;
+                    write!(f, "value={}]", constants.get(0).unwrap())?;
                 } else {
-                    write!(f, "values=[{}]", separated("; ", constants))?;
+                    write!(f, "values=[{}]]", separated("; ", constants))?;
                 }
             }
         } else {
-            write!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
+            // Can't happen in dataflow, only in fast path.
+            write!(
+                f,
+                "{}ReadIndex on={} {}=[{}]",
+                ctx.as_mut(),
+                humanized_coll,
+                humanized_index,
+                IndexUsageType::FullScan
+            )?;
         }
         Ok(())
     }

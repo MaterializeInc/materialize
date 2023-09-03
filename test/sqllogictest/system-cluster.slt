@@ -20,7 +20,7 @@ EXPLAIN SHOW DATABASES
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex mz_internal.mz_show_databases_ind
+    ReadIndex on=mz_catalog.mz_databases mz_show_databases_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_databases_ind (*** full scan ***)
@@ -33,7 +33,7 @@ EXPLAIN SHOW SCHEMAS
 Explained Query (fast path):
   Project (#3)
     Filter ((#0) IS NULL OR (#0 = "u1"))
-      ReadExistingIndex mz_internal.mz_show_schemas_ind
+      ReadIndex on=mz_catalog.mz_schemas mz_show_schemas_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_schemas_ind (*** full scan ***)
@@ -45,7 +45,7 @@ EXPLAIN SHOW CONNECTIONS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    ReadExistingIndex mz_internal.mz_show_connections_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_connections mz_show_connections_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_connections_ind (lookup)
@@ -57,7 +57,7 @@ EXPLAIN SHOW TABLES
 ----
 Explained Query (fast path):
   Project (#3)
-    ReadExistingIndex mz_internal.mz_show_tables_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_tables mz_show_tables_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_tables_ind (lookup)
@@ -69,7 +69,7 @@ EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    ReadExistingIndex mz_internal.mz_show_sources_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_sources mz_show_sources_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_sources_ind (lookup)
@@ -81,7 +81,7 @@ EXPLAIN SHOW VIEWS
 ----
 Explained Query (fast path):
   Project (#3)
-    ReadExistingIndex mz_internal.mz_show_views_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_views mz_show_views_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_views_ind (lookup)
@@ -93,7 +93,7 @@ EXPLAIN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
   Project (#1, #2)
-    ReadExistingIndex mz_internal.mz_show_materialized_views_ind lookup_value=("u3")
+    ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (lookup)
@@ -106,7 +106,7 @@ EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER default
 Explained Query (fast path):
   Project (#1, #2)
     Filter (#3 = "u1")
-      ReadExistingIndex mz_internal.mz_show_materialized_views_ind lookup_value=("u3")
+      ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_materialized_views_ind (lookup)
@@ -119,7 +119,7 @@ EXPLAIN SHOW INDEXES
 Explained Query (fast path):
   Project (#1..=#4)
     Filter NOT(like["s%"](#5))
-      ReadExistingIndex mz_internal.mz_show_indexes_ind lookup_value=("u3")
+      ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (lookup)
@@ -132,7 +132,7 @@ EXPLAIN SHOW INDEXES IN CLUSTER DEFAULT
 Explained Query (fast path):
   Project (#1..=#4)
     Filter (#6 = "u1")
-      ReadExistingIndex mz_internal.mz_show_indexes_ind
+      ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_indexes_ind (*** full scan ***)
@@ -144,7 +144,7 @@ EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    ReadExistingIndex mz_internal.mz_show_sinks_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_sinks mz_show_sinks_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_sinks_ind (lookup)
@@ -156,7 +156,7 @@ EXPLAIN SHOW TYPES
 ----
 Explained Query (fast path):
   Project (#3)
-    ReadExistingIndex mz_internal.mz_show_types_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_types mz_show_types_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_types_ind (lookup)
@@ -168,7 +168,7 @@ EXPLAIN SHOW OBJECTS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    ReadExistingIndex mz_internal.mz_show_all_objects_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_objects mz_show_all_objects_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_all_objects_ind (lookup)
@@ -183,7 +183,7 @@ EXPLAIN SHOW COLUMNS IN t
 ----
 Explained Query (fast path):
   Project (#1, #3, #4)
-    ReadExistingIndex mz_internal.mz_show_columns_ind lookup_value=("u1")
+    ReadIndex on=mz_catalog.mz_columns mz_show_columns_ind=[lookup value=("u1")]
 
 Used Indexes:
   - mz_internal.mz_show_columns_ind (lookup)
@@ -217,7 +217,7 @@ query T multiline
 EXPLAIN SHOW CLUSTER REPLICAS
 ----
 Explained Query (fast path):
-  ReadExistingIndex mz_internal.mz_show_cluster_replicas_ind
+  ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (*** full scan ***)
@@ -229,7 +229,7 @@ EXPLAIN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
 ----
 Explained Query (fast path):
   Project (#0..=#3)
-    ReadExistingIndex mz_internal.mz_show_cluster_replicas_ind lookup_values=[("ingest_qck"); ("compute_qck")]
+    ReadIndex on=mz_internal.mz_show_cluster_replicas mz_show_cluster_replicas_ind=[lookup values=[("ingest_qck"); ("compute_qck")]]
 
 Used Indexes:
   - mz_internal.mz_show_cluster_replicas_ind (lookup)
@@ -241,7 +241,7 @@ EXPLAIN SHOW SECRETS
 ----
 Explained Query (fast path):
   Project (#3)
-    ReadExistingIndex mz_internal.mz_show_secrets_ind lookup_value=("u3")
+    ReadIndex on=mz_catalog.mz_secrets mz_show_secrets_ind=[lookup value=("u3")]
 
 Used Indexes:
   - mz_internal.mz_show_secrets_ind (lookup)
@@ -352,7 +352,7 @@ Explained Query:
         Project (#0, #3)
           Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0))
-              ReadExistingIndex mz_internal.mz_source_status_history lookup_value=("u6")
+              ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
 
 Used Indexes:
   - mz_internal.mz_source_status_history_ind (lookup)

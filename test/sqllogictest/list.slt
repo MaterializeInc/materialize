@@ -2616,7 +2616,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 ----
 Explained Query (fast path):
   Project (#2)
-    ReadExistingIndex materialize.public.m3_primary_idx
+    ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2636,7 +2636,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 ----
 Explained Query (fast path):
   Project (#2)
-    ReadExistingIndex materialize.public.m3_primary_idx
+    ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2654,7 +2654,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 ----
 Explained Query (fast path):
   Project (#5)
-    ReadExistingIndex materialize.public.m3_primary_idx
+    ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2675,7 +2675,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, 
 Explained Query (fast path):
   Project (#12)
     Map (integer_to_bigint(#8), list_index(list[list[list[#0, #1], list[#6, #7, #2, #3]], list[list[#4, #5], list[#6, #7]]], #11, integer_to_bigint(#9), #11))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2694,7 +2694,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 Explained Query (fast path):
   Project (#11)
     Map (list_index(list[list[#0, #2], list[#4, #6]], integer_to_bigint(#8), integer_to_bigint(#9)))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2713,7 +2713,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 Explained Query (fast path):
   Project (#11)
     Map (list_index(list[list[#2, #3], list[#6, #7]], integer_to_bigint(#8), integer_to_bigint(#9)))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2732,7 +2732,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 Explained Query (fast path):
   Project (#11)
     Map (list_index(list[list[#0, #1], list[#2, #3]], integer_to_bigint(#8), integer_to_bigint(#9)))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2751,7 +2751,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 Explained Query (fast path):
   Project (#11)
     Map (list_index(list[#4, #5], integer_to_bigint(#8)))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2770,7 +2770,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 Explained Query (fast path):
   Project (#11)
     Map (list_index(list[#5, #7], integer_to_bigint(#8)))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2789,7 +2789,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7
 Explained Query (fast path):
   Project (#11)
     Map (list_index(list[#3, #7], integer_to_bigint(#8)))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2810,7 +2810,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][6] from m3
 Explained Query (fast path):
   Project (#11)
     Map (null)
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2823,7 +2823,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][0] from m3
 Explained Query (fast path):
   Project (#11)
     Map (null)
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2836,7 +2836,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
 Explained Query (fast path):
   Project (#11)
     Map (null)
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2858,7 +2858,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]]
 Explained Query (fast path):
   Project (#11)
     Map (null)
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2874,7 +2874,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8
 Explained Query (fast path):
   Project (#11)
     Map (null)
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2890,7 +2890,7 @@ EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]]
 Explained Query (fast path):
   Project (#11)
     Map (list_index(#10, 2))
-      ReadExistingIndex materialize.public.m3_primary_idx
+      ReadIndex on=materialize.public.m3 m3_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
