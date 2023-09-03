@@ -340,14 +340,14 @@ impl JoinImplementation {
 
                 // Collect available arrangements on this input.
                 match input {
-                    MirRelationExpr::Get { id, typ: _ } => {
+                    MirRelationExpr::Get { id, typ: _, .. } => {
                         available_arrangements[index]
                             .extend(indexes.get(*id).map(|key| key.to_vec()));
                     }
                     MirRelationExpr::ArrangeBy { input, keys } => {
                         // We may use any presented arrangement keys.
                         available_arrangements[index].extend(keys.clone());
-                        if let MirRelationExpr::Get { id, typ: _ } = &**input {
+                        if let MirRelationExpr::Get { id, typ: _, .. } = &**input {
                             available_arrangements[index]
                                 .extend(indexes.get(*id).map(|key| key.to_vec()));
                         }

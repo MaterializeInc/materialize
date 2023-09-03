@@ -40,10 +40,10 @@ Explained Query:
       %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
+        ReadStorage materialize.public.foo // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
-        Get materialize.public.bar // { arity: 2 }
+        ReadStorage materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 1))
@@ -70,10 +70,10 @@ Explained Query:
       %0:foo[#0]Kef » %1:bar[abs(#0)]Kef
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Filter (1 = (#0 % 2)) // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
+        ReadStorage materialize.public.foo // { arity: 2 }
     ArrangeBy keys=[[abs(#0)]] // { arity: 2 }
       Filter (1 = (abs(#0) % 2)) // { arity: 2 }
-        Get materialize.public.bar // { arity: 2 }
+        ReadStorage materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((1 = (#0 % 2)))
@@ -105,10 +105,10 @@ Explained Query:
       %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
+        ReadStorage materialize.public.foo // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
-        Get materialize.public.bar // { arity: 2 }
+        ReadStorage materialize.public.bar // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 1))
@@ -152,11 +152,11 @@ Explained Query:
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]UK
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.foo // { arity: 2 }
+          ReadIndex on=foo foo_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.bar // { arity: 2 }
+          ReadIndex on=bar bar_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.baz // { arity: 2 }
+          ReadStorage materialize.public.baz // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (differential join)
@@ -200,11 +200,11 @@ Explained Query:
         implementation
           %0:foo[#0]KA » %1:bar[#0]KA » %2:baz[#0]KA
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.foo // { arity: 2 }
+          ReadIndex on=foo foo_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.bar // { arity: 2 }
+          ReadIndex on=bar bar_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.baz // { arity: 2 }
+          ReadIndex on=baz baz_idx=[differential join] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (differential join)
@@ -243,9 +243,9 @@ Explained Query:
         implementation
           %0:foo[case when (#0 = 0) then null else #0 end]KA » %1:bar[-(#0)]KA
         ArrangeBy keys=[[case when (#0 = 0) then null else #0 end]] // { arity: 2 }
-          Get materialize.public.foo // { arity: 2 }
+          ReadIndex on=foo foo_idx2=[differential join] // { arity: 2 }
         ArrangeBy keys=[[-(#0)]] // { arity: 2 }
-          Get materialize.public.bar // { arity: 2 }
+          ReadIndex on=bar bar_idx2=[differential join] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx2 (differential join)
@@ -286,11 +286,11 @@ Explained Query:
         implementation
           %2:baz[#0]KA » %0:bar[(#0 + 4)]KA » %1:foo[#0]KA
         ArrangeBy keys=[[(#0 + 4)]] // { arity: 2 }
-          Get materialize.public.bar // { arity: 2 }
+          ReadIndex on=bar bar_idx3=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.foo // { arity: 2 }
+          ReadIndex on=foo foo_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.baz // { arity: 2 }
+          ReadIndex on=baz baz_idx=[differential join] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (differential join)
@@ -323,9 +323,9 @@ Explained Query:
       implementation
         %0:foo[×] » %1:bar[×]
       ArrangeBy keys=[[]] // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
+        ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
-        Get materialize.public.bar // { arity: 2 }
+        ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
@@ -354,9 +354,9 @@ Explained Query:
       implementation
         %0:foo[×] » %1:bar[×]
       ArrangeBy keys=[[]] // { arity: 2 }
-        Get materialize.public.foo // { arity: 2 }
+        ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
-        Get materialize.public.bar // { arity: 2 }
+        ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
@@ -392,13 +392,13 @@ Explained Query:
         implementation
           %0:foo[#0]KA » %1:bar[#0]K » %2:baz[#0]K
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          Get materialize.public.foo // { arity: 2 }
+          ReadIndex on=foo foo_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL // { arity: 2 }
-            Get materialize.public.bar // { arity: 2 }
+            ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL // { arity: 2 }
-            Get materialize.public.baz // { arity: 2 }
+            ReadStorage materialize.public.baz // { arity: 2 }
 
 Source materialize.public.baz
   filter=((#0) IS NOT NULL)
@@ -613,27 +613,27 @@ Explained Query:
           %9:big » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA » %10:big[#10]KA
           %10:big » %9:big[#9]KAef » %8:big[#8]KAlf » %7:big[#7]KAnf » %6:big[#6]KAiif » %5:big[#5]KAif » %2:big[#2]KAf » %3:big[#3]KAf » %4:big[#4]KAf » %0:big[#0]KA » %1:big[#1]KA
         ArrangeBy keys=[[#0]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_b=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#2]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#3]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_d=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#4]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_e=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#5]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_f=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#6]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_g=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#7]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_h=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#8]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_i=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#9]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_j=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#10]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_k=[delta join lookup] // { arity: 14 }
 
 Used Indexes:
   - materialize.public.big_idx_a (delta join 1st input (full scan))
@@ -671,11 +671,11 @@ Explained Query:
           %1:big » %0:big[#0]KAlf » %2:big[#2]KA
           %2:big » %1:big[#1]KAe » %0:big[#0]KAlf
         ArrangeBy keys=[[#0]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1]] // { arity: 15 }
           ReadExistingIndex materialize.public.big lookup_value=(42) // { arity: 15 }
         ArrangeBy keys=[[#2]] // { arity: 14 }
-          Get materialize.public.big // { arity: 14 }
+          ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
 
 Used Indexes:
   - materialize.public.big_idx_a (delta join 1st input (full scan))
@@ -713,10 +713,10 @@ Explained Query:
           %2:l0 » %0:big[×]A » %1:big[×]A
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0) // { arity: 1 }
-            Get materialize.public.big // { arity: 14 }
+            ReadIndex on=big big_idx_a=[*** full scan ***] // { arity: 14 }
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
-            Get materialize.public.big // { arity: 14 }
+            ReadIndex on=big big_idx_a=[*** full scan ***] // { arity: 14 }
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
             Get l0 // { arity: 15 }

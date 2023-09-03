@@ -57,7 +57,7 @@ EXPLAIN WITH(arity, join_impls) SELECT input ~ 'foo?' FROM data
 Explained Query:
   Project (#1) // { arity: 1 }
     Map (is_regexp_match["foo?", case_insensitive=false](#0)) // { arity: 2 }
-      Get materialize.public.data // { arity: 1 }
+      ReadStorage materialize.public.data // { arity: 1 }
 
 EOF
 
@@ -68,7 +68,7 @@ EXPLAIN WITH(arity, join_impls) SELECT input ~ input FROM data
 Explained Query:
   Project (#1) // { arity: 1 }
     Map ((#0 ~ #0)) // { arity: 2 }
-      Get materialize.public.data // { arity: 1 }
+      ReadStorage materialize.public.data // { arity: 1 }
 
 EOF
 
@@ -132,7 +132,7 @@ SELECT s FROM t WHERE s~'a.*';
 Explained Query:
   Project (#0)
     Filter is_regexp_match["a.*", case_insensitive=false](#0)
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=false](#0))
@@ -151,7 +151,7 @@ SELECT s FROM t WHERE s~*'a.*';
 Explained Query:
   Project (#0)
     Filter is_regexp_match["a.*", case_insensitive=true](#0)
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=true](#0))
@@ -171,7 +171,7 @@ SELECT s, regexp_match(s, 'a.*') FROM t;
 Explained Query:
   Project (#0, #3)
     Map (regexp_match["a.*", case_insensitive=false](#0))
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 EOF
 
@@ -192,7 +192,7 @@ SELECT s, regexp_match(s, 'a.*', 'i') FROM t;
 Explained Query:
   Project (#0, #3)
     Map (regexp_match["a.*", case_insensitive=true](#0))
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 EOF
 
@@ -238,7 +238,7 @@ SELECT s FROM t WHERE s ~ regex_pat;
 Explained Query:
   Project (#0)
     Filter (#0 ~ #2)
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#0 ~ #2))
@@ -257,7 +257,7 @@ SELECT s FROM t WHERE s ~* regex_pat;
 Explained Query:
   Project (#0)
     Filter (#0 ~* #2)
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#0 ~* #2))
@@ -277,7 +277,7 @@ SELECT s, regex_pat, regexp_match(s, regex_pat) FROM t;
 Explained Query:
   Project (#0, #2, #3)
     Map (regexp_match(#0, #2))
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 EOF
 
@@ -301,7 +301,7 @@ SELECT s, regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
 Explained Query:
   Project (#0, #2, #3)
     Map (regexp_match(#0, #2, "i"))
-      Get materialize.public.t
+      ReadStorage materialize.public.t
 
 EOF
 
@@ -362,7 +362,7 @@ Explained Query:
     \
     ^
 error: incomplete escape sequence, reached end of pattern prematurely"))
-    Get materialize.public.t
+    ReadStorage materialize.public.t
 
 EOF
 

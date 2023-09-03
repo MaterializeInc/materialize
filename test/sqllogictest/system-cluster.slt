@@ -268,20 +268,20 @@ Explained Query:
       Join on=(#0 = #13 AND #2 = #4) type=differential
         ArrangeBy keys=[[#2]]
           Project (#0..=#3)
-            Get mz_catalog.mz_cluster_replicas
+            ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
         ArrangeBy keys=[[#0]]
-          Get mz_catalog.mz_clusters
+          ReadIndex on=mz_clusters mz_clusters_ind=[differential join]
         ArrangeBy keys=[[#0]]
           Project (#0, #19)
             Filter (#3) IS NOT NULL
               Map (((uint8_to_double(#17) / uint8_to_double(#11)) * 100))
                 Join on=(#0 = #14 AND #3 = #7) type=differential
                   ArrangeBy keys=[[#0]]
-                    Get mz_catalog.mz_cluster_replicas
+                    ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[differential join]
                   ArrangeBy keys=[[#0]]
-                    Get mz_internal.mz_cluster_replica_sizes
+                    ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[differential join]
                   ArrangeBy keys=[[#0]]
-                    Get mz_internal.mz_cluster_replica_metrics
+                    ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[differential join]
 
 Used Indexes:
   - mz_internal.mz_clusters_ind (differential join)
@@ -320,14 +320,14 @@ Explained Query:
           Join on=(#0 = #5) type=differential
             Get l1
             ArrangeBy keys=[[#0]]
-              Get mz_internal.mz_source_statuses
+              ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
     cte l1 =
       ArrangeBy keys=[[#0]]
         Get l0
     cte l0 =
       Project (#0, #1, #3, #4, #6)
         Filter like["u%"](#0)
-          Get mz_catalog.mz_sources
+          ReadIndex on=mz_sources mz_show_sources_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_internal.mz_show_sources_ind (*** full scan ***)

@@ -30,14 +30,15 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::Indent;
+use mz_ore::str::{separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -567,7 +568,7 @@ impl Default for UsedIndexes {
     }
 }
 
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -631,6 +632,15 @@ impl std::fmt::Display for IndexUsageType {
                 IndexUsageType::Unknown => "*** INTERNAL ERROR (unknown usage) ***",
             }
         )
+    }
+}
+
+impl IndexUsageType {
+    pub fn display_vec<'a, I>(usage_types: I) -> impl Display + Sized + 'a
+    where
+        I: IntoIterator<Item = &'a IndexUsageType>,
+    {
+        separated(", ", usage_types.into_iter().sorted().dedup())
     }
 }
 

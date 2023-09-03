@@ -2917,7 +2917,7 @@ Explained Query:
           Map (list[row(1, row(#0))]) // { arity: 2 }
             TopK limit=1 // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Get materialize.public.m3 // { arity: 11 }
+                ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11 }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)

@@ -515,7 +515,7 @@ impl Typecheck {
 
                 Ok(typ.column_types.clone())
             }
-            Get { typ, id } => {
+            Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO(mgree) pass QueryContext through to check these types
@@ -940,6 +940,7 @@ impl Typecheck {
                 Get {
                     id: Id::Local(id),
                     typ,
+                    ..
                 } => {
                     if !ids.contains(id) {
                         return Ok(());

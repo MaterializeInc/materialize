@@ -403,7 +403,7 @@ Explained Query:
                 Project (#8, #13..=#15) // { arity: 4 }
                   Filter (#0 < 2010-06-11 09:21:46 UTC) AND (#4) IS NOT NULL // { arity: 16 }
                     Map (extract_year_tstz(#0), (#12) IS NOT NULL, case when (#8 < 40) then 0 else case when (#8 < 80) then 1 else case when (#8 < 160) then 2 else 3 end end end) // { arity: 16 }
-                      Get materialize.public.message // { arity: 13 }
+                      ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Map ((0 + bigint_to_numeric(#0))) // { arity: 2 }
@@ -421,7 +421,7 @@ Explained Query:
         Reduce aggregates=[count(*)] // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 < 2010-06-11 09:21:46 UTC) // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.message_messageid (*** full scan ***)
@@ -499,9 +499,9 @@ Explained Query:
                           Get l1 // { arity: 2 }
                       ArrangeBy keys=[[#0]] // { arity: 2 }
                         Project (#1, #2) // { arity: 2 }
-                          Get materialize.public.message_hastag_tag // { arity: 3 }
+                          ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
                       ArrangeBy keys=[[#1]] // { arity: 13 }
-                        Get materialize.public.message // { arity: 13 }
+                        ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
       cte l1 =
         Filter (#0) IS NOT NULL // { arity: 2 }
           Get l0 // { arity: 2 }
@@ -515,7 +515,7 @@ Explained Query:
                 ReadExistingIndex materialize.public.tagclass lookup_value=("ChristianBishop") // { arity: 5 }
               ArrangeBy keys=[[#2]] // { arity: 3 }
                 Project (#0, #1, #3) // { arity: 3 }
-                  Get materialize.public.tag // { arity: 4 }
+                  ReadIndex on=tag tag_id=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.tag_id (*** full scan ***)
@@ -568,15 +568,15 @@ Explained Query:
             implementation
               %5[#0]UKA » %0:message[#1]KA » %1:forum[#1]KA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
             ArrangeBy keys=[[#1]] // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[#1]] // { arity: 4 }
-              Get materialize.public.forum // { arity: 4 }
+              ReadIndex on=forum forum_id=[differential join] // { arity: 4 }
             ArrangeBy keys=[[#1]] // { arity: 11 }
-              Get materialize.public.person // { arity: 11 }
+              ReadIndex on=person person_id=[differential join] // { arity: 11 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
-              Get materialize.public.city // { arity: 4 }
+              ReadIndex on=city city_id=[differential join] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
-              Get materialize.public.country // { arity: 4 }
+              ReadIndex on=country country_id=[differential join] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#7) // { arity: 1 }
@@ -589,10 +589,10 @@ Explained Query:
                       ArrangeBy keys=[[#1]] // { arity: 2 }
                         Project (#0, #3) // { arity: 2 }
                           Filter (#0) IS NOT NULL // { arity: 4 }
-                            Get materialize.public.tag // { arity: 4 }
+                            ReadIndex on=tag tag_id=[*** full scan ***] // { arity: 4 }
                       ArrangeBy keys=[[#1]] // { arity: 2 }
                         Project (#1, #2) // { arity: 2 }
-                          Get materialize.public.message_hastag_tag // { arity: 3 }
+                          ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
 
 Used Indexes:
   - materialize.public.tag_id (*** full scan ***)
@@ -701,12 +701,12 @@ Explained Query:
               %0:l2[#1]K » %1:message[#9]KA » %2[#0]UKA » %3[#0]UKA
             Get l2 // { arity: 4 }
             ArrangeBy keys=[[#9]] // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#10) // { arity: 1 }
                   Filter (#10) IS NOT NULL // { arity: 13 }
-                    Get materialize.public.message // { arity: 13 }
+                    ReadIndex on=message message_creatorpersonid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Get l0 // { arity: 1 }
@@ -721,12 +721,12 @@ Explained Query:
               %1 » %2[#0]UKA » %0:person[#1]KA
               %2 » %1[#0]UKA » %0:person[#1]KA
             ArrangeBy keys=[[#1]] // { arity: 11 }
-              Get materialize.public.person // { arity: 11 }
+              ReadIndex on=person person_id=[delta join 1st input (full scan)] // { arity: 11 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (#1) IS NOT NULL // { arity: 11 }
-                    Get materialize.public.person // { arity: 11 }
+                    ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#2) // { arity: 1 }
@@ -737,13 +737,13 @@ Explained Query:
                       Get l0 // { arity: 1 }
                     ArrangeBy keys=[[#0]] // { arity: 2 }
                       Project (#1, #2) // { arity: 2 }
-                        Get materialize.public.forum_hasmember_person // { arity: 3 }
+                        ReadStorage materialize.public.forum_hasmember_person // { arity: 3 }
       cte l0 =
         Project (#0) // { arity: 1 }
           TopK order_by=[#1 desc nulls_first, #0 asc nulls_last] limit=100 // { arity: 2 }
             Project (#0, #2) // { arity: 2 }
               Filter (#1 > 2010-02-12 00:00:00 UTC) // { arity: 3 }
-                Get materialize.public.top100popularforumsq04 // { arity: 3 }
+                ReadIndex on=top100popularforumsq04 top100popularforumsq04_id=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, delta join 1st input (full scan))
@@ -809,7 +809,7 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
                 Project (#2) // { arity: 1 }
-                  Get materialize.public.person_likes_message // { arity: 3 }
+                  ReadStorage materialize.public.person_likes_message // { arity: 3 }
       cte l2 =
         Union // { arity: 3 }
           Map (null) // { arity: 3 }
@@ -830,7 +830,7 @@ Explained Query:
               Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
                 Project (#12) // { arity: 1 }
                   Filter (#12) IS NOT NULL // { arity: 13 }
-                    Get materialize.public.message // { arity: 13 }
+                    ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
       cte l0 =
         Project (#5, #16) // { arity: 2 }
           Filter (#0) IS NOT NULL // { arity: 20 }
@@ -841,9 +841,9 @@ Explained Query:
                 ReadExistingIndex materialize.public.tag lookup_value=("Sikh_Empire") // { arity: 5 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.message_hastag_tag // { arity: 3 }
+                  ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -925,7 +925,7 @@ Explained Query:
               Filter (#1) IS NOT NULL // { arity: 2 }
                 Get l3 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
-              Get materialize.public.popularityscoreq06 // { arity: 2 }
+              ReadIndex on=popularityscoreq06 popularityscoreq06_person2id=[differential join] // { arity: 2 }
       cte l3 =
         Distinct group_by=[#0, #1] // { arity: 2 }
           Union // { arity: 2 }
@@ -953,7 +953,7 @@ Explained Query:
             Get l1 // { arity: 2 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#1, #2) // { arity: 2 }
-                Get materialize.public.person_likes_message // { arity: 3 }
+                ReadStorage materialize.public.person_likes_message // { arity: 3 }
       cte l1 =
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get l0 // { arity: 2 }
@@ -967,9 +967,9 @@ Explained Query:
                 ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.message_hastag_tag // { arity: 3 }
+                  ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -1027,7 +1027,7 @@ Explained Query:
               Filter (#1) IS NOT NULL // { arity: 2 }
                 Get l3 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
-              Get materialize.public.popularityscoreq06 // { arity: 2 }
+              ReadIndex on=popularityscoreq06 popularityscoreq06_person2id=[differential join] // { arity: 2 }
       cte l3 =
         Distinct group_by=[#0, #1] // { arity: 2 }
           Union // { arity: 2 }
@@ -1055,7 +1055,7 @@ Explained Query:
             Get l1 // { arity: 2 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#1, #2) // { arity: 2 }
-                Get materialize.public.person_likes_message // { arity: 3 }
+                ReadStorage materialize.public.person_likes_message // { arity: 3 }
       cte l1 =
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get l0 // { arity: 2 }
@@ -1069,9 +1069,9 @@ Explained Query:
                 ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.message_hastag_tag // { arity: 3 }
+                  ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -1130,7 +1130,7 @@ Explained Query:
               Filter (#1) IS NOT NULL // { arity: 2 }
                 Get l3 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
-              Get materialize.public.popularityscoreq06 // { arity: 2 }
+              ReadIndex on=popularityscoreq06 popularityscoreq06_person2id=[differential join] // { arity: 2 }
       cte l3 =
         Distinct group_by=[#0, #1] // { arity: 2 }
           Union // { arity: 2 }
@@ -1165,7 +1165,7 @@ Explained Query:
               Get l0 // { arity: 3 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#1, #2) // { arity: 2 }
-                Get materialize.public.person_likes_message // { arity: 3 }
+                ReadStorage materialize.public.person_likes_message // { arity: 3 }
       cte l0 =
         Project (#1, #4, #15) // { arity: 3 }
           Filter (#0) IS NOT NULL // { arity: 19 }
@@ -1173,12 +1173,12 @@ Explained Query:
               implementation
                 %0:tag[#0]KA » %1:message_hastag_tag[#1]K » %2:message[#1]KA
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.tag // { arity: 4 }
+                ReadIndex on=tag tag_id=[differential join] // { arity: 4 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.message_hastag_tag // { arity: 3 }
+                  ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.tag_id (differential join)
@@ -1257,11 +1257,11 @@ Explained Query:
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Get l1 // { arity: 1 }
               ArrangeBy keys=[[#12]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_parentmessageid=[differential join] // { arity: 13 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Get l0 // { arity: 2 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.tag // { arity: 4 }
+                ReadIndex on=tag tag_id=[differential join] // { arity: 4 }
       cte l1 =
         Project (#0) // { arity: 1 }
           Filter (#1) IS NOT NULL // { arity: 7 }
@@ -1274,7 +1274,7 @@ Explained Query:
                 ReadExistingIndex materialize.public.tag lookup_value=("Slovenia") // { arity: 5 }
       cte l0 =
         Project (#1, #2) // { arity: 2 }
-          Get materialize.public.message_hastag_tag // { arity: 3 }
+          ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
 
 Used Indexes:
   - materialize.public.tag_id (differential join)
@@ -1394,7 +1394,7 @@ Explained Query:
             Get l8 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#1, #2) // { arity: 2 }
-                Get materialize.public.person_knows_person // { arity: 3 }
+                ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
       cte l8 =
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0) IS NOT NULL // { arity: 2 }
@@ -1447,9 +1447,9 @@ Explained Query:
                 Get l1 // { arity: 5 }
                 ArrangeBy keys=[[#1]] // { arity: 2 }
                   Project (#1, #2) // { arity: 2 }
-                    Get materialize.public.message_hastag_tag // { arity: 3 }
+                    ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
                 ArrangeBy keys=[[#1]] // { arity: 13 }
-                  Get materialize.public.message // { arity: 13 }
+                  ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
                 Get l0 // { arity: 11 }
       cte l2 =
         Project (#1) // { arity: 1 }
@@ -1460,14 +1460,14 @@ Explained Query:
               Get l0 // { arity: 11 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.person_hasinterest_tag // { arity: 3 }
+                  ReadStorage materialize.public.person_hasinterest_tag // { arity: 3 }
               Get l1 // { arity: 5 }
       cte l1 =
         ArrangeBy keys=[[#0]] // { arity: 5 }
           ReadExistingIndex materialize.public.tag lookup_value=("Abbas_I_of_Persia") // { arity: 5 }
       cte l0 =
         ArrangeBy keys=[[#1]] // { arity: 11 }
-          Get materialize.public.person // { arity: 11 }
+          ReadIndex on=person person_id=[differential join] // { arity: 11 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -1513,14 +1513,14 @@ Explained Query:
               %1:message » %2[#0]UKA » %0:person[#1]KA
               %2 » %1:message[#1]KAniif » %0:person[#1]KA
             ArrangeBy keys=[[#1]] // { arity: 11 }
-              Get materialize.public.person // { arity: 11 }
+              ReadIndex on=person person_id=[delta join 1st input (full scan)] // { arity: 11 }
             ArrangeBy keys=[[#1], [#9]] // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_messageid=[delta join lookup] message_creatorpersonid=[delta join lookup] // { arity: 13 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
                 Project (#2) // { arity: 1 }
                   Filter (#0 <= 2012-11-24 00:00:00 UTC) AND (#0 >= 2012-08-29 00:00:00 UTC) AND (#2) IS NOT NULL // { arity: 13 }
-                    Get materialize.public.message // { arity: 13 }
+                    ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.person_id (delta join 1st input (full scan))
@@ -1644,17 +1644,17 @@ Explained Query:
                         ArrangeBy keys=[[#1]] // { arity: 2 }
                           Project (#1, #8) // { arity: 2 }
                             Filter (#1) IS NOT NULL // { arity: 11 }
-                              Get materialize.public.person // { arity: 11 }
+                              ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
                         ArrangeBy keys=[[#1]] // { arity: 2 }
                           Project (#0, #3) // { arity: 2 }
                             Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
-                              Get materialize.public.city // { arity: 4 }
+                              ReadIndex on=city city_id=[*** full scan ***] // { arity: 4 }
                         ArrangeBy keys=[[#0]] // { arity: 4 }
-                          Get materialize.public.country // { arity: 4 }
+                          ReadIndex on=country country_id=[differential join] // { arity: 4 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Distinct group_by=[#1, #0] // { arity: 2 }
                   Project (#1, #9) // { arity: 2 }
-                    Get materialize.public.message // { arity: 13 }
+                    ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Distinct group_by=[#0] // { arity: 1 }
                   Project (#0) // { arity: 1 }
@@ -1667,17 +1667,17 @@ Explained Query:
                         ArrangeBy keys=[[#1]] // { arity: 2 }
                           Project (#0, #3) // { arity: 2 }
                             Filter (#0) IS NOT NULL // { arity: 4 }
-                              Get materialize.public.tag // { arity: 4 }
+                              ReadIndex on=tag tag_id=[*** full scan ***] // { arity: 4 }
                         ArrangeBy keys=[[#0]] // { arity: 5 }
                           ReadExistingIndex materialize.public.tagclass lookup_value=("Thing") // { arity: 5 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Get l3 // { arity: 2 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.tag // { arity: 4 }
+                ReadIndex on=tag tag_id=[differential join] // { arity: 4 }
     With
       cte l3 =
         Project (#1, #2) // { arity: 2 }
-          Get materialize.public.message_hastag_tag // { arity: 3 }
+          ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
       cte l2 =
         Distinct group_by=[#0] // { arity: 1 }
           Union // { arity: 1 }
@@ -1692,11 +1692,11 @@ Explained Query:
       cte l1 =
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#1, #2) // { arity: 2 }
-            Get materialize.public.person_knows_person // { arity: 3 }
+            ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
       cte l0 =
         Project (#2) // { arity: 1 }
           Filter (#1 = 6597069770479) // { arity: 3 }
-            Get materialize.public.person_knows_person // { arity: 3 }
+            ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.tag_id (*** full scan ***, differential join)
@@ -1787,17 +1787,17 @@ Explained Query:
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#1, #8) // { arity: 2 }
                 Filter (#1) IS NOT NULL // { arity: 11 }
-                  Get materialize.public.person // { arity: 11 }
+                  ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#0, #3) // { arity: 2 }
                 Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
-                  Get materialize.public.city // { arity: 4 }
+                  ReadIndex on=city city_id=[*** full scan ***] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
-              Get materialize.public.country // { arity: 4 }
+              ReadIndex on=country country_id=[differential join] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#1, #2) // { arity: 2 }
                 Filter (#0 <= 2013-01-10 00:00:00 UTC) AND (2012-09-28 00:00:00 UTC <= #0) // { arity: 3 }
-                  Get materialize.public.person_knows_person // { arity: 3 }
+                  ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***)
@@ -1863,7 +1863,7 @@ Explained Query:
                             Project (#0) // { arity: 1 }
                               Get l1 // { arity: 2 }
                   Project (#1) // { arity: 1 }
-                    Get materialize.public.person // { arity: 11 }
+                    ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
               Get l1 // { arity: 2 }
     With
       cte l1 =
@@ -1877,7 +1877,7 @@ Explained Query:
                 ReadExistingIndex materialize.public.message lookup_values=[("es"); ("pt"); ("ta")] // { arity: 14 }
       cte l0 =
         ArrangeBy keys=[[#1]] // { arity: 11 }
-          Get materialize.public.person // { arity: 11 }
+          ReadIndex on=person person_id=[differential join] // { arity: 11 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, differential join)
@@ -1930,9 +1930,9 @@ Explained Query:
                             Project (#0..=#10) // { arity: 11 }
                               Get l1 // { arity: 12 }
                         Distinct group_by=[#0..=#10] // { arity: 11 }
-                          Get materialize.public.person // { arity: 11 }
+                          ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
                     ArrangeBy keys=[[#0..=#10]] // { arity: 11 }
-                      Get materialize.public.person // { arity: 11 }
+                      ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
     With
       cte l1 =
         Project (#0..=#11) // { arity: 12 }
@@ -1956,10 +1956,10 @@ Explained Query:
           implementation
             %0:person[×] » %1:message[×]
           ArrangeBy keys=[[]] // { arity: 11 }
-            Get materialize.public.person // { arity: 11 }
+            ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
           ArrangeBy keys=[[]] // { arity: 6 }
             Project (#0, #1, #3, #4, #8, #9) // { arity: 6 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***)
@@ -2065,12 +2065,12 @@ Explained Query:
               implementation
                 %0:person[#1]KAif » %1:person_likes_message[#0]Kif » %2:message[#1]KAif » %3:l4[#0]Kif
               ArrangeBy keys=[[#1]] // { arity: 11 }
-                Get materialize.public.person // { arity: 11 }
+                ReadIndex on=person person_id=[differential join] // { arity: 11 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.person_likes_message // { arity: 3 }
+                  ReadStorage materialize.public.person_likes_message // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
               Get l4 // { arity: 1 }
       cte l4 =
         ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -2112,7 +2112,7 @@ Explained Query:
                 Filter (#7) IS NOT NULL // { arity: 16 }
                   Get l0 // { arity: 16 }
               ArrangeBy keys=[[#9]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
       cte l0 =
         Project (#0, #2..=#6, #8..=#15, #17, #18) // { arity: 16 }
           Filter (#1 = "India") AND (#0) IS NOT NULL // { arity: 19 }
@@ -2120,13 +2120,13 @@ Explained Query:
               implementation
                 %0:country[#0]KAef » %1:city[#3]Kef » %2:person[#8]Keif
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.country // { arity: 4 }
+                ReadIndex on=country country_id=[differential join] // { arity: 4 }
               ArrangeBy keys=[[#3]] // { arity: 4 }
                 Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
-                  Get materialize.public.city // { arity: 4 }
+                  ReadIndex on=city city_id=[*** full scan ***] // { arity: 4 }
               ArrangeBy keys=[[#8]] // { arity: 11 }
                 Filter (#0 < 2012-11-09 00:00:00 UTC) // { arity: 11 }
-                  Get materialize.public.person // { arity: 11 }
+                  ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, differential join)
@@ -2259,7 +2259,7 @@ Explained Query:
                     Get l4 // { arity: 13 }
                     ArrangeBy keys=[[#1]] // { arity: 2 }
                       Project (#1, #2) // { arity: 2 }
-                        Get materialize.public.person_likes_message // { arity: 3 }
+                        ReadStorage materialize.public.person_likes_message // { arity: 3 }
       cte l7 =
         Distinct group_by=[#0, #1] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
@@ -2296,10 +2296,10 @@ Explained Query:
                         %0:l4[#1]KA » %1:message[#12]KA
                       Get l4 // { arity: 13 }
                       ArrangeBy keys=[[#12]] // { arity: 13 }
-                        Get materialize.public.message // { arity: 13 }
+                        ReadIndex on=message message_parentmessageid=[differential join] // { arity: 13 }
       cte l4 =
         ArrangeBy keys=[[#1]] // { arity: 13 }
-          Get materialize.public.message // { arity: 13 }
+          ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
       cte l3 =
         Distinct group_by=[#0, #1] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
@@ -2323,22 +2323,22 @@ Explained Query:
               ArrangeBy keys=[[#2]] // { arity: 3 }
                 Project (#0, #1, #3) // { arity: 3 }
                   Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 4 }
-                    Get materialize.public.city // { arity: 4 }
+                    ReadIndex on=city city_id=[*** full scan ***] // { arity: 4 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #8) // { arity: 2 }
                   Filter (#1) IS NOT NULL // { arity: 11 }
-                    Get materialize.public.person // { arity: 11 }
+                    ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.person_knows_person // { arity: 3 }
+                  ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 11 }
-                Get materialize.public.person // { arity: 11 }
+                ReadIndex on=person person_id=[differential join] // { arity: 11 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.city // { arity: 4 }
+                ReadIndex on=city city_id=[differential join] // { arity: 4 }
               Get l0 // { arity: 4 }
       cte l0 =
         ArrangeBy keys=[[#0]] // { arity: 4 }
-          Get materialize.public.country // { arity: 4 }
+          ReadIndex on=country country_id=[differential join] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, differential join)
@@ -2453,9 +2453,9 @@ Explained Query:
                                               Project (#0..=#2) // { arity: 3 }
                                                 Get l2 // { arity: 4 }
                                           Distinct group_by=[#0..=#2] // { arity: 3 }
-                                            Get materialize.public.person_knows_person // { arity: 3 }
+                                            ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
                                       ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-                                        Get materialize.public.person_knows_person // { arity: 3 }
+                                        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
                   Constant // { arity: 2 }
                     - (1450, 0)
       cte l2 =
@@ -2464,7 +2464,7 @@ Explained Query:
             implementation
               %1[#1, #0]UKK » %0:person_knows_person[greatest(#1, #2), least(#1, #2)]KK
             ArrangeBy keys=[[greatest(#1, #2), least(#1, #2)]] // { arity: 3 }
-              Get materialize.public.person_knows_person // { arity: 3 }
+              ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
             ArrangeBy keys=[[#1, #0]] // { arity: 3 }
               Reduce group_by=[least(#0, #1), greatest(#0, #1)] aggregates=[sum(case when (#2) IS NULL then 10 else 5 end)] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
@@ -2484,7 +2484,7 @@ Explained Query:
                       Distinct group_by=[#0] // { arity: 1 }
                         Project (#1) // { arity: 1 }
                           Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
-                            Get materialize.public.forum // { arity: 4 }
+                            ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
       cte l1 =
         Project (#0, #1, #3, #4) // { arity: 4 }
           Join on=(eq(#2, #5, #6)) type=delta // { arity: 7 }
@@ -2503,7 +2503,7 @@ Explained Query:
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
-                    Get materialize.public.forum // { arity: 4 }
+                    ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
       cte l0 =
         Project (#1, #2, #13, #15, #26) // { arity: 5 }
           Filter (#4) IS NOT NULL // { arity: 29 }
@@ -2511,11 +2511,11 @@ Explained Query:
               implementation
                 %1:message[#1]KA » %2:message[#12]KA » %0:person_knows_person[#1, #2]KKA
               ArrangeBy keys=[[#1, #2]] // { arity: 3 }
-                Get materialize.public.person_knows_person // { arity: 3 }
+                ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[differential join] // { arity: 3 }
               ArrangeBy keys=[[#1]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
               ArrangeBy keys=[[#12]] // { arity: 13 }
-                Get materialize.public.message // { arity: 13 }
+                ReadIndex on=message message_parentmessageid=[differential join] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.forum_id (*** full scan ***)
@@ -2873,16 +2873,16 @@ Explained Query:
                           Project (#0..=#2) // { arity: 3 }
                             Get l2 // { arity: 4 }
                       Distinct group_by=[#0..=#2] // { arity: 3 }
-                        Get materialize.public.person_knows_person // { arity: 3 }
+                        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
                   ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-                    Get materialize.public.person_knows_person // { arity: 3 }
+                    ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
     cte l2 =
       Project (#0..=#2, #5) // { arity: 4 }
         Join on=(#3 = least(#1, #2) AND #4 = greatest(#1, #2)) type=differential // { arity: 6 }
           implementation
             %1[#1, #0]UKK » %0:person_knows_person[greatest(#1, #2), least(#1, #2)]KK
           ArrangeBy keys=[[greatest(#1, #2), least(#1, #2)]] // { arity: 3 }
-            Get materialize.public.person_knows_person // { arity: 3 }
+            ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
           ArrangeBy keys=[[#1, #0]] // { arity: 3 }
             Reduce group_by=[least(#0, #1), greatest(#0, #1)] aggregates=[sum(case when (#2) IS NULL then 10 else 5 end)] // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
@@ -2902,7 +2902,7 @@ Explained Query:
                     Distinct group_by=[#0] // { arity: 1 }
                       Project (#1) // { arity: 1 }
                         Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
-                          Get materialize.public.forum // { arity: 4 }
+                          ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
     cte l1 =
       Project (#0, #1, #3, #4) // { arity: 4 }
         Join on=(eq(#2, #5, #6)) type=delta // { arity: 7 }
@@ -2921,7 +2921,7 @@ Explained Query:
             Distinct group_by=[#0] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 Filter (#0 <= 2012-11-10 00:00:00 UTC) AND (#0 >= 2012-11-06 00:00:00 UTC) AND (#1) IS NOT NULL // { arity: 4 }
-                  Get materialize.public.forum // { arity: 4 }
+                  ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
     cte l0 =
       Project (#1, #2, #13, #15, #26) // { arity: 5 }
         Filter (#4) IS NOT NULL // { arity: 29 }
@@ -2929,11 +2929,11 @@ Explained Query:
             implementation
               %1:message[#1]KA » %2:message[#12]KA » %0:person_knows_person[#1, #2]KKA
             ArrangeBy keys=[[#1, #2]] // { arity: 3 }
-              Get materialize.public.person_knows_person // { arity: 3 }
+              ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[differential join] // { arity: 3 }
             ArrangeBy keys=[[#1]] // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[#12]] // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_parentmessageid=[differential join] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.forum_id (*** full scan ***)
@@ -3071,7 +3071,7 @@ Explained Query:
               Distinct group_by=[#1, #0] // { arity: 2 }
                 Project (#1, #9) // { arity: 2 }
                   Filter (2012-12-14 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0))) // { arity: 13 }
-                    Get materialize.public.message // { arity: 13 }
+                    ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -3097,7 +3097,7 @@ Explained Query:
       cte l4 =
         ArrangeBy keys=[[#1]] // { arity: 2 }
           Project (#1, #2) // { arity: 2 }
-            Get materialize.public.person_knows_person // { arity: 3 }
+            ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
       cte l3 =
         Project (#0, #2) // { arity: 2 }
           Join on=(#0 = #1 AND #2 = #3) type=differential // { arity: 4 }
@@ -3108,7 +3108,7 @@ Explained Query:
               Distinct group_by=[#1, #0] // { arity: 2 }
                 Project (#1, #9) // { arity: 2 }
                   Filter (2012-10-07 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0))) // { arity: 13 }
-                    Get materialize.public.message // { arity: 13 }
+                    ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -3121,17 +3121,17 @@ Explained Query:
                         ReadExistingIndex materialize.public.tag lookup_value=("Diosdado_Macapagal") // { arity: 5 }
       cte l2 =
         ArrangeBy keys=[[#1]] // { arity: 4 }
-          Get materialize.public.tag // { arity: 4 }
+          ReadIndex on=tag tag_name=[lookup] // { arity: 4 }
       cte l1 =
         ArrangeBy keys=[[#1]] // { arity: 2 }
           Project (#1, #2) // { arity: 2 }
-            Get materialize.public.message_hastag_tag // { arity: 3 }
+            ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
       cte l0 =
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct group_by=[#0] // { arity: 1 }
             Project (#1) // { arity: 1 }
               Filter (#1) IS NOT NULL // { arity: 11 }
-                Get materialize.public.person // { arity: 11 }
+                ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -3235,14 +3235,14 @@ Explained Query:
                 Get l1 // { arity: 2 }
       cte l1 =
         Project (#1, #2) // { arity: 2 }
-          Get materialize.public.forum_hasmember_person // { arity: 3 }
+          ReadStorage materialize.public.forum_hasmember_person // { arity: 3 }
       cte l0 =
         Project (#0, #1, #9, #10, #12) // { arity: 5 }
           Join on=(#1 = #13) type=differential // { arity: 14 }
             implementation
               %1[#0]UKA » %0:message[#1]KA
             ArrangeBy keys=[[#1]] // { arity: 13 }
-              Get materialize.public.message // { arity: 13 }
+              ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -3251,7 +3251,7 @@ Explained Query:
                       %1[#0]UKA » %0:message_hastag_tag[#1]K
                     ArrangeBy keys=[[#1]] // { arity: 2 }
                       Project (#1, #2) // { arity: 2 }
-                        Get materialize.public.message_hastag_tag // { arity: 3 }
+                        ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
                       Distinct group_by=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
@@ -3341,14 +3341,14 @@ Explained Query:
                   %1:tag[#0]KAe » %0:person_hasinterest_tag[#1]Ke » %2:l0[#0]Ke
                 ArrangeBy keys=[[#1]] // { arity: 2 }
                   Project (#1, #2) // { arity: 2 }
-                    Get materialize.public.person_hasinterest_tag // { arity: 3 }
+                    ReadStorage materialize.public.person_hasinterest_tag // { arity: 3 }
                 ArrangeBy keys=[[#0]] // { arity: 5 }
                   ReadExistingIndex materialize.public.tag lookup_value=("Fyodor_Dostoyevsky") // { arity: 5 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Get l0 // { arity: 2 }
       cte l0 =
         Project (#1, #2) // { arity: 2 }
-          Get materialize.public.person_knows_person // { arity: 3 }
+          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -3461,7 +3461,7 @@ Explained Query:
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (#8 = 1138) AND (#1) IS NOT NULL // { arity: 11 }
-                    Get materialize.public.person // { arity: 11 }
+                    ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
   With Mutually Recursive
     cte l0 =
       Reduce group_by=[#0, #1] aggregates=[min(#2)] // { arity: 3 }
@@ -3470,7 +3470,7 @@ Explained Query:
             Project (#1, #1, #11) // { arity: 3 }
               Filter (#8 = 655) // { arity: 12 }
                 Map (0) // { arity: 12 }
-                  Get materialize.public.person // { arity: 11 }
+                  ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
             Project (#0, #4, #6) // { arity: 3 }
               Map ((#2 + bigint_to_double(#5))) // { arity: 7 }
                 Join on=(#1 = #3) type=differential // { arity: 6 }
@@ -3480,7 +3480,7 @@ Explained Query:
                     Filter (#1) IS NOT NULL // { arity: 3 }
                       Get l0 // { arity: 3 }
                   ArrangeBy keys=[[#0]] // { arity: 3 }
-                    Get materialize.public.pathq19 // { arity: 3 }
+                    ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.person_id (*** full scan ***)
@@ -3590,7 +3590,7 @@ Explained Query:
           Project (#1, #1, #11) // { arity: 3 }
             Filter (#8 = 1138) // { arity: 12 }
               Map (0) // { arity: 12 }
-                Get materialize.public.person // { arity: 11 }
+                ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
           Project (#0, #5, #7) // { arity: 3 }
             Filter coalesce((#2 < #3), true) // { arity: 8 }
               Map ((#2 + bigint_to_double(#6))) // { arity: 8 }
@@ -3612,7 +3612,7 @@ Explained Query:
                           Constant // { arity: 0 }
                             - ()
                   ArrangeBy keys=[[#0]] // { arity: 3 }
-                    Get materialize.public.pathq19 // { arity: 3 }
+                    ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
     cte l2 =
       Union // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -3630,7 +3630,7 @@ Explained Query:
           Project (#1, #1, #11) // { arity: 3 }
             Filter (#8 = 655) // { arity: 12 }
               Map (0) // { arity: 12 }
-                Get materialize.public.person // { arity: 11 }
+                ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
           Project (#0, #5, #7) // { arity: 3 }
             Filter coalesce((#2 < #3), true) // { arity: 8 }
               Map ((#2 + bigint_to_double(#6))) // { arity: 8 }
@@ -3652,7 +3652,7 @@ Explained Query:
                           Constant // { arity: 0 }
                             - ()
                   ArrangeBy keys=[[#0]] // { arity: 3 }
-                    Get materialize.public.pathq19 // { arity: 3 }
+                    ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
     cte l0 =
       Union // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -3778,11 +3778,11 @@ Explained Query:
                 Project (#11, #1, #1, #12, #11) // { arity: 5 }
                   Filter (#8 = 655) // { arity: 13 }
                     Map (false, 0) // { arity: 13 }
-                      Get materialize.public.person // { arity: 11 }
+                      ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
                 Project (#11, #1, #1, #12, #13) // { arity: 5 }
                   Filter (#8 = 1138) // { arity: 14 }
                     Map (true, 0, false) // { arity: 14 }
-                      Get materialize.public.person // { arity: 11 }
+                      ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
             Project (#0..=#3, #7, #8) // { arity: 6 }
               Map ((#4 OR coalesce((#3 > #6), false)), (#5 + 1)) // { arity: 9 }
                 CrossJoin type=delta // { arity: 7 }
@@ -3842,7 +3842,7 @@ Explained Query:
                     implementation
                       %0:pathq19[#0]KA » %1:l0[#2]K
                     ArrangeBy keys=[[#0]] // { arity: 3 }
-                      Get materialize.public.pathq19 // { arity: 3 }
+                      ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }
                     ArrangeBy keys=[[#2]] // { arity: 4 }
                       Project (#0..=#3) // { arity: 4 }
                         Filter (#2) IS NOT NULL // { arity: 5 }
@@ -3999,9 +3999,9 @@ Explained Query:
                           %1:company[#0]KAef » %0:person_workat_company[#1]Kef
                         ArrangeBy keys=[[#1]] // { arity: 2 }
                           Project (#1, #2) // { arity: 2 }
-                            Get materialize.public.person_workat_company // { arity: 4 }
+                            ReadStorage materialize.public.person_workat_company // { arity: 4 }
                         ArrangeBy keys=[[#0]] // { arity: 4 }
-                          Get materialize.public.company // { arity: 4 }
+                          ReadIndex on=company company_id=[differential join] // { arity: 4 }
     With Mutually Recursive
       cte l0 =
         Project (#2, #0, #1) // { arity: 3 }
@@ -4018,7 +4018,7 @@ Explained Query:
                           Project (#1, #2) // { arity: 2 }
                             Get l0 // { arity: 3 }
                         ArrangeBy keys=[[#0]] // { arity: 3 }
-                          Get materialize.public.pathq20 // { arity: 3 }
+                          ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
                   Constant // { arity: 2 }
                     - (10995116285979, 0)
 
@@ -4104,9 +4104,9 @@ Explained Query:
                           %1:company[#0]KAef » %0:person_workat_company[#1]Kef
                         ArrangeBy keys=[[#1]] // { arity: 2 }
                           Project (#1, #2) // { arity: 2 }
-                            Get materialize.public.person_workat_company // { arity: 4 }
+                            ReadStorage materialize.public.person_workat_company // { arity: 4 }
                         ArrangeBy keys=[[#0]] // { arity: 4 }
-                          Get materialize.public.company // { arity: 4 }
+                          ReadIndex on=company company_id=[differential join] // { arity: 4 }
     With Mutually Recursive
       cte l0 =
         Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
@@ -4120,7 +4120,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 2 }
                       Get l0 // { arity: 2 }
                     ArrangeBy keys=[[#0]] // { arity: 3 }
-                      Get materialize.public.pathq20 // { arity: 3 }
+                      ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
               Constant // { arity: 2 }
                 - (10995116285979, 0)
 
@@ -4212,9 +4212,9 @@ Explained Query:
                           %1:company[#0]KAef » %0:person_workat_company[#1]Kef
                         ArrangeBy keys=[[#1]] // { arity: 2 }
                           Project (#1, #2) // { arity: 2 }
-                            Get materialize.public.person_workat_company // { arity: 4 }
+                            ReadStorage materialize.public.person_workat_company // { arity: 4 }
                         ArrangeBy keys=[[#0]] // { arity: 4 }
-                          Get materialize.public.company // { arity: 4 }
+                          ReadIndex on=company company_id=[differential join] // { arity: 4 }
     With Mutually Recursive
       cte l0 =
         Project (#3, #0..=#2) // { arity: 4 }
@@ -4232,7 +4232,7 @@ Explained Query:
                             Project (#1..=#3) // { arity: 3 }
                               Get l0 // { arity: 4 }
                           ArrangeBy keys=[[#0]] // { arity: 3 }
-                            Get materialize.public.pathq20 // { arity: 3 }
+                            ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
                     Constant // { arity: 3 }
                       - (10995116285979, 0, 0)
 
@@ -4453,7 +4453,7 @@ Explained Query:
                   implementation
                     %0:pathq20[#0]KA » %1:l3[#2]K
                   ArrangeBy keys=[[#0]] // { arity: 3 }
-                    Get materialize.public.pathq20 // { arity: 3 }
+                    ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
                   ArrangeBy keys=[[#2]] // { arity: 4 }
                     Project (#0..=#3) // { arity: 4 }
                       Get l3 // { arity: 5 }
@@ -4514,7 +4514,7 @@ Explained Query:
                   %1:pathq20[#0]KA » %0:l1[#0]K » %2[×]
                 Get l1 // { arity: 1 }
                 ArrangeBy keys=[[#0]] // { arity: 3 }
-                  Get materialize.public.pathq20 // { arity: 3 }
+                  ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
                 ArrangeBy keys=[[]] // { arity: 0 }
                   Union // { arity: 0 }
                     Negate // { arity: 0 }
@@ -4541,9 +4541,9 @@ Explained Query:
                 %1:company[#0]KAef » %0:person_workat_company[#1]Kef
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get materialize.public.person_workat_company // { arity: 4 }
+                  ReadStorage materialize.public.person_workat_company // { arity: 4 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.company // { arity: 4 }
+                ReadIndex on=company company_id=[differential join] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.company_id (differential join)

@@ -71,7 +71,7 @@ Explained Query:
             Get l1 // { arity: 2 }
           Project (#0, #0) // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 1 }
-              Get materialize.public.t // { arity: 1 }
+              ReadStorage materialize.public.t // { arity: 1 }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
