@@ -74,7 +74,7 @@ EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadExistingIndex materialize.public.accounts lookup_value=(100)
+    ReadIndex on=materialize.public.accounts accounts_balance_idx=[lookup value=(100)]
 
 Used Indexes:
   - materialize.public.accounts_balance_idx (lookup)
@@ -117,7 +117,7 @@ EXPLAIN OPTIMiZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadExistingIndex materialize.public.accounts lookup_value=(100)
+    ReadIndex on=materialize.public.accounts accounts_balance_index=[lookup value=(100)]
 
 Used Indexes:
   - materialize.public.accounts_balance_index (lookup)
@@ -155,13 +155,13 @@ statement ok
 DROP INDEX accounts_balance_index;
 
 
-# ensure that the index is now used by the view
+# The index is still used by the view
 query T multiline
 EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadExistingIndex materialize.public.accounts lookup_value=(100)
+    ReadIndex on=materialize.public.accounts u14=[lookup value=(100)]
 
 Used Indexes:
   - [DELETED INDEX] (lookup)

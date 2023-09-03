@@ -120,7 +120,7 @@ impl LiteralConstraints {
                         mfp = orig_mfp;
                     }
                 }
-                Some((key, possible_vals)) => {
+                Some((idx_id, key, possible_vals)) => {
                     // We found a usable index. We'll try to remove the corresponding literal
                     // constraints.
                     if Self::remove_literal_constraints(&mut mfp, &key)
@@ -170,7 +170,7 @@ impl LiteralConstraints {
                                 vec![(*e).clone(), MirScalarExpr::column(i + inp_typ.arity())]
                             })
                             .collect(),
-                        implementation: IndexedFilter(inp_id, key.clone(), possible_vals),
+                        implementation: IndexedFilter(inp_id, idx_id, key.clone(), possible_vals),
                     };
 
                     // Rebuild the MFP to add the projection that removes the columns coming from
@@ -199,11 +199,13 @@ impl LiteralConstraints {
     ///
     /// We can use an index if each argument of the OR includes a literal constraint on each of the
     /// key fields of the index. Extra predicates inside the OR arguments are ok.
+    ///
+    /// Returns (idx_id, idx_key, values to lookup in the index).
     fn detect_literal_constraints(
         mfp: &MapFilterProject,
         get_id: GlobalId,
         transform_ctx: &mut TransformCtx,
-    ) -> Option<(Vec<MirScalarExpr>, Vec<Row>)> {
+    ) -> Option<(GlobalId, Vec<MirScalarExpr>, Vec<Row>)> {
         // Checks whether an index with the specified key can be used to speed up the given filter.
         // See comment of `IndexMatch`.
         fn match_index(key: &[MirScalarExpr], or_args: &Vec<MirScalarExpr>) -> IndexMatch {
@@ -280,15 +282,15 @@ impl LiteralConstraints {
         let result = index_matches
             .iter()
             .cloned()
-            .filter_map(|(_index_id, key, index_match)| match index_match {
-                IndexMatch::Usable(vals, inv_cast) => Some((key, vals, inv_cast)),
+            .filter_map(|(idx_id, key, index_match)| match index_match {
+                IndexMatch::Usable(vals, inv_cast) => Some((idx_id, key, vals, inv_cast)),
                 _ => None,
             })
             // Maximize:
             //  1. number of predicates that are sped using a single index.
             //  2. whether we are using a simpler index by having removed a cast from the key expr.
-            .max_by_key(|(key, _vals, inv_cast)| (key.len(), *inv_cast))
-            .map(|(key, vals, _inv_cast)| (key, vals));
+            .max_by_key(|(_idx_id, key, _vals, inv_cast)| (key.len(), *inv_cast))
+            .map(|(idx_id, key, vals, _inv_cast)| (idx_id, key, vals));
 
         if result.is_none() && !or_args.is_empty() {
             // Let's see if we can give a hint to the user.

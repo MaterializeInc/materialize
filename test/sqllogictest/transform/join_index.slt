@@ -673,7 +673,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 14 }
           ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1]] // { arity: 15 }
-          ReadExistingIndex materialize.public.big lookup_value=(42) // { arity: 15 }
+          ReadIndex on=materialize.public.big big_idx_y=[lookup value=(42)] // { arity: 15 }
         ArrangeBy keys=[[#2]] // { arity: 14 }
           ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
 
@@ -724,7 +724,7 @@ Explained Query:
         Get l0 // { arity: 15 }
   With
     cte l0 =
-      ReadExistingIndex materialize.public.big lookup_value=(5) // { arity: 15 }
+      ReadIndex on=materialize.public.big big_idx_a=[lookup value=(5)] // { arity: 15 }
 
 Used Indexes:
   - materialize.public.big_idx_a (*** full scan ***, lookup)

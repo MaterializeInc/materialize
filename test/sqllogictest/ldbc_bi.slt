@@ -512,7 +512,7 @@ Explained Query:
               implementation
                 %0:tagclass[#0]KAe » %1:tag[#2]Ke
               ArrangeBy keys=[[#0]] // { arity: 5 }
-                ReadExistingIndex materialize.public.tagclass lookup_value=("ChristianBishop") // { arity: 5 }
+                ReadIndex on=materialize.public.tagclass tagclass_name=[lookup value=("ChristianBishop")] // { arity: 5 }
               ArrangeBy keys=[[#2]] // { arity: 3 }
                 Project (#0, #1, #3) // { arity: 3 }
                   ReadIndex on=tag tag_id=[*** full scan ***] // { arity: 4 }
@@ -585,7 +585,7 @@ Explained Query:
                       implementation
                         %0:tagclass[#0]KAe » %1:tag[#1]Ke » %2:message_hastag_tag[#1]Ke
                       ArrangeBy keys=[[#0]] // { arity: 5 }
-                        ReadExistingIndex materialize.public.tagclass lookup_value=("Philosopher") // { arity: 5 }
+                        ReadIndex on=materialize.public.tagclass tagclass_name=[lookup value=("Philosopher")] // { arity: 5 }
                       ArrangeBy keys=[[#1]] // { arity: 2 }
                         Project (#0, #3) // { arity: 2 }
                           Filter (#0) IS NOT NULL // { arity: 4 }
@@ -838,7 +838,7 @@ Explained Query:
               implementation
                 %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
               ArrangeBy keys=[[#0]] // { arity: 5 }
-                ReadExistingIndex materialize.public.tag lookup_value=("Sikh_Empire") // { arity: 5 }
+                ReadIndex on=materialize.public.tag tag_name=[lookup value=("Sikh_Empire")] // { arity: 5 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
                   ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
@@ -964,7 +964,7 @@ Explained Query:
               implementation
                 %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
               ArrangeBy keys=[[#0]] // { arity: 5 }
-                ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
+                ReadIndex on=materialize.public.tag tag_name=[lookup value=("Bob_Geldof")] // { arity: 5 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
                   ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
@@ -1066,7 +1066,7 @@ Explained Query:
               implementation
                 %0:tag[#0]KAe » %1:message_hastag_tag[#1]Ke » %2:message[#1]KAe
               ArrangeBy keys=[[#0]] // { arity: 5 }
-                ReadExistingIndex materialize.public.tag lookup_value=("Bob_Geldof") // { arity: 5 }
+                ReadIndex on=materialize.public.tag tag_name=[lookup value=("Bob_Geldof")] // { arity: 5 }
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
                   ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
@@ -1271,7 +1271,7 @@ Explained Query:
               ArrangeBy keys=[[#1]] // { arity: 2 }
                 Get l0 // { arity: 2 }
               ArrangeBy keys=[[#0]] // { arity: 5 }
-                ReadExistingIndex materialize.public.tag lookup_value=("Slovenia") // { arity: 5 }
+                ReadIndex on=materialize.public.tag tag_name=[lookup value=("Slovenia")] // { arity: 5 }
       cte l0 =
         Project (#1, #2) // { arity: 2 }
           ReadStorage materialize.public.message_hastag_tag // { arity: 3 }
@@ -1464,7 +1464,7 @@ Explained Query:
               Get l1 // { arity: 5 }
       cte l1 =
         ArrangeBy keys=[[#0]] // { arity: 5 }
-          ReadExistingIndex materialize.public.tag lookup_value=("Abbas_I_of_Persia") // { arity: 5 }
+          ReadIndex on=materialize.public.tag tag_name=[lookup value=("Abbas_I_of_Persia")] // { arity: 5 }
       cte l0 =
         ArrangeBy keys=[[#1]] // { arity: 11 }
           ReadIndex on=person person_id=[differential join] // { arity: 11 }
@@ -1669,7 +1669,7 @@ Explained Query:
                             Filter (#0) IS NOT NULL // { arity: 4 }
                               ReadIndex on=tag tag_id=[*** full scan ***] // { arity: 4 }
                         ArrangeBy keys=[[#0]] // { arity: 5 }
-                          ReadExistingIndex materialize.public.tagclass lookup_value=("Thing") // { arity: 5 }
+                          ReadIndex on=materialize.public.tagclass tagclass_name=[lookup value=("Thing")] // { arity: 5 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Get l3 // { arity: 2 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
@@ -1874,7 +1874,7 @@ Explained Query:
                 %1:message[#9]KAeiif » %0:l0[#1]KAeiif
               Get l0 // { arity: 11 }
               ArrangeBy keys=[[#9]] // { arity: 14 }
-                ReadExistingIndex materialize.public.message lookup_values=[("es"); ("pt"); ("ta")] // { arity: 14 }
+                ReadIndex on=materialize.public.message message_rootpostlanguage=[lookup values=[("es"); ("pt"); ("ta")]] // { arity: 14 }
       cte l0 =
         ArrangeBy keys=[[#1]] // { arity: 11 }
           ReadIndex on=person person_id=[differential join] // { arity: 11 }
@@ -3081,7 +3081,7 @@ Explained Query:
                         %1:tag[#0]KAe » %0:l1[#1]Ke
                       Get l1 // { arity: 2 }
                       ArrangeBy keys=[[#0]] // { arity: 5 }
-                        ReadExistingIndex materialize.public.tag lookup_value=("Thailand_Noriega") // { arity: 5 }
+                        ReadIndex on=materialize.public.tag tag_name=[lookup value=("Thailand_Noriega")] // { arity: 5 }
       cte l5 =
         Project (#0, #1, #3) // { arity: 3 }
           Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 5 }
@@ -3118,7 +3118,7 @@ Explained Query:
                         %1:tag[#0]KAe » %0:l1[#1]Ke
                       Get l1 // { arity: 2 }
                       ArrangeBy keys=[[#0]] // { arity: 5 }
-                        ReadExistingIndex materialize.public.tag lookup_value=("Diosdado_Macapagal") // { arity: 5 }
+                        ReadIndex on=materialize.public.tag tag_name=[lookup value=("Diosdado_Macapagal")] // { arity: 5 }
       cte l2 =
         ArrangeBy keys=[[#1]] // { arity: 4 }
           ReadIndex on=tag tag_name=[lookup] // { arity: 4 }
@@ -3256,7 +3256,7 @@ Explained Query:
                       Distinct group_by=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Filter (#0) IS NOT NULL // { arity: 5 }
-                            ReadExistingIndex materialize.public.tag lookup_value=("Cosmic_Egg") // { arity: 5 }
+                            ReadIndex on=materialize.public.tag tag_name=[lookup value=("Cosmic_Egg")] // { arity: 5 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
@@ -3343,7 +3343,7 @@ Explained Query:
                   Project (#1, #2) // { arity: 2 }
                     ReadStorage materialize.public.person_hasinterest_tag // { arity: 3 }
                 ArrangeBy keys=[[#0]] // { arity: 5 }
-                  ReadExistingIndex materialize.public.tag lookup_value=("Fyodor_Dostoyevsky") // { arity: 5 }
+                  ReadIndex on=materialize.public.tag tag_name=[lookup value=("Fyodor_Dostoyevsky")] // { arity: 5 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Get l0 // { arity: 2 }
       cte l0 =

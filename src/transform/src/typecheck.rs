@@ -716,7 +716,7 @@ impl Typecheck {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_global_id, key, consts) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, key, consts) => {
                         let typ: Vec<ColumnType> = key
                             .iter()
                             .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))

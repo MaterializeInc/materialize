@@ -73,7 +73,7 @@ SELECT 1 / 0
                     []
                   ]
                 },
-                "persist_or_index": null
+                "access_strategy": "UnknownOrLocal"
               }
             },
             "scalars": [
@@ -170,7 +170,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                             []
                           ]
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     },
                     "scalars": [
@@ -231,7 +231,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       "scalars": [
@@ -295,7 +295,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                           []
                         ]
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "scalars": [
@@ -396,7 +396,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                   []
                                 ]
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -419,7 +419,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           }
                         ],
@@ -540,7 +540,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                       ],
                       "keys": []
                     },
-                    "persist_or_index": null
+                    "access_strategy": "UnknownOrLocal"
                   }
                 }
               }
@@ -631,7 +631,7 @@ SELECT generate_series(a, b) from t
                           []
                         ]
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   {
@@ -654,7 +654,7 @@ SELECT generate_series(a, b) from t
                         ],
                         "keys": []
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   }
                 ],
@@ -684,7 +684,7 @@ SELECT generate_series(a, b) from t
                           ],
                           "keys": []
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     },
                     "func": "GenerateSeriesInt32",
@@ -792,7 +792,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                   []
                                 ]
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -815,7 +815,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           }
                         ],
@@ -859,7 +859,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                         []
                                       ]
                                     },
-                                    "persist_or_index": null
+                                    "access_strategy": "UnknownOrLocal"
                                   }
                                 },
                                 {
@@ -882,7 +882,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                       ],
                                       "keys": []
                                     },
-                                    "persist_or_index": null
+                                    "access_strategy": "UnknownOrLocal"
                                   }
                                 }
                               ],
@@ -962,7 +962,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -985,7 +985,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -1017,7 +1017,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                     []
                                   ]
                                 },
-                                "persist_or_index": null
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             {
@@ -1040,7 +1040,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                   ],
                                   "keys": []
                                 },
-                                "persist_or_index": null
+                                "access_strategy": "UnknownOrLocal"
                               }
                             }
                           ],
@@ -1104,7 +1104,7 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
                   []
                 ]
               },
-              "persist_or_index": null
+              "access_strategy": "UnknownOrLocal"
             }
           },
           {
@@ -1127,7 +1127,7 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
                 ],
                 "keys": []
               },
-              "persist_or_index": null
+              "access_strategy": "UnknownOrLocal"
             }
           }
         ],
@@ -1191,7 +1191,7 @@ SELECT abs(min(a) - max(a)) FROM t
                                       []
                                     ]
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               {
@@ -1214,7 +1214,7 @@ SELECT abs(min(a) - max(a)) FROM t
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               }
                             ],
@@ -1265,7 +1265,7 @@ SELECT abs(min(a) - max(a)) FROM t
                                 []
                               ]
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         "inputs": [
@@ -1303,7 +1303,7 @@ SELECT abs(min(a) - max(a)) FROM t
                                                               []
                                                             ]
                                                           },
-                                                          "persist_or_index": null
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       "group_key": [],
@@ -1328,7 +1328,7 @@ SELECT abs(min(a) - max(a)) FROM t
                                                             []
                                                           ]
                                                         },
-                                                        "persist_or_index": null
+                                                        "access_strategy": "UnknownOrLocal"
                                                       }
                                                     },
                                                     "group_key": [],
@@ -1351,7 +1351,7 @@ SELECT abs(min(a) - max(a)) FROM t
                                                   []
                                                 ]
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           }
                                         ],
@@ -1420,7 +1420,7 @@ SELECT abs(min(a) - max(a)) FROM t
                       ],
                       "keys": []
                     },
-                    "persist_or_index": null
+                    "access_strategy": "UnknownOrLocal"
                   }
                 }
               }
@@ -1512,7 +1512,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                                               []
                                             ]
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       {
@@ -1535,7 +1535,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       }
                                     ],
@@ -1561,7 +1561,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                                       ],
                                       "keys": []
                                     },
-                                    "persist_or_index": null
+                                    "access_strategy": "UnknownOrLocal"
                                   }
                                 }
                               }
@@ -1631,7 +1631,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                         ]
                       ]
                     },
-                    "persist_or_index": null
+                    "access_strategy": "UnknownOrLocal"
                   }
                 }
               }
@@ -1723,7 +1723,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               []
                                             ]
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       {
@@ -1746,7 +1746,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       }
                                     ],
@@ -1818,7 +1818,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           ],
                                           "keys": []
                                         },
-                                        "persist_or_index": null
+                                        "access_strategy": "UnknownOrLocal"
                                       }
                                     },
                                     "group_key": [
@@ -1854,7 +1854,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           },
                                           {
@@ -1887,7 +1887,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                         ]
                                                                       ]
                                                                     },
-                                                                    "persist_or_index": null
+                                                                    "access_strategy": "UnknownOrLocal"
                                                                   }
                                                                 },
                                                                 {
@@ -1910,7 +1910,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                       ],
                                                                       "keys": []
                                                                     },
-                                                                    "persist_or_index": null
+                                                                    "access_strategy": "UnknownOrLocal"
                                                                   }
                                                                 }
                                                               ],
@@ -1986,7 +1986,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           ]
                                                         ]
                                                       },
-                                                      "persist_or_index": null
+                                                      "access_strategy": "UnknownOrLocal"
                                                     }
                                                   },
                                                   "inputs": [
@@ -2026,7 +2026,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                                         ]
                                                                                       ]
                                                                                     },
-                                                                                    "persist_or_index": null
+                                                                                    "access_strategy": "UnknownOrLocal"
                                                                                   }
                                                                                 },
                                                                                 "group_key": [
@@ -2062,7 +2062,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                                       ]
                                                                                     ]
                                                                                   },
-                                                                                  "persist_or_index": null
+                                                                                  "access_strategy": "UnknownOrLocal"
                                                                                 }
                                                                               },
                                                                               "group_key": [
@@ -2096,7 +2096,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                             ]
                                                                           ]
                                                                         },
-                                                                        "persist_or_index": null
+                                                                        "access_strategy": "UnknownOrLocal"
                                                                       }
                                                                     }
                                                                   ],
@@ -2214,7 +2214,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                               ],
                               "keys": []
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         "group_key": [
@@ -2250,7 +2250,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               {
@@ -2283,7 +2283,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                             ]
                                                           ]
                                                         },
-                                                        "persist_or_index": null
+                                                        "access_strategy": "UnknownOrLocal"
                                                       }
                                                     },
                                                     {
@@ -2306,7 +2306,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           ],
                                                           "keys": []
                                                         },
-                                                        "persist_or_index": null
+                                                        "access_strategy": "UnknownOrLocal"
                                                       }
                                                     }
                                                   ],
@@ -2382,7 +2382,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               ]
                                             ]
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       "inputs": [
@@ -2422,7 +2422,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                             ]
                                                                           ]
                                                                         },
-                                                                        "persist_or_index": null
+                                                                        "access_strategy": "UnknownOrLocal"
                                                                       }
                                                                     },
                                                                     "group_key": [
@@ -2458,7 +2458,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
                                                                   "group_key": [
@@ -2492,7 +2492,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                 ]
                                                               ]
                                                             },
-                                                            "persist_or_index": null
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ],
@@ -2638,7 +2638,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -2661,7 +2661,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -2690,7 +2690,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -2716,7 +2716,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               "group_key": [
@@ -2760,7 +2760,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                           ]
                                         ]
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   "group_key": [
@@ -2801,7 +2801,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                 ]
                                               ]
                                             },
-                                            "persist_or_index": null
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         {
@@ -2837,7 +2837,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
                                                                   {
@@ -2860,7 +2860,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                         ],
                                                                         "keys": []
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   }
                                                                 ],
@@ -2923,7 +2923,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             ]
                                                           ]
                                                         },
-                                                        "persist_or_index": null
+                                                        "access_strategy": "UnknownOrLocal"
                                                       }
                                                     },
                                                     "inputs": [
@@ -2957,7 +2957,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                               ]
                                                                             ]
                                                                           },
-                                                                          "persist_or_index": null
+                                                                          "access_strategy": "UnknownOrLocal"
                                                                         }
                                                                       },
                                                                       "group_key": [
@@ -3063,7 +3063,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                       ],
                                                       "keys": []
                                                     },
-                                                    "persist_or_index": null
+                                                    "access_strategy": "UnknownOrLocal"
                                                   }
                                                 },
                                                 "inputs": [
@@ -3099,7 +3099,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                     ],
                                                                                     "keys": []
                                                                                   },
-                                                                                  "persist_or_index": null
+                                                                                  "access_strategy": "UnknownOrLocal"
                                                                                 }
                                                                               },
                                                                               "group_key": [
@@ -3135,7 +3135,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                     ]
                                                                                   ]
                                                                                 },
-                                                                                "persist_or_index": null
+                                                                                "access_strategy": "UnknownOrLocal"
                                                                               }
                                                                             },
                                                                             "group_key": [
@@ -3169,7 +3169,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   }
                                                                 ],
@@ -3274,7 +3274,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               "group_key": [
@@ -3318,7 +3318,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                           ]
                                         ]
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   "group_key": [
@@ -3359,7 +3359,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                 ]
                                               ]
                                             },
-                                            "persist_or_index": null
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         {
@@ -3395,7 +3395,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
                                                                   {
@@ -3418,7 +3418,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                         ],
                                                                         "keys": []
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   }
                                                                 ],
@@ -3481,7 +3481,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             ]
                                                           ]
                                                         },
-                                                        "persist_or_index": null
+                                                        "access_strategy": "UnknownOrLocal"
                                                       }
                                                     },
                                                     "inputs": [
@@ -3515,7 +3515,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                               ]
                                                                             ]
                                                                           },
-                                                                          "persist_or_index": null
+                                                                          "access_strategy": "UnknownOrLocal"
                                                                         }
                                                                       },
                                                                       "group_key": [
@@ -3621,7 +3621,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                       ],
                                                       "keys": []
                                                     },
-                                                    "persist_or_index": null
+                                                    "access_strategy": "UnknownOrLocal"
                                                   }
                                                 },
                                                 "inputs": [
@@ -3657,7 +3657,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                     ],
                                                                                     "keys": []
                                                                                   },
-                                                                                  "persist_or_index": null
+                                                                                  "access_strategy": "UnknownOrLocal"
                                                                                 }
                                                                               },
                                                                               "group_key": [
@@ -3693,7 +3693,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                     ]
                                                                                   ]
                                                                                 },
-                                                                                "persist_or_index": null
+                                                                                "access_strategy": "UnknownOrLocal"
                                                                               }
                                                                             },
                                                                             "group_key": [
@@ -3727,7 +3727,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   }
                                                                 ],
@@ -3904,7 +3904,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                           []
                         ]
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   {
@@ -3927,7 +3927,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         ],
                         "keys": []
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   }
                 ],
@@ -3952,7 +3952,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -3975,7 +3975,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -4011,7 +4011,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   {
@@ -4032,7 +4032,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   }
                                 ],
@@ -4093,7 +4093,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                           ],
                           "keys": []
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     }
                   }
@@ -4157,7 +4157,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                           []
                         ]
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   {
@@ -4180,7 +4180,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                         ],
                         "keys": []
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   }
                 ],
@@ -4205,7 +4205,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -4228,7 +4228,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -4264,7 +4264,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   {
@@ -4285,7 +4285,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   }
                                 ],
@@ -4346,7 +4346,7 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                           ],
                           "keys": []
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     }
                   }
@@ -4420,7 +4420,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                   []
                                 ]
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -4443,7 +4443,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           }
                         ],
@@ -4468,7 +4468,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                       []
                                     ]
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               {
@@ -4491,7 +4491,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               }
                             ],
@@ -4527,7 +4527,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           },
                                           {
@@ -4548,7 +4548,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           }
                                         ],
@@ -4609,7 +4609,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                   ],
                                   "keys": []
                                 },
-                                "persist_or_index": null
+                                "access_strategy": "UnknownOrLocal"
                               }
                             }
                           }
@@ -4635,7 +4635,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                   []
                                 ]
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -4658,7 +4658,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           }
                         ],
@@ -4702,7 +4702,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       {
@@ -4723,7 +4723,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       }
                                     ],
@@ -4794,7 +4794,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               ],
                               "keys": []
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         }
                       }
@@ -4897,7 +4897,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -4920,7 +4920,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -4945,7 +4945,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                   []
                                 ]
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -4968,7 +4968,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           }
                         ],
@@ -5004,7 +5004,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       {
@@ -5025,7 +5025,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       }
                                     ],
@@ -5082,7 +5082,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                               ],
                               "keys": []
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         }
                       }
@@ -5108,7 +5108,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -5131,7 +5131,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -5175,7 +5175,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   {
@@ -5196,7 +5196,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   }
                                 ],
@@ -5263,7 +5263,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                           ],
                           "keys": []
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     }
                   }
@@ -5333,7 +5333,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -5356,7 +5356,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -5381,7 +5381,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   []
                                 ]
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -5404,7 +5404,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           }
                         ],
@@ -5440,7 +5440,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       {
@@ -5461,7 +5461,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       }
                                     ],
@@ -5525,7 +5525,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                           ],
                                           "keys": []
                                         },
-                                        "persist_or_index": null
+                                        "access_strategy": "UnknownOrLocal"
                                       }
                                     },
                                     "outputs": [
@@ -5574,7 +5574,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                             ],
                                                             "keys": []
                                                           },
-                                                          "persist_or_index": null
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       {
@@ -5595,7 +5595,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                               ]
                                                             ]
                                                           },
-                                                          "persist_or_index": null
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       }
                                                     ],
@@ -5639,7 +5639,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           }
                                         ]
@@ -5706,7 +5706,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   }
                                 ]
@@ -5737,7 +5737,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                               []
                             ]
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       {
@@ -5760,7 +5760,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             ],
                             "keys": []
                           },
-                          "persist_or_index": null
+                          "access_strategy": "UnknownOrLocal"
                         }
                       }
                     ],
@@ -5804,7 +5804,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   {
@@ -5825,7 +5825,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   }
                                 ],
@@ -5899,7 +5899,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       ],
                                       "keys": []
                                     },
-                                    "persist_or_index": null
+                                    "access_strategy": "UnknownOrLocal"
                                   }
                                 },
                                 "outputs": [
@@ -5950,7 +5950,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                             ],
                                                             "keys": []
                                                           },
-                                                          "persist_or_index": null
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       {
@@ -5971,7 +5971,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                               ]
                                                             ]
                                                           },
-                                                          "persist_or_index": null
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       }
                                                     ],
@@ -6015,7 +6015,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           }
                                         ]
@@ -6130,7 +6130,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               }
                             ]
@@ -6206,7 +6206,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                       []
                                     ]
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               {
@@ -6229,7 +6229,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               }
                             ],
@@ -6255,7 +6255,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                               ],
                               "keys": []
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         }
                       }
@@ -6311,7 +6311,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           },
                                           {
@@ -6328,7 +6328,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           }
                                         ],
@@ -6379,7 +6379,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                   ],
                                   "keys": []
                                 },
-                                "persist_or_index": null
+                                "access_strategy": "UnknownOrLocal"
                               }
                             }
                           }
@@ -6402,7 +6402,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                               ],
                               "keys": []
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         }
                       }
@@ -6504,7 +6504,7 @@ FROM
                           []
                         ]
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   {
@@ -6527,7 +6527,7 @@ FROM
                         ],
                         "keys": []
                       },
-                      "persist_or_index": null
+                      "access_strategy": "UnknownOrLocal"
                     }
                   }
                 ],
@@ -6560,7 +6560,7 @@ FROM
                               ],
                               "keys": []
                             },
-                            "persist_or_index": null
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         "group_key": [
@@ -6596,7 +6596,7 @@ FROM
                                     ],
                                     "keys": []
                                   },
-                                  "persist_or_index": null
+                                  "access_strategy": "UnknownOrLocal"
                                 }
                               },
                               {
@@ -6628,7 +6628,7 @@ FROM
                                                         ]
                                                       ]
                                                     },
-                                                    "persist_or_index": null
+                                                    "access_strategy": "UnknownOrLocal"
                                                   }
                                                 },
                                                 {
@@ -6651,7 +6651,7 @@ FROM
                                                       ],
                                                       "keys": []
                                                     },
-                                                    "persist_or_index": null
+                                                    "access_strategy": "UnknownOrLocal"
                                                   }
                                                 }
                                               ],
@@ -6709,7 +6709,7 @@ FROM
                                                   ]
                                                 ]
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           },
                                           "inputs": [
@@ -6749,7 +6749,7 @@ FROM
                                                                                 ]
                                                                               ]
                                                                             },
-                                                                            "persist_or_index": null
+                                                                            "access_strategy": "UnknownOrLocal"
                                                                           }
                                                                         },
                                                                         "group_key": [
@@ -6785,7 +6785,7 @@ FROM
                                                                               ]
                                                                             ]
                                                                           },
-                                                                          "persist_or_index": null
+                                                                          "access_strategy": "UnknownOrLocal"
                                                                         }
                                                                       },
                                                                       "group_key": [
@@ -6819,7 +6819,7 @@ FROM
                                                                     ]
                                                                   ]
                                                                 },
-                                                                "persist_or_index": null
+                                                                "access_strategy": "UnknownOrLocal"
                                                               }
                                                             }
                                                           ],
@@ -6896,7 +6896,7 @@ FROM
                                             ],
                                             "keys": []
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       "predicates": [
@@ -6989,7 +6989,7 @@ FROM
                           ],
                           "keys": []
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     },
                     "group_key": [
@@ -7029,7 +7029,7 @@ FROM
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -7061,7 +7061,7 @@ FROM
                                                     ]
                                                   ]
                                                 },
-                                                "persist_or_index": null
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             {
@@ -7084,7 +7084,7 @@ FROM
                                                   ],
                                                   "keys": []
                                                 },
-                                                "persist_or_index": null
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             }
                                           ],
@@ -7142,7 +7142,7 @@ FROM
                                               ]
                                             ]
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       "inputs": [
@@ -7182,7 +7182,7 @@ FROM
                                                                             ]
                                                                           ]
                                                                         },
-                                                                        "persist_or_index": null
+                                                                        "access_strategy": "UnknownOrLocal"
                                                                       }
                                                                     },
                                                                     "group_key": [
@@ -7218,7 +7218,7 @@ FROM
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
                                                                   "group_key": [
@@ -7252,7 +7252,7 @@ FROM
                                                                 ]
                                                               ]
                                                             },
-                                                            "persist_or_index": null
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ],
@@ -7329,7 +7329,7 @@ FROM
                                         ],
                                         "keys": []
                                       },
-                                      "persist_or_index": null
+                                      "access_strategy": "UnknownOrLocal"
                                     }
                                   },
                                   "predicates": [
@@ -7504,7 +7504,7 @@ FROM
                       []
                     ]
                   },
-                  "persist_or_index": null
+                  "access_strategy": "UnknownOrLocal"
                 }
               },
               {
@@ -7527,7 +7527,7 @@ FROM
                     ],
                     "keys": []
                   },
-                  "persist_or_index": null
+                  "access_strategy": "UnknownOrLocal"
                 }
               }
             ],
@@ -7560,7 +7560,7 @@ FROM
                           ],
                           "keys": []
                         },
-                        "persist_or_index": null
+                        "access_strategy": "UnknownOrLocal"
                       }
                     },
                     "group_key": [
@@ -7596,7 +7596,7 @@ FROM
                                 ],
                                 "keys": []
                               },
-                              "persist_or_index": null
+                              "access_strategy": "UnknownOrLocal"
                             }
                           },
                           {
@@ -7628,7 +7628,7 @@ FROM
                                                     ]
                                                   ]
                                                 },
-                                                "persist_or_index": null
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             {
@@ -7651,7 +7651,7 @@ FROM
                                                   ],
                                                   "keys": []
                                                 },
-                                                "persist_or_index": null
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             }
                                           ],
@@ -7709,7 +7709,7 @@ FROM
                                               ]
                                             ]
                                           },
-                                          "persist_or_index": null
+                                          "access_strategy": "UnknownOrLocal"
                                         }
                                       },
                                       "inputs": [
@@ -7749,7 +7749,7 @@ FROM
                                                                             ]
                                                                           ]
                                                                         },
-                                                                        "persist_or_index": null
+                                                                        "access_strategy": "UnknownOrLocal"
                                                                       }
                                                                     },
                                                                     "group_key": [
@@ -7785,7 +7785,7 @@ FROM
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
                                                                   "group_key": [
@@ -7819,7 +7819,7 @@ FROM
                                                                 ]
                                                               ]
                                                             },
-                                                            "persist_or_index": null
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ],
@@ -7901,7 +7901,7 @@ FROM
                                                 ],
                                                 "keys": []
                                               },
-                                              "persist_or_index": null
+                                              "access_strategy": "UnknownOrLocal"
                                             }
                                           },
                                           "group_key": [
@@ -7940,7 +7940,7 @@ FROM
                                                       ],
                                                       "keys": []
                                                     },
-                                                    "persist_or_index": null
+                                                    "access_strategy": "UnknownOrLocal"
                                                   }
                                                 },
                                                 {
@@ -7977,7 +7977,7 @@ FROM
                                                                           ]
                                                                         ]
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   },
                                                                   {
@@ -8000,7 +8000,7 @@ FROM
                                                                         ],
                                                                         "keys": []
                                                                       },
-                                                                      "persist_or_index": null
+                                                                      "access_strategy": "UnknownOrLocal"
                                                                     }
                                                                   }
                                                                 ],
@@ -8066,7 +8066,7 @@ FROM
                                                                     ]
                                                                   ]
                                                                 },
-                                                                "persist_or_index": null
+                                                                "access_strategy": "UnknownOrLocal"
                                                               }
                                                             },
                                                             "inputs": [
@@ -8111,7 +8111,7 @@ FROM
                                                                                                   ]
                                                                                                 ]
                                                                                               },
-                                                                                              "persist_or_index": null
+                                                                                              "access_strategy": "UnknownOrLocal"
                                                                                             }
                                                                                           },
                                                                                           "group_key": [
@@ -8155,7 +8155,7 @@ FROM
                                                                                                 ]
                                                                                               ]
                                                                                             },
-                                                                                            "persist_or_index": null
+                                                                                            "access_strategy": "UnknownOrLocal"
                                                                                           }
                                                                                         },
                                                                                         "group_key": [
@@ -8197,7 +8197,7 @@ FROM
                                                                                       ]
                                                                                     ]
                                                                                   },
-                                                                                  "persist_or_index": null
+                                                                                  "access_strategy": "UnknownOrLocal"
                                                                                 }
                                                                               }
                                                                             ],
@@ -8287,7 +8287,7 @@ FROM
                                                               ],
                                                               "keys": []
                                                             },
-                                                            "persist_or_index": null
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         },
                                                         "predicates": [
