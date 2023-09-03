@@ -5,6 +5,12 @@ aliases:
   - /sql/consistency
   - /sql/isolation-level
   - /overview/isolation-level/
+  - /get-started/isolation-level
+menu:
+  main:
+    parent: 'reference'
+    name: 'Consistency guarantees'
+    weight: 20
 ---
 
 The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:
@@ -116,6 +122,35 @@ executed immediately. A consistent snapshot is guaranteed to be available for qu
 (which includes queries against a single materialized view that was created using multiple objects). Such queries will
 therefore never block, and always be executed immediately.
 
+## Conceptual model
+
+### Timestamps
+
+All data in Materialize is associated with a logical timestamp. Every
+transaction executes at a specific logical time and can observe only the data
+whose timestamp is less than or equal to the transaction's timestamp. See the
+[`BEGIN`](/sql/begin) documentation for details on how Materialize selects the
+timestamp for a transaction.
+
+### Queryable objects
+
+There are four types of objects in Materialize that store data: sources, tables,
+indexes, and materialized views. We refer to these objects as **queryable
+objects**. Each queryable object has a read frontier and a write frontier:
+
+  * The **read frontier** is the earliest time at which the object's data is
+    known.
+  * The **write frontier** is the earliest time at which the object's data may
+    change.
+
+The data in a queryable object is known for all times that are less than the
+write frontier but greater than the read frontier.
+
+Queries **may not** to execute at a timestamp that is less than the read
+frontier of any referenced object. Queries **may** execute at a timestamp that
+is greater than or equal to the write frontier of a referenced object, but they
+will block until the write frontier of the object advances beyond the query
+timestamp.
 
 ## Learn more
 
