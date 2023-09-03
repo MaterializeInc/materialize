@@ -431,6 +431,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty acl_item_grantor = 302;
         google.protobuf.Empty acl_item_grantee = 303;
         google.protobuf.Empty acl_item_privileges = 304;
+        mz_repr.adt.regex.ProtoRegex regexp_split_to_array = 305;
     }
 }
 

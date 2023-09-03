@@ -32,7 +32,9 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::scalar::func::{array_create_scalar, format, EagerUnaryFunc, LazyUnaryFunc};
+use crate::scalar::func::{
+    array_create_scalar, format, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
+};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -950,6 +952,63 @@ impl fmt::Display for RegexpMatch {
         write!(
             f,
             "regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct RegexpSplitToArray(pub Regex);
+
+impl LazyUnaryFunc for RegexpSplitToArray {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let haystack = a.eval(datums, temp_storage)?;
+        if haystack.is_null() {
+            return Ok(Datum::Null);
+        }
+        regexp_split_to_array_re(haystack.unwrap_str(), &self.0, temp_storage)
+    }
+
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(input_type.nullable)
+    }
+
+    /// Whether this function will produce NULL on NULL input
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    /// Whether this function will produce NULL on non-NULL input
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    /// Whether this function preserves uniqueness
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for RegexpSplitToArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "regexp_split_to_array[{}, case_insensitive={}]",
             self.0.pattern.quoted(),
             self.0.case_insensitive
         )

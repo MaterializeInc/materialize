@@ -1147,6 +1147,24 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
+                        } else if *func == VariadicFunc::RegexpSplitToArray
+                            && exprs[1].is_literal()
+                            && exprs.get(2).map_or(true, |e| e.is_literal())
+                        {
+                            let needle = exprs[1].as_literal_str().unwrap();
+                            let flags = match exprs.len() {
+                                3 => exprs[2].as_literal_str().unwrap(),
+                                _ => "",
+                            };
+                            *e = match func::build_regex(needle, flags) {
+                                Ok(regex) => mem::take(exprs).into_first().call_unary(
+                                    UnaryFunc::RegexpSplitToArray(func::RegexpSplitToArray(regex)),
+                                ),
+                                Err(err) => MirScalarExpr::literal(
+                                    Err(err),
+                                    e.typ(column_types).scalar_type,
+                                ),
+                            };
                         } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
                         {
                             // We are looking for ListIndex(ListCreate, literal), and eliminate
