@@ -24,7 +24,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_ore::{soft_assert_eq, soft_panic_or_log};
+use mz_ore::{soft_assert, soft_assert_eq, soft_panic_or_log};
 use mz_repr::explain::IndexUsageType;
 use mz_repr::GlobalId;
 
@@ -713,6 +713,31 @@ id: {}, key: {:?}",
         .index_imports
         .retain(|id, _index_import| dataflow_metainfo.index_usage_types.contains_key(id));
 
+    // A sanity check that all Get annotations indicate indexes that are present in `index_imports`.
+    for build_desc in dataflow.objects_to_build.iter_mut() {
+        build_desc
+            .plan
+            .as_inner()
+            .visit_post(&mut |expr: &MirRelationExpr| match expr {
+                MirRelationExpr::Get {
+                    id: Id::Global(_),
+                    typ: _,
+                    access_strategy,
+                } => match access_strategy {
+                    AccessStrategy::Index(accesses) => {
+                        for (idx_id, _) in accesses {
+                            soft_assert!(
+                                dataflow.index_imports.contains_key(idx_id),
+                                "Dangling Get index annotation"
+                            );
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            })?;
+    }
+
     mz_repr::explain::trace_plan(dataflow);
 
     Ok(())
@@ -858,11 +883,11 @@ impl<'a> CollectIndexRequests<'a> {
                                 )?;
                             }
                         }
-                        JoinImplementation::IndexedFilter(..) => {
+                        JoinImplementation::IndexedFilter(_coll_id, idx_id, ..) => {
                             for input in inputs {
                                 this.collect_index_reqs_inner(
                                     input,
-                                    &IndexUsageContext::from_usage_type(IndexUsageType::Lookup),
+                                    &IndexUsageContext::from_usage_type(IndexUsageType::Lookup(*idx_id)),
                                 )?;
                             }
                         }
@@ -902,7 +927,7 @@ impl<'a> CollectIndexRequests<'a> {
                                     },
                                     // You can find more info on why the following join cases
                                     // shouldn't happen in comments of the Join lowering to LIR.
-                                    IndexUsageType::Lookup => soft_panic_or_log!("CollectIndexRequests encountered an IndexedFilter join without an ArrangeBy"),
+                                    IndexUsageType::Lookup(_) => soft_panic_or_log!("CollectIndexRequests encountered an IndexedFilter join without an ArrangeBy"),
                                     IndexUsageType::DifferentialJoin => soft_panic_or_log!("CollectIndexRequests encountered a Differential join without an ArrangeBy"),
                                     IndexUsageType::DeltaJoin(_) => soft_panic_or_log!("CollectIndexRequests encountered a Delta join without an ArrangeBy"),
                                     IndexUsageType::PlanRootNoArrangement => {
@@ -932,7 +957,17 @@ impl<'a> CollectIndexRequests<'a> {
                                     match this
                                         .indexes_available
                                         .indexes_on(*global_id)
-                                        .find(|(_idx_id, available_key)| available_key == &requested_key)
+                                        .find(|(available_idx_id, available_key)| {
+                                            match context.usage_type {
+                                                IndexUsageType::Lookup(req_idx_id) => {
+                                                    // `LiteralConstraints` already picked an index
+                                                    // by id. Let's use that one.
+                                                    assert!(!(available_idx_id == &req_idx_id && available_key != &requested_key));
+                                                    available_idx_id == &req_idx_id
+                                                },
+                                                _ => available_key == &requested_key,
+                                            }
+                                        })
                                     {
                                         Some((idx_id, key)) => {
                                             this.index_reqs_by_id

@@ -821,7 +821,7 @@ impl MirRelationExpr {
                 ctx.as_mut(),
                 humanized_coll,
                 humanized_index,
-                IndexUsageType::Lookup,
+                IndexUsageType::Lookup(*idx_id),
             )?;
             if let Some(cse_id) = cse_id {
                 // If we were to simply print `constants` here, then the EXPLAIN output would look

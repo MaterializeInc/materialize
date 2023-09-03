@@ -287,7 +287,7 @@ impl FastPathPlan {
             FastPathPlan::Constant(..) => UsedIndexes::new(Vec::new()),
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, _mfp) => {
                 if literal_constraints.is_some() {
-                    UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::Lookup])])
+                    UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::Lookup(*idx_id)])])
                 } else {
                     if let Some(finishing) = finishing {
                         if finishing.limit.is_some() && finishing.order_by.is_empty() {
