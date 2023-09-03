@@ -18,7 +18,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
-use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::{strconv, ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "timestamp_to_text"]
     #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToTimestamp)]
+    #[inverse = to_unary!(super::CastStringToTimestamp(None))]
     fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
         let mut buf = String::new();
         strconv::format_timestamp(&mut buf, &a);
@@ -40,7 +40,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_text"]
     #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToTimestampTz)]
+    #[inverse = to_unary!(super::CastStringToTimestampTz(None))]
     fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
         let mut buf = String::new();
         strconv::format_timestamptz(&mut buf, &a);
@@ -51,7 +51,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_to_date"]
     #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastDateToTimestamp)]
+    #[inverse = to_unary!(super::CastDateToTimestamp(None))]
     #[is_monotone = true]
     fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
         Ok(a.date().try_into()?)
@@ -61,38 +61,182 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_date"]
     #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastDateToTimestampTz)]
+    #[inverse = to_unary!(super::CastDateToTimestampTz(None))]
     #[is_monotone = true]
     fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
         Ok(a.naive_utc().date().try_into()?)
     }
 );
 
-sqlfunc!(
-    #[sqlname = "timestamp_to_timestamp_with_time_zone"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastTimestampTzToTimestamp)]
-    #[is_monotone = true]
-    fn cast_timestamp_to_timestamp_tz(
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastTimestampToTimestampTz(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
+    type Input = CheckedTimestamp<NaiveDateTime>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+
+    fn call(
+        &self,
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        DateTime::<Utc>::from_utc(a.into(), Utc)
-            .try_into()
-            .err_into()
+        let mut out = CheckedTimestamp::try_from(DateTime::<Utc>::from_utc(a.into(), Utc))?;
+        out.round_to_precision(self.0);
+        Ok(out)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "timestamp_with_time_zone_to_timestamp"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastTimestampToTimestampTz)]
-    #[is_monotone = true]
-    fn cast_timestamp_tz_to_timestamp(
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        // Only preserves uniqueness if the output type is as precise as the
+        // input type, but we're not provided in the input type here.
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampTzToTimestamp(self.0))
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for CastTimestampToTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("timestamp_to_timestamp_with_time_zone")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastTimestampToTimestamp(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
+    type Input = CheckedTimestamp<NaiveDateTime>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+
+    fn call(
+        &self,
+        mut a: CheckedTimestamp<NaiveDateTime>,
+    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        a.round_to_precision(self.0);
+        Ok(a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        // Only preserves uniqueness if the output type is as precise as the
+        // input type, but we're not provided in the input type here.
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for CastTimestampToTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("timestamp_to_timestamp")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastTimestampTzToTimestamp(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestamp {
+    type Input = CheckedTimestamp<DateTime<Utc>>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+
+    fn call(
+        &self,
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        a.naive_utc().try_into().err_into()
+        let mut out = CheckedTimestamp::try_from(a.naive_utc())?;
+        out.round_to_precision(self.0);
+        Ok(out)
     }
-);
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        // Only preserves uniqueness if the output type is as precise as the
+        // input type, but we're not provided in the input type here.
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampToTimestampTz(self.0))
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for CastTimestampTzToTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("timestamp_with_time_zone_to_timestamp")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastTimestampTzToTimestampTz(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
+    type Input = CheckedTimestamp<DateTime<Utc>>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+
+    fn call(
+        &self,
+        mut a: CheckedTimestamp<DateTime<Utc>>,
+    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        a.round_to_precision(self.0);
+        Ok(a)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        // Only preserves uniqueness if the output type is as precise as the
+        // input type, but we're not provided in the input type here.
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for CastTimestampTzToTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("timestamp_to_timestamp")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "timestamp_to_time"]
@@ -389,7 +533,7 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp.nullable(input.nullable)
+        ScalarType::Timestamp { precision: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {
@@ -420,7 +564,7 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz.nullable(input.nullable)
+        ScalarType::TimestampTz { precision: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {
@@ -500,7 +644,7 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz.nullable(input.nullable)
+        ScalarType::TimestampTz { precision: None }.nullable(input.nullable)
     }
 }
 
@@ -529,7 +673,7 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp.nullable(input.nullable)
+        ScalarType::Timestamp { precision: None }.nullable(input.nullable)
     }
 }
 

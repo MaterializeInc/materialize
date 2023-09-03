@@ -527,8 +527,12 @@ impl Coordinator {
             ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
             ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
             ScalarType::UInt64 => evaled.unwrap_uint64().into(),
-            ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
-            ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
+            ScalarType::TimestampTz { .. } => {
+                evaled.unwrap_timestamptz().timestamp_millis().try_into()?
+            }
+            ScalarType::Timestamp { .. } => {
+                evaled.unwrap_timestamp().timestamp_millis().try_into()?
+            }
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
                 Catalog::for_session_state(catalog, session).humanize_column_type(&ty)

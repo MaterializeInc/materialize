@@ -23,7 +23,14 @@ $ set schema={
         }
       },
       {
-        "name": "ts",
+        "name": "ts_millis",
+        "type": {
+          "type": "long",
+          "logicalType": "timestamp-millis"
+        }
+      },
+      {
+        "name": "ts_micros",
         "type": {
           "type": "long",
           "logicalType": "timestamp-micros"
@@ -35,11 +42,15 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"d": 18135, "ts": 1566865029000000}
-{"d": 0, "ts": 65000000}
+{"d": 18135, "ts_millis": 1566865029000000, "ts_micros": 1566865029000000}
+{"d": 0, "ts_millis": 65000000, "ts_micros": 65000000}
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
+
+> CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
 
 > CREATE SOURCE data FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -48,14 +59,51 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
 > SELECT * FROM data_view
-2019-08-27 "2019-08-27 00:17:09"
-1970-01-01 "1970-01-01 00:01:05"
+1970-01-01 "1970-01-01 18:03:20" "1970-01-01 00:01:05"
+2019-08-27 "+51621-12-22 21:50:00" "2019-08-27 00:17:09"
 
-# Since the latest record in the topic is 10, the logical timestamp at which
-# we read should be 10 - 1.
-# This is no longer true after timestamping - commenting out
-#> SELECT mz_now() FROM data_view LIMIT 1
-#9
+> CREATE SINK data_sink FROM data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-roundtrip-${testdrive.seed}')
+  KEY (d) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT
+
+$ schema-registry-verify schema-type=avro subject=testdrive-data-roundtrip-${testdrive.seed}-value
+{"type":"record","name":"envelope","fields":[{"name":"d","type":{"type":"int","logicalType":"date"}},{"name":"ts_millis","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts_micros","type":{"type":"long","logicalType":"timestamp-micros"}}]}
+
+$ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=true
+{"d": 0} {"d": 0, "ts_millis": 65000000, "ts_micros": 65000000}
+{"d": 18135} {"d": 18135, "ts_millis": 1566865029000000, "ts_micros": 1566865029000000}
+
+> CREATE MATERIALIZED VIEW ts_precision AS
+  SELECT
+    TRUE AS key,
+    '1970-01-01T00:00:00.123456'::timestamp AS ts,
+    '1970-01-01T00:00:00.123456'::timestamp(1) AS ts1,
+    '1970-01-01T00:00:00.123456'::timestamp(2) AS ts2,
+    '1970-01-01T00:00:00.123456'::timestamp(3) AS ts3,
+    '1970-01-01T00:00:00.123456'::timestamp(4) AS ts4,
+    '1970-01-01T00:00:00.123456'::timestamp(5) AS ts5,
+    '1970-01-01T00:00:00.123456'::timestamp(6) AS ts6,
+    '1970-01-01T00:00:00.123456'::timestamptz AS tstz,
+    '1970-01-01T00:00:00.123456'::timestamptz(1) AS tstz1,
+    '1970-01-01T00:00:00.123456'::timestamptz(2) AS tstz2,
+    '1970-01-01T00:00:00.123456'::timestamptz(3) AS tstz3,
+    '1970-01-01T00:00:00.123456'::timestamptz(4) AS tstz4,
+    '1970-01-01T00:00:00.123456'::timestamptz(5) AS tstz5,
+    '1970-01-01T00:00:00.123456'::timestamptz(6) AS tstz6
+
+> CREATE SINK ts_precision_sink FROM ts_precision
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ts-precision-${testdrive.seed}')
+  KEY (key) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT
+
+$ schema-registry-verify schema-type=avro subject=testdrive-ts-precision-${testdrive.seed}-value
+{"type":"record","name":"envelope","fields":[{"name":"key","type":"boolean"},{"name":"ts","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts1","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts2","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts3","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts4","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts5","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts6","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz1","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz2","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz3","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz4","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz5","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz6","type":{"type":"long","logicalType":"timestamp-micros"}}]}
+
+$ kafka-verify-data format=avro sink=materialize.public.ts_precision_sink sort-messages=true
+{"key": true} {"key": true, "ts": 123456, "ts1": 100, "ts2": 120, "ts3": 123, "ts4": 123500, "ts5": 123460, "ts6": 123456, "tstz": 123456, "tstz1": 100, "tstz2": 120, "tstz3": 123, "tstz4": 123500, "tstz5": 123460, "tstz6": 123456}
 
 > SELECT INTERVAL '1' SECOND
 "00:00:01"
