@@ -21,6 +21,7 @@ import "repr/src/adt/datetime.proto";
 import "repr/src/adt/numeric.proto";
 import "repr/src/adt/range.proto";
 import "repr/src/adt/regex.proto";
+import "repr/src/adt/timestamp.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/chrono.proto";
 import "repr/src/relation_and_scalar.proto";
@@ -125,6 +126,7 @@ message ProtoUnaryFunc {
         mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
         repeated ProtoMirScalarExpr cast_exprs = 2;
     }
+    reserved 5, 6, 15, 104, 111, 115;
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
@@ -219,8 +221,8 @@ message ProtoUnaryFunc {
         ProtoCastToVariableType cast_string_to_map = 91;
         ProtoCastToVariableType cast_string_to_range = 281;
         google.protobuf.Empty cast_string_to_time = 4;
-        google.protobuf.Empty cast_string_to_timestamp = 5;
-        google.protobuf.Empty cast_string_to_timestamp_tz = 6;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_string_to_timestamp = 307;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_string_to_timestamp_tz = 308;
         google.protobuf.Empty cast_string_to_interval = 7;
         mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_string_to_numeric = 96;
         google.protobuf.Empty cast_string_to_uuid = 97;
@@ -229,19 +231,21 @@ message ProtoUnaryFunc {
         ProtoCastStringToVarChar cast_string_to_var_char = 100;
         google.protobuf.Empty cast_char_to_string = 101;
         google.protobuf.Empty cast_var_char_to_string = 102;
-        google.protobuf.Empty cast_date_to_timestamp = 15;
-        google.protobuf.Empty cast_date_to_timestamp_tz = 104;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_date_to_timestamp = 309;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_date_to_timestamp_tz = 310;
         google.protobuf.Empty cast_date_to_string = 105;
         google.protobuf.Empty cast_time_to_interval = 106;
         google.protobuf.Empty cast_time_to_string = 107;
         google.protobuf.Empty cast_interval_to_string = 108;
         google.protobuf.Empty cast_interval_to_time = 109;
         google.protobuf.Empty cast_timestamp_to_date = 110;
-        google.protobuf.Empty cast_timestamp_to_timestamp_tz = 111;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_to_timestamp_tz = 311;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_to_timestamp = 306;
         google.protobuf.Empty cast_timestamp_to_string = 112;
         google.protobuf.Empty cast_timestamp_to_time = 113;
         google.protobuf.Empty cast_timestamp_tz_to_date = 114;
-        google.protobuf.Empty cast_timestamp_tz_to_timestamp = 115;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_tz_to_timestamp = 312;
+        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_tz_to_timestamp_tz = 313;
         google.protobuf.Empty cast_timestamp_tz_to_string = 116;
         google.protobuf.Empty cast_timestamp_tz_to_time = 117;
         google.protobuf.Empty cast_pg_legacy_char_to_string = 118;

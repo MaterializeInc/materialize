@@ -53,7 +53,10 @@ pub fn pack_status_row(
 
 pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
         .with_column("sink_id", ScalarType::String.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
@@ -62,7 +65,10 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 
 pub static MZ_SOURCE_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
         .with_column("source_id", ScalarType::String.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))

@@ -47,6 +47,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
@@ -5304,6 +5305,28 @@ fn scalar_type_from_catalog(
             }
             Ok(ScalarType::VarChar { max_length: length })
         }
+        CatalogType::Timestamp => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) => Some(TimestampPrecision::try_from(*p)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type timestamp supports at most one type modifier");
+            }
+            Ok(ScalarType::Timestamp { precision })
+        }
+        CatalogType::TimestampTz => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) => Some(TimestampPrecision::try_from(*p)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type timestamp with time zone supports at most one type modifier");
+            }
+            Ok(ScalarType::TimestampTz { precision })
+        }
         t => {
             if !modifiers.is_empty() {
                 sql_bail!(
@@ -5385,14 +5408,14 @@ fn scalar_type_from_catalog(
                 CatalogType::RegType => Ok(ScalarType::RegType),
                 CatalogType::String => Ok(ScalarType::String),
                 CatalogType::Time => Ok(ScalarType::Time),
-                CatalogType::Timestamp => Ok(ScalarType::Timestamp),
-                CatalogType::TimestampTz => Ok(ScalarType::TimestampTz),
                 CatalogType::Uuid => Ok(ScalarType::Uuid),
                 CatalogType::Int2Vector => Ok(ScalarType::Int2Vector),
                 CatalogType::MzAclItem => Ok(ScalarType::MzAclItem),
                 CatalogType::Numeric => unreachable!("handled above"),
                 CatalogType::Char => unreachable!("handled above"),
                 CatalogType::VarChar => unreachable!("handled above"),
+                CatalogType::Timestamp => unreachable!("handled above"),
+                CatalogType::TimestampTz => unreachable!("handled above"),
             }
         }
     }

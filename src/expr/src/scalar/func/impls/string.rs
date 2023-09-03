@@ -24,7 +24,7 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::pg_legacy_name::PgLegacyName;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
-use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
 use once_cell::sync::Lazy;
@@ -205,16 +205,35 @@ sqlfunc!(
     }
 );
 
-sqlfunc!(
-    #[sqlname = "text_to_timestamp"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimestampToString)]
-    fn cast_string_to_timestamp<'a>(
-        a: &'a str,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        strconv::parse_timestamp(a).err_into()
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
+    type Input = &'a str;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        let mut out = strconv::parse_timestamp(a)?;
+        out.round_to_precision(self.0);
+        Ok(out)
     }
-);
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampToString)
+    }
+}
+
+impl fmt::Display for CastStringToTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("text_to_timestamp")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
@@ -233,16 +252,35 @@ sqlfunc!(
     }
 );
 
-sqlfunc!(
-    #[sqlname = "text_to_timestamp_with_time_zone"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimestampTzToString)]
-    fn cast_string_to_timestamp_tz<'a>(
-        a: &'a str,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        strconv::parse_timestamptz(a).err_into()
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
+    type Input = &'a str;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        let mut out = strconv::parse_timestamptz(a)?;
+        out.round_to_precision(self.0);
+        Ok(out)
     }
-);
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampTzToString)
+    }
+}
+
+impl fmt::Display for CastStringToTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("text_to_timestamp_with_time_zone")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "text_to_interval"]

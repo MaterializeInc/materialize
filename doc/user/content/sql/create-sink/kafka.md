@@ -117,31 +117,31 @@ When using a Confluent Schema Registry:
 SQL types are converted to Avro types according to the following conversion
 table:
 
-SQL type                     | Avro type
------------------------------|----------
-[`bigint`]                   | `"long"`
-[`boolean`]                  | `"boolean"`
-[`bytea`]                    | `"bytes"`
-[`date`]                     | `{"type": "int", "logicalType": "date"}`
-[`double precision`]         | `"double"`
-[`integer`]                  | `"int"`
-[`interval`]                 | `{"type": "fixed", "size": 16, "name": "com.materialize.sink.interval"}`
-[`jsonb`]                    | `{"type": "string", "connect.name": "io.debezium.data.Json"}`
-[`map`]                      | `{"type": "map", "values": ...}`
-[`list`]                     | `{"type": "array", "items": ...}`
-[`numeric(p,s)`][`numeric`]  | `{"type": "bytes", "logicalType": "decimal", "precision": P, "scale": s}`
-[`oid`]                      | `{"type": "fixed", "size": 4, "name": "com.materialize.sink.uint4"}`
-[`real`]                     | `"float"`
-[`record`]                   | `{"type": "record", "name": ..., "fields": ...}`
-[`smallint`]                 | `"int"`
-[`text`]                     | `"string"`
-[`time`]                     | `{"type": "long", "logicalType": "time-micros"}`
-[`uint2`]                    | `{"type": "fixed", "size": 2, "name": "com.materialize.sink.uint2"}`
-[`uint4`]                    | `{"type": "fixed", "size": 4, "name": "com.materialize.sink.uint4"}`
-[`uint8`]                    | `{"type": "fixed", "size": 8, "name": "com.materialize.sink.uint8"}`
-[`timestamp`]                | `{"type": "long", "logicalType: "timestamp-micros"}`
-[`timestamp with time zone`] | `{"type": "long", "logicalType: "timestamp-micros"}`
-[Arrays]                     | `{"type": "array", "items": ...}`
+SQL type                         | Avro type
+---------------------------------|----------
+[`bigint`]                       | `"long"`
+[`boolean`]                      | `"boolean"`
+[`bytea`]                        | `"bytes"`
+[`date`]                         | `{"type": "int", "logicalType": "date"}`
+[`double precision`]             | `"double"`
+[`integer`]                      | `"int"`
+[`interval`]                     | `{"type": "fixed", "size": 16, "name": "com.materialize.sink.interval"}`
+[`jsonb`]                        | `{"type": "string", "connect.name": "io.debezium.data.Json"}`
+[`map`]                          | `{"type": "map", "values": ...}`
+[`list`]                         | `{"type": "array", "items": ...}`
+[`numeric(p,s)`][`numeric`]      | `{"type": "bytes", "logicalType": "decimal", "precision": p, "scale": s}`
+[`oid`]                          | `{"type": "fixed", "size": 4, "name": "com.materialize.sink.uint4"}`
+[`real`]                         | `"float"`
+[`record`]                       | `{"type": "record", "name": ..., "fields": ...}`
+[`smallint`]                     | `"int"`
+[`text`]                         | `"string"`
+[`time`]                         | `{"type": "long", "logicalType": "time-micros"}`
+[`uint2`]                        | `{"type": "fixed", "size": 2, "name": "com.materialize.sink.uint2"}`
+[`uint4`]                        | `{"type": "fixed", "size": 4, "name": "com.materialize.sink.uint4"}`
+[`uint8`]                        | `{"type": "fixed", "size": 8, "name": "com.materialize.sink.uint8"}`
+[`timestamp (p)`][`timestamp`]   | If precision `p` is less than or equal to 3:<br>`{"type": "long", "logicalType: "timestamp-millis"}`<br>Otherwise:<br>`{"type": "long", "logicalType: "timestamp-micros"}`
+[`timestamptz (p)`][`timestamp`] | Same as `timestamp (p)`.
+[Arrays]                         | `{"type": "array", "items": ...}`
 
 ### JSON
 

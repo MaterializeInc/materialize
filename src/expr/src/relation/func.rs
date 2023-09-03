@@ -2287,12 +2287,13 @@ impl TableFunc {
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestamp => {
-                let column_types = vec![ScalarType::Timestamp.nullable(false)];
+                let column_types = vec![ScalarType::Timestamp { precision: None }.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestampTz => {
-                let column_types = vec![ScalarType::TimestampTz.nullable(false)];
+                let column_types =
+                    vec![ScalarType::TimestampTz { precision: None }.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }

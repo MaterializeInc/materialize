@@ -674,12 +674,22 @@ time
 query T
 SELECT format_type(1114, NULL)
 ----
-timestamp
+timestamp without time zone
 
 query T
 SELECT format_type(1184, NULL)
 ----
 timestamp with time zone
+
+query T
+SELECT format_type(1114, 3)
+----
+timestamp(3) without time zone
+
+query T
+SELECT format_type(1184, 3)
+----
+timestamp(3) with time zone
 
 query T
 SELECT format_type(1186, NULL)
@@ -759,7 +769,7 @@ time[]
 query T
 SELECT format_type(1115, NULL)
 ----
-timestamp[]
+timestamp without time zone[]
 
 query T
 SELECT format_type(1185, NULL)

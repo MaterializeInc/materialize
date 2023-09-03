@@ -17,6 +17,7 @@ package mz_repr.relation_and_scalar;
 import "google/protobuf/empty.proto";
 import "repr/src/adt/char.proto";
 import "repr/src/adt/numeric.proto";
+import "repr/src/adt/timestamp.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/global_id.proto";
 
@@ -81,6 +82,15 @@ message ProtoScalarType {
         ProtoScalarType element_type = 1;
     }
 
+    message ProtoTimestamp {
+        adt.timestamp.ProtoTimestampPrecision precision = 1;
+    }
+
+    message ProtoTimestampTz {
+        adt.timestamp.ProtoTimestampPrecision precision = 1;
+    }
+
+    reserved 10, 11;
     oneof kind  {
         google.protobuf.Empty Bool = 1;
         google.protobuf.Empty Int16 = 2;
@@ -91,8 +101,8 @@ message ProtoScalarType {
         adt.numeric.ProtoOptionalNumericMaxScale Numeric = 7;
         google.protobuf.Empty Date = 8;
         google.protobuf.Empty Time = 9;
-        google.protobuf.Empty Timestamp = 10;
-        google.protobuf.Empty TimestampTz = 11;
+        ProtoTimestamp Timestamp = 37;
+        ProtoTimestampTz TimestampTz = 38;
         google.protobuf.Empty Interval = 12;
         google.protobuf.Empty PgLegacyChar = 13;
         google.protobuf.Empty Bytes = 14;

@@ -80,8 +80,8 @@ impl TypeCategory {
             | ScalarType::MzAclItem => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
-            | ScalarType::Timestamp
-            | ScalarType::TimestampTz => Self::DateTime,
+            | ScalarType::Timestamp { .. }
+            | ScalarType::TimestampTz { .. } => Self::DateTime,
             ScalarType::Float32
             | ScalarType::Float64
             | ScalarType::Int16
@@ -203,7 +203,7 @@ impl TypeCategory {
             | Self::Unknown
             | Self::UserDefined => None,
             Self::Boolean => Some(ScalarType::Bool),
-            Self::DateTime => Some(ScalarType::TimestampTz),
+            Self::DateTime => Some(ScalarType::TimestampTz { precision: None }),
             Self::Numeric => Some(ScalarType::Float64),
             Self::String => Some(ScalarType::String),
             Self::Timespan => Some(ScalarType::Interval),
@@ -865,8 +865,8 @@ impl From<ScalarBaseType> for ParamType {
             Numeric => ScalarType::Numeric { max_scale: None },
             Date => ScalarType::Date,
             Time => ScalarType::Time,
-            Timestamp => ScalarType::Timestamp,
-            TimestampTz => ScalarType::TimestampTz,
+            Timestamp => ScalarType::Timestamp { precision: None },
+            TimestampTz => ScalarType::TimestampTz { precision: None },
             Interval => ScalarType::Interval,
             Bytes => ScalarType::Bytes,
             String => ScalarType::String,
@@ -2031,6 +2031,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, Int32) => sql_impl_func(
                 "CASE
                         WHEN $1 IS NULL THEN NULL
+                        -- timestamp and timestamptz have the typmod in
+                        -- a nonstandard location that requires special
+                        -- handling.
+                        WHEN $1 = 1114 AND $2 >= 0 THEN 'timestamp(' || $2 || ') without time zone'
+                        WHEN $1 = 1184 AND $2 >= 0 THEN 'timestamp(' || $2 || ') with time zone'
                         ELSE coalesce((SELECT pg_catalog.concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
             ) => String, 1081;
@@ -2649,31 +2654,31 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Timestamp, Timestamp) => Operation::variadic(|_ecx, mut exprs| {
                 exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp {precision: None}},
                     exprs
                 })
-            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Timestamp)}, 3933;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Timestamp { precision: None})}, 3933;
             params!(Timestamp, Timestamp, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp {precision: None}},
                     exprs
                 })
-            }) => ScalarType::Range { element_type: Box::new(ScalarType::Timestamp)}, 3934;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Timestamp { precision: None})}, 3934;
         },
         "tstzrange" => Scalar {
             params!(TimestampTz, TimestampTz) => Operation::variadic(|_ecx, mut exprs| {
                 exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz {precision: None}},
                     exprs
                 })
-            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz)}, 3937;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz { precision: None})}, 3937;
             params!(TimestampTz, TimestampTz, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz {precision: None}},
                     exprs
                 })
-            }) => ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz)}, 3938;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz { precision: None})}, 3938;
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper) => String, 871;

@@ -999,7 +999,7 @@ mod tests {
         ScalarType::Jsonb,
         NUM_TYPE,
         ScalarType::Date,
-        ScalarType::Timestamp,
+        ScalarType::Timestamp { precision: None },
         ScalarType::MzTimestamp,
         ScalarType::String,
     ];
@@ -1028,9 +1028,9 @@ mod tests {
             CastJsonbToNumeric(_) | CastJsonbToBool(_) | CastJsonbToString(_) => {
                 arg.scalar_type.base_eq(&ScalarType::Jsonb)
             }
-            ExtractTimestamp(_) | DateTruncTimestamp(_) => {
-                arg.scalar_type.base_eq(&ScalarType::Timestamp)
-            }
+            ExtractTimestamp(_) | DateTruncTimestamp(_) => arg
+                .scalar_type
+                .base_eq(&ScalarType::Timestamp { precision: None }),
             ExtractDate(_) => arg.scalar_type.base_eq(&ScalarType::Date),
             Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
             IsNull(_) => true,
@@ -1062,7 +1062,8 @@ mod tests {
         use BinaryFunc::*;
         match func {
             AddTimestampInterval => {
-                arg0.scalar_type.base_eq(&ScalarType::Timestamp)
+                arg0.scalar_type
+                    .base_eq(&ScalarType::Timestamp { precision: None })
                     && arg1.scalar_type.base_eq(&ScalarType::Interval)
             }
             AddNumeric | SubNumeric | MulNumeric | DivNumeric => {
@@ -1071,7 +1072,9 @@ mod tests {
             Eq | Lt | Gt | Lte | Gte => arg0.scalar_type.base_eq(&arg1.scalar_type),
             DateTruncTimestamp => {
                 arg0.scalar_type.base_eq(&ScalarType::String)
-                    && arg1.scalar_type.base_eq(&ScalarType::Timestamp)
+                    && arg1
+                        .scalar_type
+                        .base_eq(&ScalarType::Timestamp { precision: None })
             }
             JsonbGetString { .. } => {
                 arg0.scalar_type.base_eq(&ScalarType::Jsonb)

@@ -5155,14 +5155,21 @@ impl<'a> Parser<'a> {
                     }
                 }
                 TIMESTAMP => {
+                    let typ_mod = self.parse_typ_mod()?;
                     if self.parse_keyword(WITH) {
                         self.expect_keywords(&[TIME, ZONE])?;
-                        other("timestamptz")
+                        RawDataType::Other {
+                            name: RawItemName::Name(UnresolvedItemName::unqualified("timestamptz")),
+                            typ_mod,
+                        }
                     } else {
                         if self.parse_keyword(WITHOUT) {
                             self.expect_keywords(&[TIME, ZONE])?;
                         }
-                        other("timestamp")
+                        RawDataType::Other {
+                            name: RawItemName::Name(UnresolvedItemName::unqualified("timestamp")),
+                            typ_mod,
+                        }
                     }
                 }
 

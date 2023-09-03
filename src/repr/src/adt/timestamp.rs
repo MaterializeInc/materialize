@@ -18,18 +18,23 @@
 
 //! Methods for checked timestamp operations.
 
-use std::fmt::Display;
+use std::error::Error;
+use std::fmt::{self, Display};
 use std::ops::Sub;
+use std::time::Duration as StdDuration;
 
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
 };
+use chrono::DurationRound;
+use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::{Serialize, Serializer};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
 use crate::adt::datetime::DateTimePart;
@@ -39,7 +44,7 @@ use crate::chrono::ProtoNaiveDateTime;
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
 use crate::Datum;
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
 
 const MONTHS_PER_YEAR: i64 = cast::u16_to_i64(Interval::MONTH_PER_YEAR);
 const HOURS_PER_DAY: i64 = cast::u16_to_i64(Interval::HOUR_PER_DAY);
@@ -49,6 +54,92 @@ const SECONDS_PER_MINUTE: i64 = cast::u16_to_i64(Interval::SECOND_PER_MINUTE);
 const NANOSECONDS_PER_HOUR: i64 = NANOSECONDS_PER_MINUTE * MINUTES_PER_HOUR;
 const NANOSECONDS_PER_MINUTE: i64 = NANOSECONDS_PER_SECOND * SECONDS_PER_MINUTE;
 const NANOSECONDS_PER_SECOND: i64 = 10i64.pow(9);
+
+pub const MAX_PRECISION: u8 = 6;
+
+/// The `max_precision` of a [`ScalarType::Timestamp`] or
+/// [`ScalarType::TimestampTz`].
+///
+/// This newtype wrapper ensures that the length is within the valid range.
+///
+/// [`ScalarType::Timestamp`]: crate::ScalarType::Timestamp
+/// [`ScalarType::TimestampTz`]: crate::ScalarType::TimestampTz
+#[derive(
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
+)]
+pub struct TimestampPrecision(pub(crate) u8);
+
+impl TimestampPrecision {
+    /// Consumes the newtype wrapper, returning the inner `u8`.
+    pub fn into_u8(self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<i64> for TimestampPrecision {
+    type Error = InvalidTimestampPrecisionError;
+
+    fn try_from(max_precision: i64) -> Result<Self, Self::Error> {
+        match u8::try_from(max_precision) {
+            Ok(max_precision) if max_precision <= MAX_PRECISION => {
+                Ok(TimestampPrecision(max_precision))
+            }
+            _ => Err(InvalidTimestampPrecisionError),
+        }
+    }
+}
+
+impl RustType<ProtoTimestampPrecision> for TimestampPrecision {
+    fn into_proto(&self) -> ProtoTimestampPrecision {
+        ProtoTimestampPrecision {
+            value: self.0.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTimestampPrecision) -> Result<Self, TryFromProtoError> {
+        Ok(TimestampPrecision(proto.value.into_rust()?))
+    }
+}
+
+impl RustType<ProtoOptionalTimestampPrecision> for Option<TimestampPrecision> {
+    fn into_proto(&self) -> ProtoOptionalTimestampPrecision {
+        ProtoOptionalTimestampPrecision {
+            value: self.into_proto(),
+        }
+    }
+
+    fn from_proto(precision: ProtoOptionalTimestampPrecision) -> Result<Self, TryFromProtoError> {
+        precision.value.into_rust()
+    }
+}
+
+/// The error returned when constructing a [`VarCharMaxLength`] from an invalid
+/// value.
+#[derive(Debug, Clone)]
+pub struct InvalidTimestampPrecisionError;
+
+impl fmt::Display for InvalidTimestampPrecisionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "precision for type timestamp or timestamptz must be between 1 and {}",
+            MAX_PRECISION
+        )
+    }
+}
+
+impl Error for InvalidTimestampPrecisionError {}
 
 /// Common set of methods for time component.
 pub trait TimeLike: chrono::Timelike {
@@ -703,6 +794,24 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
 
         // If at any point we overflow, map to a TimestampError.
         age_inner(self, other).ok_or(TimestampError::OutOfRange)
+    }
+
+    /// Rounds the timestamp to the specified number of digits of precision.
+    pub fn round_to_precision(&mut self, precision: Option<TimestampPrecision>) {
+        if let Some(precision) = precision {
+            let power = 9_u32
+                .checked_sub(precision.into_u8().into())
+                .expect("precision fits in nanos");
+            let round_to = Duration::from_std(StdDuration::from_nanos(10_u64.pow(power)))
+                .expect("duration fits in chrono duration");
+            let sec = Duration::from_std(StdDuration::from_secs(1))
+                .expect("duration fits in chrono duration");
+            let dt = self.date_time();
+            let dt = dt + sec;
+            let dt = dt.duration_round(round_to).expect("rounding is valid");
+            let dt = dt - sec;
+            self.t = T::from_date_time(dt)
+        }
     }
 }
 

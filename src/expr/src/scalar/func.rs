@@ -120,7 +120,9 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::CurrentTimestamp => {
+                ScalarType::TimestampTz { precision: None }.nullable(false)
+            }
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
             UnmaterializableFunc::IsRbacEnabled => ScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
@@ -136,7 +138,9 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
             UnmaterializableFunc::MzVersionNum => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
-            UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::PgPostmasterStartTime => {
+                ScalarType::TimestampTz { precision: None }.nullable(false)
+            }
             UnmaterializableFunc::SessionUser => ScalarType::String.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
             UnmaterializableFunc::ViewableVariables => ScalarType::Map {
@@ -2550,10 +2554,10 @@ impl BinaryFunc {
                 ScalarType::Int64 => contains_range_elem::<i64>(a, b),
                 ScalarType::Date => contains_range_elem::<Date>(a, b),
                 ScalarType::Numeric { .. } => contains_range_elem::<OrderedDecimal<Numeric>>(a, b),
-                ScalarType::Timestamp => {
+                ScalarType::Timestamp { .. } => {
                     contains_range_elem::<CheckedTimestamp<NaiveDateTime>>(a, b)
                 }
-                ScalarType::TimestampTz => {
+                ScalarType::TimestampTz { precision: None } => {
                     contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>(a, b)
                 }
                 _ => unreachable!(),
@@ -2651,12 +2655,12 @@ impl BinaryFunc {
             | SubTimeInterval => input1_type.nullable(in_nullable),
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
-            | DateTruncTimestamp => ScalarType::Timestamp.nullable(in_nullable),
+            | DateTruncTimestamp => ScalarType::Timestamp { precision: None }.nullable(in_nullable),
 
             DateTruncInterval => ScalarType::Interval.nullable(in_nullable),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
-                ScalarType::Timestamp.nullable(in_nullable)
+                ScalarType::Timestamp { precision: None }.nullable(in_nullable)
             }
 
             ExtractInterval | ExtractTime | ExtractTimestamp | ExtractTimestampTz | ExtractDate => {
@@ -2667,10 +2671,10 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(true)
             }
 
-            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
+            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(true),
 
             TimezoneTimestamp | TimezoneIntervalTimestamp => {
-                ScalarType::TimestampTz.nullable(in_nullable)
+                ScalarType::TimestampTz { precision: None }.nullable(in_nullable)
             }
 
             TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
@@ -4515,11 +4519,13 @@ derive_unary!(
     CastIntervalToString,
     CastIntervalToTime,
     CastTimestampToDate,
+    CastTimestampToTimestamp,
     CastTimestampToTimestampTz,
     CastTimestampToString,
     CastTimestampToTime,
     CastTimestampTzToDate,
     CastTimestampTzToTimestamp,
+    CastTimestampTzToTimestampTz,
     CastTimestampTzToString,
     CastTimestampTzToTime,
     CastPgLegacyCharToString,
@@ -5233,8 +5239,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }))
             }
             UnaryFunc::CastStringToTime(_) => CastStringToTime(()),
-            UnaryFunc::CastStringToTimestamp(_) => CastStringToTimestamp(()),
-            UnaryFunc::CastStringToTimestampTz(_) => CastStringToTimestampTz(()),
+            UnaryFunc::CastStringToTimestamp(precision) => {
+                CastStringToTimestamp(precision.0.into_proto())
+            }
+            UnaryFunc::CastStringToTimestampTz(precision) => {
+                CastStringToTimestampTz(precision.0.into_proto())
+            }
             UnaryFunc::CastStringToInterval(_) => CastStringToInterval(()),
             UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric(func.0.into_proto()),
             UnaryFunc::CastStringToUuid(_) => CastStringToUuid(()),
@@ -5251,19 +5261,29 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             }),
             UnaryFunc::CastCharToString(_) => CastCharToString(()),
             UnaryFunc::CastVarCharToString(_) => CastVarCharToString(()),
-            UnaryFunc::CastDateToTimestamp(_) => CastDateToTimestamp(()),
-            UnaryFunc::CastDateToTimestampTz(_) => CastDateToTimestampTz(()),
+            UnaryFunc::CastDateToTimestamp(func) => CastDateToTimestamp(func.0.into_proto()),
+            UnaryFunc::CastDateToTimestampTz(func) => CastDateToTimestampTz(func.0.into_proto()),
             UnaryFunc::CastDateToString(_) => CastDateToString(()),
             UnaryFunc::CastTimeToInterval(_) => CastTimeToInterval(()),
             UnaryFunc::CastTimeToString(_) => CastTimeToString(()),
             UnaryFunc::CastIntervalToString(_) => CastIntervalToString(()),
             UnaryFunc::CastIntervalToTime(_) => CastIntervalToTime(()),
             UnaryFunc::CastTimestampToDate(_) => CastTimestampToDate(()),
-            UnaryFunc::CastTimestampToTimestampTz(_) => CastTimestampToTimestampTz(()),
+            UnaryFunc::CastTimestampToTimestamp(func) => {
+                CastTimestampToTimestamp(func.0.into_proto())
+            }
+            UnaryFunc::CastTimestampToTimestampTz(func) => {
+                CastTimestampToTimestampTz(func.0.into_proto())
+            }
             UnaryFunc::CastTimestampToString(_) => CastTimestampToString(()),
             UnaryFunc::CastTimestampToTime(_) => CastTimestampToTime(()),
             UnaryFunc::CastTimestampTzToDate(_) => CastTimestampTzToDate(()),
-            UnaryFunc::CastTimestampTzToTimestamp(_) => CastTimestampTzToTimestamp(()),
+            UnaryFunc::CastTimestampTzToTimestampTz(func) => {
+                CastTimestampTzToTimestampTz(func.0.into_proto())
+            }
+            UnaryFunc::CastTimestampTzToTimestamp(func) => {
+                CastTimestampTzToTimestamp(func.0.into_proto())
+            }
             UnaryFunc::CastTimestampTzToString(_) => CastTimestampTzToString(()),
             UnaryFunc::CastTimestampTzToTime(_) => CastTimestampTzToTime(()),
             UnaryFunc::CastPgLegacyCharToString(_) => CastPgLegacyCharToString(()),
@@ -5622,8 +5642,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }
                 .into()),
                 CastStringToTime(()) => Ok(impls::CastStringToTime.into()),
-                CastStringToTimestamp(()) => Ok(impls::CastStringToTimestamp.into()),
-                CastStringToTimestampTz(()) => Ok(impls::CastStringToTimestampTz.into()),
+                CastStringToTimestamp(precision) => {
+                    Ok(impls::CastStringToTimestamp(precision.into_rust()?).into())
+                }
+                CastStringToTimestampTz(precision) => {
+                    Ok(impls::CastStringToTimestampTz(precision.into_rust()?).into())
+                }
                 CastStringToInterval(()) => Ok(impls::CastStringToInterval.into()),
                 CastStringToNumeric(max_scale) => {
                     Ok(impls::CastStringToNumeric(max_scale.into_rust()?).into())
@@ -5645,19 +5669,33 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 .into()),
                 CastCharToString(()) => Ok(impls::CastCharToString.into()),
                 CastVarCharToString(()) => Ok(impls::CastVarCharToString.into()),
-                CastDateToTimestamp(()) => Ok(impls::CastDateToTimestamp.into()),
-                CastDateToTimestampTz(()) => Ok(impls::CastDateToTimestampTz.into()),
+                CastDateToTimestamp(precision) => {
+                    Ok(impls::CastDateToTimestamp(precision.into_rust()?).into())
+                }
+                CastDateToTimestampTz(precision) => {
+                    Ok(impls::CastDateToTimestampTz(precision.into_rust()?).into())
+                }
                 CastDateToString(()) => Ok(impls::CastDateToString.into()),
                 CastTimeToInterval(()) => Ok(impls::CastTimeToInterval.into()),
                 CastTimeToString(()) => Ok(impls::CastTimeToString.into()),
                 CastIntervalToString(()) => Ok(impls::CastIntervalToString.into()),
                 CastIntervalToTime(()) => Ok(impls::CastIntervalToTime.into()),
                 CastTimestampToDate(()) => Ok(impls::CastTimestampToDate.into()),
-                CastTimestampToTimestampTz(()) => Ok(impls::CastTimestampToTimestampTz.into()),
+                CastTimestampToTimestamp(precision) => {
+                    Ok(impls::CastTimestampToTimestamp(precision.into_rust()?).into())
+                }
+                CastTimestampToTimestampTz(precision) => {
+                    Ok(impls::CastTimestampToTimestampTz(precision.into_rust()?).into())
+                }
                 CastTimestampToString(()) => Ok(impls::CastTimestampToString.into()),
                 CastTimestampToTime(()) => Ok(impls::CastTimestampToTime.into()),
                 CastTimestampTzToDate(()) => Ok(impls::CastTimestampTzToDate.into()),
-                CastTimestampTzToTimestamp(()) => Ok(impls::CastTimestampTzToTimestamp.into()),
+                CastTimestampTzToTimestamp(precision) => {
+                    Ok(impls::CastTimestampTzToTimestamp(precision.into_rust()?).into())
+                }
+                CastTimestampTzToTimestampTz(precision) => {
+                    Ok(impls::CastTimestampTzToTimestampTz(precision.into_rust()?).into())
+                }
                 CastTimestampTzToString(()) => Ok(impls::CastTimestampTzToString.into()),
                 CastTimestampTzToTime(()) => Ok(impls::CastTimestampTzToTime.into()),
                 CastPgLegacyCharToString(()) => Ok(impls::CastPgLegacyCharToString.into()),
@@ -6442,8 +6480,8 @@ where
         Numeric { .. } => Ok(strconv::format_numeric(buf, &d.unwrap_numeric())),
         Date => Ok(strconv::format_date(buf, d.unwrap_date())),
         Time => Ok(strconv::format_time(buf, d.unwrap_time())),
-        Timestamp => Ok(strconv::format_timestamp(buf, &d.unwrap_timestamp())),
-        TimestampTz => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
+        Timestamp { .. } => Ok(strconv::format_timestamp(buf, &d.unwrap_timestamp())),
+        TimestampTz { .. } => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
         Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
         Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
         String | VarChar { .. } | PgLegacyName => Ok(strconv::format_string(buf, d.unwrap_str())),
@@ -7515,7 +7553,7 @@ impl VariadicFunc {
                 .reduce(|l, r| l.union(&r).unwrap())
                 .unwrap(),
             Concat | ConcatWs => ScalarType::String.nullable(in_nullable),
-            MakeTimestamp => ScalarType::Timestamp.nullable(true),
+            MakeTimestamp => ScalarType::Timestamp { precision: None }.nullable(true),
             PadLeading => ScalarType::String.nullable(in_nullable),
             Substr => ScalarType::String.nullable(in_nullable),
             Replace => ScalarType::String.nullable(in_nullable),
@@ -7565,8 +7603,8 @@ impl VariadicFunc {
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(in_nullable),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
-            DateBinTimestamp => ScalarType::Timestamp.nullable(in_nullable),
-            DateBinTimestampTz => ScalarType::TimestampTz.nullable(in_nullable),
+            DateBinTimestamp => ScalarType::Timestamp { precision: None }.nullable(in_nullable),
+            DateBinTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(in_nullable),
             DateDiffTimestamp => ScalarType::Int64.nullable(in_nullable),
             DateDiffTimestampTz => ScalarType::Int64.nullable(in_nullable),
             DateDiffDate => ScalarType::Int64.nullable(in_nullable),
@@ -7807,8 +7845,8 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::Int64 => "int8range",
                 ScalarType::Date => "daterange",
                 ScalarType::Numeric { .. } => "numrange",
-                ScalarType::Timestamp => "tsrange",
-                ScalarType::TimestampTz => "tstzrange",
+                ScalarType::Timestamp { .. } => "tsrange",
+                ScalarType::TimestampTz { .. } => "tstzrange",
                 _ => unreachable!(),
             }),
             VariadicFunc::MakeAclItem => f.write_str("makeaclitem"),

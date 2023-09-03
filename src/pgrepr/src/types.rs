@@ -16,6 +16,9 @@ use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{
     InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
 };
+use mz_repr::adt::timestamp::{
+    InvalidTimestampPrecisionError, TimestampPrecision as AdtTimestampPrecision,
+};
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::ScalarType;
@@ -295,6 +298,13 @@ impl fmt::Display for TimePrecision {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TimestampPrecision(i32);
 
+impl TimestampPrecision {
+    /// Consumes the newtype wrapper, returning the contents as an `i32`.
+    pub fn into_i32(self) -> i32 {
+        self.0
+    }
+}
+
 impl TypeConstraint for TimestampPrecision {
     fn from_typmod(typmod: i32) -> Result<Option<TimestampPrecision>, String> {
         if typmod > MAX_TIMESTAMP_PRECISION {
@@ -310,6 +320,12 @@ impl TypeConstraint for TimestampPrecision {
 
     fn into_typmod(&self) -> i32 {
         self.0
+    }
+}
+
+impl From<AdtTimestampPrecision> for TimestampPrecision {
+    fn from(precision: AdtTimestampPrecision) -> TimestampPrecision {
+        TimestampPrecision(i32::from(precision.into_u8()))
     }
 }
 
@@ -794,7 +810,7 @@ impl Type {
             &postgres_types::Type::RECORD_ARRAY => "record[]",
             &postgres_types::Type::TEXT_ARRAY => "text[]",
             &postgres_types::Type::TIME_ARRAY => "time[]",
-            &postgres_types::Type::TIMESTAMP_ARRAY => "timestamp[]",
+            &postgres_types::Type::TIMESTAMP_ARRAY => "timestamp without time zone[]",
             &postgres_types::Type::TIMESTAMPTZ_ARRAY => "timestamp with time zone[]",
             &postgres_types::Type::UUID_ARRAY => "uuid[]",
             &postgres_types::Type::VARCHAR_ARRAY => "character varying[]",
@@ -805,6 +821,7 @@ impl Type {
             &postgres_types::Type::INT2 => "smallint",
             &postgres_types::Type::INT4 => "integer",
             &postgres_types::Type::INT8 => "bigint",
+            &postgres_types::Type::TIMESTAMP => "timestamp without time zone",
             &postgres_types::Type::TIMESTAMPTZ => "timestamp with time zone",
             &postgres_types::Type::VARCHAR => "character varying",
             &postgres_types::Type::REGCLASS_ARRAY => "regclass[]",
@@ -1049,14 +1066,22 @@ impl TryFrom<&Type> for ScalarType {
                     None => None,
                 },
             }),
-            Type::Timestamp { precision: None } => Ok(ScalarType::Timestamp),
-            Type::Timestamp { precision: Some(_) } => {
-                Err(TypeConversionError::UnsupportedType(typ.clone()))
-            }
-            Type::TimestampTz { precision: None } => Ok(ScalarType::TimestampTz),
-            Type::TimestampTz { precision: Some(_) } => {
-                Err(TypeConversionError::UnsupportedType(typ.clone()))
-            }
+            Type::Timestamp { precision } => Ok(ScalarType::Timestamp {
+                precision: match precision {
+                    Some(precision) => Some(AdtTimestampPrecision::try_from(i64::from(
+                        precision.into_i32(),
+                    ))?),
+                    None => None,
+                },
+            }),
+            Type::TimestampTz { precision } => Ok(ScalarType::TimestampTz {
+                precision: match precision {
+                    Some(precision) => Some(AdtTimestampPrecision::try_from(i64::from(
+                        precision.into_i32(),
+                    ))?),
+                    None => None,
+                },
+            }),
             Type::Uuid => Ok(ScalarType::Uuid),
             Type::RegClass => Ok(ScalarType::RegClass),
             Type::RegProc => Ok(ScalarType::RegProc),
@@ -1125,6 +1150,9 @@ pub enum TypeConversionError {
     /// The source type contained an invalid max length for a
     /// [`ScalarType::VarChar`].
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
+    /// The source type contained an invalid precision for a
+    /// [`ScalarType::Timestamp`] or [`ScalarType::TimestampTz`].
+    InvalidTimestampPrecision(InvalidTimestampPrecisionError),
 }
 
 impl fmt::Display for TypeConversionError {
@@ -1135,6 +1163,7 @@ impl fmt::Display for TypeConversionError {
             TypeConversionError::InvalidNumericConstraint(msg) => f.write_str(msg),
             TypeConversionError::InvalidCharLength(e) => e.fmt(f),
             TypeConversionError::InvalidVarCharMaxLength(e) => e.fmt(f),
+            TypeConversionError::InvalidTimestampPrecision(e) => e.fmt(f),
         }
     }
 }
@@ -1156,6 +1185,12 @@ impl From<InvalidCharLengthError> for TypeConversionError {
 impl From<InvalidVarCharMaxLengthError> for TypeConversionError {
     fn from(e: InvalidVarCharMaxLengthError) -> TypeConversionError {
         TypeConversionError::InvalidVarCharMaxLength(e)
+    }
+}
+
+impl From<InvalidTimestampPrecisionError> for TypeConversionError {
+    fn from(e: InvalidTimestampPrecisionError) -> TypeConversionError {
+        TypeConversionError::InvalidTimestampPrecision(e)
     }
 }
 
@@ -1200,8 +1235,12 @@ impl From<&ScalarType> for Type {
                 max_length: (*max_length).map(CharLength::from),
             },
             ScalarType::Time => Type::Time { precision: None },
-            ScalarType::Timestamp => Type::Timestamp { precision: None },
-            ScalarType::TimestampTz => Type::TimestampTz { precision: None },
+            ScalarType::Timestamp { precision } => Type::Timestamp {
+                precision: (*precision).map(TimestampPrecision::from),
+            },
+            ScalarType::TimestampTz { precision } => Type::TimestampTz {
+                precision: (*precision).map(TimestampPrecision::from),
+            },
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { max_scale } => Type::Numeric {
                 constraints: Some(NumericConstraints {

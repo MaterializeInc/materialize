@@ -482,7 +482,11 @@ type_escape_text ::=
 type_time ::=
   'TIME' "'" time_str "'"
 type_timestamp ::=
-  ('TIMESTAMP' | 'TIMESTAMPTZ')
+  (
+    'TIMESTAMP' ('(' precision ')')? (('WITH' | 'WITHOUT') TIME ZONE)?
+    |
+    'TIMESTAMPTZ' ('(' precision ')')?
+  )
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"

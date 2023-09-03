@@ -135,11 +135,11 @@ impl ToJson for TypedDatum<'_> {
                 // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
                 ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
                 ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
-                ScalarType::Timestamp => serde_json::Value::String(format!(
+                ScalarType::Timestamp { .. } => serde_json::Value::String(format!(
                     "{:?}",
                     datum.unwrap_timestamp().to_naive().timestamp_millis()
                 )),
-                ScalarType::TimestampTz => serde_json::Value::String(format!(
+                ScalarType::TimestampTz { .. } => serde_json::Value::String(format!(
                     "{:?}",
                     datum.unwrap_timestamptz().to_naive().timestamp_millis()
                 )),
@@ -257,9 +257,12 @@ fn build_row_schema_field(
             "type": "long",
             "logicalType": "time-micros",
         }),
-        ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+        ScalarType::Timestamp { precision } | ScalarType::TimestampTz { precision } => json!({
             "type": "long",
-            "logicalType": "timestamp-micros"
+            "logicalType": match precision {
+                Some(precision) if precision.into_u8() <= 3 => "timestamp-millis",
+                _ => "timestamp-micros",
+            },
         }),
         ScalarType::Interval => type_namer.interval_type(),
         ScalarType::Bytes => json!("bytes"),

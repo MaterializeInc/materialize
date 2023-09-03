@@ -24,6 +24,7 @@ use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
+use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -109,6 +110,7 @@ pub enum PlanError {
         object_description: ErrorMessageObjectDescription,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
+    InvalidTimestampPrecision(InvalidTimestampPrecisionError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
     ParserStatement(ParserStatementError),
@@ -463,6 +465,7 @@ impl fmt::Display for PlanError {
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
+            Self::InvalidTimestampPrecision(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
             Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
@@ -631,6 +634,12 @@ impl From<InvalidCharLengthError> for PlanError {
 impl From<InvalidVarCharMaxLengthError> for PlanError {
     fn from(e: InvalidVarCharMaxLengthError) -> PlanError {
         PlanError::InvalidVarCharMaxLength(e)
+    }
+}
+
+impl From<InvalidTimestampPrecisionError> for PlanError {
+    fn from(e: InvalidTimestampPrecisionError) -> PlanError {
+        PlanError::InvalidTimestampPrecision(e)
     }
 }
 
