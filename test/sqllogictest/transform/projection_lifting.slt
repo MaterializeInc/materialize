@@ -50,7 +50,7 @@ Explained Query:
   With
     cte l0 =
       Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-        Get materialize.public.edges
+        ReadStorage materialize.public.edges
 
 Source materialize.public.edges
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
@@ -108,7 +108,7 @@ Explained Query:
             Get l1
     cte l0 =
       Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-        Get materialize.public.edges
+        ReadStorage materialize.public.edges
 
 Source materialize.public.edges
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)

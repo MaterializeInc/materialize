@@ -38,12 +38,12 @@ Explained Query:
   Return
     Threshold
       Union
-        Get materialize.public.foo
+        ReadStorage materialize.public.foo
         Negate
           Get l0
   With Mutually Recursive
     cte l1 =
-      Get materialize.public.foo
+      ReadStorage materialize.public.foo
     cte l0 =
       Get l1
 

@@ -184,7 +184,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a, sum(b) from agg_pk group by a
 Explained Query:
   Project (#0, #3) // { arity: 2 }
     Map (integer_to_bigint(#1)) // { arity: 4 }
-      Get materialize.public.agg_pk // { arity: 3 }
+      ReadStorage materialize.public.agg_pk // { arity: 3 }
 
 EOF
 
@@ -201,7 +201,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a, sum(c) from agg_pk group by a
 Explained Query:
   Project (#0, #3) // { arity: 2 }
     Map (bigint_to_numeric(#2)) // { arity: 4 }
-      Get materialize.public.agg_pk // { arity: 3 }
+      ReadStorage materialize.public.agg_pk // { arity: 3 }
 
 EOF
 

@@ -20,11 +20,11 @@ use itertools::Itertools;
 use mz_compute_client::types::dataflows::{DataflowDesc, IndexImport};
 use mz_expr::visit::Visit;
 use mz_expr::{
-    CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject, MirRelationExpr,
-    MirScalarExpr, RECURSION_LIMIT,
+    AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
+    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::{soft_assert_eq, soft_panic_or_log};
 use mz_repr::explain::IndexUsageType;
 use mz_repr::GlobalId;
 
@@ -461,6 +461,8 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 
 /// Restricts the indexes imported by `dataflow` to only the ones it needs.
 /// It also adds to the `DataflowMetainfo` how each index will be used.
+/// It also annotates global `Get`s with whether they will be reads from Persist or an index, plus
+/// their index usage types.
 ///
 /// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
@@ -490,6 +492,7 @@ fn prune_and_annotate_dataflow_index_imports(
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
                     typ,
+                    ..
                 } => {
                     source_keys.entry(*global_id).or_insert(
                         typ.keys
@@ -527,16 +530,24 @@ fn prune_and_annotate_dataflow_index_imports(
     for (_sink_id, sink_desc) in dataflow.sink_exports.iter() {
         // First, let's see if there exists an index on the id that the sink wants. If not, there is
         // nothing we can do here.
-        if let Some((_idx_id, arbitrary_index_key)) = indexes.indexes_on(sink_desc.from).next() {
+        if let Some((idx_id, arbitrary_idx_key)) = indexes.indexes_on(sink_desc.from).next() {
             // If yes, then we'll add a request of _some_ index: If we already collected an index
             // request on this id, then use that, otherwise use the above arbitrarily picked index.
-            let requested_keys = index_reqs_by_id
+            let requested_idxs = index_reqs_by_id
                 .entry(sink_desc.from)
                 .or_insert_with(Vec::new);
-            if let Some((already_requested_key, _usage_type)) = requested_keys.get(0) {
-                requested_keys.push((already_requested_key.clone(), IndexUsageType::SinkExport));
+            if let Some((already_req_idx_id, already_req_key, _)) = requested_idxs.get(0) {
+                requested_idxs.push((
+                    *already_req_idx_id,
+                    already_req_key.clone(),
+                    IndexUsageType::SinkExport,
+                ));
             } else {
-                requested_keys.push((arbitrary_index_key.to_owned(), IndexUsageType::SinkExport));
+                requested_idxs.push((
+                    idx_id,
+                    arbitrary_idx_key.to_owned(),
+                    IndexUsageType::SinkExport,
+                ));
             }
         }
     }
@@ -545,22 +556,30 @@ fn prune_and_annotate_dataflow_index_imports(
     for (_id, (index_desc, _)) in dataflow.index_exports.iter() {
         // First, let's see if there exists an index on the id that the exported index is on. If
         // not, there is nothing we can do here.
-        if let Some((_idx_id, arbitrary_index_key)) = indexes.indexes_on(index_desc.on_id).next() {
+        if let Some((idx_id, arbitrary_index_key)) = indexes.indexes_on(index_desc.on_id).next() {
             // If yes, then we'll add an index request of some index: If we already collected an
             // index request on this id, then use that, otherwise use the above arbitrarily picked
             // index.
-            let requested_keys = index_reqs_by_id
+            let requested_idxs = index_reqs_by_id
                 .entry(index_desc.on_id)
                 .or_insert_with(Vec::new);
-            if let Some((already_requested_key, _usage_type)) = requested_keys.get(0) {
-                requested_keys.push((already_requested_key.clone(), IndexUsageType::IndexExport));
+            if let Some((already_req_idx_id, already_req_key, _)) = requested_idxs.get(0) {
+                requested_idxs.push((
+                    *already_req_idx_id,
+                    already_req_key.clone(),
+                    IndexUsageType::IndexExport,
+                ));
             } else {
                 // This is surprising: Actually, an index creation dataflow always has a plan in
                 // `objects_to_build` that will have a Get of the object that the index is on (see
                 // `DataflowDescription::export_index`). Therefore, we should have already requested
                 // an index usage when seeing that Get in `CollectIndexRequests`.
                 soft_panic_or_log!("We are seeing an index export on an id that's not mentioned in `objects_to_build`");
-                requested_keys.push((arbitrary_index_key.to_owned(), IndexUsageType::IndexExport));
+                requested_idxs.push((
+                    idx_id,
+                    arbitrary_index_key.to_owned(),
+                    IndexUsageType::IndexExport,
+                ));
             }
         }
     }
@@ -572,41 +591,85 @@ fn prune_and_annotate_dataflow_index_imports(
     for (id, index_reqs) in index_reqs_by_id.iter_mut() {
         if index_reqs.is_empty() {
             // Try to pick an arbitrary index to be fully scanned.
-            if let Some((_idx_id, key)) = indexes.indexes_on(*id).next() {
+            if let Some((idx_id, key)) = indexes.indexes_on(*id).next() {
                 soft_panic_or_log!(
                     "prune_and_annotate_dataflow_index_imports didn't find any index for an id, even though one exists
 id: {}, key: {:?}",
                     id,
                     key
                 );
-                index_reqs.push((key.to_owned(), IndexUsageType::Unknown));
+                index_reqs.push((idx_id, key.to_owned(), IndexUsageType::Unknown));
             }
         }
     }
 
     // Adjust FullScans to not introduce a new index dependency if there is also some non-FullScan
     // request on the same id.
-    for (id, index_reqs) in index_reqs_by_id.iter_mut() {
+    // `full_scan_changes` saves the changes that we do: Each (Get id, index id) entry indicates
+    // that if a Get has that id, then any full scan index accesses on it should be changed to use
+    // the indicated index id.
+    let mut full_scan_changes = BTreeMap::new();
+    for (get_id, index_reqs) in index_reqs_by_id.iter_mut() {
         // Let's choose a non-FullScan access (if exists).
-        if let Some(picked_non_full_scan_key) = choose_index(
+        if let Some((picked_idx, picked_idx_key)) = choose_index(
             &source_keys,
-            id,
+            get_id,
             &index_reqs
                 .iter()
-                .filter_map(|(key, usage_type)| match usage_type {
+                .filter_map(|(idx_id, key, usage_type)| match usage_type {
                     IndexUsageType::FullScan => None,
-                    _ => Some(key.clone()),
+                    _ => Some((*idx_id, key.clone())),
                 })
                 .collect_vec(),
         ) {
             // Found a non-FullScan access. Modify all FullScans to use the same index as that one.
-            for (key, usage_type) in index_reqs {
+            for (idx_id, key, usage_type) in index_reqs {
                 match usage_type {
-                    IndexUsageType::FullScan => *key = picked_non_full_scan_key.clone(),
+                    IndexUsageType::FullScan => {
+                        full_scan_changes.insert(get_id, picked_idx);
+                        *idx_id = picked_idx;
+                        *key = picked_idx_key.clone();
+                    }
                     _ => {}
                 }
             }
         }
+    }
+    // Apply the above full scan changes to also the Gets.
+    for build_desc in dataflow.objects_to_build.iter_mut() {
+        build_desc
+            .plan
+            .as_inner_mut()
+            .visit_mut_post(&mut |expr: &mut MirRelationExpr| {
+                match expr {
+                    MirRelationExpr::Get {
+                        id: Id::Global(global_id),
+                        typ: _,
+                        access_strategy: persist_or_index,
+                    } => {
+                        if let Some(new_idx_id) = full_scan_changes.get(global_id) {
+                            match persist_or_index {
+                                AccessStrategy::UnknownOrLocal => {
+                                    // Should have been already filled by `collect_index_reqs`.
+                                    unreachable!()
+                                }
+                                AccessStrategy::Persist => {
+                                    // We already know that it's an indexed access.
+                                    unreachable!()
+                                }
+                                AccessStrategy::Index(accesses) => {
+                                    for (idx_id, usage_type) in accesses {
+                                        if matches!(usage_type, IndexUsageType::FullScan) {
+                                            *idx_id = *new_idx_id;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            })?;
     }
 
     // Annotate index imports by their usage types
@@ -631,8 +694,9 @@ id: {}, key: {:?}",
         // Let's see whether something has requested an index on this object that this imported
         // index is on.
         if let Some(index_reqs) = index_reqs_by_id.get(&index_desc.on_id) {
-            for (req_key, req_usage_type) in index_reqs {
-                if *req_key == index_desc.key {
+            for (req_idx_id, req_key, req_usage_type) in index_reqs {
+                if req_idx_id == index_id {
+                    soft_assert_eq!(*req_key, index_desc.key);
                     new_usage_types.push(req_usage_type.clone());
                 }
             }
@@ -671,12 +735,15 @@ id: {}, key: {:?}",
 fn choose_index(
     source_keys: &BTreeMap<GlobalId, BTreeSet<Vec<MirScalarExpr>>>,
     id: &GlobalId,
-    indexes: &Vec<Vec<MirScalarExpr>>,
-) -> Option<Vec<MirScalarExpr>> {
+    indexes: &Vec<(GlobalId, Vec<MirScalarExpr>)>,
+) -> Option<(GlobalId, Vec<MirScalarExpr>)> {
     match source_keys.get(id) {
         None => indexes.iter().next().cloned(), // pick an arbitrary index
-        Some(coll_keys) => match indexes.iter().find(|key| coll_keys.contains(*key)) {
-            Some(key) => Some(key.clone()),
+        Some(coll_keys) => match indexes
+            .iter()
+            .find(|(_idx_id, key)| coll_keys.contains(&*key))
+        {
+            Some((idx_id, key)) => Some((*idx_id, key.clone())),
             None => indexes.iter().next().cloned(), // pick an arbitrary index
         },
     }
@@ -689,7 +756,8 @@ struct CollectIndexRequests<'a> {
     /// We were told about these indexes being available.
     indexes_available: &'a dyn IndexOracle,
     /// We'll be collecting index requests here.
-    index_reqs_by_id: &'a mut BTreeMap<GlobalId, Vec<(Vec<MirScalarExpr>, IndexUsageType)>>,
+    index_reqs_by_id:
+        &'a mut BTreeMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>, IndexUsageType)>>,
     /// As we recurse down a MirRelationExpr, we'll need to keep track of the context of the
     /// current node (see docs on `IndexUsageContext` about what context we keep).
     /// Moreover, we need to propagate this context from cte uses to cte definitions.
@@ -709,7 +777,10 @@ impl<'a> CollectIndexRequests<'a> {
     fn new(
         source_keys: &'a BTreeMap<GlobalId, BTreeSet<Vec<MirScalarExpr>>>,
         indexes_available: &'a dyn IndexOracle,
-        index_reqs_by_id: &'a mut BTreeMap<GlobalId, Vec<(Vec<MirScalarExpr>, IndexUsageType)>>,
+        index_reqs_by_id: &'a mut BTreeMap<
+            GlobalId,
+            Vec<(GlobalId, Vec<MirScalarExpr>, IndexUsageType)>,
+        >,
     ) -> CollectIndexRequests<'a> {
         CollectIndexRequests {
             source_keys,
@@ -722,7 +793,7 @@ impl<'a> CollectIndexRequests<'a> {
 
     pub fn collect_index_reqs(
         &mut self,
-        expr: &MirRelationExpr,
+        expr: &mut MirRelationExpr,
     ) -> Result<(), RecursionLimitError> {
         assert!(self.context_across_lets.is_empty());
         self.collect_index_reqs_inner(
@@ -735,7 +806,7 @@ impl<'a> CollectIndexRequests<'a> {
 
     fn collect_index_reqs_inner(
         &mut self,
-        expr: &MirRelationExpr,
+        expr: &mut MirRelationExpr,
         contexts: &Vec<IndexUsageContext>,
     ) -> Result<(), RecursionLimitError> {
         self.checked_recur_mut(|this| {
@@ -748,7 +819,7 @@ impl<'a> CollectIndexRequests<'a> {
                     this.source_keys,
                     on_id,
                     &this.indexes_available.indexes_on(*on_id).map(
-                        |(_idx_id, key)| key.iter().cloned().collect_vec()
+                        |(idx_id, key)| (idx_id, key.iter().cloned().collect_vec())
                     ).collect_vec()
                 )
             };
@@ -775,10 +846,10 @@ impl<'a> CollectIndexRequests<'a> {
                             // For Delta joins, the first input is special, see
                             // https://github.com/MaterializeInc/materialize/issues/6789
                             this.collect_index_reqs_inner(
-                                &inputs[0],
+                                &mut inputs[0],
                                 &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(true)),
                             )?;
-                            for input in &inputs[1..] {
+                            for input in &mut inputs[1..] {
                                 this.collect_index_reqs_inner(
                                     input,
                                     &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(
@@ -807,6 +878,7 @@ impl<'a> CollectIndexRequests<'a> {
                 }
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
+                    access_strategy: persist_or_index,
                     ..
                 } => {
                     this.index_reqs_by_id
@@ -816,6 +888,7 @@ impl<'a> CollectIndexRequests<'a> {
                     // specifically want to use an index for this Get. However, let's still try to
                     // find an index for a full scan.
                     let mut try_full_scan = contexts.is_empty();
+                    let mut index_accesses = Vec::new();
                     for context in contexts {
                         match &context.requested_keys {
                             None => {
@@ -856,21 +929,24 @@ impl<'a> CollectIndexRequests<'a> {
                             }
                             Some(requested_keys) => {
                                 for requested_key in requested_keys {
-                                    if this
+                                    match this
                                         .indexes_available
                                         .indexes_on(*global_id)
                                         .find(|(_idx_id, available_key)| available_key == &requested_key)
-                                        .is_some()
                                     {
-                                        this.index_reqs_by_id
-                                            .get_mut(global_id)
-                                            .unwrap()
-                                            .push((requested_key.clone(), context.usage_type.clone()));
-                                    } else {
-                                        // If there is a key requested for which we don't have an
-                                        // index, then we might still be able to do a full scan of a
-                                        // differently keyed index.
-                                        try_full_scan = true;
+                                        Some((idx_id, key)) => {
+                                            this.index_reqs_by_id
+                                                .get_mut(global_id)
+                                                .unwrap()
+                                                .push((idx_id, key.to_owned(), context.usage_type.clone()));
+                                            index_accesses.push((idx_id, context.usage_type.clone()));
+                                        },
+                                        None => {
+                                            // If there is a key requested for which we don't have an
+                                            // index, then we might still be able to do a full scan of a
+                                            // differently keyed index.
+                                            try_full_scan = true;
+                                        }
                                     }
                                 }
                                 if requested_keys.is_empty() {
@@ -890,12 +966,18 @@ impl<'a> CollectIndexRequests<'a> {
                         // https://github.com/MaterializeInc/materialize/issues/21145
                         // Also note that currently we are deduplicating index usage types when
                         // printing index usages in EXPLAIN.
-                        if let Some(key) = pick_index_for_full_scan(global_id) {
+                        if let Some((idx_id, key)) = pick_index_for_full_scan(global_id) {
                             this.index_reqs_by_id
                                 .get_mut(global_id)
                                 .unwrap()
-                                .push((key.to_owned(), IndexUsageType::FullScan));
+                                .push((idx_id, key.to_owned(), IndexUsageType::FullScan));
+                            index_accesses.push((idx_id, IndexUsageType::FullScan));
                         }
+                    }
+                    if index_accesses.is_empty() {
+                        *persist_or_index = AccessStrategy::Persist;
+                    } else {
+                        *persist_or_index = AccessStrategy::Index(index_accesses);
                     }
                 }
                 MirRelationExpr::Get {
@@ -933,7 +1015,7 @@ impl<'a> CollectIndexRequests<'a> {
                     limits: _,
                     body,
                 } => {
-                    for id in ids {
+                    for id in ids.iter() {
                         let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
                         assert!(shadowed_context.is_none()); // No shadowing in MIR
                     }
@@ -941,14 +1023,14 @@ impl<'a> CollectIndexRequests<'a> {
                     this.collect_index_reqs_inner(body, contexts)?;
                     // Reset the contexts of the ids (of the current LetRec), because an arrangement
                     // from a value can't be used in the body.
-                    for id in ids {
+                    for id in ids.iter() {
                         *this.context_across_lets.get_mut(id).unwrap() = Vec::new();
                     }
                     // Recurse on the values in reverse order.
                     // Note that we do only one pass, i.e., we won't see context through a Get that
                     // refers to the previous iteration. But this is ok, because we can't reuse
                     // arrangements across iterations anyway.
-                    for (id, value) in ids.iter().zip(values.iter()).rev() {
+                    for (id, value) in ids.iter().zip(values.iter_mut()).rev() {
                         this.collect_index_reqs_inner(
                             value,
                             &this.context_across_lets[id].clone(),
@@ -963,7 +1045,7 @@ impl<'a> CollectIndexRequests<'a> {
                     // Nothing interesting at this node, recurse with the empty context (regardless of
                     // what context we got from above).
                     let empty_context = Vec::new();
-                    for child in expr.children() {
+                    for child in expr.children_mut() {
                         this.collect_index_reqs_inner(child, &empty_context)?;
                     }
                 }

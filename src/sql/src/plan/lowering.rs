@@ -40,6 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
+use mz_expr::AccessStrategy;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -205,6 +206,7 @@ impl HirRelationExpr {
                         let get_cte = SR::Get {
                             id: mz_expr::Id::Local(cte_desc.new_id.clone()),
                             typ: cte_desc.relation_type.clone(),
+                            access_strategy: AccessStrategy::UnknownOrLocal,
                         };
                         if get_outer == cte_desc.outer_relation {
                             // If the CTE was applied to the same exact relation, we can safely
@@ -254,7 +256,11 @@ impl HirRelationExpr {
                     }
                     _ => {
                         // Get statements are only to external sources, and are not correlated with `get_outer`.
-                        get_outer.product(SR::Get { id, typ })
+                        get_outer.product(SR::Get {
+                            id,
+                            typ,
+                            access_strategy: AccessStrategy::UnknownOrLocal,
+                        })
                     }
                 },
                 Let {

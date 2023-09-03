@@ -247,24 +247,24 @@ Operator | Meaning | Example
 
 ### Reference: Operators in decorrelated and optimized plans
 
-Operator | Meaning | Example
----------|---------|---------
-**Constant** | Always produces the same collection of rows. | `Constant`<br />`- ((1, 2) x 2)`<br />`- (3, 4)`
-**Get** | Produces rows from either an existing source/view or from a previous operator in the same plan. | `Get materialize.public.ordered`
-**Project** | Produces a subset of the columns in the input rows. | `Project (#2, #3)`
-**Map** | Appends the results of some scalar expressions to each row in the input. | `Map (((#1 * 10000000dec) / #2) * 1000dec)`
-**FlatMap** | Appends the result of some table function to each row in the input. | `FlatMap jsonb_foreach(#3)`
-**Filter** | Removes rows of the input for which some scalar predicates return `false`. | `Filter (#20 < #21)`
-**Join** | Returns combinations of rows from each input whenever some equality predicates are `true`. | `Join on=(#1 = #2)`
-**CrossJoin** | An alias for a `Join` with an empty predicate (emits all combinations). | `CrossJoin`
-**Reduce** | Groups the input rows by some scalar expressions, reduces each groups using some aggregate functions, and produce rows containing the group key and aggregate outputs. | `Reduce group_by=[#0] aggregates=[max((#0 * #1))]`
-**Distinct** | Alias for a `Reduce` with an empty aggregate list. | `Distinct`
-**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows.| `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
-**Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input. | `Negate`
-**Threshold** | Removes any rows with negative counts. | `Threshold`
-**Union** | Sums the counts of each row of all inputs. | `Union`
-**ArrangeBy** | Indicates a point that will become an arrangement in the dataflow engine (each `keys` element will be a different arrangement). | `ArrangeBy keys=[[#0]]`
-**Return ... With ...**  | Binds sub-plans consumed multiple times by downstream operators. | [See above](#reading-decorrelated-and-optimized-plans)
+Operator | Meaning                                                                                                                                                                  | Example
+---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------
+**Constant** | Always produces the same collection of rows.                                                                                                                             | `Constant`<br />`- ((1, 2) x 2)`<br />`- (3, 4)`
+**Get** | Produces rows from either an existing source/view or from a previous operator in the same plan.                                                                          | `Get materialize.public.ordered`
+**Project** | Produces a subset of the columns in the input rows.                                                                                                                      | `Project (#2, #3)`
+**Map** | Appends the results of some scalar expressions to each row in the input.                                                                                                 | `Map (((#1 * 10000000dec) / #2) * 1000dec)`
+**FlatMap** | Appends the result of some table function to each row in the input.                                                                                                      | `FlatMap jsonb_foreach(#3)`
+**Filter** | Removes rows of the input for which some scalar predicates return `false`.                                                                                               | `Filter (#20 < #21)`
+**Join** | Returns combinations of rows from each input whenever some equality predicates are `true`.                                                                               | `Join on=(#1 = #2)`
+**CrossJoin** | An alias for a `Join` with an empty predicate (emits all combinations).                                                                                                  | `CrossJoin`
+**Reduce** | Groups the input rows by some scalar expressions, reduces each groups using some aggregate functions, and produce rows containing the group key and aggregate outputs.   | `Reduce group_by=[#0] aggregates=[max((#0 * #1))]`
+**Distinct** | Alias for a `Reduce` with an empty aggregate list.                                                                                                                       | `Distinct`
+**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows. | `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
+**Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.                                           | `Negate`
+**Threshold** | Removes any rows with negative counts.                                                                                                                                   | `Threshold`
+**Union** | Sums the counts of each row of all inputs.                                                                                                                               | `Union`
+**ArrangeBy** | Indicates a point that will become an arrangement in the dataflow engine (each `keys` element will be a different arrangement). Note that if the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.                                         | `ArrangeBy keys=[[#0]]`
+**Return ... With ...**  | Binds sub-plans consumed multiple times by downstream operators.                                                                                                         | [See above](#reading-decorrelated-and-optimized-plans)
 
 ## Examples
 

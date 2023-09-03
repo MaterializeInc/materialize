@@ -192,7 +192,7 @@ Explained Query:
         Reduce group_by=[#4, #5] aggregates=[sum(#0), sum(#1), sum((#1 * (1 - #2))), sum(((#1 * (1 - #2)) * (1 + #3))), count(*), sum(#2)] // { arity: 8 }
           Project (#4..=#9) // { arity: 6 }
             Filter (date_to_timestamp(#10) <= 1998-10-02 00:00:00) // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
@@ -277,23 +277,23 @@ Explained Query:
                 %3:l2 » %4:l3[#0]KAef » %1:l0[#3]KA » %2:l1[#1]KA » %0:part[#0]KAelf
                 %4:l3 » %3:l2[#2]KA » %1:l0[#3]KA » %2:l1[#1]KA » %0:part[#0]KAelf
               ArrangeBy keys=[[#0]] // { arity: 9 }
-                Get materialize.public.part // { arity: 9 }
+                ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
               Get l0 // { arity: 7 }
               Get l1 // { arity: 5 }
               Get l2 // { arity: 4 }
               Get l3 // { arity: 3 }
       cte l3 =
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          Get materialize.public.region // { arity: 3 }
+          ReadIndex on=region pk_region_regionkey=[delta join lookup] // { arity: 3 }
       cte l2 =
         ArrangeBy keys=[[#0], [#2]] // { arity: 4 }
-          Get materialize.public.nation // { arity: 4 }
+          ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
       cte l1 =
         ArrangeBy keys=[[#0], [#1]] // { arity: 5 }
-          Get materialize.public.partsupp // { arity: 5 }
+          ReadIndex on=partsupp fk_partsupp_partkey=[delta join lookup] fk_partsupp_suppkey=[delta join lookup] // { arity: 5 }
       cte l0 =
         ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
-          Get materialize.public.supplier // { arity: 7 }
+          ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -345,11 +345,11 @@ Explained Query:
                 %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
                 %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
               ArrangeBy keys=[[#0]] // { arity: 8 }
-                Get materialize.public.customer // { arity: 8 }
+                ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] // { arity: 8 }
               ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-                Get materialize.public.orders // { arity: 9 }
+                ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
               ArrangeBy keys=[[#0]] // { arity: 16 }
-                Get materialize.public.lineitem // { arity: 16 }
+                ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
@@ -395,17 +395,17 @@ Explained Query:
               %1 » %2[#0]UKA » %0:orders[#0]KAiif
               %2 » %1[#0]UKA » %0:orders[#0]KAiif
             ArrangeBy keys=[[#0]] // { arity: 9 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders pk_orders_orderkey=[delta join 1st input (full scan)] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#4 >= 1993-07-01) AND (#0) IS NOT NULL AND (date_to_timestamp(#4) < 1993-10-01 00:00:00) // { arity: 9 }
-                    Get materialize.public.orders // { arity: 9 }
+                    ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#11 < #12) // { arity: 16 }
-                    Get materialize.public.lineitem // { arity: 16 }
+                    ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***, delta join 1st input (full scan))
@@ -450,19 +450,19 @@ Explained Query:
             implementation
               %5:region[#0]KAef » %4:nation[#2]KAef » %0:customer[#3]KAef » %1:orders[#1]KAeiif » %2:lineitem[#0]KAeiif » %3:supplier[#0, #1]KKeiif
             ArrangeBy keys=[[#3]] // { arity: 8 }
-              Get materialize.public.customer // { arity: 8 }
+              ReadIndex on=customer fk_customer_nationkey=[differential join] // { arity: 8 }
             ArrangeBy keys=[[#1]] // { arity: 9 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
             ArrangeBy keys=[[#0, #1]] // { arity: 2 }
               Project (#0, #3) // { arity: 2 }
                 Filter (#0) IS NOT NULL // { arity: 7 }
-                  Get materialize.public.supplier // { arity: 7 }
+                  ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
             ArrangeBy keys=[[#2]] // { arity: 4 }
-              Get materialize.public.nation // { arity: 4 }
+              ReadIndex on=nation fk_nation_regionkey=[differential join] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 3 }
-              Get materialize.public.region // { arity: 3 }
+              ReadIndex on=region pk_region_regionkey=[differential join] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.fk_nation_regionkey (differential join)
@@ -503,7 +503,7 @@ Explained Query:
       Reduce aggregates=[sum((#0 * #1))] // { arity: 1 }
         Project (#5, #6) // { arity: 2 }
           Filter (#4 < 24) AND (#6 <= 0.07) AND (#6 >= 0.05) AND (#10 >= 1994-01-01) AND (date_to_timestamp(#10) < 1995-01-01 00:00:00) // { arity: 16 }
-            Get materialize.public.lineitem // { arity: 16 }
+            ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
@@ -569,19 +569,19 @@ Explained Query:
                   %4:l0 » %0:supplier[#3]KA » %1:lineitem[#2]KAiif » %2:orders[#0]KA » %3:customer[#0]KA » %5:l0[#0]KAef
                   %5:l0 » %3:customer[#3]KA » %2:orders[#1]KA » %1:lineitem[#0]KAiif » %0:supplier[#0]KA » %4:l0[#0]KAef
                 ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
-                  Get materialize.public.supplier // { arity: 7 }
+                  ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
                 ArrangeBy keys=[[#0], [#2]] // { arity: 16 }
-                  Get materialize.public.lineitem // { arity: 16 }
+                  ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
                 ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-                  Get materialize.public.orders // { arity: 9 }
+                  ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
                 ArrangeBy keys=[[#0], [#3]] // { arity: 8 }
-                  Get materialize.public.customer // { arity: 8 }
+                  ReadIndex on=customer pk_customer_custkey=[delta join lookup] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
                 Get l0 // { arity: 4 }
                 Get l0 // { arity: 4 }
     With
       cte l0 =
         ArrangeBy keys=[[#0]] // { arity: 4 }
-          Get materialize.public.nation // { arity: 4 }
+          ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -655,21 +655,21 @@ Explained Query:
                   %6:nation » %1:supplier[#3]KA » %2:lineitem[#2]KA » %0:part[#0]KAef » %3:orders[#0]KAiif » %4:customer[#0]KA » %5:nation[#0]KA » %7:region[#0]KAef
                   %7:region » %5:nation[#2]KA » %4:customer[#3]KA » %3:orders[#1]KAiif » %2:lineitem[#0]KA » %0:part[#0]KAef » %1:supplier[#0]KA » %6:nation[#0]KA
                 ArrangeBy keys=[[#0]] // { arity: 9 }
-                  Get materialize.public.part // { arity: 9 }
+                  ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
                 ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
-                  Get materialize.public.supplier // { arity: 7 }
+                  ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
                 ArrangeBy keys=[[#0], [#1], [#2]] // { arity: 16 }
-                  Get materialize.public.lineitem // { arity: 16 }
+                  ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_partkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
                 ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-                  Get materialize.public.orders // { arity: 9 }
+                  ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
                 ArrangeBy keys=[[#0], [#3]] // { arity: 8 }
-                  Get materialize.public.customer // { arity: 8 }
+                  ReadIndex on=customer pk_customer_custkey=[delta join lookup] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
                 ArrangeBy keys=[[#0], [#2]] // { arity: 4 }
-                  Get materialize.public.nation // { arity: 4 }
+                  ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 4 }
-                  Get materialize.public.nation // { arity: 4 }
+                  ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 3 }
-                  Get materialize.public.region // { arity: 3 }
+                  ReadIndex on=region pk_region_regionkey=[delta join lookup] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -738,17 +738,17 @@ Explained Query:
               %4:orders » %2:lineitem[#0]KA » %3:partsupp[#0, #1]KKA » %0:part[#0]KAlf » %1:supplier[#0]KA » %5:nation[#0]KA
               %5:nation » %1:supplier[#3]KA » %2:lineitem[#2]KA » %3:partsupp[#0, #1]KKA » %0:part[#0]KAlf » %4:orders[#0]KA
             ArrangeBy keys=[[#0]] // { arity: 9 }
-              Get materialize.public.part // { arity: 9 }
+              ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
             ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
-              Get materialize.public.supplier // { arity: 7 }
+              ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
             ArrangeBy keys=[[#0], [#1], [#1, #2], [#2]] // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_partkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] fk_lineitem_partsuppkey=[delta join lookup] // { arity: 16 }
             ArrangeBy keys=[[#0, #1]] // { arity: 5 }
-              Get materialize.public.partsupp // { arity: 5 }
+              ReadIndex on=partsupp pk_partsupp_partkey_suppkey=[delta join lookup] // { arity: 5 }
             ArrangeBy keys=[[#0]] // { arity: 9 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
-              Get materialize.public.nation // { arity: 4 }
+              ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -813,13 +813,13 @@ Explained Query:
                 %2:lineitem » %1:orders[#0]KAiiif » %0:customer[#0]KA » %3:nation[#0]KA
                 %3:nation » %0:customer[#3]KA » %1:orders[#1]KAiiif » %2:lineitem[#0]KAef
               ArrangeBy keys=[[#0], [#3]] // { arity: 8 }
-                Get materialize.public.customer // { arity: 8 }
+                ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join 1st input (full scan)] // { arity: 8 }
               ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-                Get materialize.public.orders // { arity: 9 }
+                ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
               ArrangeBy keys=[[#0]] // { arity: 16 }
-                Get materialize.public.lineitem // { arity: 16 }
+                ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] // { arity: 16 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -887,11 +887,11 @@ Explained Query:
                 %1:supplier » %2:nation[#0]KAef » %0:partsupp[#1]KA
                 %2:nation » %1:supplier[#3]KA » %0:partsupp[#1]KA
               ArrangeBy keys=[[#1]] // { arity: 5 }
-                Get materialize.public.partsupp // { arity: 5 }
+                ReadIndex on=partsupp fk_partsupp_suppkey=[delta join 1st input (full scan)] // { arity: 5 }
               ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -942,9 +942,9 @@ Explained Query:
             implementation
               %1:lineitem[#0]KAeiif » %0:orders[#0]KAeiif
             ArrangeBy keys=[[#0]] // { arity: 9 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (differential join)
@@ -997,9 +997,9 @@ Explained Query:
                             Project (#0..=#7) // { arity: 8 }
                               Get l0 // { arity: 9 }
                         Distinct group_by=[#0..=#7] // { arity: 8 }
-                          Get materialize.public.customer // { arity: 8 }
+                          ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
                     ArrangeBy keys=[[#0..=#7]] // { arity: 8 }
-                      Get materialize.public.customer // { arity: 8 }
+                      ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
     With
       cte l0 =
         Project (#0..=#8) // { arity: 9 }
@@ -1008,9 +1008,9 @@ Explained Query:
               implementation
                 %1:orders[#1]KAf » %0:customer[#0]KAf
               ArrangeBy keys=[[#0]] // { arity: 8 }
-                Get materialize.public.customer // { arity: 8 }
+                ReadIndex on=customer pk_customer_custkey=[differential join] // { arity: 8 }
               ArrangeBy keys=[[#1]] // { arity: 9 }
-                Get materialize.public.orders // { arity: 9 }
+                ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***, differential join)
@@ -1057,9 +1057,9 @@ Explained Query:
               implementation
                 %0:lineitem[#1]KAiif » %1:part[#0]KAiif
               ArrangeBy keys=[[#1]] // { arity: 16 }
-                Get materialize.public.lineitem // { arity: 16 }
+                ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
               ArrangeBy keys=[[#0]] // { arity: 9 }
-                Get materialize.public.part // { arity: 9 }
+                ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
@@ -1112,7 +1112,7 @@ Explained Query:
             implementation
               %0:supplier[#0]KA » %1:l0[#0]UKA » %2[#0]UK
             ArrangeBy keys=[[#0]] // { arity: 7 }
-              Get materialize.public.supplier // { arity: 7 }
+              ReadIndex on=supplier pk_supplier_suppkey=[differential join] // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Get l0 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1124,7 +1124,7 @@ Explained Query:
         Reduce group_by=[#0] aggregates=[sum((#1 * (1 - #2)))] // { arity: 2 }
           Project (#2, #5, #6) // { arity: 3 }
             Filter (#10 >= 1996-01-01) AND (date_to_timestamp(#10) < 1996-04-01 00:00:00) // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_supplier_suppkey (differential join)
@@ -1193,7 +1193,7 @@ Explained Query:
                           ArrangeBy keys=[[]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
                               Filter like["%Customer%Complaints%"](varchar_to_text(#6)) // { arity: 7 }
-                                Get materialize.public.supplier // { arity: 7 }
+                                ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
                 Get l1 // { arity: 1 }
     With
       cte l1 =
@@ -1207,9 +1207,9 @@ Explained Query:
               implementation
                 %1:part[#0]KAef » %0:partsupp[#0]KAef
               ArrangeBy keys=[[#0]] // { arity: 5 }
-                Get materialize.public.partsupp // { arity: 5 }
+                ReadIndex on=partsupp fk_partsupp_partkey=[differential join] // { arity: 5 }
               ArrangeBy keys=[[#0]] // { arity: 9 }
-                Get materialize.public.part // { arity: 9 }
+                ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
@@ -1281,10 +1281,10 @@ Explained Query:
               %1:part[#0]KAef » %0:l0[#1]KAef
             Get l0 // { arity: 16 }
             ArrangeBy keys=[[#0]] // { arity: 9 }
-              Get materialize.public.part // { arity: 9 }
+              ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
     cte l0 =
       ArrangeBy keys=[[#1]] // { arity: 16 }
-        Get materialize.public.lineitem // { arity: 16 }
+        ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
@@ -1360,13 +1360,13 @@ Explained Query:
                 %1:orders » %0:customer[#0]KA » %2:l0[#0]KA
                 %2:l0 » %1:orders[#0]KA » %0:customer[#0]KA
               ArrangeBy keys=[[#0]] // { arity: 8 }
-                Get materialize.public.customer // { arity: 8 }
+                ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] // { arity: 8 }
               ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-                Get materialize.public.orders // { arity: 9 }
+                ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
               Get l0 // { arity: 16 }
       cte l0 =
         ArrangeBy keys=[[#0]] // { arity: 16 }
-          Get materialize.public.lineitem // { arity: 16 }
+          ReadIndex on=lineitem fk_lineitem_orderkey=[differential join, delta join lookup] // { arity: 16 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
@@ -1436,9 +1436,9 @@ Explained Query:
                 implementation
                   %1:part[#0]KAeiiif » %0:lineitem[#1]KAeiiiiif
                 ArrangeBy keys=[[#1]] // { arity: 16 }
-                  Get materialize.public.lineitem // { arity: 16 }
+                  ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
                 ArrangeBy keys=[[#0]] // { arity: 9 }
-                  Get materialize.public.part // { arity: 9 }
+                  ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_part_partkey (differential join)
@@ -1521,7 +1521,7 @@ Explained Query:
                                       Project (#1, #2) // { arity: 2 }
                                         Get l1 // { arity: 4 }
                                   ArrangeBy keys=[[#1, #2]] // { arity: 16 }
-                                    Get materialize.public.lineitem // { arity: 16 }
+                                    ReadIndex on=lineitem fk_lineitem_partsuppkey=[differential join] // { arity: 16 }
     With
       cte l1 =
         Project (#0..=#3) // { arity: 4 }
@@ -1533,12 +1533,12 @@ Explained Query:
                 Project (#0) // { arity: 1 }
                   Get l0 // { arity: 3 }
             ArrangeBy keys=[[#0]] // { arity: 5 }
-              Get materialize.public.partsupp // { arity: 5 }
+              ReadIndex on=partsupp fk_partsupp_partkey=[differential join] // { arity: 5 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Distinct group_by=[#0] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#0) IS NOT NULL AND like["forest%"](varchar_to_text(#1)) // { arity: 9 }
-                    Get materialize.public.part // { arity: 9 }
+                    ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
       cte l0 =
         Project (#0..=#2) // { arity: 3 }
           Filter (#8 = "CANADA") AND (#3) IS NOT NULL // { arity: 11 }
@@ -1546,9 +1546,9 @@ Explained Query:
               implementation
                 %1:nation[#0]KAef » %0:supplier[#3]KAef
               ArrangeBy keys=[[#3]] // { arity: 7 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation pk_nation_nationkey=[differential join] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (differential join)
@@ -1651,7 +1651,7 @@ Explained Query:
                       Get l1 // { arity: 16 }
       cte l1 =
         ArrangeBy keys=[[#0]] // { arity: 16 }
-          Get materialize.public.lineitem // { arity: 16 }
+          ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
       cte l0 =
         Project (#0, #1, #7) // { arity: 3 }
           Filter (#25 = "F") AND (#33 = "SAUDI ARABIA") AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#7) IS NOT NULL AND (#19 > #18) // { arity: 36 }
@@ -1662,13 +1662,13 @@ Explained Query:
                 %2:orders » %1:lineitem[#0]KAf » %0:supplier[#0]KA » %3:nation[#0]KAef
                 %3:nation » %0:supplier[#3]KA » %1:lineitem[#2]KAf » %2:orders[#0]KAef
               ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
               ArrangeBy keys=[[#0], [#2]] // { arity: 16 }
-                Get materialize.public.lineitem // { arity: 16 }
+                ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
               ArrangeBy keys=[[#0]] // { arity: 9 }
-                Get materialize.public.orders // { arity: 9 }
+                ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
               ArrangeBy keys=[[#0]] // { arity: 4 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
@@ -1754,7 +1754,7 @@ Explained Query:
                         ArrangeBy keys=[[#0]] // { arity: 1 }
                           Distinct group_by=[#0] // { arity: 1 }
                             Project (#1) // { arity: 1 }
-                              Get materialize.public.orders // { arity: 9 }
+                              ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
                 Get l2 // { arity: 1 }
     With
       cte l2 =
@@ -1778,7 +1778,7 @@ Explained Query:
                       Get l0 // { arity: 9 }
       cte l0 =
         Map (substr(char_to_text(#4), 1, 2)) // { arity: 9 }
-          Get materialize.public.customer // { arity: 8 }
+          ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)

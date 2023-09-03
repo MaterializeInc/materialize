@@ -201,9 +201,9 @@ Explained Query:
         implementation
           %0:lineitem[#0]KAeif » %1:orders[#0]KAeif
         ArrangeBy keys=[[#0]] // { arity: 16 }
-          Get materialize.public.lineitem // { arity: 16 }
+          ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
         ArrangeBy keys=[[#0]] // { arity: 9 }
-          Get materialize.public.orders // { arity: 9 }
+          ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (differential join)
@@ -248,11 +248,11 @@ Explained Query:
           %1:orders » %0:lineitem[#0]KA » %2:customer[#0]KA
           %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KA
         ArrangeBy keys=[[#0]] // { arity: 16 }
-          Get materialize.public.lineitem // { arity: 16 }
+          ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
         ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-          Get materialize.public.orders // { arity: 9 }
+          ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
         ArrangeBy keys=[[#0]] // { arity: 8 }
-          Get materialize.public.customer // { arity: 8 }
+          ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)
@@ -312,11 +312,11 @@ Explained Query:
               %1:orders » %0:lineitem[#0]KAiif » %2:customer[#0]KAif
               %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KAiif
             ArrangeBy keys=[[#0]] // { arity: 16 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
             ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 8 }
-              Get materialize.public.customer // { arity: 8 }
+              ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)
@@ -372,11 +372,11 @@ Explained Query:
           ArrangeBy keys=[[#4]] // { arity: 5 }
             Project (#2..=#5, #12) // { arity: 5 }
               Filter (#3 != 1) AND (#3 != 2) AND (#3 != 6) // { arity: 16 }
-                Get materialize.public.lineitem // { arity: 16 }
+                ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
           ArrangeBy keys=[[#1]] // { arity: 9 }
-            Get materialize.public.orders // { arity: 9 }
+            ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
           ArrangeBy keys=[[#0]] // { arity: 8 }
-            Get materialize.public.customer // { arity: 8 }
+            ReadIndex on=customer pk_customer_custkey=[differential join] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (differential join)
@@ -433,7 +433,7 @@ Explained Query:
   With
     cte l1 =
       Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22))) // { arity: 16 }
-        Get materialize.public.lineitem // { arity: 16 }
+        ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
     cte l0 =
       Project (#0..=#4) // { arity: 5 }
         Join on=(#2 = #5) type=differential // { arity: 6 }
@@ -441,10 +441,10 @@ Explained Query:
             %0:lineitem[#2]K » %1:orders[#1]K
           ArrangeBy keys=[[#2]] // { arity: 4 }
             Project (#0, #4, #11, #12) // { arity: 4 }
-              Get materialize.public.lineitem // { arity: 16 }
+              ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
           ArrangeBy keys=[[#1]] // { arity: 2 }
             Project (#0, #4) // { arity: 2 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
@@ -486,12 +486,12 @@ Explained Query:
           implementation
             %0:lineitem[#0]KAef » %1:orders[#0]KAef » %2:customer[×]ef
           ArrangeBy keys=[[#0]] // { arity: 16 }
-            Get materialize.public.lineitem // { arity: 16 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
           ArrangeBy keys=[[#0]] // { arity: 9 }
-            Get materialize.public.orders // { arity: 9 }
+            ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
           ArrangeBy keys=[[]] // { arity: 3 }
             Project (#0, #5, #7) // { arity: 3 }
-              Get materialize.public.customer // { arity: 8 }
+              ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
@@ -541,11 +541,11 @@ Explained Query:
             %1:orders » %0:lineitem[#0]KAiiiiiif » %2:customer[#0]KA
             %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KAiiiiiif
           ArrangeBy keys=[[#0]] // { arity: 16 }
-            Get materialize.public.lineitem // { arity: 16 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
           ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-            Get materialize.public.orders // { arity: 9 }
+            ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
           ArrangeBy keys=[[#0]] // { arity: 8 }
-            Get materialize.public.customer // { arity: 8 }
+            ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)
@@ -598,11 +598,11 @@ Explained Query:
             ArrangeBy keys=[[]] // { arity: 2 }
               Project (#5, #10) // { arity: 2 }
                 Filter (#3 != 4) // { arity: 16 }
-                  Get materialize.public.lineitem // { arity: 16 }
+                  ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
             ArrangeBy keys=[[#1]] // { arity: 9 }
-              Get materialize.public.orders // { arity: 9 }
+              ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
             ArrangeBy keys=[[#0]] // { arity: 8 }
-              Get materialize.public.customer // { arity: 8 }
+              ReadIndex on=customer pk_customer_custkey=[differential join] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (differential join)
@@ -650,11 +650,11 @@ Explained Query:
             %1:orders » %0:lineitem[#0]KAiiiif » %2:customer[#0]KA
             %2:customer » %1:orders[#1]KAiiiif » %0:lineitem[#0]KAiiiif
           ArrangeBy keys=[[#0]] // { arity: 16 }
-            Get materialize.public.lineitem // { arity: 16 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
           ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
-            Get materialize.public.orders // { arity: 9 }
+            ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
           ArrangeBy keys=[[#0]] // { arity: 8 }
-            Get materialize.public.customer // { arity: 8 }
+            ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join lookup)
@@ -700,12 +700,12 @@ Explained Query:
           implementation
             %0:lineitem[#0]KAiif » %1:orders[#0]KAiiif » %2:customer[×]iiif
           ArrangeBy keys=[[#0]] // { arity: 16 }
-            Get materialize.public.lineitem // { arity: 16 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
           ArrangeBy keys=[[#0]] // { arity: 9 }
-            Get materialize.public.orders // { arity: 9 }
+            ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
           ArrangeBy keys=[[]] // { arity: 2 }
             Project (#0, #5) // { arity: 2 }
-              Get materialize.public.customer // { arity: 8 }
+              ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)

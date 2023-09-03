@@ -1927,7 +1927,7 @@ EXPLAIN INDEX i;
 ----
 materialize.public.i:
   ArrangeBy keys=[[#0]]
-    Get materialize.public.t
+    ReadStorage materialize.public.t
 
 EOF
 

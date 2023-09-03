@@ -710,7 +710,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")] // { arity: 3 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          Get materialize.public.t2 // { arity: 3 }
+          ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.idx_t2_a (differential join)
@@ -745,7 +745,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 3 }
           ReadExistingIndex materialize.public.t1 lookup_value=("l2") // { arity: 3 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          Get materialize.public.t2 // { arity: 3 }
+          ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.idx_t2_a (differential join)
@@ -1232,7 +1232,7 @@ Explained Query:
     cte l0 =
       Distinct group_by=[#0]
         Union
-          Get materialize.public.t5
+          ReadIndex on=t5 idx_t5_f1=[*** full scan ***]
           Project (#2)
             Map ((#0 + #1))
               CrossJoin type=differential
@@ -1509,7 +1509,7 @@ EXPLAIN MATERIALIZED VIEW mv1;
 ----
 materialize.public.mv1:
   Filter (#1 = 5)
-    Get materialize.public.t6
+    ReadIndex on=t6 t6_idx_x_y=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)

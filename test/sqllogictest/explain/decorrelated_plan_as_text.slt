@@ -806,7 +806,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
         Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
-          Get materialize.public.r
+          ReadStorage materialize.public.r
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::mem;
 
 use itertools::zip_eq;
-use mz_expr::{Id, MirRelationExpr, RECURSION_LIMIT};
+use mz_expr::{AccessStrategy, Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformCtx;
@@ -69,11 +69,16 @@ impl ProjectionLifting {
         self.checked_recur(|_| {
             match relation {
                 MirRelationExpr::Constant { .. } => Ok(()),
-                MirRelationExpr::Get { id, .. } => {
+                MirRelationExpr::Get {
+                    id,
+                    typ: _,
+                    access_strategy: _,
+                } => {
                     if let Some((typ, columns)) = gets.get(id) {
                         *relation = MirRelationExpr::Get {
                             id: *id,
                             typ: typ.clone(),
+                            access_strategy: AccessStrategy::UnknownOrLocal, // (we are not copying it over)
                         }
                         .project(columns.clone());
                     }

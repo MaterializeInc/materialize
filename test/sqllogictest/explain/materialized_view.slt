@@ -25,7 +25,7 @@ EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Filter (#1 = 100)
-    Get materialize.public.accounts
+    ReadStorage materialize.public.accounts
 
 Source materialize.public.accounts
   filter=((#1 = 100))
@@ -43,7 +43,7 @@ EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Filter (#1 = 100)
-    Get materialize.public.accounts
+    ReadStorage materialize.public.accounts
 
 Source materialize.public.accounts
   filter=((#1 = 100))

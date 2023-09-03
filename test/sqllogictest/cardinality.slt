@@ -48,7 +48,7 @@ EXPLAIN WITH(cardinality) SELECT DISTINCT x FROM t
 Explained Query:
   Distinct group_by=[#0] // { cardinality: "materialize.public.t" }
     Project (#0) // { cardinality: "materialize.public.t" }
-      Get materialize.public.t // { cardinality: "materialize.public.t" }
+      ReadIndex on=t t_x=[*** full scan ***] // { cardinality: "materialize.public.t" }
 
 Used Indexes:
   - materialize.public.t_x (*** full scan ***)
@@ -63,7 +63,7 @@ EXPLAIN WITH(cardinality) SELECT * FROM (SELECT DISTINCT ON(t.x) t.x, t.y FROM t
 Explained Query:
   Filter (#0 = #1) // { cardinality: "materialize.public.t * icard(#0)^1" }
     TopK group_by=[#0] limit=1 // { cardinality: "materialize.public.t" }
-      Get materialize.public.t // { cardinality: "materialize.public.t" }
+      ReadIndex on=t t_x=[*** full scan ***] // { cardinality: "materialize.public.t" }
 
 Used Indexes:
   - materialize.public.t_x (*** full scan ***)
@@ -82,9 +82,9 @@ Explained Query:
     Filter (#2 > (#4 / 2)) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
       Join on=(#1 = #3) type=differential // { cardinality: "materialize.public.cities * materialize.public.states" }
         ArrangeBy keys=[[#1]] // { cardinality: "materialize.public.cities" }
-          Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+          ReadIndex on=cities cities_state=[differential join] // { cardinality: "materialize.public.cities" }
         ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.states" }
-          Get materialize.public.states // { cardinality: "materialize.public.states" }
+          ReadIndex on=states state_state=[differential join] // { cardinality: "materialize.public.states" }
 
 Used Indexes:
   - materialize.public.cities_state (differential join)
@@ -114,9 +114,9 @@ Explained Query:
         Project (#1) // { cardinality: "materialize.public.t * materialize.public.t2" }
           Join on=(#0 = #2) type=differential // { cardinality: "materialize.public.t * materialize.public.t2" }
             ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t" }
-              Get materialize.public.t // { cardinality: "materialize.public.t" }
+              ReadIndex on=t t_x=[differential join] // { cardinality: "materialize.public.t" }
             ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t2" }
-              Get materialize.public.t2 // { cardinality: "materialize.public.t2" }
+              ReadIndex on=t2 tt_x=[differential join] // { cardinality: "materialize.public.t2" }
 
 Used Indexes:
   - materialize.public.t_x (differential join)
@@ -133,7 +133,7 @@ EXPLAIN WITH(cardinality) SELECT state, name FROM
 Explained Query:
   Project (#1, #0) // { cardinality: "materialize.public.cities" }
     TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 // { cardinality: "materialize.public.cities" }
-      Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+      ReadIndex on=cities cities_name=[*** full scan ***] // { cardinality: "materialize.public.cities" }
 
 Used Indexes:
   - materialize.public.cities_name (*** full scan ***)
@@ -167,7 +167,7 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t
+        ReadIndex on=t t_x=[differential join]
 
 Used Indexes:
   - materialize.public.t_x (differential join)
@@ -186,9 +186,9 @@ Explained Query:
       implementation
         %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t
+        ReadIndex on=t t_x=[differential join]
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t2
+        ReadIndex on=t2 tt_x=[differential join]
 
 Used Indexes:
   - materialize.public.t_x (differential join)
@@ -312,12 +312,12 @@ Explained Query:
                         Distinct group_by=[#0..=#2]
                           Get l0
                       Distinct group_by=[#0..=#2]
-                        Get materialize.public.person_knows_person
+                        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
                   ArrangeBy keys=[[#0..=#2]]
-                    Get materialize.public.person_knows_person
+                    ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
     cte l0 =
       Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-        Get materialize.public.person_knows_person
+        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
@@ -430,12 +430,12 @@ Explained Query:
                         Distinct group_by=[#0..=#2]
                           Get l0
                       Distinct group_by=[#0..=#2]
-                        Get materialize.public.person_knows_person
+                        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
                   ArrangeBy keys=[[#0..=#2]]
-                    Get materialize.public.person_knows_person
+                    ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
     cte l0 =
       Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-        Get materialize.public.person_knows_person
+        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)

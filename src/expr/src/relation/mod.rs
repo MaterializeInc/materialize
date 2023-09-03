@@ -26,7 +26,9 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::explain::{
+    DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
+};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -100,6 +102,12 @@ pub enum MirRelationExpr {
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
+        /// If this is a global Get, this will indicate whether we are going to read from Persist or
+        /// from an index. If it's an index, then how downstream dataflow operations will use this
+        /// index is also recorded. This is filled by `prune_and_annotate_dataflow_index_imports`.
+        /// Note that this is not used by the lowering to LIR, but is used only by EXPLAIN.
+        #[mzreflect(ignore)]
+        access_strategy: AccessStrategy,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -839,6 +847,7 @@ impl MirRelationExpr {
                 if let MirRelationExpr::Get {
                     id: first_id,
                     typ: _,
+                    ..
                 } = base_with_project_stripped
                 {
                     if inputs.len() == 1 {
@@ -849,6 +858,7 @@ impl MirRelationExpr {
                                         if let MirRelationExpr::Get {
                                             id: second_id,
                                             typ: _,
+                                            ..
                                         } = input
                                         {
                                             if first_id == second_id {
@@ -1063,6 +1073,7 @@ impl MirRelationExpr {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
         }
     }
 
@@ -1449,9 +1460,9 @@ impl MirRelationExpr {
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> super::MirRelationExpr
+    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
     where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> super::MirRelationExpr,
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
     {
         if let MirRelationExpr::Get { .. } = self {
             // already done
@@ -1461,6 +1472,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get);
             MirRelationExpr::Let {
@@ -1488,6 +1500,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get)?;
             Ok(MirRelationExpr::Let {
@@ -2043,7 +2056,7 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
 }
 
 impl CollectionPlan for MirRelationExpr {
-    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    // !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
     // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
@@ -3307,6 +3320,20 @@ impl Display for LetRecLimit {
         }
         write!(f, "]")
     }
+}
+
+/// For a global Get, this indicates whether we are going to read from Persist or from an index.
+/// (See comment in MirRelationExpr::Get.)
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+pub enum AccessStrategy {
+    /// It's either a local Get (a CTE), or unknown at the time.
+    /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to
+    /// one of the other variants.
+    UnknownOrLocal,
+    /// The Get will read from Persist.
+    Persist,
+    /// The Get will read from an index or indexes: (index id, how the index will be used).
+    Index(Vec<(GlobalId, IndexUsageType)>),
 }
 
 #[cfg(test)]

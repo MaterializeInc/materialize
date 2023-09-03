@@ -36,7 +36,7 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF
 
@@ -71,7 +71,7 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF
 
@@ -105,7 +105,7 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF
 
@@ -133,7 +133,7 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF
 
@@ -161,7 +161,7 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF
 
@@ -189,7 +189,7 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
       Reduce group_by=[#0, #1] aggregates=[max(#2)]
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF
 
@@ -228,7 +228,7 @@ materialize.public.sections_of_top_3_courses_per_teacher:
     Join on=(#0 = #1) type=differential
       ArrangeBy keys=[[#0]]
         Project (#0)
-          Get materialize.public.teachers
+          ReadStorage materialize.public.teachers
       ArrangeBy keys=[[#0]]
         Project (#0, #1)
           TopK group_by=[#0] order_by=[#2 desc nulls_first] limit=3 exp_group_size=1000
@@ -238,11 +238,11 @@ materialize.public.sections_of_top_3_courses_per_teacher:
                   Distinct group_by=[#0]
                     Project (#0)
                       Filter (#0) IS NOT NULL
-                        Get materialize.public.teachers
+                        ReadStorage materialize.public.teachers
                 ArrangeBy keys=[[#1]]
                   Project (#0..=#2)
                     Filter (#1) IS NOT NULL
-                      Get materialize.public.sections
+                      ReadStorage materialize.public.sections
 
 Source materialize.public.sections
   filter=((#1) IS NOT NULL)
@@ -274,7 +274,7 @@ materialize.public.max_sections_of_top_3_courses_per_teacher:
     Join on=(#0 = #1) type=differential
       ArrangeBy keys=[[#0]]
         Project (#0)
-          Get materialize.public.teachers
+          ReadStorage materialize.public.teachers
       ArrangeBy keys=[[#0]]
         Project (#0, #2)
           TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3 exp_group_size=20
@@ -285,11 +285,11 @@ materialize.public.max_sections_of_top_3_courses_per_teacher:
                     Distinct group_by=[#0]
                       Project (#0)
                         Filter (#0) IS NOT NULL
-                          Get materialize.public.teachers
+                          ReadStorage materialize.public.teachers
                   ArrangeBy keys=[[#1]]
                     Project (#0..=#2)
                       Filter (#1) IS NOT NULL
-                        Get materialize.public.sections
+                        ReadStorage materialize.public.sections
 
 Source materialize.public.sections
   filter=((#1) IS NOT NULL)

@@ -88,7 +88,7 @@ EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
 Explained Query:
   Project (#1, #0) // { arity: 2 }
     TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
-      Get materialize.public.cities // { arity: 3 }
+      ReadStorage materialize.public.cities // { arity: 3 }
 
 EOF
 
@@ -110,12 +110,12 @@ Explained Query:
                 Get l0 // { arity: 2 }
           Distinct group_by=[#0] // { arity: 1 }
             Project (#1) // { arity: 1 }
-              Get materialize.public.cities // { arity: 3 }
+              ReadStorage materialize.public.cities // { arity: 3 }
   With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
         TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
-          Get materialize.public.cities // { arity: 3 }
+          ReadStorage materialize.public.cities // { arity: 3 }
 
 EOF
 
@@ -148,7 +148,7 @@ Explained Query:
     Map (1) // { arity: 3 }
       TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1 // { arity: 2 }
         Project (#1, #2) // { arity: 2 }
-          Get materialize.public.cities // { arity: 3 }
+          ReadStorage materialize.public.cities // { arity: 3 }
 
 EOF
 
@@ -162,6 +162,6 @@ EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
 Explained Query:
   Project (#1, #0) // { arity: 2 }
     TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 exp_group_size=1 // { arity: 3 }
-      Get materialize.public.cities // { arity: 3 }
+      ReadStorage materialize.public.cities // { arity: 3 }
 
 EOF

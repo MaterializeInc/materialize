@@ -105,10 +105,11 @@ pub use linear::{
 pub use relation::func::{AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, TableFunc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
-    canonicalize, compare_columns, non_nullable_columns, AggregateExpr, CollectionPlan,
-    ColumnOrder, JoinImplementation, JoinInputCharacteristics, LetRecLimit, MirRelationExpr,
-    ProtoAggregateExpr, ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc,
-    RowSetFinishing, WindowFrame, WindowFrameBound, WindowFrameUnits, RECURSION_LIMIT,
+    canonicalize, compare_columns, non_nullable_columns, AccessStrategy, AggregateExpr,
+    CollectionPlan, ColumnOrder, JoinImplementation, JoinInputCharacteristics, LetRecLimit,
+    MirRelationExpr, ProtoAggregateExpr, ProtoAggregateFunc, ProtoColumnOrder,
+    ProtoRowSetFinishing, ProtoTableFunc, RowSetFinishing, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, RECURSION_LIMIT,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{

@@ -28,11 +28,11 @@ Explained Query:
       ArrangeBy keys=[[#1]] // { arity: 2 }
         Distinct group_by=[#0, #1] // { arity: 2 }
           Filter (#1) IS NOT NULL // { arity: 2 }
-            Get materialize.public.x // { arity: 2 }
+            ReadStorage materialize.public.x // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
         Distinct group_by=[#1, #0] // { arity: 2 }
           Filter (#1) IS NOT NULL // { arity: 2 }
-            Get materialize.public.y // { arity: 2 }
+            ReadStorage materialize.public.y // { arity: 2 }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
@@ -70,11 +70,11 @@ Explained Query:
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Distinct group_by=[#0, #1] // { arity: 2 }
                 Filter (#1) IS NOT NULL // { arity: 2 }
-                  Get materialize.public.x // { arity: 2 }
+                  ReadStorage materialize.public.x // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Distinct group_by=[#1, #0] // { arity: 2 }
                 Filter (#1) IS NOT NULL // { arity: 2 }
-                  Get materialize.public.y // { arity: 2 }
+                  ReadStorage materialize.public.y // { arity: 2 }
         Get l0 // { arity: 4 }
 
 Source materialize.public.x

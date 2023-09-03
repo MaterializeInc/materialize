@@ -48,11 +48,11 @@ Explained Query:
   Project (#0..=#2, #0)
     Join on=(#0 = #3) type=differential
       ArrangeBy keys=[[#0]]
-        Get materialize.public.foo
+        ReadStorage materialize.public.foo
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#0) IS NOT NULL
-            Get materialize.public.bar
+            ReadStorage materialize.public.bar
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -73,7 +73,7 @@ Explained Query:
           Negate
             Project (#0..=#2)
               Get l0
-          Get materialize.public.foo_raw
+          ReadStorage materialize.public.foo_raw
       Project (#0..=#2, #0, #3)
         Get l0
   With
@@ -82,10 +82,10 @@ Explained Query:
         Join on=(#0 = #3) type=differential
           ArrangeBy keys=[[#0]]
             Filter (#0) IS NOT NULL
-              Get materialize.public.foo_raw
+              ReadStorage materialize.public.foo_raw
           ArrangeBy keys=[[#0]]
             Filter (#0) IS NOT NULL
-              Get materialize.public.bar
+              ReadStorage materialize.public.bar
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -112,7 +112,7 @@ Explained Query:
                   ArrangeBy keys=[[#0]]
                     Project (#0)
                       Get l1
-            Get materialize.public.foo_raw
+            ReadStorage materialize.public.foo_raw
       Project (#0, #1, #0, #3, #4)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
@@ -121,11 +121,11 @@ Explained Query:
   With
     cte l1 =
       Filter (#0) IS NOT NULL
-        Get materialize.public.bar
+        ReadStorage materialize.public.bar
     cte l0 =
       ArrangeBy keys=[[#0]]
         Filter (#0) IS NOT NULL
-          Get materialize.public.foo_raw
+          ReadStorage materialize.public.foo_raw
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -159,7 +159,7 @@ Explained Query:
             Filter (#6) IS NOT NULL
               Get l3
           ArrangeBy keys=[[#0]]
-            Get materialize.public.quux
+            ReadStorage materialize.public.quux
     cte l3 =
       Union
         Map (null, null, null)
@@ -176,7 +176,7 @@ Explained Query:
           ArrangeBy keys=[[#1]]
             Get l1
           ArrangeBy keys=[[#0]]
-            Get materialize.public.baz
+            ReadStorage materialize.public.baz
     cte l1 =
       Union
         Map (null, null)
@@ -184,17 +184,17 @@ Explained Query:
             Negate
               Project (#0..=#2)
                 Get l0
-            Get materialize.public.foo
+            ReadStorage materialize.public.foo
         Project (#0..=#2, #0, #3)
           Get l0
     cte l0 =
       Project (#0..=#2, #4)
         Join on=(#0 = #3) type=differential
           ArrangeBy keys=[[#0]]
-            Get materialize.public.foo
+            ReadStorage materialize.public.foo
           ArrangeBy keys=[[#0]]
             Filter (#0) IS NOT NULL
-              Get materialize.public.bar
+              ReadStorage materialize.public.bar
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -232,17 +232,17 @@ Explained Query:
                   Project ()
                     Get l0
                 Project ()
-                  Get materialize.public.foo
+                  ReadStorage materialize.public.foo
             Get l0
     cte l0 =
       Project (#2)
         Join on=(#0 = #1) type=differential
           ArrangeBy keys=[[#0]]
             Project (#1)
-              Get materialize.public.foo
+              ReadStorage materialize.public.foo
           ArrangeBy keys=[[#0]]
             Project (#0, #1)
-              Get materialize.public.baz
+              ReadStorage materialize.public.baz
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -276,7 +276,7 @@ Explained Query:
             Filter (#4) IS NOT NULL
               Get l2
           ArrangeBy keys=[[#0]]
-            Get materialize.public.quux
+            ReadStorage materialize.public.quux
     cte l2 =
       Union
         Map (null, null, null)
@@ -293,10 +293,10 @@ Explained Query:
           ArrangeBy keys=[[#1]]
             Get l0
           ArrangeBy keys=[[#0]]
-            Get materialize.public.baz
+            ReadStorage materialize.public.baz
     cte l0 =
       Filter (#0 = 7)
-        Get materialize.public.foo
+        ReadStorage materialize.public.foo
 
 Source materialize.public.foo
   filter=((#0 = 7))
@@ -334,11 +334,11 @@ Explained Query:
           Project (#0..=#2, #0)
             Join on=(#0 = #3) type=differential
               ArrangeBy keys=[[#0]]
-                Get materialize.public.foo
+                ReadStorage materialize.public.foo
               ArrangeBy keys=[[#0]]
                 Project (#0)
                   Filter (#0) IS NOT NULL
-                    Get materialize.public.bar
+                    ReadStorage materialize.public.bar
           Get l0
 
 Source materialize.public.bar
@@ -377,7 +377,7 @@ Explained Query:
           Project (#0..=#2, #0) // { keys: "()" }
             Join on=(#0 = #3) type=differential // { keys: "()" }
               ArrangeBy keys=[[#0]] // { keys: "()" }
-                Get materialize.public.foo // { keys: "()" }
+                ReadStorage materialize.public.foo // { keys: "()" }
               ArrangeBy keys=[[#0]] // { keys: "([0])" }
                 Distinct group_by=[#0] // { keys: "([0])" }
                   Project (#0) // { keys: "()" }
@@ -419,7 +419,7 @@ Explained Query:
               ArrangeBy keys=[[#0]]
                 Project (#0)
                   Filter (#0) IS NOT NULL
-                    Get materialize.public.bar
+                    ReadStorage materialize.public.bar
           Get l0
 
 Source materialize.public.bar
@@ -457,7 +457,7 @@ Explained Query:
               ArrangeBy keys=[[#0]]
                 Project (#0)
                   Filter (#0) IS NOT NULL
-                    Get materialize.public.bar
+                    ReadStorage materialize.public.bar
           Get l0
 
 Source materialize.public.bar
@@ -504,7 +504,7 @@ Explained Query:
                     Distinct group_by=[#0, #1]
                       Union
                         Filter (#0) IS NOT NULL
-                          Get materialize.public.bar
+                          ReadStorage materialize.public.bar
                         Project (#0, #2)
                           Get l0
           Get l0
@@ -554,7 +554,7 @@ Explained Query:
     cte l1 =
       Distinct group_by=[#0, #1] // { keys: "([0, 1])" }
         Union // { keys: "()" }
-          Get materialize.public.bar // { keys: "([0])" }
+          ReadStorage materialize.public.bar // { keys: "([0])" }
           Project (#0, #2) // { keys: "()" }
             Get l2 // { keys: "()" }
     cte l0 =
@@ -637,7 +637,7 @@ Explained Query:
     cte l0 =
       Distinct group_by=[#0, #1]
         Union
-          Get materialize.public.bar
+          ReadStorage materialize.public.bar
           Project (#0, #2)
             Get l2
 
@@ -670,22 +670,22 @@ Explained Query:
                 Project (#0..=#2) // { keys: "()" }
                   Join on=(#0 = #3) type=differential // { keys: "()" }
                     ArrangeBy keys=[[#0]] // { keys: "()" }
-                      Get materialize.public.foo_raw // { keys: "()" }
+                      ReadStorage materialize.public.foo_raw // { keys: "()" }
                     ArrangeBy keys=[[#0]] // { keys: "([0])" }
                       Distinct group_by=[#0] // { keys: "([0])" }
                         Project (#0) // { keys: "()" }
                           Get l0 // { keys: "()" }
-              Get materialize.public.foo_raw // { keys: "()" }
+              ReadStorage materialize.public.foo_raw // { keys: "()" }
           Project (#0..=#2, #0, #3) // { keys: "()" }
             Get l0 // { keys: "()" }
           Project (#0..=#2, #0, #2) // { keys: "()" }
-            Get materialize.public.foo_raw // { keys: "()" }
+            ReadStorage materialize.public.foo_raw // { keys: "()" }
     cte l0 =
       Project (#0..=#2, #4) // { keys: "()" }
         Join on=(#0 = #3) type=differential // { keys: "()" }
           ArrangeBy keys=[[#0]] // { keys: "()" }
             Filter (#0) IS NOT NULL // { keys: "()" }
-              Get materialize.public.foo_raw // { keys: "()" }
+              ReadStorage materialize.public.foo_raw // { keys: "()" }
           ArrangeBy keys=[[#0]] // { keys: "()" }
             Project (#0, #2) // { keys: "()" }
               Filter (#0) IS NOT NULL // { keys: "()" }
@@ -726,7 +726,7 @@ Explained Query:
           Project (#0..=#2, #0, #3)
             Get l0
           Project (#0..=#2, #0, #2)
-            Get materialize.public.foo_raw
+            ReadStorage materialize.public.foo_raw
     cte l0 =
       Project (#0..=#2, #4)
         Join on=(#0 = #3) type=differential
@@ -736,7 +736,7 @@ Explained Query:
                 Get l1
           ArrangeBy keys=[[#0]]
             Filter (#0) IS NOT NULL
-              Get materialize.public.bar
+              ReadStorage materialize.public.bar
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -770,7 +770,7 @@ Explained Query:
               Negate
                 Project (#0..=#2)
                   Get l0
-              Get materialize.public.foo_raw
+              ReadStorage materialize.public.foo_raw
           Project (#0..=#2, #0, #3)
             Get l0
           Get l1
@@ -779,10 +779,10 @@ Explained Query:
         Join on=(#0 = #3) type=differential
           ArrangeBy keys=[[#0]]
             Filter (#0) IS NOT NULL
-              Get materialize.public.foo_raw
+              ReadStorage materialize.public.foo_raw
           ArrangeBy keys=[[#0]]
             Filter (#0) IS NOT NULL
-              Get materialize.public.bar
+              ReadStorage materialize.public.bar
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -822,7 +822,7 @@ Explained Query:
                     Get l3
                 Project (#0..=#5, #5)
                   Get l4
-          Get materialize.public.foo
+          ReadStorage materialize.public.foo
     cte l4 =
       Project (#0..=#5)
         Join on=(#5 = #6) type=differential
@@ -831,7 +831,7 @@ Explained Query:
               Get l3
           ArrangeBy keys=[[#0]]
             Project (#0)
-              Get materialize.public.quux
+              ReadStorage materialize.public.quux
     cte l3 =
       Union
         Map (null, null)
@@ -850,7 +850,7 @@ Explained Query:
               Get l1
           ArrangeBy keys=[[#0]]
             Project (#0, #1)
-              Get materialize.public.baz
+              ReadStorage materialize.public.baz
     cte l1 =
       Union
         Map (null)
@@ -869,7 +869,7 @@ Explained Query:
           ArrangeBy keys=[[#0]]
             Project (#0)
               Filter (#0) IS NOT NULL
-                Get materialize.public.bar
+                ReadStorage materialize.public.bar
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)
@@ -910,7 +910,7 @@ Explained Query:
                       Get l0 // { arity: 4 }
                   Get l1 // { arity: 3 }
               Get l0 // { arity: 4 }
-          Get materialize.public.foo // { arity: 3 }
+          ReadStorage materialize.public.foo // { arity: 3 }
     cte l0 =
       Project (#0..=#2, #4) // { arity: 4 }
         Join on=(#1 = #3) type=differential // { arity: 5 }
@@ -918,7 +918,7 @@ Explained Query:
             Get l1 // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
-              Get materialize.public.baz // { arity: 3 }
+              ReadStorage materialize.public.baz // { arity: 3 }
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)

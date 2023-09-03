@@ -116,7 +116,7 @@ Explained Query:
   Project (#3, #2)
     Filter (#1 < 0) AND (#0 > 0) AND (#2 > 0)
       Map ((#0 + #1), 1)
-        Get materialize.public.mv
+        ReadStorage materialize.public.mv
 
 Source materialize.public.mv
   filter=((#0 > 0) AND (#1 < 0) AND ((#0 + #1) > 0))
@@ -131,7 +131,7 @@ SELECT generate_series(a, b) from t
 Explained Query:
   Project (#2)
     FlatMap generate_series(#0, #1, 1)
-      Get materialize.public.t
+      ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -148,11 +148,11 @@ Explained Query:
     Union
       Distinct group_by=[#0]
         Project (#0)
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
         Distinct group_by=[#0]
           Project (#1)
-            Get materialize.public.mv
+            ReadStorage materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -168,10 +168,10 @@ Explained Query:
   Threshold
     Union
       Project (#0)
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
         Project (#1)
-          Get materialize.public.mv
+          ReadStorage materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -185,7 +185,7 @@ SELECT * FROM ov
 ----
 Explained Query:
   TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
-    Get materialize.public.t
+    ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -228,7 +228,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[min(#0), max(#0)]
         Project (#0)
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -244,7 +244,7 @@ Explained Query:
   Project (#3)
     Map (abs((#1 - #2)))
       Reduce group_by=[#1] aggregates=[min(#0), max(#0)]
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -273,13 +273,13 @@ Explained Query:
                         Get l0
                   ArrangeBy keys=[[]]
                     Project (#1)
-                      Get materialize.public.mv
+                      ReadStorage materialize.public.mv
   With
     cte l0 =
       Project (#0, #1)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Get materialize.public.t
+            ReadIndex on=t t_a_idx=[differential join]
           ArrangeBy keys=[[#0]]
             Distinct group_by=[#0]
               Project (#0)
@@ -288,10 +288,10 @@ Explained Query:
                     ArrangeBy keys=[[]]
                       Distinct group_by=[#0]
                         Project (#0)
-                          Get materialize.public.t
+                          ReadIndex on=t t_a_idx=[*** full scan ***]
                     ArrangeBy keys=[[]]
                       Project (#0)
-                        Get materialize.public.mv
+                        ReadStorage materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
@@ -336,7 +336,7 @@ Explained Query:
               Get l2
               ArrangeBy keys=[[#1]]
                 Filter (#1) IS NOT NULL
-                  Get materialize.public.mv
+                  ReadStorage materialize.public.mv
     cte l3 =
       TopK group_by=[#0] limit=1
         Project (#0, #1)
@@ -344,7 +344,7 @@ Explained Query:
             Join on=(#0 = #2) type=differential
               Get l2
               ArrangeBy keys=[[#1]]
-                Get materialize.public.iv
+                ReadIndex on=iv iv_b_idx=[differential join]
     cte l2 =
       ArrangeBy keys=[[#0]]
         Get l1
@@ -353,7 +353,7 @@ Explained Query:
         Get l0
     cte l0 =
       Project (#1)
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Source materialize.public.mv
   filter=((#1) IS NOT NULL)
@@ -382,13 +382,13 @@ Explained Query:
               Join on=(#0 = #1) type=differential
                 ArrangeBy keys=[[#0]]
                   Project (#1)
-                    Get materialize.public.t
+                    ReadIndex on=t t_a_idx=[*** full scan ***]
                 ArrangeBy keys=[[#0]]
                   Distinct group_by=[#0]
                     Project (#1)
                       Get l2
           Project ()
-            Get materialize.public.t
+            ReadIndex on=t t_a_idx=[*** full scan ***]
       Project (#0, #2)
         Get l2
   With
@@ -405,7 +405,7 @@ Explained Query:
         Get l0
     cte l0 =
       Filter (#1) IS NOT NULL
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -429,7 +429,7 @@ Explained Query:
       ArrangeBy keys=[[]]
         Project (#2)
           Map ((#0 * #1))
-            Get materialize.public.t
+            ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -443,7 +443,7 @@ INDEX t_a_idx
 ----
 materialize.public.t_a_idx:
   ArrangeBy keys=[[#0]]
-    Get materialize.public.t
+    ReadStorage materialize.public.t
 
 EOF
 
@@ -454,11 +454,11 @@ INDEX iv_a_idx;
 ----
 materialize.public.iv_a_idx:
   ArrangeBy keys=[[#0]]
-    Get materialize.public.iv
+    ReadStorage materialize.public.iv
 
 materialize.public.iv:
   Filter (#0) IS NOT NULL
-    Get materialize.public.t
+    ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -472,7 +472,7 @@ INDEX iv_b_idx;
 ----
 materialize.public.iv_b_idx:
   ArrangeBy keys=[[#1]]
-    Get materialize.public.iv
+    ReadIndex on=iv iv_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.iv_a_idx (*** full scan ***, index export)
@@ -486,7 +486,7 @@ INDEX iv_b_idx_2;
 ----
 materialize.public.iv_b_idx_2:
   ArrangeBy keys=[[#1]]
-    Get materialize.public.iv
+    ReadIndex on=iv iv_b_idx=[plan root (no new arrangement)]
 
 Used Indexes:
   - materialize.public.iv_b_idx (plan root (no new arrangement), index export)
@@ -537,7 +537,7 @@ Explained Query:
         Filter (#0 != #3)
           Join on=(#0 = #2) type=differential
             ArrangeBy keys=[[#0]]
-              Get materialize.public.t
+              ReadIndex on=t t_a_idx=[differential join]
             ArrangeBy keys=[[#0]]
               Reduce group_by=[#0] aggregates=[max((#0 * #1))]
                 CrossJoin type=differential
@@ -550,7 +550,7 @@ Explained Query:
         Get l0
     cte l0 =
       Project (#0)
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
@@ -571,7 +571,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[]]
         Project (#0)
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -603,7 +603,7 @@ Explained Query:
         Get l0
     cte l0 =
       Filter (#1) IS NOT NULL
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -633,12 +633,12 @@ Explained Query:
     Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
         ArrangeBy keys=[[#0]]
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx=[differential join]
         ArrangeBy keys=[[#0]]
-          Get materialize.public.u
+          ReadIndex on=u u_c_idx=[differential join]
         ArrangeBy keys=[[#0, #1]]
           Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-            Get materialize.public.v
+            ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (differential join)
@@ -661,12 +661,12 @@ Explained Query:
         implementation
           %0:t[#0]KA » %1:u[#0]KA » %2:v[#0, #1]KK
         ArrangeBy keys=[[#0]]
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx=[differential join]
         ArrangeBy keys=[[#0]]
-          Get materialize.public.u
+          ReadIndex on=u u_c_idx=[differential join]
         ArrangeBy keys=[[#0, #1]]
           Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-            Get materialize.public.v
+            ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx (differential join)
@@ -692,11 +692,11 @@ Explained Query:
     Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
       Join on=(#1 = #2 AND #3 = #4) type=delta
         ArrangeBy keys=[[#1]]
-          Get materialize.public.t
+          ReadIndex on=t t_b_idx=[delta join 1st input (full scan)]
         ArrangeBy keys=[[#0], [#1]]
-          Get materialize.public.u
+          ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
         ArrangeBy keys=[[#0]]
-          Get materialize.public.v
+          ReadIndex on=v v_e_idx=[delta join lookup]
 
 Used Indexes:
   - materialize.public.u_c_idx (delta join lookup)
@@ -722,11 +722,11 @@ Explained Query:
           %1:u » %0:t[#1]KA » %2:v[#0]KA
           %2:v » %1:u[#1]KA » %0:t[#1]KA
         ArrangeBy keys=[[#1]]
-          Get materialize.public.t
+          ReadIndex on=t t_b_idx=[delta join 1st input (full scan)]
         ArrangeBy keys=[[#0], [#1]]
-          Get materialize.public.u
+          ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
         ArrangeBy keys=[[#0]]
-          Get materialize.public.v
+          ReadIndex on=v v_e_idx=[delta join lookup]
 
 Used Indexes:
   - materialize.public.u_c_idx (delta join lookup)
@@ -827,7 +827,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
         Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
-          Get materialize.public.r
+          ReadStorage materialize.public.r
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
@@ -904,7 +904,7 @@ Explained Query:
     Map (record_get[0](#1))
       FlatMap unnest_list(#0)
         Reduce aggregates=[lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0, 3, "default")), (#0 || #0)))]
-          Get materialize.public.t1
+          ReadStorage materialize.public.t1
 
 EOF
 
@@ -918,7 +918,7 @@ Explained Query:
     Map (record_get[0](#1))
       FlatMap unnest_list(#0)
         Reduce aggregates=[first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0), (#0 || #0)))]
-          Get materialize.public.t1
+          ReadStorage materialize.public.t1
 
 EOF
 
@@ -956,9 +956,9 @@ Explained Query:
       Join on=(#1 = #2) type=differential
         ArrangeBy keys=[[#1]]
           Filter (#1) IS NOT NULL
-            Get materialize.public.t
+            ReadStorage materialize.public.t
         ArrangeBy keys=[[#0]]
-          Get materialize.public.u
+          ReadIndex on=u u_c=[differential join]
 
 Source materialize.public.t
   filter=((#1) IS NOT NULL)
@@ -980,9 +980,9 @@ Explained Query:
       Join on=(#1 = #3) type=differential
         ArrangeBy keys=[[#1]]
           Filter (#1) IS NOT NULL
-            Get materialize.public.t
+            ReadStorage materialize.public.t
         ArrangeBy keys=[[#1]]
-          Get materialize.public.u
+          ReadIndex on=u u_d=[differential join]
 
 Source materialize.public.t
   filter=((#1) IS NOT NULL)
@@ -1014,10 +1014,10 @@ Explained Query:
     Filter (#0) IS NOT NULL
       Join on=(#0 = #2) type=differential
         ArrangeBy keys=[[#0]]
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx_1=[differential join]
         ArrangeBy keys=[[#0]]
           Filter (#0) IS NOT NULL
-            Get materialize.public.u
+            ReadIndex on=u u_d=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.u_d (*** full scan ***)
@@ -1043,7 +1043,7 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx_1=[delta join lookup, delta join 1st input (full scan)]
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (delta join lookup, delta join 1st input (full scan))
@@ -1072,11 +1072,11 @@ Explained Query:
                 Get l0
                 Get l0
         Filter (#1 > 5)
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx_1=[*** full scan ***]
   With
     cte l0 =
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t
+        ReadIndex on=t t_a_idx_1=[differential join]
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***, differential join)
@@ -1104,12 +1104,12 @@ Explained Query:
               Get l0
               Get l0
         Filter (#1 > 5)
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx_1=[*** full scan ***]
   With
     cte l0 =
       ArrangeBy keys=[[#1]]
         Filter (#1) IS NOT NULL
-          Get materialize.public.t
+          ReadIndex on=t t_a_idx_1=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
@@ -1148,11 +1148,11 @@ Explained Query:
               Get l0
               Get l0
         Filter (#1 > 5)
-          Get materialize.public.t_non_null
+          ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
   With
     cte l0 =
       ArrangeBy keys=[[#1]]
-        Get materialize.public.t_non_null
+        ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_non_null_a_idx (*** full scan ***)
@@ -1178,11 +1178,11 @@ Explained Query:
         Map ((#0 + #2), (#1 + #3))
           Join on=(#1 = (#3 + 1)) type=differential
             ArrangeBy keys=[[#1]]
-              Get materialize.public.t_non_null
+              ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
             ArrangeBy keys=[[(#1 + 1)]]
-              Get materialize.public.t_non_null
+              ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
       Filter (#1 > 5)
-        Get materialize.public.t_non_null
+        ReadIndex on=t_non_null t_non_null_a_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_non_null_a_idx (*** full scan ***)
@@ -1199,7 +1199,7 @@ SELECT * FROM t WHERE a = 5;
 Explained Query:
   Distinct group_by=[#0, #1]
     Union
-      Get materialize.public.t
+      ReadIndex on=t t_a_idx_1=[*** full scan ***]
       Project (#0, #1)
         ReadExistingIndex materialize.public.t lookup_value=(5)
 
@@ -1227,13 +1227,13 @@ SELECT * FROM u WHERE d = 1;
 ----
 Explained Query:
   Union
-    Get materialize.public.t
+    ReadIndex on=t t_b_idx=[*** full scan ***]
     Project (#0, #1)
       ReadExistingIndex materialize.public.t lookup_value=(7)
     Project (#0, #1)
       ReadExistingIndex materialize.public.t lookup_value=(5)
     Filter (#0 = 3)
-      Get materialize.public.u
+      ReadIndex on=u u_d=[*** full scan ***]
     Project (#0, #1)
       ReadExistingIndex materialize.public.u lookup_value=(1)
 
@@ -1313,7 +1313,7 @@ EXPLAIN INDEX t_idx_empty_key;
 ----
 materialize.public.t_idx_empty_key:
   ArrangeBy keys=[[]]
-    Get materialize.public.t
+    ReadIndex on=t t_a_idx_1=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***, index export)

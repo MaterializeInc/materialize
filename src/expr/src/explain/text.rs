@@ -9,21 +9,23 @@
 
 //! `EXPLAIN ... AS TEXT` support for structures defined in this crate.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Formatter;
 
 use mz_ore::soft_assert;
-use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
+use mz_ore::str::{bracketed, closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
-    CompactScalarSeq, ExprHumanizer, Indices, PlanRenderingContext, RenderingContext,
+    CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, PlanRenderingContext,
+    RenderingContext,
 };
 use mz_repr::{GlobalId, Row};
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
 use crate::{
-    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, LocalId, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    AccessStrategy, AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, LocalId,
+    MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -362,17 +364,65 @@ impl MirRelationExpr {
                     })?;
                 }
             }
-            Get { id, .. } => {
+            Get {
+                id,
+                access_strategy: persist_or_index,
+                ..
+            } => {
                 match id {
                     Id::Local(id) => {
+                        assert!(matches!(persist_or_index, AccessStrategy::UnknownOrLocal));
                         write!(f, "{}Get {}", ctx.indent, id)?;
                     }
                     Id::Global(id) => {
-                        let humanized_id = ctx
-                            .humanizer
-                            .humanize_id(*id)
-                            .unwrap_or_else(|| id.to_string());
-                        write!(f, "{}Get {}", ctx.indent, humanized_id)?;
+                        let humanize = |id: &GlobalId| {
+                            ctx.humanizer
+                                .humanize_id(*id)
+                                .unwrap_or_else(|| id.to_string())
+                        };
+                        let humanize_unqualified = |id: &GlobalId| {
+                            ctx.humanizer
+                                .humanize_id_unqualified(*id)
+                                .unwrap_or_else(|| id.to_string())
+                        };
+                        match persist_or_index {
+                            AccessStrategy::UnknownOrLocal => {
+                                write!(f, "{}Get {}", ctx.indent, humanize(id))?;
+                            }
+                            AccessStrategy::Persist => {
+                                write!(f, "{}ReadStorage {}", ctx.indent, humanize(id))?;
+                            }
+                            AccessStrategy::Index(index_accesses) => {
+                                let mut grouped_index_accesses = BTreeMap::new();
+                                for (idx_id, usage_type) in index_accesses {
+                                    grouped_index_accesses
+                                        .entry(idx_id)
+                                        .or_insert(Vec::new())
+                                        .push(usage_type.clone());
+                                }
+                                write!(
+                                    f,
+                                    "{}ReadIndex on={} {}",
+                                    ctx.indent,
+                                    humanize_unqualified(id),
+                                    separated(
+                                        " ",
+                                        grouped_index_accesses.iter().map(
+                                            |(idx_id, usage_types)| {
+                                                closure_to_display(move |f| {
+                                                    write!(
+                                                        f,
+                                                        "{}=[{}]",
+                                                        humanize_unqualified(idx_id),
+                                                        IndexUsageType::display_vec(usage_types)
+                                                    )
+                                                })
+                                            }
+                                        )
+                                    ),
+                                )?;
+                            }
+                        }
                     }
                 }
                 self.fmt_attributes(f, ctx)?;

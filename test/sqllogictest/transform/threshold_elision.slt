@@ -75,12 +75,12 @@ EXCEPT
 Explained Query:
   Union // { non_negative: false }
     Project (#0) // { non_negative: true }
-      Get materialize.public.people // { non_negative: true }
+      ReadStorage materialize.public.people // { non_negative: true }
     Map (5) // { non_negative: false }
       Negate // { non_negative: false }
         Project () // { non_negative: true }
           Filter (#0 = 5) // { non_negative: true }
-            Get materialize.public.people // { non_negative: true }
+            ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -98,11 +98,11 @@ EXCEPT ALL
 Explained Query:
   Union // { non_negative: false }
     Project (#0) // { non_negative: true }
-      Get materialize.public.people // { non_negative: true }
+      ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
       Project (#0) // { non_negative: true }
         Filter (#3) IS NOT NULL // { non_negative: true }
-          Get materialize.public.people // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -117,12 +117,12 @@ Explained Query:
   Union // { non_negative: false }
     Distinct group_by=[#0] // { non_negative: true }
       Project (#1) // { non_negative: true }
-        Get materialize.public.people // { non_negative: true }
+        ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
       Distinct group_by=[#0] // { non_negative: true }
         Project (#1) // { non_negative: true }
           Filter (#0 > 1) // { non_negative: true }
-            Get materialize.public.people // { non_negative: true }
+            ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -140,13 +140,13 @@ Explained Query:
       Project (#1) // { non_negative: true }
         Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
           Project (#0, #1) // { non_negative: true }
-            Get materialize.public.people // { non_negative: true }
+            ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
         Project (#1) // { non_negative: true }
           Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
             Project (#0, #1) // { non_negative: true }
               Filter (#0 > 1) // { non_negative: true }
-                Get materialize.public.people // { non_negative: true }
+                ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -185,7 +185,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { non_negative: true }
-        Get materialize.public.people // { non_negative: true }
+        ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -224,7 +224,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #1) // { non_negative: true }
-        Get materialize.public.people // { non_negative: true }
+        ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -246,10 +246,10 @@ Explained Query:
       CrossJoin type=differential // { non_negative: true }
         ArrangeBy keys=[[]] // { non_negative: true }
           Project (#0) // { non_negative: true }
-            Get materialize.public.people // { non_negative: true }
+            ReadStorage materialize.public.people // { non_negative: true }
         ArrangeBy keys=[[]] // { non_negative: true }
           Project () // { non_negative: true }
-            Get materialize.public.bands // { non_negative: true }
+            ReadStorage materialize.public.bands // { non_negative: true }
 
 EOF
 
@@ -270,7 +270,7 @@ Explained Query:
     cte l0 =
       Distinct group_by=[#0] // { non_negative: true }
         Project (#1) // { non_negative: true }
-          Get materialize.public.people // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -295,7 +295,7 @@ Explained Query:
     cte l0 =
       Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)] // { non_negative: true }
         Project (#2) // { non_negative: true }
-          Get materialize.public.people // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -330,10 +330,10 @@ Explained Query:
     cte l0 =
       Distinct group_by=[#0..=#3] // { non_negative: false }
         Union // { non_negative: false }
-          Get materialize.public.people // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
           Negate // { non_negative: false }
             Filter like["J%"](#1) // { non_negative: true }
-              Get materialize.public.people // { non_negative: true }
+              ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -352,15 +352,15 @@ Explained Query:
   Threshold // { non_negative: true }
     Union // { non_negative: false }
       Project (#1) // { non_negative: true }
-        Get materialize.public.people // { non_negative: true }
+        ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
         Project (#1) // { non_negative: true }
           Filter (#0 = 1) // { non_negative: true }
-            Get materialize.public.people // { non_negative: true }
+            ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
         Project (#1) // { non_negative: true }
           Filter (#0 = 2) // { non_negative: true }
-            Get materialize.public.people // { non_negative: true }
+            ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -397,11 +397,11 @@ Explained Query:
             Map ((#1 || "_init")) // { non_negative: false }
               Union // { non_negative: false }
                 Project (#0, #1) // { non_negative: true }
-                  Get materialize.public.people // { non_negative: true }
+                  ReadStorage materialize.public.people // { non_negative: true }
                 Negate // { non_negative: false }
                   Project (#0, #1) // { non_negative: true }
                     Filter (#0 > 1) // { non_negative: true }
-                      Get materialize.public.people // { non_negative: true }
+                      ReadStorage materialize.public.people // { non_negative: true }
           Project (#0, #2) // { non_negative: false }
             Map ((#1 || "_iter")) // { non_negative: false }
               Get l0 // { non_negative: false }
@@ -445,7 +445,7 @@ Explained Query:
         Union // { non_negative: true }
           Project (#0, #4) // { non_negative: true }
             Map ((#1 || "_init")) // { non_negative: true }
-              Get materialize.public.people // { non_negative: true }
+              ReadStorage materialize.public.people // { non_negative: true }
           Threshold // { non_negative: true }
             Union // { non_negative: false }
               Distinct group_by=[#0, (#1 || "_iter")] // { non_negative: false }
@@ -484,7 +484,7 @@ Explained Query:
         Union // { non_negative: true }
           Project (#0, #4) // { non_negative: true }
             Map ((#1 || "_init")) // { non_negative: true }
-              Get materialize.public.people // { non_negative: true }
+              ReadStorage materialize.public.people // { non_negative: true }
           Threshold // { non_negative: true }
             Union // { non_negative: false }
               Distinct group_by=[#0, (#1 || "_iter")] // { non_negative: false }

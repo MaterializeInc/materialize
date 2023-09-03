@@ -77,7 +77,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AccessStrategy, EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
@@ -522,12 +522,17 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
             Some(TokenTree::Ident(ident)) => {
                 let name = ident.to_string();
                 match self.scope.get(&name) {
-                    Some((id, typ)) => Ok(MirRelationExpr::Get { id, typ }),
+                    Some((id, typ)) => Ok(MirRelationExpr::Get {
+                        id,
+                        typ,
+                        access_strategy: AccessStrategy::UnknownOrLocal,
+                    }),
                     None => match self.catalog.get(&name) {
                         None => Err(format!("no catalog object named {}", name)),
                         Some((id, typ)) => Ok(MirRelationExpr::Get {
                             id: Id::Global(*id),
                             typ: typ.clone(),
+                            access_strategy: AccessStrategy::UnknownOrLocal,
                         }),
                     },
                 }

@@ -27,7 +27,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * from foo3
 Explained Query:
   Project (#1) // { arity: 1 }
     Filter (#0 = 5) AND (#1 = 6) // { arity: 2 }
-      Get materialize.public.foo // { arity: 2 }
+      ReadStorage materialize.public.foo // { arity: 2 }
 
 Source materialize.public.foo
   filter=((#0 = 5) AND (#1 = 6))

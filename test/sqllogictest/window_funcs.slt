@@ -244,11 +244,11 @@ Explained Query:
                           Distinct group_by=[#0] // { arity: 1 }
                             Get l0 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 2 }
-                          Get materialize.public.t2 // { arity: 2 }
+                          ReadStorage materialize.public.t2 // { arity: 2 }
   With
     cte l0 =
       Project (#0) // { arity: 1 }
-        Get materialize.public.t1 // { arity: 2 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 

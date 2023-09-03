@@ -45,9 +45,9 @@ Explained Query:
                 Project (#0) // { arity: 1 }
                   Get l0 // { arity: 2 }
                 Project (#0) // { arity: 1 }
-                  Get materialize.public.t1 // { arity: 2 }
+                  ReadStorage materialize.public.t1 // { arity: 2 }
             Project (#1) // { arity: 1 }
-              Get materialize.public.t1 // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -85,8 +85,8 @@ Explained Query:
       Distinct group_by=[#0] // { arity: 1 }
         Union // { arity: 1 }
           Project (#0) // { arity: 1 }
-            Get materialize.public.t1 // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
           Project (#1) // { arity: 1 }
-            Get materialize.public.t1 // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF

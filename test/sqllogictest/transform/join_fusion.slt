@@ -38,13 +38,13 @@ Explained Query:
           %0:t1[#0]Kif » %2:t3[#0]Kiif » %1:t2[#1]Kiif
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0 > 0) AND (#1) IS NOT NULL // { arity: 2 }
-            Get materialize.public.t1 // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
         ArrangeBy keys=[[#1]] // { arity: 2 }
           Filter (#1) IS NOT NULL // { arity: 2 }
-            Get materialize.public.t2 // { arity: 2 }
+            ReadStorage materialize.public.t2 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0 > 0) // { arity: 2 }
-            Get materialize.public.t3 // { arity: 2 }
+            ReadStorage materialize.public.t3 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 > 0) AND (#1) IS NOT NULL)
@@ -118,12 +118,12 @@ Explained Query:
         implementation
           %0:lineitem[#0, (#5 - 9 months)]KK » %1:orders[#0, date_to_timestamp(#3)]KK » %2:customer[×]
         ArrangeBy keys=[[#0, (#5 - 9 months)]] // { arity: 8 }
-          Get materialize.public.lineitem // { arity: 8 }
+          ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
         ArrangeBy keys=[[#0, date_to_timestamp(#3)]] // { arity: 4 }
           Filter (#0) IS NOT NULL // { arity: 4 }
-            Get materialize.public.orders // { arity: 4 }
+            ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
         ArrangeBy keys=[[]] // { arity: 3 }
-          Get materialize.public.customer // { arity: 3 }
+          ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)
@@ -161,11 +161,11 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#4) // { arity: 1 }
                 Filter (#6 = 1997-01-25) // { arity: 8 }
-                  Get materialize.public.lineitem // { arity: 8 }
+                  ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
                 Filter (#0 <= 195) AND (#0 >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#3)) // { arity: 4 }
-                  Get materialize.public.orders // { arity: 4 }
+                  ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Union // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -202,7 +202,7 @@ Explained Query:
         ArrangeBy keys=[[#2, #3]] // { arity: 4 }
           Project (#0, #1, #4, #6) // { arity: 4 }
             Filter (#4 = (#4 % 5)) // { arity: 8 }
-              Get materialize.public.lineitem // { arity: 8 }
+              ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
         ArrangeBy keys=[[#0, #1]] // { arity: 2 }
           Project (#2, #3) // { arity: 2 }
             Filter (#2 = (#2 % 5)) // { arity: 5 }
@@ -239,7 +239,7 @@ Explained Query:
           %1:orders[#2, #3]KKe » %0:lineitem[#4, #5]KKef » %2:customer[×]ef
         ArrangeBy keys=[[#4, #5]] // { arity: 8 }
           Filter (date_to_timestamp(#7) = (#5 + 6 days)) // { arity: 8 }
-            Get materialize.public.lineitem // { arity: 8 }
+            ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
         ArrangeBy keys=[[#2, #3]] // { arity: 4 }
           Project (#0..=#3) // { arity: 4 }
             ReadExistingIndex materialize.public.orders lookup_values=<Get l0> // { arity: 5 }

@@ -111,7 +111,7 @@ where
     }
 }
 
-/// Give na closure, it creates a Display that simply calls the given closure when fmt'd.
+/// Given a closure, it creates a Display that simply calls the given closure when fmt'd.
 pub fn closure_to_display<F>(fun: F) -> impl fmt::Display
 where
     F: Fn(&mut fmt::Formatter) -> fmt::Result,

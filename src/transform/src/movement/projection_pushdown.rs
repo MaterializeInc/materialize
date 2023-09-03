@@ -414,7 +414,12 @@ impl ProjectionPushdown {
     ) -> Result<(), TransformError> {
         relation.visit_mut_pre(&mut |e| {
             if let MirRelationExpr::Project { input, outputs } = e {
-                if let MirRelationExpr::Get { id: inner_id, typ } = &mut **input {
+                if let MirRelationExpr::Get {
+                    id: inner_id,
+                    typ,
+                    access_strategy: _,
+                } = &mut **input
+                {
                     if let Some((new_projection, new_type)) = applied_projections.get(inner_id) {
                         typ.clone_from(new_type);
                         reverse_permute_columns(outputs.iter_mut(), new_projection.iter());

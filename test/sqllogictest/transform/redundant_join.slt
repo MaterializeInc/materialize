@@ -26,7 +26,7 @@ SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS F FROM t1) T WHERE t1.f1 % 2 = t.f;
 Explained Query:
   Filter (#0) IS NOT NULL // { arity: 3 }
     Map ((#0 % 2)) // { arity: 3 }
-      Get materialize.public.t1 // { arity: 2 }
+      ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -71,7 +71,7 @@ Explained Query:
         Union // { arity: 3 }
           Get l0 // { arity: 3 }
           Map ((#0 % 2)) // { arity: 3 }
-            Get materialize.public.t2 // { arity: 2 }
+            ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -99,7 +99,7 @@ Explained Query:
           Get l0 // { arity: 3 }
           Filter (#0) IS NOT NULL // { arity: 3 }
             Map ((#0 % 2)) // { arity: 3 }
-              Get materialize.public.t1 // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -150,12 +150,12 @@ Explained Query:
             implementation
               %1:l0[#0]UK » %0:t2[(#0 % 2)]K
             ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
-              Get materialize.public.t2 // { arity: 2 }
+              ReadStorage materialize.public.t2 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Get l0 // { arity: 1 }
     cte l0 =
       Distinct group_by=[(#0 % 2)] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Get materialize.public.t2 // { arity: 2 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF

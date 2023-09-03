@@ -87,7 +87,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT CAST(col_null AS BIGINT), CAST(col_not_
 Explained Query:
   Project (#2, #3) // { types: "(bigint?, bigint)" }
     Map (integer_to_bigint(#0), integer_to_bigint(#1)) // { types: "(integer?, integer, bigint?, bigint)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -101,7 +101,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null IS NULL, col_null IS NOT NULL 
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
     Map ((#0) IS NULL, NOT(#2)) // { types: "(integer?, integer, boolean, boolean)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -111,7 +111,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null IS TRUE, col_null IS NOT TRUE 
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
     Map ((#0) IS TRUE, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
-      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
+      ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
@@ -121,7 +121,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null IS UNKNOWN, col_null IS NOT UN
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
     Map ((#0) IS NULL, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
-      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
+      ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
@@ -135,7 +135,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null + col_not_null , col_not_n
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer, integer)" }
     Map ((#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)) // { types: "(integer?, integer, integer, integer, integer, integer)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -150,7 +150,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT GREATEST(col_not_null), GREATEST(col_no
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
     Map (greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -160,7 +160,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT LEAST(col_not_null), LEAST(col_not_null
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
     Map (least(#1), least(#1, #1), least(#1, #0), least(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -169,7 +169,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT COALESCE(col_not_null), COALESCE(col_no
 ----
 Explained Query:
   Project (#1, #1, #1, #0) // { types: "(integer, integer, integer, integer?)" }
-    Get materialize.public.int_table // { types: "(integer?, integer)" }
+    ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -184,7 +184,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT NULLIF(col_not_null, 'a') , NULLIF(col_
 Explained Query:
   Project (#3, #1, #0, #2) // { types: "(integer?, integer, integer?, integer?)" }
     Map (case when (#0 = #1) then null else #0 end, error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -198,7 +198,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null = 1 FROM int_table;
 Explained Query:
   Project (#2) // { types: "(boolean)" }
     Map ((#1 = 1)) // { types: "(integer?, integer, boolean)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -207,7 +207,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null AND col_not_null , col_not
 ----
 Explained Query:
   Project (#1, #1) // { types: "(boolean, boolean)" }
-    Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
+    ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
@@ -217,7 +217,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null AND col_not_null , col_null OR
 Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean?)" }
     Map ((#0 AND #1), (#0 OR #1)) // { types: "(boolean?, boolean, boolean?, boolean?)" }
-      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
+      ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
@@ -227,7 +227,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT NOT col_null , NOT col_not_null FROM bo
 Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean)" }
     Map (NOT(#0), NOT(#1)) // { types: "(boolean?, boolean, boolean?, boolean)" }
-      Get materialize.public.bool_table // { types: "(boolean?, boolean)" }
+      ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 EOF
 
@@ -241,7 +241,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT ABS(col_not_null), LOG(col_not_null), R
 Explained Query:
   Project (#2, #4..=#7) // { types: "(integer, double precision, double precision, double precision, integer)" }
     Map (abs(#1), integer_to_double(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)) // { types: "(integer?, integer, integer, double precision, double precision, double precision, double precision, integer)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -269,7 +269,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[min(#0), max(#0), sum(#0), count(*), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0)), list_agg[order_by=[]](row(list[#0]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
         Project (#1) // { types: "(integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -295,7 +295,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*), count(distinct #0)] // { types: "(bigint, bigint)" }
         Project (#1) // { types: "(integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -309,7 +309,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null LIKE col_not_null, col_nul
 Explained Query:
   Project (#2..=#4) // { types: "(boolean, boolean?, boolean?)" }
     Map ((#1 like #1), (#0 like #1), (#1 like #0)) // { types: "(text?, text, boolean, boolean?, boolean?)" }
-      Get materialize.public.str_table // { types: "(text?, text)" }
+      ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
 
@@ -321,7 +321,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null || col_not_null, substr(co
 Explained Query:
   Project (#2..=#5) // { types: "(text, text, text[]?, text)" }
     Map ((#1 || #1), substr(#1, 3, 2), regexp_match(#1, #1), lpad(#1, 3, #1)) // { types: "(text?, text, text, text, text[]?, text)" }
-      Get materialize.public.str_table // { types: "(text?, text)" }
+      ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
 
@@ -350,7 +350,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGE
 Explained Query:
   Project (#2, #3) // { types: "(text[]?, text[]?)" }
     Map (regexp_match["aaa", case_insensitive=false](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
-      Get materialize.public.str_table // { types: "(text?, text)" }
+      ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
 
@@ -364,7 +364,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT SPLIT_PART(col_not_null, 'a', 100), SPL
 Explained Query:
   Project (#2..=#4) // { types: "(text, text, text)" }
     Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", text_to_integer(#1))) // { types: "(text?, text, text, text, text)" }
-      Get materialize.public.str_table // { types: "(text?, text)" }
+      ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 EOF
 
@@ -378,7 +378,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null IN (1), 1 IN (col_not_null
 Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
     Map ((#1 = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -388,7 +388,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null NOT IN (1), 1 not IN (col_
 Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
     Map ((#1 != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -405,7 +405,7 @@ Explained Query:
       Map ((#0 = 1), (#0 = #1), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?)" }
         Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
               Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
@@ -423,7 +423,7 @@ Explained Query:
   With
     cte l0 =
       Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -437,7 +437,7 @@ Explained Query:
       Map ((#0 > #1), (#1 > #0), (1 > #0), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?, boolean?)" }
         Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
               Filter (1 > #1) // { types: "(integer?, integer, boolean)" }
@@ -452,7 +452,7 @@ Explained Query:
   With
     cte l0 =
       Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -465,7 +465,7 @@ Explained Query:
       Map ((#0 < #1), (#1 < #0), (1 < #0), NOT(#4), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean, boolean?, boolean?)" }
         Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
               Filter (1 >= #1) // { types: "(integer?, integer, boolean)" }
@@ -480,7 +480,7 @@ Explained Query:
   With
     cte l0 =
       Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -562,7 +562,7 @@ Explained Query:
         Get l0 // { types: "(integer)" }
     cte l0 =
       Project (#1) // { types: "(integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -593,7 +593,7 @@ Explained Query:
     cte l1 =
       Union // { types: "(integer)" }
         Project (#1) // { types: "(integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         Map (error("more than one record produced in subquery")) // { types: "(integer)" }
           Project () // { types: "()" }
             Filter (#0 > 1) // { types: "(bigint)" }
@@ -601,7 +601,7 @@ Explained Query:
                 Get l0 // { types: "()" }
     cte l0 =
       Project () // { types: "()" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -619,7 +619,7 @@ Explained Query:
         CrossJoin type=delta // { types: "(boolean, boolean)" }
           ArrangeBy keys=[[]] // { types: "()" }
             Project () // { types: "()" }
-              Get materialize.public.int_table // { types: "(integer?, integer)" }
+              ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
           Get l1 // { types: "(boolean)" }
           Get l1 // { types: "(boolean)" }
   With
@@ -638,7 +638,7 @@ Explained Query:
       Distinct // { types: "()" }
         Project () // { types: "()" }
           Filter (#1 = 1) // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -667,7 +667,7 @@ Explained Query:
         Get l0 // { types: "()" }
     cte l0 =
       Project () // { types: "()" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -679,7 +679,7 @@ Explained Query:
     Project (#2, #5, #7) // { types: "(boolean, boolean, boolean?)" }
       Join on=(eq(#0, #3, #6) AND #1 = #4) type=differential // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
         ArrangeBy keys=[[#0]] // { types: "(integer?, integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         ArrangeBy keys=[[]] // { types: "(boolean)" }
           Union // { types: "(boolean)" }
             Map (true) // { types: "(boolean)" }
@@ -730,19 +730,19 @@ Explained Query:
             Get l2 // { types: "(integer?)" }
           ArrangeBy keys=[[]] // { types: "(integer)" }
             Project (#1) // { types: "(integer)" }
-              Get materialize.public.int_table // { types: "(integer?, integer)" }
+              ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l2 =
       Distinct group_by=[#0] // { types: "(integer?)" }
         Project (#0) // { types: "(integer?)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
       Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l0 =
       Distinct // { types: "()" }
         Project () // { types: "()" }
           Filter (#1 = 1) // { types: "(integer?, integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -755,7 +755,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null - INTERVAL '1 second' , col_no
 Explained Query:
   Project (#2, #3) // { types: "(timestamp?, timestamp)" }
     Map ((#0 - 00:00:01), (#1 - 00:00:01)) // { types: "(timestamp?, timestamp, timestamp?, timestamp)" }
-      Get materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
+      ReadStorage materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
 
 EOF
 
@@ -765,7 +765,7 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null - col_not_null, col_not_null -
 Explained Query:
   Project (#2, #3) // { types: "(interval?, interval?)" }
     Map ((#0 - #1), (#1 - #0)) // { types: "(timestamp?, timestamp, interval?, interval?)" }
-      Get materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
+      ReadStorage materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
 
 EOF
 
@@ -786,7 +786,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[]] // { types: "(integer)" }
         Project (#1) // { types: "(integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -812,17 +812,17 @@ Explained Query:
                     Project (#0, #1) // { types: "(integer?, integer)" }
                       Get l0 // { types: "(integer?, integer, integer)" }
                 Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
-                  Get materialize.public.int_table // { types: "(integer?, integer)" }
+                  ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
             ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
-              Get materialize.public.int_table // { types: "(integer?, integer)" }
+              ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   With
     cte l0 =
       CrossJoin type=differential // { types: "(integer?, integer, integer)" }
         ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+          ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         ArrangeBy keys=[[]] // { types: "(integer)" }
           Project (#1) // { types: "(integer)" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
+            ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -859,17 +859,17 @@ Explained Query:
   With
     cte l3 =
       ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l2 =
       Distinct group_by=[#0, #1] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
       CrossJoin type=differential // { types: "(integer?, integer, integer?, integer)" }
         Get l0 // { types: "(integer?, integer)" }
         Get l0 // { types: "(integer?, integer)" }
     cte l0 =
       ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -889,7 +889,7 @@ Explained Query:
   With
     cte l0 =
       Project (#1) // { types: "(integer)" }
-        Get materialize.public.int_table // { types: "(integer?, integer)" }
+        ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -899,9 +899,9 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_not_null FROM int_table UNION ALL S
 Explained Query:
   Union // { types: "(integer?)" }
     Project (#1) // { types: "(integer)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     Project (#0) // { types: "(integer?)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
@@ -915,6 +915,6 @@ EXPLAIN WITH(types, no_fast_path) SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS
 Explained Query:
   Project (#2) // { types: "(integer)" }
     Map (((#1 + 1) + 1)) // { types: "(integer?, integer, integer)" }
-      Get materialize.public.int_table // { types: "(integer?, integer)" }
+      ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF

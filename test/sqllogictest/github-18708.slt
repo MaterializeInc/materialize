@@ -38,16 +38,16 @@ Explained Query:
         CrossJoin type=delta
           ArrangeBy keys=[[]]
             Project ()
-              Get materialize.public.t0
+              ReadStorage materialize.public.t0
           ArrangeBy keys=[[]]
             Project ()
               Filter (#0 <= #0) AND (#0 >= #0)
-                Get materialize.public.t5
+                ReadStorage materialize.public.t5
           ArrangeBy keys=[[]]
             Filter (#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1))))))
-              Get materialize.public.t3
+              ReadStorage materialize.public.t3
           ArrangeBy keys=[[]]
-            Get materialize.public.t5
+            ReadStorage materialize.public.t5
 
 Source materialize.public.t3
   filter=((#1 = text_to_char(text_to_varchar(boolean_to_text(like["0.31161855206970124"](padchar(#1)))))))

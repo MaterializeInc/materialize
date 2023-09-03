@@ -24,7 +24,9 @@ use mz_repr::explain::{
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
-use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use crate::{
+    AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+};
 
 pub use crate::explain::text::display_singleton_row;
 
@@ -200,6 +202,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
                     body: Box::new(Get {
                         id: Id::Local(id.clone()),
                         typ: input.typ(),
+                        access_strategy: AccessStrategy::UnknownOrLocal,
                     }),
                 };
                 // swap the current body with the replacement
