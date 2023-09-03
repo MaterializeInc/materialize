@@ -579,7 +579,10 @@ pub enum IndexUsageType {
     /// When later input batches are arriving, all inputs are fully read.
     DeltaJoin(bool),
     /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
-    Lookup,
+    /// This also stores the id of the index that we want to do the lookup from. (This id is already
+    /// chosen by `LiteralConstraints`, and then `IndexUsageType::Lookup` communicates this inside
+    /// `CollectIndexRequests` from the `IndexedFilter` to the `Get`.)
+    Lookup(GlobalId),
     /// This is a rare case that happens when the user creates an index that is identical to an
     /// existing one (i.e., on the same object, and with the same keys). We'll re-use the
     /// arrangement of the existing index. The plan is an `ArrangeBy` + `Get`, where the `ArrangeBy`
@@ -614,7 +617,7 @@ impl std::fmt::Display for IndexUsageType {
             "{}",
             match self {
                 IndexUsageType::FullScan => "*** full scan ***",
-                IndexUsageType::Lookup => "lookup",
+                IndexUsageType::Lookup(_idx_id) => "lookup",
                 IndexUsageType::DifferentialJoin => "differential join",
                 IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
                 // Technically, this is a lookup only for a snapshot. For later update batches, all

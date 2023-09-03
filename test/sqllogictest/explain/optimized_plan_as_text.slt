@@ -1199,12 +1199,12 @@ SELECT * FROM t WHERE a = 5;
 Explained Query:
   Distinct group_by=[#0, #1]
     Union
-      ReadIndex on=t t_a_idx_1=[*** full scan ***]
+      ReadIndex on=t t_a_idx_2=[*** full scan ***]
       Project (#0, #1)
         ReadIndex on=materialize.public.t t_a_idx_2=[lookup value=(5)]
 
 Used Indexes:
-  - materialize.public.t_a_idx_1 (*** full scan ***, lookup)
+  - materialize.public.t_a_idx_2 (*** full scan ***, lookup)
 
 EOF
 
@@ -1239,7 +1239,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.u_d (*** full scan ***, lookup)
-  - materialize.public.t_a_idx_1 (lookup)
+  - materialize.public.t_a_idx_2 (lookup)
   - materialize.public.t_b_idx (*** full scan ***, lookup)
 
 EOF

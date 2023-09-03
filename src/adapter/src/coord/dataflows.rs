@@ -337,7 +337,6 @@ impl<'a> DataflowBuilder<'a> {
                 // Deduplicate indexes by keys, in case we have redundant indexes.
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
                 valid_indexes.sort_by_key(|(_, idx)| &idx.keys);
-                valid_indexes.dedup_by_key(|(_, idx)| &idx.keys);
                 for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,
