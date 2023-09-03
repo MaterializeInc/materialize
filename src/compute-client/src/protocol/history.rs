@@ -106,7 +106,7 @@ where
                     create_timely_command = Some(create_timely);
                 }
                 // We should be able to handle the Create* commands, should this client need to be restartable.
-                create_inst @ ComputeCommand::CreateInstance(_) => {
+                create_inst @ ComputeCommand::CreateInstance { .. } => {
                     assert!(create_inst_command.is_none());
                     create_inst_command = Some(create_inst);
                 }

@@ -338,14 +338,15 @@ where
 
                         // Merge results into the order they were asked for.
                         let mut row_packer = row_buf.packer();
-                        for typ in aggregate_types.iter() {
+                        if let Err(()) = row_packer.try_extend(aggregate_types.iter().map(|typ| {
                             let datum = match typ {
                                 ReductionType::Accumulable => accumulable.next(),
                                 ReductionType::Hierarchical => hierarchical.next(),
                                 ReductionType::Basic => basic.next(),
                             };
-                            let Some(datum) = datum else { return };
-                            row_packer.push(datum);
+                            datum.ok_or(())
+                        })) {
+                            return;
                         }
                         // If we did not have enough values to stitch together, then we do not generate
                         // an output row. Not outputting here corresponds to the semantics of an
@@ -508,10 +509,12 @@ where
                     let mut row_buf = Row::default();
                     move |_key, input, output| {
                         let mut row_packer = row_buf.packer();
-                        for ((_, row), _) in input.iter() {
-                            let datum = row.unpack_first();
-                            row_packer.push(datum);
-                        }
+                        row_packer.extend(
+                            input
+                                .iter()
+                                .into_iter()
+                                .map(|((_, row), _)| row.unpack_first()),
+                        );
                         output.push((row_buf.clone(), 1));
                     }
                 },
@@ -800,12 +803,15 @@ where
                         let mut row_buf = Row::default();
                         move |_key, source: &[(&Vec<Row>, Diff)], target: &mut Vec<(Row, Diff)>| {
                             let mut row_packer = row_buf.packer();
-                            for (aggr_index, func) in aggr_funcs.iter().enumerate() {
-                                let iter = source.iter().map(|(values, _cnt)| {
-                                    values[aggr_index].iter().next().unwrap()
-                                });
-                                row_packer.push(func.eval(iter, &RowArena::new()));
-                            }
+                            let ra = RowArena::new();
+                            row_packer.extend(aggr_funcs.iter().enumerate().map(
+                                |(aggr_index, func)| {
+                                    let iter = source.iter().map(|(values, _cnt)| {
+                                        values[aggr_index].iter().next().unwrap()
+                                    });
+                                    func.eval(iter, &ra)
+                                },
+                            ));
                             target.push((row_buf.clone(), 1));
                         }
                     },
@@ -1268,7 +1274,7 @@ where
                         let (ref accums, total) = input[0].1;
                         let mut row_packer = row_buf.packer();
 
-                        for (aggr, accum) in full_aggrs.iter().zip(accums) {
+                        row_packer.extend(full_aggrs.iter().zip(accums).map(|(aggr, accum)| {
                             // The finished value depends on the aggregation function in a variety of ways.
                             // For all aggregates but count, if only null values were
                             // accumulated, then the output is null.
@@ -1454,8 +1460,8 @@ where
                                 }
                             };
 
-                            row_packer.push(value);
-                        }
+                            value
+                        }));
                         output.push((row_buf.clone(), 1));
                     }
                 },

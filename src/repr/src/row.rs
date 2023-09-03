@@ -1773,10 +1773,10 @@ impl RowPacker<'_> {
         let off = self.row.data.len();
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
         let mut nelements = 0;
-        for datum in iter {
-            self.push(*datum.borrow());
+        self.extend(iter.into_iter().map(|datum| {
             nelements += 1;
-        }
+            datum
+        }));
         let len = u64::cast_from(self.row.data.len() - off - size_of::<u64>());
         self.row.data[off..off + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
 
@@ -1806,9 +1806,7 @@ impl RowPacker<'_> {
         D: Borrow<Datum<'a>>,
     {
         self.push_list_with(|packer| {
-            for elem in iter {
-                packer.push(*elem.borrow())
-            }
+            packer.extend(iter.into_iter().map(|elem| *elem.borrow()));
         });
     }
 
@@ -1818,12 +1816,21 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = (&'a str, D)>,
         D: Borrow<Datum<'a>>,
     {
-        self.push_dict_with(|packer| {
-            for (k, v) in iter {
-                packer.push(Datum::String(k));
-                packer.push(*v.borrow())
-            }
-        })
+        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
+            self.push_dict_with(|packer| {
+                for (k, v) in iter {
+                    push_datum::<_, true>(&mut packer.row.data, Datum::String(k));
+                    push_datum::<_, true>(&mut packer.row.data, *v.borrow());
+                }
+            })
+        } else {
+            self.push_dict_with(|packer| {
+                for (k, v) in iter {
+                    push_datum::<_, false>(&mut packer.row.data, Datum::String(k));
+                    push_datum::<_, false>(&mut packer.row.data, *v.borrow());
+                }
+            })
+        }
     }
 
     /// Pushes a `Datum::Range` derived from the `Range<Datum<'a>`.
