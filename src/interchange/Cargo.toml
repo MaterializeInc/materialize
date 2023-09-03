@@ -27,7 +27,7 @@ mz-ore = { path = "../ore", features = ["network"] }
 mz-repr = { path = "../repr" }
 ordered-float = { version = "3.4.0", features = ["serde"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-prost-reflect = "0.11.4"
+prost-reflect = "0.12.0"
 serde_json = "1.0.89"
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.24.2", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
