@@ -4876,6 +4876,33 @@ ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_dependencies_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_object_dependencies_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_object_dependencies (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_COMPUTE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_compute_dependencies_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_compute_dependencies_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_compute_dependencies (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_GLOBAL_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_global_frontiers_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_global_frontiers_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_global_frontiers (object_id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
     attributes: RoleAttributes::new().with_all(),
@@ -5268,6 +5295,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
+        Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_GLOBAL_FRONTIERS_IND),
     ]);
 
     builtins

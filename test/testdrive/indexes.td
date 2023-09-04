@@ -299,6 +299,7 @@ mz_cluster_replica_statuses_ind                             mz_cluster_replica_s
 mz_cluster_replicas_ind                                     mz_cluster_replicas                          mz_introspection    {id}
 mz_clusters_ind                                             mz_clusters                                  mz_introspection    {id}
 mz_compute_delays_histogram_raw_s2_primary_idx              mz_compute_delays_histogram_raw              mz_introspection    {export_id,import_id,worker_id,delay_ns}
+mz_compute_dependencies_ind                                 mz_compute_dependencies                      mz_introspection    {object_id}
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_introspection    {export_id,worker_id}
 mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_introspection    {export_id,worker_id,time}
 mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_introspection    {export_id,import_id,worker_id,time}
@@ -308,10 +309,12 @@ mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
+mz_global_frontiers_ind                                     mz_global_frontiers                          mz_introspection    {object_id}
 mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
+mz_object_dependencies_ind                                  mz_object_dependencies                       mz_introspection    {object_id}
 mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_introspection    {id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_introspection    {id,worker_id}
