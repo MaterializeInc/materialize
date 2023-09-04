@@ -758,6 +758,9 @@ steps:
     priority: 1
     agents:
       queue: builder-linux-x86_64
+    retry:
+      manual:
+        permit_on_passed: true
     coverage: only
 
   - wait: ~
