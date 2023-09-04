@@ -34,7 +34,7 @@ l3
 xxx
 yyy
 
-# IN list translated to ReadExistingIndex, but no semi-join or lookup, because the index is too wide
+# IN list translated to fast path full scan, but no semi-join or lookup, because the index is too wide
 
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1
@@ -1143,7 +1143,7 @@ SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 1
 
 # Check the nullability- and unique key inference:
-# The `ReadExistingIndex` should have
+# The `ReadIndex` should have
 # - non-nullable first 3 columns
 # - non-nullable last 3 columns
 # - the unique keys on #1 and #2 should remain
