@@ -11,8 +11,6 @@
 
 use mz::{error::Error, ui::OutputFormatter};
 use mz_build_info::build_info;
-use reqwest::redirect::Policy;
-use reqwest::Client;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +24,7 @@ use std::{
 };
 
 const CACHE_FILE_NAME: &str = ".mz.ver";
-const BINARIES_LATEST_VERSION_URL: &str =
-    "https://binaries.materialize.com/mz-latest-x86_64-unknown-linux-gnu.tar.gz";
+const BINARIES_LATEST_VERSION_URL: &str = "https://binaries.materialize.com/mz-latest.version";
 
 /// Represents the file structure stored in the cache.
 #[derive(Serialize, Deserialize)]
@@ -114,35 +111,16 @@ impl UpgradeChecker {
         version > installed_version
     }
 
-    /// Fetches and returns the latest tag version from the Materialize repository
-    /// using the GitHub public API.
+    /// Fetches and returns the latest tag version from the
+    /// body returned at the endpoint [BINARIES_LATEST_VERSION_URL].
     async fn get_latest_tag_version(&self) -> Result<Version, Error> {
-        // The policy must be set to None.
-        // Otherwise the client will handle the redirection.
-        let client = Client::builder().redirect(Policy::none()).build()?;
-
-        // Set an agent. Otherwise the response is not useful.
-        // let mut headers = HeaderMap::new();
-        // let user_agent = format!("mz/{}", VERSION.clone());
-        // headers.insert(
-        //     USER_AGENT,
-        //     HeaderValue::from_str(&user_agent).map_err(Error::HeaderParseError)?,
-        // );
-        let response = client
-            .get(BINARIES_LATEST_VERSION_URL)
-            // .headers(headers)
-            .send()
-            .await?;
-
         // If the server returns a redirect, you can usually find the location header.
-        if let Some(latest_version) = response.headers().get("mz-latest.version") {
-            let latest_version =
-                Version::parse(latest_version.to_str().map_err(Error::HeaderToStrError)?)
-                    .map_err(Error::SemVerParseError)?;
-            return Ok(latest_version);
-        }
-
-        Err(Error::LatestVersionHeaderMissingError)
+        let version = reqwest::get(BINARIES_LATEST_VERSION_URL)
+            .await?
+            .text()
+            .await?;
+        let latest_version = Version::parse(&version).map_err(Error::SemVerParseError)?;
+        Ok(latest_version)
     }
 
     /// Prints the warning message to update mz if the check result is true.
