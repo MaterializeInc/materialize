@@ -111,7 +111,6 @@ Before a project can move to General Availability, it must:
 - Have a merged release note that the project is in General Availability.
 - Have a merged Changelog announcement.
 - Have its GitHub epic status set to "GA" and closed.
-- Have its feature flag removed.
 
 ## General Availability
 
@@ -119,3 +118,6 @@ The General Availability is the last phase of the project
 lifecycle. By this point, we're convinced about a solution's value,
 as well as its performance and stability. Generally available
 solutions are available in all customer environments.
+
+Once a project reaches this phase, we will consider removing its
+feature flag.
