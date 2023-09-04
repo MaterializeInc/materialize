@@ -19,7 +19,10 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
+)
 
 
 class Expression:
@@ -63,18 +66,33 @@ class Expression:
         raise NotImplementedError
 
     def has_all_characteristics(
-        self, characteristics: set[ExpressionCharacteristics]
+        self,
+        characteristics: set[ExpressionCharacteristics],
+        recursive: bool = True,
+        row_selection: DataRowSelection = ALL_ROWS_SELECTION,
     ) -> bool:
-        """True if this expression itself exhibits all characteristics. Child expressions are not considered."""
-        overlap = self.own_characteristics & characteristics
+        """True if this expression itself exhibits all characteristics."""
+        present_characteristics = (
+            self.own_characteristics
+            if not recursive
+            else self.recursively_collect_involved_characteristics(row_selection)
+        )
+        overlap = present_characteristics & characteristics
         return len(overlap) == len(characteristics)
 
     def has_any_characteristic(
         self,
         characteristics: set[ExpressionCharacteristics],
+        recursive: bool = True,
+        row_selection: DataRowSelection = ALL_ROWS_SELECTION,
     ) -> bool:
-        """True if this expression itself exhibits any of the characteristics. Child expressions are not considered."""
-        overlap = self.own_characteristics & characteristics
+        """True if this expression itself exhibits any of the characteristics."""
+        present_characteristics = (
+            self.own_characteristics
+            if not recursive
+            else self.recursively_collect_involved_characteristics(row_selection)
+        )
+        overlap = present_characteristics & characteristics
         return len(overlap) > 0
 
     def is_leaf(self) -> bool:
