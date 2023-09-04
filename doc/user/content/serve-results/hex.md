@@ -33,6 +33,7 @@ This guide walks you through the steps required to use the collaborative data no
     Authentication type | Choose the **Password** option.
     Username            | Materialize user.
     Password            | App-specific password.
+
 6. Click the **Create connection** button.
 
 ## Step 2. Execute and visualize a query
