@@ -107,7 +107,7 @@ out to your manager.
 
 Once a design has been approved, the DRI can move a project from Discovery
 to Delivery. During Delivery, the DRI is responsible for ushering
-their project through all of the phases of our [Feature Lifecycle](./feature-lifecycle.md),
+their project through all of the phases of our [Project Lifecycle](./project-lifecycle.md),
 from Internal Development to General Availability.
 
 It is not required that the DRI personally deliver each piece
