@@ -103,6 +103,10 @@ def mark_covered_lines(
             not unittests_have_run
         ), "Call mark_covered_lines for unit tests last in order to get correct code coverage reports"
 
+    # There will always be an SF line specifying a file before a DA line
+    # according to the lcov tracing file format definition
+    file = None
+
     for line in open(lcov_file):
         line = line.strip()
         if not line:
@@ -110,7 +114,6 @@ def mark_covered_lines(
         if line == "end_of_record":
             continue
         method, content = tuple(line.strip().split(":", 1))
-        file = "__SENTINEL_VERY_UNLIKELY_TO_MATCH_ANY_FILE_NAME"
         # SF:/var/lib/buildkite-agent/builds/buildkite-builders-d43b1b5-i-0193496e7aec9a4e3-1/materialize/coverage/src/transform/src/lib.rs
         if method == "SF":
             if content.startswith("src/"):  # for unit tests
@@ -122,16 +125,20 @@ def mark_covered_lines(
         # DA:111,15524
         # DA:112,0
         # DA:113,15901
-        elif method == "DA" and file in coverage:
-            line_str, hit_str = content.split(",", 1)
-            line_nr = int(line_str)
-            hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
-            if line_nr in coverage[file]:
-                if unittests:
-                    if not coverage[file][line_nr]:
-                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) - hit
-                else:
-                    coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
+        elif method == "DA":
+            assert file, "file was not set by a SF line"
+            if file in coverage:
+                line_str, hit_str = content.split(",", 1)
+                line_nr = int(line_str)
+                hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
+                if line_nr in coverage[file]:
+                    if unittests:
+                        if not coverage[file][line_nr]:
+                            coverage[file][line_nr] = (
+                                coverage[file][line_nr] or 0
+                            ) - hit
+                    else:
+                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
 
 
 def get_report(
