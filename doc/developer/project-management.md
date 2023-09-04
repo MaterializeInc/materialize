@@ -61,7 +61,7 @@ most urgent and important problems at all times.
 
 Newly reported bugs will be triaged most frequently. If the reported
 bug has been assigned a `P0` or `release-blocker` label, it must be
-triaged within 24 hours. All other bugs will be triaged within 3
+triaged within 24 hours. All other bugs will be triaged within 5
 business days. The remaining backlog of problem Issues will be triaged
 by EPD management at least once a month.
 
