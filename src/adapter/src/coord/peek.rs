@@ -736,8 +736,9 @@ mod tests {
 
         let constant_err_exp = "Error \"division by zero\"\n";
         let no_lookup_exp =
-            "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex (on u8): u10[*** full scan ***]\n";
-        let lookup_exp = "Filter (#0) IS NULL\n  ReadIndex (on u9): u11[lookup value=(5)]\n";
+            "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex on=u8 [DELETED INDEX]=[*** full scan ***]\n";
+        let lookup_exp =
+            "Filter (#0) IS NULL\n  ReadIndex on=u9 [DELETED INDEX]=[lookup value=(5)]\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
         assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);

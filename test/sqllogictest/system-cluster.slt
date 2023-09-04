@@ -206,7 +206,7 @@ EOF
 # ----
 # Explained Query (fast path):
 #   Project (#0)
-#     ReadExistingIndex mz_internal.mz_show_clusters_ind
+#     ReadIndex mz_internal.mz_show_clusters_ind
 #
 # Used Indexes:
 #   - mz_internal.mz_show_clusters_ind
