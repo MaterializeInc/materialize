@@ -412,7 +412,7 @@ steps:
 
   - id: checks-parallel-restart-clusterd-compute
     label: "Checks parallel + restart compute clusterd"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
