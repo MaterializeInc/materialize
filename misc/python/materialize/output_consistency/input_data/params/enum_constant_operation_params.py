@@ -34,7 +34,7 @@ DATE_TIME_COMPONENT_PARAM = EnumConstantOperationParam(
 )
 
 TYPE_FORMAT_PARAM = EnumConstantOperationParam(
-    {"Dy, Mon DD YYYY HH24:MI:SS +0000", "Welcome to Mon, YYYY", "Dth of Mon"},
+    {"Dy, Mon DD YYYY HH24:MI:SS +0000", "Welcome to Mon, YYYY", 'Dth "of" Mon'},
     add_quotes=True,
 )
 
