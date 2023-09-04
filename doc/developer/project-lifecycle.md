@@ -11,7 +11,7 @@ each work item is completed.
 The DRI is responsible for communicating progress through these
 lifecycle phases by:
 
-- Updating the “Lifecycle” tag on the associated Github Epic.
+- Updating the "Lifecycle" tag on the associated Github Epic.
 - Optionally, announcing the update in #epd-announce and #ohship.
 
 ## Internal Development
@@ -65,7 +65,7 @@ fixes can be made within the scoped solution. The Private Preview
 phase may take a few days for smaller projects, and up to a few
 weeks for larger ones.
 
-_Note: projects in Private Preview will not be available in
+_Note: solutions in Private Preview will not be available in
 customer environments by default, they will be turned on for
 individual customers via our [feature flagging system](https://www.notion.so/materialize/45cf26682e1b4d1d87325d04f5885725).
 Customers who test solutions in this phase should be warned
@@ -76,7 +76,7 @@ Before a project can move to Public Preview, it must:
 
 - Be verified that it solves the targeted problem for at least
   one external tester, with additional optional internal testers.
-- Be entirely code complete, if it wasn’t already.
+- Be entirely code complete, if it wasn't already.
 - Have comprehensive tests live and running.
 - Have basic observability live and running.
 - Have basic metrics live and running.
@@ -105,9 +105,9 @@ Before a project can move to General Availability, it must:
 
 - Be used by at least two customers in production use cases.
 - Have additional documentation (like user guides) live, or
-  an explicit justification for why it’s not required.
+  an explicit justification for why it's not required.
 - Have a blog post describing the project, or an explicit
-  justification for why it’s not required.
+  justification for why it's not required.
 - Have a merged release note that the project is in General Availability.
 - Have a merged Changelog announcement.
 - Have its GitHub epic status set to "GA" and closed.
@@ -116,6 +116,6 @@ Before a project can move to General Availability, it must:
 ## General Availability
 
 The General Availability is the last phase of the project
-lifecycle. By this point, we’re convinced about a solution’s value,
+lifecycle. By this point, we're convinced about a solution's value,
 as well as its performance and stability. Generally available
 solutions are available in all customer environments.

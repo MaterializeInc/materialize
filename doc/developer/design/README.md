@@ -6,7 +6,7 @@ A design document is a tool we use to thoroughly discover problems and
 examine potential solutions before moving into the delivery phase of a project.
 Design documents can tackle different classes of problems, including customer
 needs and internal technical challenges. The important part of a design
-document is being crisp about the exact problem we’re tackling, explaining
+document is being crisp about the exact problem we're tackling, explaining
 all of the options being considered for tackling that problem, and recording why
 we ended up moving forward with a particular solution.
 
@@ -18,7 +18,7 @@ in order to move faster and more confidently when we enter the delivery phase.
 
 Once a design document is written, it is required to host a discussion
 meeting. Asynchronous, text-only communication tends to drag out the
-process and doesn’t get the same kind of broad feedback that live
+process and doesn't get the same kind of broad feedback that live
 meetings solicit. It is expected that attendees are given time to read, digest,
 and engage with the design document before the meeting. It is not
 expected that all open questions will be answered before the meeting starts.
@@ -47,10 +47,10 @@ design document should:
   along with any required context.
 - Document evidence of the problem via customer interviews,
   metrics, or any other means.
-- Crisply articulate the author’s preferred solution to the
+- Crisply articulate the author's preferred solution to the
   problem, and why.
 - Document all alternative solutions that were considered,
-  and why they weren’t chosen.
+  and why they weren't chosen.
 - Document any dependencies that may need to break or change
   as a result of this work.
 - Record any decisions that resulted from the document.
@@ -63,7 +63,7 @@ design process, reach out to your manager.
 
 These are not explicitly required for a good design document.
 You should, however, use your own judgment to determine what
-is and isn’t required for your specific case.
+is and isn't required for your specific case.
 
 - Allow a drive-by commenter without any context to fully understand the
   design: the intention is that a group of people with common context can come
@@ -109,13 +109,13 @@ your thinking and inform the writing process.
 ### Creation
 
 1. Copy the design document [template](./00000000_template.md) to a new
-   date-prefixed file in the `design` directory of the repository you’re
+   date-prefixed file in the `design` directory of the repository you're
    working in, and fill it in.
 2. Submit a pull request of your filled in design document. This
    makes it easy for others to add written comments.
 3. Identify your key stakeholders and socialize the design document
    with them. Typically, there is a small set of people who have a vested
-   interest in the area the design touches. If it’s not clear who your
+   interest in the area the design touches. If it's not clear who your
    stakeholders for the design document are, check in with your manager.
 4. Schedule a meeting to discuss the design document live with your
    stakeholders. Rule of thumb is that you should give your reviewers
@@ -137,7 +137,7 @@ your thinking and inform the writing process.
    a PR comment.
 8. If you do not get explicit approvals in the meeting, keep iterating
    until you do. You can do this asynchronously or synchronously.
-   If you’ve gone through multiple iterations and are struggling to get
+   If you've gone through multiple iterations and are struggling to get
    the required approvals, get help from your manager.
 
 ### Approval
@@ -150,10 +150,10 @@ your thinking and inform the writing process.
 
 ## Refinement
 
-Once you’ve had your design document approved, you will move into
+Once you've had your design document approved, you will move into
 the [delivery phase of the project management process](../project-management.md).
 On the happy path, your design will work as planned and the
-implementation will match what you’ve already documented. In that case,
+implementation will match what you've already documented. In that case,
 your design document will not require any refinement. On the unhappy
 path, you might discover that the design you proposed needs to be updated.
 
