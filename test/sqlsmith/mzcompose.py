@@ -56,6 +56,7 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "could not translate host name",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "canceling statement due to statement timeout",
     "value too long for type",
     "list_agg on char not yet supported",
