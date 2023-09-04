@@ -16,9 +16,13 @@ This guide walks you through the steps required to use the collaborative data no
 ## Step 1. Create an integration
 
 1. Sign in to **[Hex](https://hex.tech/)**.
+
 2. Go to an existing project or create a new one.
+
 3. Go to {{% icons/hex_data_sources %}}**Data Sources > +Add > Create data connection... > Materialize**.
+
 4. Search and click the **Materialize** option.
+
 5. Enter the connection fields as follows:
     Field               | Value
     ------------------- | ----------------------
@@ -29,6 +33,7 @@ This guide walks you through the steps required to use the collaborative data no
     Authentication type | Choose the **Password** option.
     Username            | Materialize user.
     Password            | App-specific password.
+
 6. Click the **Create connection** button.
 
 ## Step 2. Execute and visualize a query
