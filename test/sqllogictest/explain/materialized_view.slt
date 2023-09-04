@@ -161,7 +161,7 @@ EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadIndex on=materialize.public.accounts u14=[lookup value=(100)]
+    ReadIndex on=materialize.public.accounts [DELETED INDEX]=[lookup value=(100)]
 
 Used Indexes:
   - [DELETED INDEX] (lookup)
