@@ -375,7 +375,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
-        self.history.push(cmd.clone(), &self.peeks);
+        self.history.push(cmd.clone());
 
         // Clone the command for each active replica.
         for (id, replica) in self.replicas.iter_mut() {
@@ -499,7 +499,6 @@ where
         );
 
         // Take this opportunity to clean up the history we should present.
-        self.compute.history.retain_peeks(&self.compute.peeks);
         self.compute.history.reduce();
 
         // Replay the commands at the client, creating new dataflow identifiers.
@@ -1107,7 +1106,8 @@ where
     ///
     /// As part of this we:
     ///  * Emit a `CancelPeek` command to instruct replicas to stop spending resources on this
-    ///    peek.
+    ///    peek, and to allow the `ComputeCommandHistory` to reduce away the corresponding `Peek`
+    ///    command.
     ///  * Remove the read hold for this peek, unblocking compaction that might have waited on it.
     fn remove_peek(&mut self, uuid: Uuid) {
         let Some(peek) = self.compute.peeks.remove(&uuid) else {
