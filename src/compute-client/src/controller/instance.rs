@@ -212,6 +212,20 @@ impl<T> Instance<T> {
         self.replicas.keys().copied()
     }
 
+    /// Return the IDs of pending peeks targeting the specified replica.
+    fn peeks_targeting(
+        &self,
+        replica_id: ReplicaId,
+    ) -> impl Iterator<Item = (Uuid, &PendingPeek<T>)> {
+        self.peeks.iter().filter_map(move |(uuid, peek)| {
+            if peek.target_replica == Some(replica_id) {
+                Some((*uuid, peek))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Return the IDs of in-progress subscribes targeting the specified replica.
     fn subscribes_targeting(&self, replica_id: ReplicaId) -> impl Iterator<Item = GlobalId> + '_ {
         self.subscribes.iter().filter_map(move |(id, subscribe)| {
@@ -532,6 +546,23 @@ where
             );
             self.compute.ready_responses.push_back(response);
         }
+
+        // Peeks targeting this replica might not be served anymore (if the replica is dropped).
+        // If the replica has failed it might come back and respond to the peek later, but it still
+        // seems like a good idea to cancel the peek to inform the caller about the failure. This
+        // is consistent with how we handle targeted subscribes above.
+        let mut peek_responses = Vec::new();
+        let mut to_drop = Vec::new();
+        for (uuid, peek) in self.compute.peeks_targeting(id) {
+            peek_responses.push(ComputeControllerResponse::PeekResponse(
+                uuid,
+                PeekResponse::Error("target replica failed or was dropped".into()),
+                peek.otel_ctx.clone(),
+            ));
+            to_drop.push(uuid);
+        }
+        self.compute.ready_responses.extend(peek_responses);
+        to_drop.into_iter().for_each(|uuid| self.remove_peek(uuid));
 
         Ok(())
     }
