@@ -11,7 +11,7 @@ each work item is completed.
 The DRI is responsible for communicating progress through these
 lifecycle phases by:
 
-- Updating the "Lifecycle" tag on the associated Github Epic.
+- Updating the "Lifecycle" tag on the associated GitHub Epic.
 - Optionally, announcing the update in #epd-announce and #ohship.
 
 ## Internal Development

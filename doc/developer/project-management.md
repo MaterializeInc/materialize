@@ -51,7 +51,7 @@ performance. Both types of problems are important to solve in order to
 ensure the overall success of Materialize as a product.
 
 By default, all created issues will end up in a Materialize-wide
-backlog. Issues created in our public Github repository will be
+backlog. Issues created in our public GitHub repository will be
 visible outside of our team.
 
 ## Triage
@@ -67,7 +67,7 @@ by EPD management at least once a month.
 
 Some problems will be sufficiently straightforward with a clearly
 defined scope, a limited solution space, and limited effects on other
-teams and projects. In these cases, these Github Issues can be directly
+teams and projects. In these cases, these GitHub Issues can be directly
 assigned to an owner for implementation.
 
 Other problems will be less straightforward. Some may require more
@@ -76,7 +76,7 @@ highlight a symptom of a larger issue with the product, and require
 the Product team to discover the true underlying problem. Some may
 impact the work of other teams or require ongoing stakeholder management.
 In any of these cases, or in any case where a solution does not feel
-simple, problems should be turned into a Github Epic.
+simple, problems should be turned into a GitHub Epic.
 
 Each standalone Issue and Epic will be prioritized and tagged with
 a Milestone: ["Now," "Next," or "Later,"](https://www.notion.so/Product-Planning-and-Prioritization-Guidance-ce7f91bd5e224a71841630c306414700#b745adb7b4604268a93033b38a504aae)
@@ -93,7 +93,7 @@ responsible for driving the Design Document Process for their project.
 
 If a project is sufficiently straightforward, the DRI can opt to skip
 the Design Document Process. The DRI will need to write that they're
-skipping this step in the Github Epic.
+skipping this step in the GitHub Epic.
 
 Otherwise, the DRI is responsible for researching the solution space,
 proposing potential solutions, and getting signoff from relevant stakeholders.
@@ -118,7 +118,7 @@ as expected.
 
 The DRI is also responsible for ensuring that the status of their project
 is up to date and visible at all times. At a minimum, this means including
-the Github Epic on their team's Github project, marking the Epic with the
+the GitHub Epic on their team's GitHub project, marking the Epic with the
 correct lifecycle phase, and proactively calling out any potential blockers.
 Depending on the project, it might be useful to broadcast even more
 information more frequently.
