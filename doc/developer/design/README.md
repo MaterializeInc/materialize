@@ -70,10 +70,9 @@ is and isn't required for your specific case.
   together, understand the design and come to a decision. Some context might
   be gathered from previous design documents, from reference documentation, or
   from looking at the code.
-- Provide a fully spec'ed reference implementation: depending on the topic, it
-  can be very helpful to prepare a prototype. Both for validating the design
-  and for presenting it to others. However, it is not always a required part
-  of the design.
+- Provide a fully spec'ed reference implementation. Prototypes on the other
+  hand are crucial for de-risking the design as early as possible and a minimal
+  viable prototype is required in most cases.
 
 ## When should you make a design document?
 
@@ -173,8 +172,7 @@ point-in-time artifact that describes the historical context for the design.
 Once the described work is complete, you can stop updating the design doc.
 
 Instead, invest in evergreen content. Add comments in the code itself (module
-comments can be particularly valuable) and reference documentation in
-[doc/developer/reference](/doc/developer/reference/README.md). For larger
+comments can be particularly valuable) and reference documentation. For larger
 components, consider putting together an architecture presentation (see, for
 example, the [`persist` lectures
 (internal)](https://www.notion.so/materialize/6f83baae1f5348eb87334a53daa63066));
