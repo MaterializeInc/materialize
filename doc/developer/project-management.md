@@ -1,8 +1,8 @@
 # Project Management
 
 At Materialize, we have a
-[unified EPD (Engineering, Product, Design) roadmap](https://github.com/orgs/MaterializeInc/projects/43).
-The roadmap describes all prioritized projects across our EPD teams,
+[unified Engineering, Product, Design (EPD) backlog](https://github.com/orgs/MaterializeInc/projects/43).
+The backlog describes all prioritized projects across our EPD teams,
 including: Product Teams, Functional Teams, Product Design, Developer
 Experience, Education, and Analytics. Each roadmap item is marked with
 a priority ("Now," "Next," or "Later") that indicates the timeline upon
@@ -15,19 +15,18 @@ and also for keeping the status of the project visible and up to date
 at all times. The DRI for any given project can change over time, as
 long as the handoff is publicly documented.
 
-The unified EPD roadmap is created by EPD management once a quarter.
+The unified EPD backlog is revised by EPD management once a quarter.
 For the most part, projects are picked up and prioritized from the
 existing backlog of issues. In some cases, new projects will be spun
 up to address an urgent and important need that is not already
 represented in the backlog.
 
-The EPD roadmap is not set in stone. Although we only holistically
-revise the roadmap once a quarter, prioritizations of individual
+The EPD backlog is not set in stone. Although we only holistically
+revise the backlog once a quarter, prioritizations of individual
 projects can and should change as we learn new information. EPD
 management is responsible for ensuring that we are working on the
-right things each week in a recurring Roadmap Review. During this
-review, the priority and staffing of any individual project can
-be updated.
+right things each week in a recurring review. During this review,
+the priority and staffing of any individual project can be updated.
 
 The rest of this document describes how individual projects are
 managed at Materialize, broken down into four interconnected phases:
@@ -57,7 +56,7 @@ visible outside of our team.
 
 ## Triage
 
-The purpose of the Triage phase is to ensure we’re working on the
+The purpose of the Triage phase is to ensure we're working on the
 most urgent and important problems at all times.
 
 Newly reported bugs will be triaged most frequently. If the reported
@@ -118,8 +117,8 @@ work attached to a project, and ensuring that progress is moving along
 as expected.
 
 The DRI is also responsible for ensuring that the status of their project
-is up to date and visible at all times. At minimum, this means including
-the Github Epic on their team’s roadmap, marking the Epic with the correct
-lifecycle phase, and proactively calling out any potential blockers.
+is up to date and visible at all times. At a minimum, this means including
+the Github Epic on their team's Github project, marking the Epic with the
+correct lifecycle phase, and proactively calling out any potential blockers.
 Depending on the project, it might be useful to broadcast even more
 information more frequently.
