@@ -261,7 +261,7 @@ time[]
 
 # read timestamp
 > SELECT pg_typeof(c) FROM t_timestamp_array LIMIT 1;
-timestamp[]
+"timestamp with time zone[]"
 
 > SELECT * FROM t_timestamp_array;
 "{2007-02-01 15:04:05,2007-02-01 15:04:06}"
