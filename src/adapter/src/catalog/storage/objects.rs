@@ -12,19 +12,16 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
 use crate::catalog::storage::{
-    CommentValue, DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey,
-    SystemPrivilegesValue,
+    CommentValue, DefaultPrivilegesKey, DefaultPrivilegesValue, ReplicaConfig, ReplicaLocation,
+    SystemPrivilegesKey, SystemPrivilegesValue,
 };
-use crate::catalog::{
-    ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership, SerializedCatalogItem,
-};
+use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership};
 
 use super::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, ConfigKey,
     ConfigValue, DatabaseKey, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey,
     IdAllocValue, ItemKey, ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    SerializedReplicaConfig, SerializedReplicaLocation, SerializedReplicaLogging,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey,
     TimestampKey, TimestampValue,
 };
@@ -309,7 +306,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
     }
 }
 
-impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
+impl RustType<proto::ReplicaConfig> for ReplicaConfig {
     fn into_proto(&self) -> proto::ReplicaConfig {
         proto::ReplicaConfig {
             logging: Some(self.logging.into_proto()),
@@ -321,7 +318,7 @@ impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
     }
 
     fn from_proto(proto: proto::ReplicaConfig) -> Result<Self, TryFromProtoError> {
-        Ok(SerializedReplicaConfig {
+        Ok(ReplicaConfig {
             location: proto
                 .location
                 .into_rust_if_some("ReplicaConfig::location")?,
@@ -331,26 +328,10 @@ impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
     }
 }
 
-impl RustType<proto::ReplicaLogging> for SerializedReplicaLogging {
-    fn into_proto(&self) -> proto::ReplicaLogging {
-        proto::ReplicaLogging {
-            log_logging: self.log_logging,
-            interval: self.interval.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
-        Ok(SerializedReplicaLogging {
-            log_logging: proto.log_logging,
-            interval: proto.interval.into_rust()?,
-        })
-    }
-}
-
-impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
+impl RustType<proto::replica_config::Location> for ReplicaLocation {
     fn into_proto(&self) -> proto::replica_config::Location {
         match self {
-            SerializedReplicaLocation::Unmanaged {
+            ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -365,7 +346,7 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
                     workers: CastFrom::cast_from(*workers),
                 },
             ),
-            SerializedReplicaLocation::Managed {
+            ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,
@@ -380,7 +361,7 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
     fn from_proto(proto: proto::replica_config::Location) -> Result<Self, TryFromProtoError> {
         match proto {
             proto::replica_config::Location::Unmanaged(location) => {
-                Ok(SerializedReplicaLocation::Unmanaged {
+                Ok(ReplicaLocation::Unmanaged {
                     storagectl_addrs: location.storagectl_addrs,
                     storage_addrs: location.storage_addrs,
                     computectl_addrs: location.computectl_addrs,
@@ -388,13 +369,11 @@ impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
                     workers: CastFrom::cast_from(location.workers),
                 })
             }
-            proto::replica_config::Location::Managed(location) => {
-                Ok(SerializedReplicaLocation::Managed {
-                    size: location.size,
-                    availability_zone: location.availability_zone,
-                    disk: location.disk,
-                })
-            }
+            proto::replica_config::Location::Managed(location) => Ok(ReplicaLocation::Managed {
+                size: location.size,
+                availability_zone: location.availability_zone,
+                disk: location.disk,
+            }),
         }
     }
 }
@@ -483,47 +462,35 @@ impl RustType<proto::ItemKey> for ItemKey {
     }
 }
 
-impl RustType<proto::CatalogItem> for SerializedCatalogItem {
-    fn into_proto(&self) -> proto::CatalogItem {
-        let value = match self.clone() {
-            SerializedCatalogItem::V1 { create_sql } => {
-                proto::catalog_item::Value::V1(proto::catalog_item::V1 { create_sql })
-            }
-        };
-
-        proto::CatalogItem { value: Some(value) }
-    }
-
-    fn from_proto(proto: proto::CatalogItem) -> Result<Self, TryFromProtoError> {
-        let value = proto
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("CatalogItem::value"))?;
-        match value {
-            proto::catalog_item::Value::V1(c) => Ok(SerializedCatalogItem::V1 {
-                create_sql: c.create_sql,
-            }),
-        }
-    }
-}
-
 impl RustType<proto::ItemValue> for ItemValue {
     fn into_proto(&self) -> proto::ItemValue {
+        let definition = proto::CatalogItem {
+            value: Some(proto::catalog_item::Value::V1(proto::catalog_item::V1 {
+                create_sql: self.create_sql.clone(),
+            })),
+        };
         proto::ItemValue {
             schema_id: Some(self.schema_id.into_proto()),
             name: self.name.to_string(),
-            definition: Some(self.definition.into_proto()),
+            definition: Some(definition),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
         }
     }
 
     fn from_proto(proto: proto::ItemValue) -> Result<Self, TryFromProtoError> {
+        let create_sql_value = proto
+            .definition
+            .ok_or_else(|| TryFromProtoError::missing_field("ItemValue::definition"))?
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("CatalogItem::value"))?;
+        let create_sql = match create_sql_value {
+            proto::catalog_item::Value::V1(c) => c.create_sql,
+        };
         Ok(ItemValue {
             schema_id: proto.schema_id.into_rust_if_some("ItemValue::schema_id")?,
             name: proto.name,
-            definition: proto
-                .definition
-                .into_rust_if_some("ItemValue::definition")?,
+            create_sql,
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
         })

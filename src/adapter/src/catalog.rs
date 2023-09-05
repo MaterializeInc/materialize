@@ -97,7 +97,6 @@ use mz_storage_client::types::sources::{
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
@@ -2157,7 +2156,7 @@ impl From<ClusterReplica> for storage::ClusterReplica {
             cluster_id: replica.cluster_id,
             replica_id: replica.replica_id,
             name: replica.name,
-            serialized_config: replica.config.into(),
+            config: replica.config.into(),
             owner_id: replica.owner_id,
         }
     }
@@ -2202,7 +2201,7 @@ impl From<CatalogEntry> for storage::Item {
         storage::Item {
             id: entry.id,
             name: entry.name,
-            definition: entry.item.into_serialized(),
+            create_sql: entry.item.into_serialized(),
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
         }
@@ -2902,88 +2901,46 @@ impl CatalogItem {
         }
     }
 
-    pub(crate) fn to_serialized(&self) -> SerializedCatalogItem {
+    pub(crate) fn to_serialized(&self) -> String {
         match self {
-            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
-                create_sql: table.create_sql.clone(),
-            },
+            CatalogItem::Table(table) => table.create_sql.clone(),
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
-                    match source.data_source {
-                        DataSourceDesc::Introspection(_) => false,
-                        _ => true,
-                    },
+                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                SerializedCatalogItem::V1 {
-                    create_sql: source.create_sql.clone(),
-                }
+                source.create_sql.clone()
             }
-            CatalogItem::View(view) => SerializedCatalogItem::V1 {
-                create_sql: view.create_sql.clone(),
-            },
-            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
-                create_sql: mview.create_sql.clone(),
-            },
-            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
-                create_sql: index.create_sql.clone(),
-            },
-            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
-                create_sql: sink.create_sql.clone(),
-            },
-            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
-                create_sql: typ.create_sql.clone(),
-            },
-            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
-                create_sql: secret.create_sql.clone(),
-            },
-            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
-                create_sql: connection.create_sql.clone(),
-            },
+            CatalogItem::View(view) => view.create_sql.clone(),
+            CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
+            CatalogItem::Index(index) => index.create_sql.clone(),
+            CatalogItem::Sink(sink) => sink.create_sql.clone(),
+            CatalogItem::Type(typ) => typ.create_sql.clone(),
+            CatalogItem::Secret(secret) => secret.create_sql.clone(),
+            CatalogItem::Connection(connection) => connection.create_sql.clone(),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
 
-    pub(crate) fn into_serialized(self) -> SerializedCatalogItem {
+    pub(crate) fn into_serialized(self) -> String {
         match self {
-            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
-                create_sql: table.create_sql,
-            },
+            CatalogItem::Table(table) => table.create_sql,
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
-                    match source.data_source {
-                        DataSourceDesc::Introspection(_) => false,
-                        _ => true,
-                    },
+                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                SerializedCatalogItem::V1 {
-                    create_sql: source.create_sql,
-                }
+                source.create_sql
             }
-            CatalogItem::View(view) => SerializedCatalogItem::V1 {
-                create_sql: view.create_sql,
-            },
-            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
-                create_sql: mview.create_sql,
-            },
-            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
-                create_sql: index.create_sql,
-            },
-            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
-                create_sql: sink.create_sql,
-            },
-            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
-                create_sql: typ.create_sql,
-            },
-            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
-                create_sql: secret.create_sql,
-            },
-            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
-                create_sql: connection.create_sql,
-            },
+            CatalogItem::View(view) => view.create_sql,
+            CatalogItem::MaterializedView(mview) => mview.create_sql,
+            CatalogItem::Index(index) => index.create_sql,
+            CatalogItem::Sink(sink) => sink.create_sql,
+            CatalogItem::Type(typ) => typ.create_sql,
+            CatalogItem::Secret(secret) => secret.create_sql,
+            CatalogItem::Connection(connection) => connection.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
@@ -4055,23 +4012,23 @@ impl Catalog {
             cluster_id,
             replica_id,
             name,
-            serialized_config,
+            config,
             owner_id,
         } in replicas
         {
             let logging = ReplicaLogging {
-                log_logging: serialized_config.logging.log_logging,
-                interval: serialized_config.logging.interval,
+                log_logging: config.logging.log_logging,
+                interval: config.logging.interval,
             };
             let config = ReplicaConfig {
                 location: catalog.concretize_replica_location(
-                    serialized_config.location,
+                    config.location,
                     &vec![],
                     cluster_azs.get(&cluster_id).map(|zones| &**zones),
                 )?,
                 compute: ComputeReplicaConfig {
                     logging,
-                    idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
+                    idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
                 },
             };
 
@@ -4079,7 +4036,13 @@ impl Catalog {
             catalog
                 .storage()
                 .await
-                .set_replica_config(replica_id, cluster_id, name.clone(), &config, owner_id)
+                .set_replica_config(
+                    replica_id,
+                    cluster_id,
+                    name.clone(),
+                    config.clone().into(),
+                    owner_id,
+                )
                 .await?;
 
             catalog
@@ -4926,7 +4889,7 @@ impl Catalog {
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some(item) = items.pop_front() {
-            let d_c = item.definition.clone();
+            let d_c = item.create_sql.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -5002,7 +4965,7 @@ impl Catalog {
             let storage::Item {
                 id,
                 name,
-                definition: _,
+                create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
@@ -5021,7 +4984,7 @@ impl Catalog {
             let storage::Item {
                 id,
                 name,
-                definition: _,
+                create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
@@ -5669,12 +5632,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: SerializedReplicaLocation,
+        location: storage::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            SerializedReplicaLocation::Unmanaged {
+            storage::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -5695,7 +5658,7 @@ impl Catalog {
                     workers,
                 })
             }
-            SerializedReplicaLocation::Managed {
+            storage::ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,
@@ -7914,7 +7877,7 @@ impl Catalog {
     fn deserialize_item(
         &self,
         id: GlobalId,
-        SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
+        create_sql: String,
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
@@ -8490,11 +8453,6 @@ pub enum Op {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
-pub enum SerializedCatalogItem {
-    V1 { create_sql: String },
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
@@ -8504,7 +8462,7 @@ pub struct ClusterConfig {
 pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
-    pub logging: SerializedReplicaLogging,
+    pub logging: ReplicaLogging,
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
@@ -8514,101 +8472,6 @@ pub struct ClusterVariantManaged {
 pub enum ClusterVariant {
     Managed(ClusterVariantManaged),
     Unmanaged,
-}
-
-/// Serialized (stored alongside the replica) logging configuration of
-/// a replica. Serialized variant of `ReplicaLogging`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SerializedReplicaLogging {
-    pub(crate) log_logging: bool,
-    pub(crate) interval: Option<Duration>,
-}
-
-impl From<ReplicaLogging> for SerializedReplicaLogging {
-    fn from(
-        ReplicaLogging {
-            log_logging,
-            interval,
-        }: ReplicaLogging,
-    ) -> Self {
-        Self {
-            log_logging,
-            interval,
-        }
-    }
-}
-
-/// A [`ReplicaConfig`] that is serialized as JSON and persisted to the catalog
-/// stash. This is a separate type to allow us to evolve the on-disk format
-/// independently from the SQL layer.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub struct SerializedReplicaConfig {
-    pub location: SerializedReplicaLocation,
-    pub logging: SerializedReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
-}
-
-impl From<ReplicaConfig> for SerializedReplicaConfig {
-    fn from(config: ReplicaConfig) -> Self {
-        SerializedReplicaConfig {
-            location: config.location.into(),
-            logging: config.compute.logging.into(),
-            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SerializedReplicaLocation {
-    Unmanaged {
-        storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
-        computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
-    },
-    Managed {
-        size: String,
-        /// `Some(az)` if the AZ was specified by the user and must be respected;
-        availability_zone: Option<String>,
-        disk: bool,
-    },
-}
-
-impl From<ReplicaLocation> for SerializedReplicaLocation {
-    fn from(loc: ReplicaLocation) -> Self {
-        match loc {
-            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            }) => Self::Unmanaged {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            },
-            ReplicaLocation::Managed(ManagedReplicaLocation {
-                allocation: _,
-                size,
-                availability_zones,
-                disk,
-            }) => SerializedReplicaLocation::Managed {
-                size,
-                availability_zone: if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
-                    availability_zones
-                {
-                    Some(az)
-                } else {
-                    None
-                },
-                disk,
-            },
-        }
-    }
 }
 
 impl ConnCatalog<'_> {

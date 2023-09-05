@@ -3789,6 +3789,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
+ "mz-stash",
  "mz-storage-client",
  "mz-timely-util",
  "mz-tracing",

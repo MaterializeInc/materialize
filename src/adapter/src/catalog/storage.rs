@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
+use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLogging};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
@@ -45,8 +45,7 @@ use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{
     is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, SystemObjectMapping,
+    DefaultPrivilegeObject, RoleMembership, SystemObjectMapping,
 };
 use crate::coord::timeline;
 
@@ -153,9 +152,9 @@ fn add_new_builtin_cluster_replicas_migration(
     Ok(())
 }
 
-fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedReplicaConfig {
-    SerializedReplicaConfig {
-        location: SerializedReplicaLocation::Managed {
+fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
+    ReplicaConfig {
+        location: ReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: None,
             disk: false,
@@ -165,8 +164,8 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
     }
 }
 
-fn default_logging_config() -> SerializedReplicaLogging {
-    SerializedReplicaLogging {
+fn default_logging_config() -> ReplicaLogging {
+    ReplicaLogging {
         log_logging: false,
         interval: Some(Duration::from_secs(1)),
     }
@@ -474,7 +473,7 @@ impl Connection {
                     cluster_id: v.cluster_id,
                     replica_id: k.id,
                     name: v.name,
-                    serialized_config: v.config,
+                    config: v.config,
                     owner_id: v.owner_id,
                 },
             )
@@ -732,14 +731,14 @@ impl Connection {
         replica_id: ReplicaId,
         cluster_id: ClusterId,
         name: String,
-        config: &ReplicaConfig,
+        config: ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         let key = ClusterReplicaKey { id: replica_id }.into_proto();
         let val = ClusterReplicaValue {
             cluster_id,
             name,
-            config: config.clone().into(),
+            config,
             owner_id,
         }
         .into_proto();
@@ -1055,7 +1054,7 @@ impl<'a> Transaction<'a> {
                     },
                     item: v.name.clone(),
                 },
-                definition: v.definition.clone(),
+                create_sql: v.create_sql.clone(),
                 owner_id: v.owner_id,
                 privileges: v.privileges.clone(),
             });
@@ -1309,7 +1308,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
-        config: &SerializedReplicaConfig,
+        config: &ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         if let Err(_) = self.cluster_replicas.insert(
@@ -1367,7 +1366,7 @@ impl<'a> Transaction<'a> {
         id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
-        item: SerializedCatalogItem,
+        create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<(), Error> {
@@ -1376,7 +1375,7 @@ impl<'a> Transaction<'a> {
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
-                definition: item,
+                create_sql,
                 owner_id,
                 privileges,
             },
@@ -1525,7 +1524,7 @@ impl<'a> Transaction<'a> {
                 Some(ItemValue {
                     schema_id: v.schema_id,
                     name: item.name.item,
-                    definition: item.definition,
+                    create_sql: item.create_sql,
                     owner_id: item.owner_id,
                     privileges: item.privileges,
                 })
@@ -1559,7 +1558,7 @@ impl<'a> Transaction<'a> {
                 Some(ItemValue {
                     schema_id: v.schema_id,
                     name: item.name.item.clone(),
-                    definition: item.definition.clone(),
+                    create_sql: item.create_sql.clone(),
                     owner_id: item.owner_id.clone(),
                     privileges: item.privileges.clone(),
                 })
@@ -1683,7 +1682,7 @@ impl<'a> Transaction<'a> {
                 Some(ClusterReplicaValue {
                     cluster_id,
                     name: replica.name,
-                    config: replica.serialized_config,
+                    config: replica.config,
                     owner_id: replica.owner_id,
                 })
             } else {
@@ -2037,15 +2036,101 @@ pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub name: String,
-    pub serialized_config: SerializedReplicaConfig,
+    pub config: ReplicaConfig,
     pub owner_id: RoleId,
+}
+
+// The on-disk replica configuration does not match the in-memory replica configuration, so we need
+// separate structs. As of writing this comment, it is mainly due to the fact that we don't persist
+// the replica allocation.
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReplicaConfig {
+    pub location: ReplicaLocation,
+    pub logging: ReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
+}
+
+impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
+    fn from(config: mz_controller::clusters::ReplicaConfig) -> Self {
+        Self {
+            location: config.location.into(),
+            logging: config.compute.logging,
+            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ReplicaLocation {
+    Unmanaged {
+        storagectl_addrs: Vec<String>,
+        storage_addrs: Vec<String>,
+        computectl_addrs: Vec<String>,
+        compute_addrs: Vec<String>,
+        workers: usize,
+    },
+    Managed {
+        size: String,
+        /// `Some(az)` if the AZ was specified by the user and must be respected;
+        availability_zone: Option<String>,
+        disk: bool,
+    },
+}
+
+impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
+    fn from(loc: mz_controller::clusters::ReplicaLocation) -> Self {
+        match loc {
+            mz_controller::clusters::ReplicaLocation::Unmanaged(
+                mz_controller::clusters::UnmanagedReplicaLocation {
+                    storagectl_addrs,
+                    storage_addrs,
+                    computectl_addrs,
+                    compute_addrs,
+                    workers,
+                },
+            ) => Self::Unmanaged {
+                storagectl_addrs,
+                storage_addrs,
+                computectl_addrs,
+                compute_addrs,
+                workers,
+            },
+            mz_controller::clusters::ReplicaLocation::Managed(
+                mz_controller::clusters::ManagedReplicaLocation {
+                    allocation: _,
+                    size,
+                    availability_zones,
+                    disk,
+                },
+            ) => ReplicaLocation::Managed {
+                size,
+                availability_zone:
+                    if let mz_controller::clusters::ManagedReplicaAvailabilityZones::FromReplica(
+                        Some(az),
+                    ) = availability_zones
+                    {
+                        Some(az)
+                    } else {
+                        None
+                    },
+                disk,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComputeReplicaLogging {
+    pub log_logging: bool,
+    pub interval: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
-    pub definition: SerializedCatalogItem,
+    pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
 }
@@ -2119,7 +2204,7 @@ pub struct ClusterReplicaKey {
 pub struct ClusterReplicaValue {
     cluster_id: ClusterId,
     name: String,
-    config: SerializedReplicaConfig,
+    config: ReplicaConfig,
     owner_id: RoleId,
 }
 
@@ -2157,7 +2242,7 @@ pub struct ItemKey {
 pub struct ItemValue {
     schema_id: SchemaId,
     name: String,
-    definition: SerializedCatalogItem,
+    create_sql: String,
     owner_id: RoleId,
     privileges: Vec<MzAclItem>,
 }
