@@ -31,8 +31,8 @@ SOURCE_RE = re.compile(
 # cases, so ignore such lines. Same for mz_ore::test
 IGNORE_RE = re.compile(
     r"""
-    ( #\[derive\(.*\)\]
-    | #\[mz_ore::test.*\]
+    ( \#\[derive\(.*\)\]
+    | \#\[mz_ore::test.*\]
     )
     """,
     re.VERBOSE,
