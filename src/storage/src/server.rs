@@ -22,6 +22,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
+use crate::metrics::StorageBaseMetrics;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
@@ -37,6 +38,8 @@ pub struct Config {
     /// Other configuration for storage instances.
     pub instance_context: StorageInstanceContext,
 
+    /// Metrics for storage objects.
+    pub storage_metrics: StorageBaseMetrics,
     /// Metrics for sources.
     pub source_metrics: SourceBaseMetrics,
     /// Metrics for sinks.
@@ -68,6 +71,7 @@ pub fn serve(
     anyhow::Error,
 > {
     // Various metrics related things.
+    let storage_metrics = StorageBaseMetrics::register_with(&generic_config.metrics_registry);
     let source_metrics = SourceBaseMetrics::register_with(&generic_config.metrics_registry);
     let sink_metrics = SinkBaseMetrics::register_with(&generic_config.metrics_registry);
     let decode_metrics = DecodeMetrics::register_with(&generic_config.metrics_registry);
@@ -77,6 +81,7 @@ pub fn serve(
         now,
         connection_context,
         instance_context,
+        storage_metrics,
         source_metrics,
         sink_metrics,
         decode_metrics,
@@ -117,6 +122,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             timely_worker,
             client_rx,
             config.decode_metrics,
+            config.storage_metrics,
             config.source_metrics,
             config.sink_metrics,
             config.now.clone(),

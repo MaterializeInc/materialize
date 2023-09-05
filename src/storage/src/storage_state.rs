@@ -116,6 +116,7 @@ use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
+use crate::metrics::StorageBaseMetrics;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
@@ -156,6 +157,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
         decode_metrics: DecodeMetrics,
+        storage_metrics: StorageBaseMetrics,
         source_metrics: SourceBaseMetrics,
         sink_metrics: SinkBaseMetrics,
         now: NowFn,
@@ -207,6 +209,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let cluster_memory_limit = instance_context.cluster_memory_limit;
 
         let storage_state = StorageState {
+            active_objects: BTreeMap::new(),
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
             decode_metrics,
@@ -214,6 +217,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
             now,
+            storage_metrics,
             source_metrics,
             sink_metrics,
             timely_worker_index: timely_worker.index(),
@@ -252,6 +256,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
+    /// State for all active storage objects (sources and sinks) that can be
+    /// dropped immediately upon receiving a `DropDataflow` command.
+    pub active_objects: BTreeMap<GlobalId, Option<crate::metrics::StorageMetrics>>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -271,6 +278,8 @@ pub struct StorageState {
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
+    /// Metrics for all storage objects
+    pub storage_metrics: StorageBaseMetrics,
     /// Metrics for the source-specific side of dataflows.
     pub source_metrics: SourceBaseMetrics,
     /// Undocumented
@@ -1203,6 +1212,15 @@ impl StorageState {
                     update,
                 } in ingestions
                 {
+                    self.active_objects.insert(
+                        id,
+                        crate::metrics::StorageMetrics::new_source(
+                            &self.storage_metrics,
+                            worker_index,
+                            id,
+                            &description.desc,
+                        ),
+                    );
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
                     let prev = self.ingestions.insert(id, description.clone());

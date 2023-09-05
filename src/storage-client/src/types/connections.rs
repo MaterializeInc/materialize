@@ -246,6 +246,12 @@ impl Connection<InlinedConnection> {
     }
 }
 
+/// lalala
+pub trait ConnectionDescription {
+    fn type_(&self) -> String;
+    fn networking(&self) -> String;
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinkConnection {
     pub service_name: String,
@@ -376,6 +382,24 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
             security,
             options,
         }
+    }
+}
+
+impl ConnectionDescription for KafkaConnection<InlinedConnection> {
+    fn type_(&self) -> String {
+        "kafka".to_string()
+    }
+    fn networking(&self) -> String {
+        let mut net = None;
+        for b in &self.brokers {
+            let desc = b.tunnel.description().to_string();
+            match net {
+                None => net = Some(desc),
+                Some(before) if before != desc => return "mixed".to_string(),
+                _ => {}
+            }
+        }
+        net.unwrap_or_else(|| "none".to_string())
     }
 }
 
@@ -659,6 +683,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<CsrConnection, R>
 impl<C: ConnectionAccess> CsrConnection<C> {
     fn validate_by_default(&self) -> bool {
         true
+    }
+}
+
+impl ConnectionDescription for CsrConnection<InlinedConnection> {
+    fn type_(&self) -> String {
+        "schema-registry".to_string()
+    }
+    fn networking(&self) -> String {
+        self.tunnel.description().to_string()
     }
 }
 
@@ -968,6 +1001,15 @@ impl<C: ConnectionAccess> PostgresConnection<C> {
     }
 }
 
+impl ConnectionDescription for PostgresConnection<InlinedConnection> {
+    fn type_(&self) -> String {
+        "postgres".to_string()
+    }
+    fn networking(&self) -> String {
+        self.tunnel.description().to_string()
+    }
+}
+
 impl PostgresConnection<InlinedConnection> {
     pub async fn config(
         &self,
@@ -1154,6 +1196,16 @@ impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
             Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
             Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
         })
+    }
+}
+
+impl Tunnel {
+    fn description(&self) -> &str {
+        match self {
+            Tunnel::Direct => "none",
+            Tunnel::Ssh(ssh) => "ssh",
+            Tunnel::AwsPrivatelink(awspl) => "privatelink",
+        }
     }
 }
 

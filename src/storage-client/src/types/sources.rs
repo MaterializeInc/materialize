@@ -845,6 +845,18 @@ pub enum SourceEnvelope {
     CdcV2,
 }
 
+impl SourceEnvelope {
+    fn description(&self) -> &str {
+        use SourceEnvelope::*;
+        match self {
+            None(_) => "none",
+            Debezium(_) => "debezium",
+            Upsert(_) => "upsert",
+            CdcV2 => "cdcv2",
+        }
+    }
+}
+
 impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
     fn into_proto(&self) -> ProtoSourceEnvelope {
         use proto_source_envelope::Kind;
@@ -1800,6 +1812,76 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
         })
+    }
+}
+
+/// lalala
+pub trait StorageDescription {
+    fn type_(&self) -> String;
+    fn connection_type(&self) -> String;
+    fn connection_networking(&self) -> String;
+    fn encoding(&self) -> String;
+    fn encoding_networking(&self) -> String;
+    fn envelope_type(&self) -> String;
+}
+impl StorageDescription for SourceDesc<InlinedConnection> {
+    fn type_(&self) -> String {
+        "source".to_string()
+    }
+    fn connection_type(&self) -> String {
+        use crate::types::connections::ConnectionDescription;
+        use GenericSourceConnection::*;
+        match &self.connection {
+            Kafka(kafka) => kafka.connection.type_(),
+            Postgres(pg) => pg.connection.type_(),
+            LoadGenerator(lg) => {
+                use self::LoadGenerator::*;
+                match &lg.load_generator {
+                    Auction => "loadgen-auction".to_string(),
+                    Counter { .. } => "loadgen-counter".to_string(),
+                    Datums => "loadgen-datums".to_string(),
+                    Marketing => "loadgen-marketing".to_string(),
+                    Tpch { .. } => "loadgen-tpch".to_string(),
+                }
+            }
+            TestScript(_) => "testscript".to_string(),
+        }
+    }
+    fn connection_networking(&self) -> String {
+        use crate::types::connections::ConnectionDescription;
+        use GenericSourceConnection::*;
+        match &self.connection {
+            Kafka(kafka) => kafka.connection.networking(),
+            Postgres(pg) => pg.connection.networking(),
+            _ => "none".to_string(),
+        }
+    }
+    fn encoding(&self) -> String {
+        match &self.encoding {
+            SourceDataEncoding::Single(s) => s.inner.description(),
+            SourceDataEncoding::KeyValue { key, value } => {
+                format!(
+                    "key-{}-value-{}",
+                    key.inner.description(),
+                    value.inner.description()
+                )
+            }
+        }
+    }
+    fn encoding_networking(&self) -> String {
+        match &self.encoding {
+            SourceDataEncoding::Single(s) => s.inner.networking(),
+            SourceDataEncoding::KeyValue { key, value } => {
+                format!(
+                    "key-{}-value-{}",
+                    key.inner.networking(),
+                    value.inner.networking()
+                )
+            }
+        }
+    }
+    fn envelope_type(&self) -> String {
+        self.envelope.description().to_string()
     }
 }
 

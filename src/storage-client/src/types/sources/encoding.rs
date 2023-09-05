@@ -226,6 +226,35 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
     }
 }
 
+use crate::types::connections::ConnectionDescription;
+impl DataEncodingInner<InlinedConnection> {
+    pub fn description(&self) -> String {
+        match self {
+            DataEncodingInner::Avro(e) => match &e.csr_connection {
+                None => "avro-inline".to_string(),
+                Some(csr) => format!("avro-{}", csr.type_()),
+            },
+            DataEncodingInner::Protobuf(e) => "protobuf".to_string(),
+            DataEncodingInner::Csv(e) => "csv".to_string(),
+            DataEncodingInner::Regex(e) => "regex".to_string(),
+            DataEncodingInner::Bytes => "bytes".to_string(),
+            DataEncodingInner::Text => "text".to_string(),
+            DataEncodingInner::RowCodec(e) => "row".to_string(),
+            DataEncodingInner::Json => "json".to_string(),
+        }
+    }
+
+    pub fn networking(&self) -> String {
+        match self {
+            DataEncodingInner::Avro(e) => match &e.csr_connection {
+                None => "none".to_string(),
+                Some(csr) => csr.networking(),
+            },
+            _ => "none".to_string(),
+        }
+    }
+}
+
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
