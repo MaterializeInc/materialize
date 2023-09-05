@@ -31,25 +31,25 @@ use serde::{Deserialize, Serialize};
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 
 #[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
-pub struct PersistFlag {
+pub struct PersistFeatureFlag {
     pub name: &'static str,
     pub default: bool,
     pub description: &'static str,
 }
 
-impl PersistFlag {
-    pub(crate) const STREAMING_COMPACTION: PersistFlag = PersistFlag {
-        name: "enable_streaming_compaction",
+impl PersistFeatureFlag {
+    pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_streaming_compaction_enabled",
         default: false,
         description: "use the new streaming consolidate during compaction",
     };
-    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFlag = PersistFlag {
-        name: "enable_streaming_snapshot_and_fetch",
+    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_streaming_snapshot_and_fetch_enabled",
         default: false,
         description: "use the new streaming consolidate during snapshot_and_fetch",
     };
 
-    pub const ALL: &'static [PersistFlag] = &[
+    pub const ALL: &'static [PersistFeatureFlag] = &[
         Self::STREAMING_COMPACTION,
         Self::STREAMING_SNAPSHOT_AND_FETCH,
     ];
@@ -203,7 +203,7 @@ impl PersistConfig {
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
                 feature_flags: {
                     // NB: initialized with the full set of feature flags, so the map never needs updating.
-                    PersistFlag::ALL
+                    PersistFeatureFlag::ALL
                         .iter()
                         .map(|f| (f.name, AtomicBool::new(f.default)))
                         .collect()
@@ -256,6 +256,10 @@ impl PersistConfig {
 
         let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
+        cfg.dynamic
+            .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
+        cfg.dynamic
+            .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
         cfg
     }
 }
@@ -480,11 +484,11 @@ impl DynamicConfig {
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
 
-    pub fn enabled(&self, flag: PersistFlag) -> bool {
+    pub fn enabled(&self, flag: PersistFeatureFlag) -> bool {
         self.feature_flags[flag.name].load(DynamicConfig::LOAD_ORDERING)
     }
 
-    pub fn set_flag(&self, flag: PersistFlag, to: bool) {
+    pub fn set_feature_flag(&self, flag: PersistFeatureFlag, to: bool) {
         self.feature_flags[flag.name].store(to, DynamicConfig::STORE_ORDERING);
     }
 
@@ -1068,9 +1072,9 @@ impl PersistParameters {
                 .rollup_threshold
                 .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
         }
-        for flag in PersistFlag::ALL {
+        for flag in PersistFeatureFlag::ALL {
             if let Some(value) = feature_flags.get(flag.name) {
-                cfg.dynamic.set_flag(*flag, *value);
+                cfg.dynamic.set_feature_flag(*flag, *value);
             }
         }
     }

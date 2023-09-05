@@ -34,7 +34,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::cfg::PersistFlag;
+use crate::cfg::PersistFeatureFlag;
 use crate::fetch::{
     fetch_leased_part, BatchFetcher, FetchBatchFilter, FetchedPart, LeasedBatchPart,
     SerdeLeasedBatchPart, SerdeLeasedBatchPartMetadata,
@@ -1041,7 +1041,7 @@ where
             .applier
             .cfg
             .dynamic
-            .enabled(PersistFlag::STREAMING_SNAPSHOT_AND_FETCH)
+            .enabled(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH)
         {
             return self.snapshot_and_fetch_streaming(as_of).await;
         }
