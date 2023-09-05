@@ -30,18 +30,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 CREATE TABLE tbl_a (pk INTEGER PRIMARY KEY);
 INSERT INTO tbl_a VALUES (1);
 
-> CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
-    DATABASE postgres,
-    USER priv,
-    PASSWORD SECRET pgpass
-  )
-
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES(tbl_a);
-contains:failed to connect to PostgreSQL database
-detail:the following are not tables with REPLICA IDENTITY FULL: tbl_a
+contains:referenced items not tables with REPLICA IDENTITY FULL
+detail:referenced items: tbl_a
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE tbl_a REPLICA IDENTITY FULL

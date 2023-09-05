@@ -51,7 +51,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE table_a CASCADE;
 
 !ALTER SOURCE mz_source ADD SUBSOURCE table_b;
-contains:PostgreSQL PUBLICATION mz_source is empty
+contains:PUBLICATION mz_source is empty
 
 # Adding a table with the same name as a running table does not allow you to add
 # the new table, even though its OID is the different.
@@ -69,7 +69,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 
 # We are not aware that the new table_a is different
 !ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:cannot create multiple subsources in the same source that refer to upstream table postgres.public.table_a
+contains:another subsource already refers to postgres.public.table_a
 
 > DROP SOURCE mz_source;
 
@@ -274,7 +274,7 @@ contains:SOURCE "mz_source" must retain at least one non-progress subsource
 # Add subsources
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_g;
-contains:cannot create multiple subsources in the same source that refer to upstream table postgres.public.table_g
+contains:another subsource already refers to postgres.public.table_g
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a, table_b AS tb;
 
@@ -283,7 +283,7 @@ contains:cannot create multiple subsources in the same source that refer to upst
 2 two
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:cannot create multiple subsources in the same source that refer to upstream table postgres.public.table_a
+contains:another subsource already refers to postgres.public.table_a
 
 > SELECT * FROM tb;
 1 one
@@ -414,8 +414,8 @@ INSERT INTO table_f VALUES (3, 'var1');
 contains:invalid TEXT COLUMNS option value: table table_z not found in source
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS [table_f.f2]);
-contains:TEXT COLUMNS can only refer to tables being added to source
-detail:the following tables were referenced but not added: public.table_f
+contains:TEXT COLUMNS refers to table not currently being added
+detail:the following tables are referenced but not added: public.table_f
 
 # Test adding text cols w/o original text columns
 

@@ -23,7 +23,7 @@ users                   subsource      <null>                         <null>
 # It did not check users, which causes a panic.
 # If this is fixed in the future, tests should probably exhaustively check each subsource.
 ! CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR TABLES (user);
-contains: FOR TABLES (..) invalid for LOAD GENERATOR sources
+contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
 
 # For Tables with mentioned schema should work
 > CREATE SCHEMA another;

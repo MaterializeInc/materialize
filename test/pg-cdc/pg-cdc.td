@@ -82,6 +82,7 @@ INSERT INTO "таблица" VALUES ('стойност');
 CREATE TABLE """literal_quotes""" (a TEXT);
 ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
 INSERT INTO """literal_quotes""" VALUES ('v');
+ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
 
 CREATE TABLE "create" (a TEXT);
 ALTER TABLE "create" REPLICA IDENTITY FULL;
@@ -116,7 +117,6 @@ INSERT INTO another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE another_enum_table REPLICA IDENTITY FULL;
 
 CREATE TABLE conflict_schema.another_enum_table ("колона" another_enum);
-ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 
@@ -210,14 +210,14 @@ contains:database "no_such_dbname" does not exist
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
 # TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:failed to connect to PostgreSQL database
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (
     "enum_table"
   );
-regex: the following columns contain unsupported types:\npostgres.public.enum_table.a \(OID \d+\)
+contains:referenced tables use unsupported types
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -225,7 +225,7 @@ regex: the following columns contain unsupported types:\npostgres.public.enum_ta
     "enum_table",
     public.another_enum_table
   );
-regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
+contains:referenced tables use unsupported types
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (
@@ -235,7 +235,7 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
   FOR TABLES (
     pk_table
   );
-contains: must not specify DETAILS option in CREATE SOURCE
+contains: CREATE SOURCE specifies DETAILS option
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -243,8 +243,8 @@ contains: must not specify DETAILS option in CREATE SOURCE
     "no_replica_identity",
     "pk_table"
   );
-contains:failed to connect to PostgreSQL database
-detail:the following are not tables with REPLICA IDENTITY FULL: no_replica_identity
+contains:referenced items not tables with REPLICA IDENTITY FULL
+detail:referenced items: no_replica_identity
 
 #
 # Establish direct replication
@@ -626,7 +626,7 @@ contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguo
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (pk_table);
 contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
 ! CREATE SOURCE enum_source
@@ -634,7 +634,7 @@ contains: invalid TEXT COLUMNS option value: column name 'foo' must have at leas
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo.bar.qux.qax.foo]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (pk_table);
 contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
 ! CREATE SOURCE enum_source
@@ -642,7 +642,7 @@ contains: invalid TEXT COLUMNS option value: qualified name did not have between
     PUBLICATION 'mz_source',
     TEXT COLUMNS [enum_table.a, enum_table.a]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (enum_table);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
 # utf8_table is not part of mz_source_narrow publication
@@ -651,7 +651,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
     PUBLICATION 'mz_source_narrow',
     TEXT COLUMNS [enum_table.a, utf8_table.f1]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (enum_table);
 contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
@@ -670,7 +670,7 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
     "enum_table",
     public.another_enum_table
   );
-contains:TEXT COLUMNS can only refer to tables being added to source
+contains:TEXT COLUMNS refers to table not currently being added
 
 > CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
