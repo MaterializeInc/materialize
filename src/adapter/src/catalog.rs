@@ -751,13 +751,9 @@ impl CatalogState {
     /// source.
     ///
     /// Note: Identifiers for the source, e.g. item name, are URL encoded.
-    pub fn try_get_webhook_url(
-        &self,
-        id: &GlobalId,
-        conn_id: Option<&ConnectionId>,
-    ) -> Option<url::Url> {
+    pub fn try_get_webhook_url(&self, id: &GlobalId) -> Option<url::Url> {
         let entry = self.try_get_entry(id)?;
-        let name = self.resolve_full_name(entry.name(), conn_id);
+        let name = self.resolve_full_name(entry.name(), entry.conn_id());
         let host_name = self
             .http_host_name
             .as_ref()

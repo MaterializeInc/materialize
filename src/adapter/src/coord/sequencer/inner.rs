@@ -246,10 +246,8 @@ impl Coordinator {
                         ),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
-                            if let Some(url) = self
-                                .catalog()
-                                .state()
-                                .try_get_webhook_url(&source_id, Some(session.conn_id()))
+                            if let Some(url) =
+                                self.catalog().state().try_get_webhook_url(&source_id)
                             {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }

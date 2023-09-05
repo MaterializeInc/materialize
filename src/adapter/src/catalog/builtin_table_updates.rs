@@ -50,7 +50,7 @@ use crate::catalog::builtin::{
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
+    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use crate::catalog::builtin::{
     MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
@@ -376,6 +376,9 @@ impl CatalogState {
                         }
                         _ => vec![],
                     },
+                    DataSourceDesc::Webhook { .. } => {
+                        vec![self.pack_webhook_source_update(id, diff)]
+                    }
                     _ => vec![],
                 });
 
@@ -1561,6 +1564,29 @@ impl CatalogState {
                 Datum::String(&object_type_str),
                 column_pos_datum,
                 Datum::String(comment),
+            ]),
+            diff,
+        }
+    }
+
+    pub fn pack_webhook_source_update(
+        &self,
+        source_id: GlobalId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let url = self
+            .try_get_webhook_url(&source_id)
+            .expect("webhook source should exist");
+        let url = url.to_string();
+        let name = &self.get_entry(&source_id).name().item;
+        let id_str = source_id.to_string();
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_WEBHOOKS_SOURCES),
+            row: Row::pack_slice(&[
+                Datum::String(&id_str),
+                Datum::String(&name),
+                Datum::String(&url),
             ]),
             diff,
         }

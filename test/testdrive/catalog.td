@@ -569,6 +569,7 @@ mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys
 mz_object_dependencies
+mz_webhook_sources
 
 > SHOW VIEWS FROM mz_internal
 name
