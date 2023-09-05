@@ -23,13 +23,14 @@ const CLICK_OUTPUT: usize = 3;
 const LEADS_OUTPUT: usize = 4;
 const COUPONS_OUTPUT: usize = 5;
 const CONVERSIONS_PREDICTIONS_OUTPUT: usize = 6;
+const CONVERSIONS_OUTPUT: usize = 7;
 
 const CONTROL: &str = "control";
 const EXPERIMENT: &str = "experiment";
 
 pub struct Marketing {}
 
-// Note that this generator issues retractions; if you change this,
+// Note that this generator does not issues retractions; if you change this,
 // `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
 // must be updated.
 impl Generator for Marketing {
@@ -114,12 +115,10 @@ impl Generator for Marketing {
                     let id = counter;
                     counter += 1;
 
-                    let mut lead = Lead {
+                    let lead = Lead {
                         id,
                         customer_id: rng.gen_range(0..CUSTOMERS.len()).try_into().unwrap(),
                         created_at: now(),
-                        converted_at: None,
-                        conversion_amount: None,
                     };
 
                     pending.push((LEADS_OUTPUT, lead.to_row(), 1));
@@ -176,14 +175,23 @@ impl Generator for Marketing {
                     }
 
                     if converted {
-                        let converted_at = now() + rng.gen_range(1..30);
+                        let converted_at = now() + rng.gen_range(5..30);
 
-                        future_updates.insert(converted_at, (LEADS_OUTPUT, lead.to_row(), -1));
+                        let mut conversion = Row::with_capacity(4);
+                        let mut packer = conversion.packer();
 
-                        lead.converted_at = Some(converted_at);
-                        lead.conversion_amount = Some(rng.gen_range(1000..25000));
+                        let id = counter;
+                        counter += 1;
+                        packer.push(Datum::Int64(id));
+                        packer.push(Datum::Int64(lead.customer_id));
+                        packer.push(Datum::TimestampTz(
+                            to_datetime(converted_at)
+                                .try_into()
+                                .expect("timestamp must fit"),
+                        ));
+                        packer.push(Datum::Int64(rng.gen_range(1000..25000)));
 
-                        future_updates.insert(converted_at, (LEADS_OUTPUT, lead.to_row(), 1));
+                        future_updates.insert(converted_at, (CONVERSIONS_OUTPUT, conversion, 1));
                     }
                 }
             }
@@ -204,8 +212,6 @@ struct Lead {
     id: i64,
     customer_id: i64,
     created_at: u64,
-    converted_at: Option<u64>,
-    conversion_amount: Option<i64>,
 }
 
 impl Lead {
@@ -219,22 +225,6 @@ impl Lead {
                 .try_into()
                 .expect("timestamp must fit"),
         ));
-        packer.push(
-            self.converted_at
-                .map(|converted_at| {
-                    Datum::TimestampTz(
-                        to_datetime(converted_at)
-                            .try_into()
-                            .expect("timestamp must fit"),
-                    )
-                })
-                .unwrap_or(Datum::Null),
-        );
-        packer.push(
-            self.conversion_amount
-                .map(Datum::Int64)
-                .unwrap_or(Datum::Null),
-        );
 
         row
     }
