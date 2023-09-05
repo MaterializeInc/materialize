@@ -97,7 +97,6 @@ use mz_storage_client::types::sources::{
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
