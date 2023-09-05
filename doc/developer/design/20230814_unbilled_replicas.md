@@ -14,7 +14,66 @@ customer.
 We extend Materialize with a concept of unbilled replicas, which server compute
 traffic but are not charged to a customer's account.
 
-To achieve this, we extend clusters and their replicas with concept of replica sets.
+## Alternative 1: Replica attributes
+
+We extend the definition of a replica to include a `BILLED AS` attribute.
+It determines the size of a replica for billing purposes, which can be different to the actual size, and includes a "free" option that is charged at zero credits.
+This attribute can only be specified on replicas, but not as an option for managed clusters.
+Access is limited to privileged accounts.
+To achieve this, we need to adjust managed clusters and billing logic.
+
+### Managed clusters
+
+At the moment, a managed cluster only contains replicas that conform to the spec of the cluster, but it cannot have replicas outside its definition.
+We change managed clusters to allow both the set of managed replicas, and additional replicas that are not covered by the configuration of the cluster.
+We achieve this by adding a `managed` flag to replicas to differentiate those that are part of the managed configuration and those that are manually configured, and adjust the logic around managed cluster to take this flag into account.
+
+Additional replicas that are not managed must not use names that might collide with the names of managed replicas.
+For this reason, they cannot be named `rX` where `X` is any number.
+
+### Billing
+
+Billing calculates credit consumption based on entries in the audit log.
+The query needs to take to use the size of a replica into account, unless a replicas has a specific billing property.
+
+### Detailed description
+
+We extend the syntax to create replicas with a `BILLED AS` option:
+
+```sql
+CREATE CLUSTER REPLICA clsname.unbilled_replica SIZE 'xlarge', BILLED AS 'free';
+ 
+CREATE CLUSTER REPLICA clsname.r2 SIZE 'xlarge', BILLED AS 'free';
+ERROR: The cluster name 'r2' is reserved for managed replicas.
+```
+
+This syntax is restricted to privileged users, such as Materialize's support user, and cannot be accessed by the customer.
+
+When an unprivileged user tries to create the billing property, they'll receive an error:
+
+```sql
+CREATE CLUSTER REPLICA clsname.unbilled_replica SIZE 'xlarge', BILLED AS 'free';
+ERROR: BILLED AS not permitted for non-system users.
+HINT: Contact support for billing-related inquiries.
+```
+
+We extend the definition of replicas to include a `managed` flag.
+The flag is `true` if the replica is managed by the managed cluster, and `false` if it is a manually-create replica.
+This requires us to store the managed status in the catalog's stash.
+In the catalog, it'll show up as:
+```sql
+SELECT id, name, managed FROM mz_cluster_replicas;
+id      name        managed
+u123    r1          false
+u234    unbilled    true
+```
+
+The owner of a cluster can drop replicas with a billing property, but cannot alter it.
+(In general, we only support changing the owner and name of a replica, but no other option.)
+
+## Alternative 2: Replica sets
+
+We extend clusters and their replicas with concept of replica sets.
 A replica set defines properties shared by a partition of replicas within a cluster.
 We allow internal users to create replica sets with specific billing information to add free or cost-reduced resouces to user environemnts, without changing the structure of a user's deplyoment.
 
@@ -170,16 +229,7 @@ CREATE REPLICA SET cl.support BILL AS 'free', SIZE 'xlarge';
 
 The `BILL` setting is reserved for Materialize and cannot be used by users.
 
-## Alternatives
-
-### Cluster replica properties
-
-Instead of introducing replica sets, we could encode the information directly on
-replicas. This has the benefit that we don't have to introduce a novel concept,
-but it doesn't integrate well with managed clusters.
-
-To avoid the interaction with managed clusters, we could allow unbilled replicas
-only for unmanaged clusters where there are no constraints across replicas.
+## Further alternatives
 
 ### Specific billing information
 
