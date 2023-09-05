@@ -28,6 +28,8 @@ use crate::names::{Aug, PartialItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
+use super::error::PgSourcePurificationError;
+
 pub(super) fn derive_catalog_from_publication_tables<'a>(
     database: &'a str,
     publication_tables: &'a [PostgresTableDesc],
@@ -68,10 +70,10 @@ pub(super) async fn validate_requested_subsources(
 
         upstream_references.sort();
 
-        return Err(PlanError::SubsourceNameConflict {
+        Err(PgSourcePurificationError::SubsourceNameConflict {
             name,
             upstream_references,
-        });
+        })?;
     }
 
     // We technically could allow multiple subsources to ingest the same upstream table, but
@@ -90,7 +92,7 @@ pub(super) async fn validate_requested_subsources(
 
         target_names.sort();
 
-        return Err(PlanError::SubsourceDuplicateReference { name, target_names });
+        Err(PgSourcePurificationError::SubsourceDuplicateReference { name, target_names })?;
     }
 
     // Ensure that we have select permissions on all tables; we have to do this before we
@@ -307,9 +309,10 @@ where
     }
 
     if !unsupported_cols.is_empty() {
-        return Err(PlanError::UnrecognizedTypeInPostgresSource {
+        unsupported_cols.sort();
+        Err(PgSourcePurificationError::UnrecognizedTypes {
             cols: unsupported_cols,
-        });
+        })?;
     }
 
     // If any any item was not removed from the text_cols dict, it wasn't being
@@ -330,9 +333,10 @@ where
     }
 
     if !dangling_text_column_refs.is_empty() {
-        return Err(PlanError::DanglingTextColumns {
+        dangling_text_column_refs.sort();
+        Err(PgSourcePurificationError::DanglingTextColumns {
             items: dangling_text_column_refs,
-        });
+        })?;
     }
 
     targeted_subsources.sort();
@@ -341,13 +345,12 @@ where
 }
 
 mod privileges {
-
-    use anyhow::anyhow;
     use postgres_array::{Array, Dimension};
 
     use mz_postgres_util::{Config, PostgresError};
 
     use crate::plan::PlanError;
+    use crate::pure::PgSourcePurificationError;
 
     async fn check_schema_privileges(config: &Config, schemas: Vec<&str>) -> Result<(), PlanError> {
         let client = config.connect("check_schema_privileges").await?;
@@ -391,12 +394,13 @@ mod privileges {
         if invalid_schema_privileges.is_empty() {
             Ok(())
         } else {
-            Err(anyhow!(
-                "user {} lacks USAGE privileges for schemas {}",
-                config.get_user().expect("connection specifies user"),
-                invalid_schema_privileges.join(", ")
-            )
-            .into())
+            Err(PgSourcePurificationError::UserLacksUsageOnSchemas {
+                user: config
+                    .get_user()
+                    .expect("connection specifies user")
+                    .to_string(),
+                schemas: invalid_schema_privileges,
+            })?
         }
     }
 
@@ -469,35 +473,36 @@ mod privileges {
             })
             .collect::<Vec<String>>();
 
-        invalid_table_privileges.sort();
-
         if invalid_table_privileges.is_empty() {
             Ok(())
         } else {
-            Err(anyhow!(
-                "user {} lacks SELECT privileges for tables {}",
-                config.get_user().expect("connection specifies user"),
-                invalid_table_privileges.join(", ")
-            )
-            .into())
+            invalid_table_privileges.sort();
+            Err(PgSourcePurificationError::UserLacksSelectOnTables {
+                user: config
+                    .get_user()
+                    .expect("connection specifies user")
+                    .to_string(),
+                tables: invalid_table_privileges,
+            })?
         }
     }
 }
 
 mod replica_identity {
-
-    use anyhow::anyhow;
     use postgres_array::{Array, Dimension};
     use tokio_postgres::types::Oid;
 
     use mz_postgres_util::{Config, PostgresError};
 
+    use crate::plan::PlanError;
+    use crate::pure::PgSourcePurificationError;
+
     /// Ensures that all provided OIDs are tables with `REPLICA IDENTITY FULL`.
     pub async fn check_replica_identity_full(
         config: &Config,
         oids: Vec<Oid>,
-    ) -> Result<(), PostgresError> {
-        let client = config.connect("chec_replica_identity_full").await?;
+    ) -> Result<(), PlanError> {
+        let client = config.connect("check_replica_identity_full").await?;
 
         let oids_len = oids.len();
 
@@ -521,7 +526,8 @@ mod replica_identity {
                 relreplident != 'f' OR relreplident IS NULL;",
                 &[&oids],
             )
-            .await?
+            .await
+            .map_err(PostgresError::from)?
             .into_iter()
             .map(|row| row.get("name"))
             .collect::<Vec<String>>();
@@ -530,12 +536,9 @@ mod replica_identity {
             Ok(())
         } else {
             invalid_replica_identity.sort();
-
-            Err(anyhow!(
-                "the following are not tables with REPLICA IDENTITY FULL: {}",
-                invalid_replica_identity.join(", ")
-            )
-            .into())
+            Err(PgSourcePurificationError::NotTablesWReplicaIdentityFull {
+                items: invalid_replica_identity,
+            })?
         }
     }
 }
