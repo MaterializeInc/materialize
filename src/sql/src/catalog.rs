@@ -26,6 +26,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
+use mz_proto::IntoRustIfSome;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
@@ -1452,6 +1453,83 @@ impl Display for ErrorMessageObjectDescription {
             }
             ErrorMessageObjectDescription::System => f.write_str("SYSTEM"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+// These attributes are needed because the key of a map must be a string. We also
+// get the added benefit of flattening this struct in it's serialized form.
+#[serde(into = "BTreeMap<String, RoleId>")]
+#[serde(try_from = "BTreeMap<String, RoleId>")]
+/// Represents the grantee and a grantor of a role membership.
+pub struct RoleMembership {
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
+    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
+    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
+    // migration.
+    pub map: BTreeMap<RoleId, RoleId>,
+}
+
+impl RoleMembership {
+    /// Creates a new [`RoleMembership`].
+    pub fn new() -> RoleMembership {
+        RoleMembership {
+            map: BTreeMap::new(),
+        }
+    }
+}
+
+impl From<RoleMembership> for BTreeMap<String, RoleId> {
+    fn from(value: RoleMembership) -> Self {
+        value
+            .map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+}
+
+impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BTreeMap<String, RoleId>) -> Result<Self, Self::Error> {
+        Ok(RoleMembership {
+            map: value
+                .into_iter()
+                .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
+                .collect::<Result<_, anyhow::Error>>()?,
+        })
+    }
+}
+
+impl RustType<proto::RoleMembership> for RoleMembership {
+    fn into_proto(&self) -> proto::RoleMembership {
+        proto::RoleMembership {
+            map: self
+                .map
+                .iter()
+                .map(|(key, val)| proto::role_membership::Entry {
+                    key: Some(key.into_proto()),
+                    value: Some(val.into_proto()),
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: proto::RoleMembership) -> Result<Self, TryFromProtoError> {
+        Ok(RoleMembership {
+            map: proto
+                .map
+                .into_iter()
+                .map(|e| {
+                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
+                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
+
+                    Ok((key, val))
+                })
+                .collect::<Result<_, TryFromProtoError>>()?,
+        })
     }
 }
 

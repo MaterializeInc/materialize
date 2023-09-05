@@ -57,8 +57,8 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, SystemObjectType,
-    TypeReference,
+    EnvironmentId, IdReference, NameReference, RoleAttributes, RoleMembership, SessionCatalog,
+    SystemObjectType, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -109,7 +109,7 @@ use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -2021,51 +2021,6 @@ impl From<Role> for storage::Role {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-// These attributes are needed because the key of a map must be a string. We also
-// get the added benefit of flattening this struct in it's serialized form.
-#[serde(into = "BTreeMap<String, RoleId>")]
-#[serde(try_from = "BTreeMap<String, RoleId>")]
-pub struct RoleMembership {
-    /// Key is the role that some role is a member of, value is the grantor role ID.
-    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
-    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
-    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
-    // migration.
-    pub map: BTreeMap<RoleId, RoleId>,
-}
-
-impl RoleMembership {
-    fn new() -> RoleMembership {
-        RoleMembership {
-            map: BTreeMap::new(),
-        }
-    }
-}
-
-impl From<RoleMembership> for BTreeMap<String, RoleId> {
-    fn from(value: RoleMembership) -> Self {
-        value
-            .map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect()
-    }
-}
-
-impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
-    type Error = anyhow::Error;
-
-    fn try_from(value: BTreeMap<String, RoleId>) -> Result<Self, Self::Error> {
-        Ok(RoleMembership {
-            map: value
-                .into_iter()
-                .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
-                .collect::<Result<_, anyhow::Error>>()?,
-        })
-    }
-}
-
 #[derive(Debug, Serialize, Clone)]
 pub struct Cluster {
     pub name: String,
@@ -3434,22 +3389,6 @@ impl DefaultPrivileges {
             .iter()
             .map(|(object, acl_map)| (object, acl_map.values()))
     }
-}
-
-/// Functions can share the same name as any other catalog item type
-/// within a given schema.
-/// For example, a function can have the same name as a type, e.g.
-/// 'date'.
-/// As such, system objects are keyed in the catalog storage by the
-/// tuple (schema_name, object_type, object_name), which is guaranteed
-/// to be unique.
-#[derive(Debug)]
-pub struct SystemObjectMapping {
-    schema_name: String,
-    object_type: CatalogItemType,
-    object_name: String,
-    id: GlobalId,
-    fingerprint: String,
 }
 
 #[derive(Debug)]

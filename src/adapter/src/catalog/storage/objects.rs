@@ -15,7 +15,7 @@ use crate::catalog::storage::{
     CommentValue, DefaultPrivilegesKey, DefaultPrivilegesValue, ReplicaConfig, ReplicaLocation,
     SystemPrivilegesKey, SystemPrivilegesValue,
 };
-use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, RoleMembership};
+use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 
 use super::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
@@ -549,36 +549,6 @@ impl RustType<proto::RoleKey> for RoleKey {
     fn from_proto(proto: proto::RoleKey) -> Result<Self, TryFromProtoError> {
         Ok(RoleKey {
             id: proto.id.into_rust_if_some("RoleKey::id")?,
-        })
-    }
-}
-
-impl RustType<proto::RoleMembership> for RoleMembership {
-    fn into_proto(&self) -> proto::RoleMembership {
-        proto::RoleMembership {
-            map: self
-                .map
-                .iter()
-                .map(|(key, val)| proto::role_membership::Entry {
-                    key: Some(key.into_proto()),
-                    value: Some(val.into_proto()),
-                })
-                .collect(),
-        }
-    }
-
-    fn from_proto(proto: proto::RoleMembership) -> Result<Self, TryFromProtoError> {
-        Ok(RoleMembership {
-            map: proto
-                .map
-                .into_iter()
-                .map(|e| {
-                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
-                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
-
-                    Ok((key, val))
-                })
-                .collect::<Result<_, TryFromProtoError>>()?,
         })
     }
 }
