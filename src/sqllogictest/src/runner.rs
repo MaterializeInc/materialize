@@ -391,6 +391,7 @@ pub struct Runner<'a> {
 pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
+    internal_http_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
     system_client: tokio_postgres::Client,
@@ -750,6 +751,14 @@ impl<'a> Runner<'a> {
         }
     }
 
+    async fn check_catalog(&self) -> Result<(), anyhow::Error> {
+        self.inner
+            .as_ref()
+            .expect("RunnerInner missing")
+            .check_catalog()
+            .await
+    }
+
     async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
         let inner = self.inner.as_mut().expect("RunnerInner missing");
 
@@ -1022,6 +1031,7 @@ impl<'a> RunnerInner<'a> {
         // be live at the start of the next file's server.
         let (server_addr_tx, server_addr_rx) = oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
+        let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
         let server_thread = thread::spawn(|| {
             let runtime = match Runtime::new() {
@@ -1048,10 +1058,14 @@ impl<'a> RunnerInner<'a> {
             internal_server_addr_tx
                 .send(server.internal_sql_local_addr())
                 .expect("receiver should not drop first");
+            internal_http_server_addr_tx
+                .send(server.internal_http_local_addr())
+                .expect("receiver should not drop first");
             let _ = runtime.block_on(shutdown_tripwire);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
+        let internal_http_server_addr = internal_http_server_addr_rx.await?;
 
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
@@ -1059,6 +1073,7 @@ impl<'a> RunnerInner<'a> {
         let inner = RunnerInner {
             server_addr,
             internal_server_addr,
+            internal_http_server_addr,
             _shutdown_trigger: shutdown_trigger,
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
@@ -1655,6 +1670,22 @@ impl<'a> RunnerInner<'a> {
             Ok(Outcome::Success)
         }
     }
+
+    async fn check_catalog(&self) -> Result<(), anyhow::Error> {
+        let url = format!(
+            "http://{}/api/catalog/check",
+            self.internal_http_server_addr
+        );
+        let response: serde_json::Value = reqwest::get(&url).await?.json().await?;
+
+        if let Some(inconsistencies) = response.get("err") {
+            let inconsistencies = serde_json::to_string_pretty(&inconsistencies)
+                .expect("serializing Value cannot fail");
+            Err(anyhow::anyhow!("Catalog inconsistency\n{inconsistencies}"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 async fn connect(addr: SocketAddr, user: Option<&str>) -> tokio_postgres::Client {
@@ -1835,7 +1866,10 @@ pub async fn run_string(
 pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(runner, &format!("{}", filename.display()), &input).await
+    let outcomes = run_string(runner, &format!("{}", filename.display()), &input).await?;
+    runner.check_catalog().await?;
+
+    Ok(outcomes)
 }
 
 pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
