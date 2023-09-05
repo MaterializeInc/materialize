@@ -2,7 +2,7 @@
 
 All notable changes to the `mz` CLI will be documented in this file.
 
-## [0.1.4] - 2023-09-04
+## [0.2.0] - 2023-09-04
 
 This version implements fixes from internal feedback and pending features.
 
