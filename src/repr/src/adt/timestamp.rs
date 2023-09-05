@@ -26,7 +26,6 @@ use std::time::Duration as StdDuration;
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
 };
-use chrono::DurationRound;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -126,6 +125,8 @@ impl RustType<ProtoOptionalTimestampPrecision> for Option<TimestampPrecision> {
 
 /// The error returned when constructing a [`VarCharMaxLength`] from an invalid
 /// value.
+///
+/// [`VarCharMaxLength`]: crate::adt::varchar::VarCharMaxLength
 #[derive(Debug, Clone)]
 pub struct InvalidTimestampPrecisionError;
 
@@ -133,7 +134,7 @@ impl fmt::Display for InvalidTimestampPrecisionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "precision for type timestamp or timestamptz must be between 1 and {}",
+            "precision for type timestamp or timestamptz must be between 0 and {}",
             MAX_PRECISION
         )
     }
@@ -799,17 +800,40 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
     /// Rounds the timestamp to the specified number of digits of precision.
     pub fn round_to_precision(&mut self, precision: Option<TimestampPrecision>) {
         if let Some(precision) = precision {
-            let power = 9_u32
+            // maximum precision is micros
+            let power = 6_u32
                 .checked_sub(precision.into_u8().into())
-                .expect("precision fits in nanos");
-            let round_to = Duration::from_std(StdDuration::from_nanos(10_u64.pow(power)))
+                .expect("precision fits in micros");
+            let round_to = Duration::from_std(StdDuration::from_micros(10_u64.pow(power)))
                 .expect("duration fits in chrono duration");
-            let sec = Duration::from_std(StdDuration::from_secs(1))
-                .expect("duration fits in chrono duration");
-            let dt = self.date_time();
-            let dt = dt + sec;
-            let dt = dt.duration_round(round_to).expect("rounding is valid");
-            let dt = dt - sec;
+            let original = self.date_time();
+
+            // this is copied from [`chrono::round::duration_round`]
+            // but using microseconds instead of nanoseconds precision
+            let new_dt = round_to.num_microseconds().map(|span| {
+                let stamp = original.timestamp_micros();
+
+                if span == 0 {
+                    return original;
+                }
+                let delta_down = stamp % span;
+                if delta_down == 0 {
+                    original
+                } else {
+                    let (delta_up, delta_down) = if delta_down < 0 {
+                        (delta_down.abs(), span - delta_down.abs())
+                    } else {
+                        (span - delta_down, delta_down)
+                    };
+                    if delta_up <= delta_down {
+                        original + Duration::microseconds(delta_up)
+                    } else {
+                        original - Duration::microseconds(delta_down)
+                    }
+                }
+            });
+
+            let dt = new_dt.expect("rounding is valid in micros");
             self.t = T::from_date_time(dt)
         }
     }
@@ -966,6 +990,72 @@ mod test {
         // Test low - high.
         let result = low.age(&high).unwrap();
         assert_eq!(result, Interval::new(-months, 0, 0));
+    }
+
+    fn assert_round_to_precision(
+        mut dt: CheckedTimestamp<NaiveDateTime>,
+        precision: u8,
+        expected: i64,
+    ) {
+        dt.round_to_precision(Some(TimestampPrecision(precision)));
+        assert_eq!(expected, dt.timestamp_micros());
+    }
+
+    #[mz_ore::test]
+    fn test_round_to_precision() {
+        let date = CheckedTimestamp::try_from(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .and_hms_nano_opt(0, 0, 0, 123456789)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_round_to_precision(date, 0, 0);
+        assert_round_to_precision(date, 1, 100000);
+        assert_round_to_precision(date, 2, 120000);
+        assert_round_to_precision(date, 3, 123000);
+        assert_round_to_precision(date, 4, 123500);
+        assert_round_to_precision(date, 5, 123460);
+        assert_round_to_precision(date, 6, 123456);
+
+        let low =
+            CheckedTimestamp::try_from(LOW_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
+                .unwrap();
+        assert_round_to_precision(low, 0, -210863606400000000);
+        assert_round_to_precision(low, 1, -210863606399900000);
+        assert_round_to_precision(low, 2, -210863606399880000);
+        assert_round_to_precision(low, 3, -210863606399877000);
+        assert_round_to_precision(low, 4, -210863606399876500);
+        assert_round_to_precision(low, 5, -210863606399876540);
+        assert_round_to_precision(low, 6, -210863606399876544);
+
+        let high =
+            CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
+                .unwrap();
+        assert_round_to_precision(high, 0, 8210298326400000000);
+        assert_round_to_precision(high, 1, 8210298326400100000);
+        assert_round_to_precision(high, 2, 8210298326400120000);
+        assert_round_to_precision(high, 3, 8210298326400123000);
+        assert_round_to_precision(high, 4, 8210298326400123500);
+        assert_round_to_precision(high, 5, 8210298326400123460);
+        assert_round_to_precision(high, 6, 8210298326400123456);
+    }
+
+    #[mz_ore::test]
+    fn test_precision_edge_cases() {
+        let result = mz_ore::panic::catch_unwind(|| {
+            let mut date =
+                CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
+                    .unwrap();
+            date.round_to_precision(Some(TimestampPrecision(7)));
+        });
+        assert!(result.is_err());
+
+        let mut date =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
+                .unwrap();
+        date.round_to_precision(None);
+        assert_eq!(123456, date.timestamp_micros());
     }
 
     proptest! {

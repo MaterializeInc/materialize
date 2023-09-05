@@ -370,7 +370,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
             let p = to_type.unwrap_timestamp_precision();
             Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestampTz(func::CastTimestampToTimestampTz(p))))
         }),
-        (Timestamp, Timestamp) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+        (Timestamp, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
             let p = to_type.unwrap_timestamp_precision();
             Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestamp(func::CastTimestampToTimestamp(p))))
         }),

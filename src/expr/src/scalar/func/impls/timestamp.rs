@@ -91,8 +91,7 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        // Only preserves uniqueness if the output type is as precise as the
-        // input type, but we're not provided in the input type here.
+        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
         false
     }
 
@@ -133,8 +132,7 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        // Only preserves uniqueness if the output type is as precise as the
-        // input type, but we're not provided in the input type here.
+        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
         false
     }
 
@@ -176,8 +174,7 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestamp {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        // Only preserves uniqueness if the output type is as precise as the
-        // input type, but we're not provided in the input type here.
+        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
         false
     }
 
@@ -218,8 +215,7 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        // Only preserves uniqueness if the output type is as precise as the
-        // input type, but we're not provided in the input type here.
+        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
         false
     }
 

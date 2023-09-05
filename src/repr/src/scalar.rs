@@ -2933,6 +2933,13 @@ impl<'a> ScalarType {
                         .try_into()
                         .unwrap(),
                 ),
+                // nano seconds
+                Datum::Timestamp(
+                    NaiveDateTime::from_timestamp_opt(0, 123456789)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                ),
                 // Leap second
                 Datum::Timestamp(
                     CheckedTimestamp::from_timestamplike(
@@ -2967,6 +2974,15 @@ impl<'a> ScalarType {
                         crate::adt::timestamp::HIGH_DATE
                             .and_hms_opt(23, 59, 59)
                             .unwrap(),
+                        Utc,
+                    )
+                    .try_into()
+                    .unwrap(),
+                ),
+                // nano seconds
+                Datum::TimestampTz(
+                    DateTime::from_utc(
+                        NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap(),
                         Utc,
                     )
                     .try_into()
@@ -3160,9 +3176,17 @@ impl<'a> ScalarType {
             ScalarType::Timestamp {
                 precision: Some(TimestampPrecision(crate::adt::timestamp::MAX_PRECISION)),
             },
+            ScalarType::Timestamp {
+                precision: Some(TimestampPrecision(0)),
+            },
+            ScalarType::Timestamp { precision: None },
             ScalarType::TimestampTz {
                 precision: Some(TimestampPrecision(crate::adt::timestamp::MAX_PRECISION)),
             },
+            ScalarType::TimestampTz {
+                precision: Some(TimestampPrecision(0)),
+            },
+            ScalarType::TimestampTz { precision: None },
             ScalarType::Interval,
             ScalarType::PgLegacyChar,
             ScalarType::Bytes,

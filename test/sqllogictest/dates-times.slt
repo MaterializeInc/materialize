@@ -1370,6 +1370,11 @@ SELECT now() + null;
 NULL
 
 # Test timestamp precision.
+statement error
+SELECT '1970-01-01T00:00:00.666666'::timestamp(-1);
+
+query error db error: ERROR: precision for type timestamp or timestamptz must be between 0 and 6
+SELECT '1970-01-01T00:00:00.666666'::timestamp(7);
 
 query T
 SELECT '1970-01-01T00:00:00.666666'::timestamp(0);
@@ -1471,3 +1476,33 @@ query T
 SELECT '1970-01-01T00:00:00.666666'::date::timestamp(3);
 ----
 1970-01-01 00:00:00
+
+query T
+SELECT '1970-01-01T00:00:00.123456'::timestamp(6) - '1970-01-01T00:00:00.123456'::timestamp(3);
+----
+00:00:00.000456
+
+query T
+SELECT '1970-01-01T00:00:00.123456'::timestamptz(6) - '1970-01-01T00:00:00.123456'::timestamptz(3);
+----
+00:00:00.000456
+
+query T
+SELECT date_bin('5 microseconds'::interval, '1970-01-01T00:00:00.123456'::timestamp(6), '1970-01-01T00:00:00.123456'::timestamp(3));
+----
+1970-01-01 00:00:00.123455
+
+query T
+SELECT date_bin('5 milliseconds'::interval, '1970-01-01T00:00:00.123456'::timestamptz(6), '1970-01-01T00:00:00.123456'::timestamptz(3));
+----
+1970-01-01 00:00:00.123+00
+
+query T
+SELECT age('1970-01-01T00:00:00.123456'::timestamp(6), '1970-01-01T00:00:00.123456'::timestamp(3));
+----
+00:00:00.000456
+
+query T
+SELECT age('1970-01-01T00:00:00.123456'::timestamptz(3), '1970-01-01T00:00:00.123456'::timestamptz(0));
+----
+00:00:00.123

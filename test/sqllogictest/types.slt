@@ -677,9 +677,29 @@ SELECT format_type(1114, NULL)
 timestamp without time zone
 
 query T
-SELECT format_type(1184, NULL)
+SELECT format_type(1114, -2)
 ----
-timestamp with time zone
+timestamp without time zone
+
+query T
+SELECT format_type(1114, -1)
+----
+timestamp without time zone
+
+query T
+SELECT format_type(1114, 0)
+----
+timestamp(0) without time zone
+
+query T
+SELECT format_type(1114, 1)
+----
+timestamp(1) without time zone
+
+query T
+SELECT format_type(1114, 2)
+----
+timestamp(2) without time zone
 
 query T
 SELECT format_type(1114, 3)
@@ -687,9 +707,79 @@ SELECT format_type(1114, 3)
 timestamp(3) without time zone
 
 query T
+SELECT format_type(1114, 4)
+----
+timestamp(4) without time zone
+
+query T
+SELECT format_type(1114, 5)
+----
+timestamp(5) without time zone
+
+query T
+SELECT format_type(1114, 6)
+----
+timestamp(6) without time zone
+
+query T
+SELECT format_type(1114, 7)
+----
+timestamp(7) without time zone
+
+query T
+SELECT format_type(1184, NULL)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, -2)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, -1)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, 0)
+----
+timestamp(0) with time zone
+
+query T
+SELECT format_type(1184, 1)
+----
+timestamp(1) with time zone
+
+query T
+SELECT format_type(1184, 2)
+----
+timestamp(2) with time zone
+
+query T
 SELECT format_type(1184, 3)
 ----
 timestamp(3) with time zone
+
+query T
+SELECT format_type(1184, 4)
+----
+timestamp(4) with time zone
+
+query T
+SELECT format_type(1184, 5)
+----
+timestamp(5) with time zone
+
+query T
+SELECT format_type(1184, 6)
+----
+timestamp(6) with time zone
+
+query T
+SELECT format_type(1184, 7)
+----
+timestamp(7) with time zone
 
 query T
 SELECT format_type(1186, NULL)
