@@ -758,7 +758,7 @@ impl CatalogState {
             .http_host_name
             .as_ref()
             .map(|x| x.as_str())
-            .unwrap_or_else(|| "<HOST>");
+            .unwrap_or_else(|| "HOST");
 
         let RawDatabaseSpecifier::Name(database) = name.database else {
             return None;
