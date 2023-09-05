@@ -95,6 +95,7 @@ pub mod dyn_struct;
 pub mod parquet;
 pub mod part;
 pub mod stats;
+pub mod timestamp;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
