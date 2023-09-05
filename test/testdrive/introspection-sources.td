@@ -310,4 +310,20 @@ ALTER SYSTEM SET enable_arrangement_size_logging = false
 > SELECT records >= 1000 AND records <= 1001, batches > 0, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
 true true 0 0 0
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_arrangement_size_logging = true
+
 > DROP INDEX ii_t4
+
+# Test arrangement size logging for error dataflows
+
+> CREATE TABLE t5(a int)
+
+> INSERT INTO t5 SELECT -a FROM generate_series(1, 10000) g(a)
+
+> CREATE VIEW vt5 AS SELECT a::uint2 FROM t5
+
+> CREATE INDEX vt5_idx ON vt5(a)
+
+> SELECT records, (size/1024/1024)::int FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='vt5_idx'
+10000 1
