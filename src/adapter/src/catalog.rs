@@ -2643,7 +2643,7 @@ impl Catalog {
                 ));
             }
             for (replica_name, replica_id) in &cluster.replica_id_by_name {
-                builtin_table_updates.push(catalog.state.pack_cluster_replica_update(
+                builtin_table_updates.extend(catalog.state.pack_cluster_replica_update(
                     *id,
                     replica_name,
                     1,
@@ -4144,6 +4144,8 @@ impl Catalog {
                 size,
                 availability_zone,
                 disk,
+                billed_as,
+                internal,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
                     coord_bail!(
@@ -4172,6 +4174,8 @@ impl Catalog {
                     },
                     size,
                     disk,
+                    billed_as,
+                    internal,
                 })
             }
         };
@@ -4187,8 +4191,11 @@ impl Catalog {
 
         if !cluster_replica_sizes.0.contains_key(size)
             || (!allowed_sizes.is_empty() && !allowed_sizes.contains(size))
+            || cluster_replica_sizes.0[size].disabled
         {
-            let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+            let mut entries = cluster_replica_sizes
+                .enabled_allocations()
+                .collect::<Vec<_>>();
 
             if !allowed_sizes.is_empty() {
                 let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
@@ -4947,8 +4954,13 @@ impl Catalog {
                         &config.clone().into(),
                         owner_id,
                     )?;
-                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, disk, .. }) =
-                        &config.location
+                    if let ReplicaLocation::Managed(ManagedReplicaLocation {
+                        size,
+                        disk,
+                        billed_as,
+                        internal,
+                        ..
+                    }) = &config.location
                     {
                         let details = EventDetails::CreateClusterReplicaV1(
                             mz_audit_log::CreateClusterReplicaV1 {
@@ -4958,6 +4970,8 @@ impl Catalog {
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
                                 disk: *disk,
+                                billed_as: billed_as.clone(),
+                                internal: *internal,
                             },
                         );
                         state.add_to_audit_log(
@@ -4974,7 +4988,7 @@ impl Catalog {
                     let num_processes = config.location.num_processes();
                     state.insert_cluster_replica(cluster_id, name.clone(), id, config, owner_id);
                     builtin_table_updates
-                        .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
+                        .extend(state.pack_cluster_replica_update(cluster_id, &name, 1));
                     for process_id in 0..num_processes {
                         let update = state.pack_cluster_replica_status_update(
                             cluster_id,
@@ -5348,7 +5362,7 @@ impl Catalog {
                                 builtin_table_updates.push(update);
                             }
 
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
+                            builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 cluster_id,
                                 &replica.name,
                                 -1,
@@ -5741,14 +5755,14 @@ impl Catalog {
                         )));
                     }
                     tx.rename_cluster_replica(replica_id, &name, &to_name)?;
-                    builtin_table_updates.push(state.pack_cluster_replica_update(
+                    builtin_table_updates.extend(state.pack_cluster_replica_update(
                         cluster_id,
                         name.replica.as_str(),
                         -1,
                     ));
                     state.rename_cluster_replica(cluster_id, replica_id, to_name.clone());
                     builtin_table_updates
-                        .push(state.pack_cluster_replica_update(cluster_id, &to_name, 1));
+                        .extend(state.pack_cluster_replica_update(cluster_id, &to_name, 1));
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -5933,7 +5947,7 @@ impl Catalog {
                                     ErrorKind::ReservedReplicaName(replica_name),
                                 )));
                             }
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
+                            builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
                                 -1,
@@ -5949,7 +5963,7 @@ impl Catalog {
                                 *replica_id,
                                 replica.clone().into(),
                             )?;
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
+                            builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
                                 1,

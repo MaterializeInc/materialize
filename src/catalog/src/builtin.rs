@@ -1932,6 +1932,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         ),
     is_retained_metrics_object: false,
 });
+
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas",
     schema: MZ_CATALOG_SCHEMA,
@@ -1946,6 +1947,13 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
+});
+
+pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_internal_cluster_replicas",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
 });
 
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -5131,6 +5139,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
+        Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),

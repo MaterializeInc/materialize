@@ -82,6 +82,8 @@ impl Coordinator {
             size: size.to_string(),
             availability_zone: None,
             disk,
+            billed_as: None,
+            internal: false,
         };
         let location = self.catalog().concretize_replica_location(
             location,
@@ -165,8 +167,7 @@ impl Coordinator {
             let mut entries = self
                 .catalog()
                 .cluster_replica_sizes()
-                .0
-                .iter()
+                .enabled_allocations()
                 .collect::<Vec<_>>();
             entries.sort_by_key(
                 |(

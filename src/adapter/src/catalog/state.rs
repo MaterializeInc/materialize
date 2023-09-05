@@ -1577,8 +1577,7 @@ impl CatalogState {
             None => {
                 let (size, _allocation) = self
                     .cluster_replica_sizes
-                    .0
-                    .iter()
+                    .enabled_allocations()
                     .min_by_key(|(_, a)| (a.scale, a.workers, a.memory_limit))
                     .expect("should have at least one valid cluster replica size");
                 size.clone()

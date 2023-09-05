@@ -465,6 +465,10 @@ mz_global_frontiers
 VIEW
 materialize
 mz_internal
+mz_internal_cluster_replicas
+BASE TABLE
+materialize
+mz_internal
 mz_kafka_sources
 BASE TABLE
 materialize

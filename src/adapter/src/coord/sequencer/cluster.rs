@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaLocation,
-    ReplicaLogging,
+    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig,
+    ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_ore::cast::CastFrom;
@@ -170,9 +170,11 @@ impl Coordinator {
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::ReplicaLocation::Managed {
-            size: size.clone(),
             availability_zone: None,
+            billed_as: None,
             disk,
+            internal: false,
+            size: size.clone(),
         };
 
         let logging = if let Some(config) = compute.introspection {
@@ -281,15 +283,19 @@ impl Coordinator {
                     (compute, location)
                 }
                 mz_sql::plan::ReplicaConfig::Managed {
-                    size,
                     availability_zone,
+                    billed_as,
                     compute,
                     disk,
+                    internal,
+                    size,
                 } => {
                     let location = mz_catalog::ReplicaLocation::Managed {
-                        size: size.clone(),
                         availability_zone,
+                        billed_as,
                         disk,
+                        internal,
+                        size: size.clone(),
                     };
                     (compute, location)
                 }
@@ -404,10 +410,12 @@ impl Coordinator {
                 (compute, location)
             }
             mz_sql::plan::ReplicaConfig::Managed {
-                size,
                 availability_zone,
+                billed_as,
                 compute,
                 disk,
+                internal,
+                size,
             } => {
                 let availability_zone = match availability_zone {
                     Some(az) => {
@@ -417,9 +425,11 @@ impl Coordinator {
                     None => None,
                 };
                 let location = mz_catalog::ReplicaLocation::Managed {
-                    size,
                     availability_zone,
+                    billed_as,
                     disk,
+                    internal,
+                    size,
                 };
                 (compute, location)
             }
@@ -451,9 +461,31 @@ impl Coordinator {
             },
         };
 
-        let id = self.catalog_mut().allocate_user_replica_id().await?;
+        let cluster = self.catalog().get_cluster(cluster_id);
+
+        if let ReplicaLocation::Managed(ManagedReplicaLocation {
+            internal,
+            billed_as,
+            ..
+        }) = &config.location
+        {
+            // Only internal users have access to INTERNAL and BILLED AS
+            if !session.user().is_internal() && (*internal || billed_as.is_some()) {
+                coord_bail!("cannot specify INTERNAL or BILLED AS as non-internal user")
+            }
+            // Managed clusters require the INTERNAL flag.
+            if cluster.is_managed() && !*internal {
+                coord_bail!("must specify INTERNAL when creating a replica in a managed cluster");
+            }
+            // BILLED AS implies the INTERNAL flag.
+            if billed_as.is_some() && !*internal {
+                coord_bail!("must specify INTERNAL when specifying BILLED AS");
+            }
+        }
+
         // Replicas have the same owner as their cluster.
-        let owner_id = self.catalog().get_cluster(cluster_id).owner_id();
+        let owner_id = cluster.owner_id();
+        let id = self.catalog_mut().allocate_user_replica_id().await?;
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
@@ -838,7 +870,11 @@ impl Coordinator {
         self.ensure_valid_azs(new_availability_zones.iter())?;
 
         // Validate per-replica configuration
-        for replica in cluster.replicas_by_id.values() {
+        for replica in cluster
+            .replicas_by_id
+            .values()
+            .filter(|replica| !replica.config.location.internal())
+        {
             names.insert(replica.name.clone());
             match &replica.config.location {
                 ReplicaLocation::Unmanaged(_) => coord_bail!(

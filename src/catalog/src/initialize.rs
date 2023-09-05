@@ -634,6 +634,8 @@ pub async fn initialize(
                 replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string().into()),
                 logical_size: options.default_cluster_replica_size.to_string(),
                 disk: false,
+                billed_as: None,
+                internal: false,
             },
         ),
     ));
@@ -882,6 +884,8 @@ fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
                 size: args.default_cluster_replica_size.to_string(),
                 availability_zone: None,
                 disk: false,
+                internal: false,
+                billed_as: None,
             },
         )),
         logging: Some(proto::ReplicaLogging {

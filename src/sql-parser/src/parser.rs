@@ -3565,10 +3565,12 @@ impl<'a> Parser<'a> {
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
+            BILLED,
             COMPUTE,
             COMPUTECTL,
             DISK,
             IDLE,
+            INTERNAL,
             INTROSPECTION,
             SIZE,
             STORAGE,
@@ -3578,6 +3580,10 @@ impl<'a> Parser<'a> {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
                 ReplicaOptionName::AvailabilityZone
+            }
+            BILLED => {
+                self.expect_keyword(AS)?;
+                ReplicaOptionName::BilledAs
             }
             COMPUTE => {
                 self.expect_keyword(ADDRESSES)?;
@@ -3592,6 +3598,7 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
             }
+            INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,

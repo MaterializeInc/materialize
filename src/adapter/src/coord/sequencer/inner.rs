@@ -1521,6 +1521,9 @@ impl Coordinator {
         // database or schema.
         let mut default_privilege_revokes = BTreeSet::new();
 
+        // Clusters we're dropping
+        let mut clusters_to_drop = BTreeSet::new();
+
         let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
             match id {
@@ -1537,6 +1540,7 @@ impl Coordinator {
                     }
                 }
                 ObjectId::Cluster(id) => {
+                    clusters_to_drop.insert(*id);
                     if let Some(active_id) = self
                         .catalog()
                         .active_cluster(session)
@@ -1590,6 +1594,29 @@ impl Coordinator {
                                 index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
                                 dependant_objects: dependants,
                             });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for id in &ids {
+            match id {
+                // Validate that `ClusterReplica` drops do not drop replicas of managed clusters,
+                // unless they are internal replicas, which exist outside the scope
+                // of managed clusters.
+                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                    if !clusters_to_drop.contains(cluster_id) {
+                        let cluster = self.catalog.get_cluster(*cluster_id);
+                        if cluster.is_managed() {
+                            let replica = cluster
+                                .replicas_by_id
+                                .get(replica_id)
+                                .expect("Catalog out of sync");
+                            if !replica.config.location.internal() {
+                                coord_bail!("cannot drop replica of managed cluster");
+                            }
                         }
                     }
                 }

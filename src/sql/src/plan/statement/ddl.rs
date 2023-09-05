@@ -130,6 +130,9 @@ use crate::session::vars;
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
 
+const MANAGED_REPLICA_PATTERN: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
+
 pub fn describe_create_database(
     _: &StatementContext,
     _: CreateDatabaseStatement,
@@ -3025,17 +3028,19 @@ const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
 
 generate_extracted_config!(
     ReplicaOption,
-    (Size, String),
     (AvailabilityZone, String),
-    (StoragectlAddresses, Vec<String>),
-    (StorageAddresses, Vec<String>),
-    (ComputectlAddresses, Vec<String>),
+    (BilledAs, String),
     (ComputeAddresses, Vec<String>),
-    (Workers, u16),
-    (IntrospectionInterval, OptionalInterval),
-    (IntrospectionDebugging, bool, Default(false)),
+    (ComputectlAddresses, Vec<String>),
+    (Disk, bool),
     (IdleArrangementMergeEffort, u32),
-    (Disk, bool)
+    (Internal, bool, Default(false)),
+    (IntrospectionDebugging, bool, Default(false)),
+    (IntrospectionInterval, OptionalInterval),
+    (Size, String),
+    (StorageAddresses, Vec<String>),
+    (StoragectlAddresses, Vec<String>),
+    (Workers, u16)
 );
 
 fn plan_replica_config(
@@ -3043,17 +3048,19 @@ fn plan_replica_config(
     options: Vec<ReplicaOption<Aug>>,
 ) -> Result<ReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
-        size,
         availability_zone,
-        storagectl_addresses,
-        storage_addresses,
-        computectl_addresses,
+        billed_as,
         compute_addresses,
-        workers,
-        introspection_interval,
-        introspection_debugging,
-        idle_arrangement_merge_effort,
+        computectl_addresses,
         disk,
+        idle_arrangement_merge_effort,
+        internal,
+        introspection_debugging,
+        introspection_interval,
+        size,
+        storage_addresses,
+        storagectl_addresses,
+        workers,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -3070,6 +3077,7 @@ fn plan_replica_config(
     match (
         size,
         availability_zone,
+        billed_as,
         storagectl_addresses,
         storage_addresses,
         computectl_addresses,
@@ -3077,12 +3085,12 @@ fn plan_replica_config(
         workers,
     ) {
         // Common cases we expect end users to hit.
-        (None, _, None, None, None, None, None) => {
+        (None, _, None, None, None, None, None, None) => {
             // We don't mention the unmanaged options in the error message
             // because they are only available in unsafe mode.
             sql_bail!("SIZE option must be specified");
         }
-        (Some(size), availability_zone, None, None, None, None, None) => {
+        (Some(size), availability_zone, billed_as, None, None, None, None, None) => {
             let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
             let disk = disk.unwrap_or(disk_default);
 
@@ -3091,10 +3099,13 @@ fn plan_replica_config(
                 availability_zone,
                 compute,
                 disk,
+                billed_as,
+                internal,
             })
         }
 
         (
+            None,
             None,
             None,
             storagectl_addresses,
@@ -3205,11 +3216,21 @@ pub fn plan_create_cluster_replica(
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
-    ensure_cluster_is_not_managed(scx, cluster.id())?;
+
+    let config = plan_replica_config(scx, options)?;
+
+    if let ReplicaConfig::Managed { internal: true, .. } = &config {
+        if MANAGED_REPLICA_PATTERN.is_match(name.as_str()) {
+            return Err(PlanError::MangedReplicaName(name.into_string()));
+        }
+    } else {
+        ensure_cluster_is_not_managed(scx, cluster.id())?;
+    }
+
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
-        config: plan_replica_config(scx, options)?,
+        config,
     }))
 }
 
@@ -3960,7 +3981,6 @@ fn plan_drop_cluster_replica(
     let cluster = resolve_cluster_replica(scx, name, if_exists)?;
     if let Some((cluster, _)) = &cluster {
         ensure_cluster_is_not_linked(scx, cluster.id())?;
-        ensure_cluster_is_not_managed(scx, cluster.id())?;
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
