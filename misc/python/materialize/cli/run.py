@@ -347,8 +347,7 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
         command += ["--release"]
     if args.timings:
         command += ["--timings"]
-    if args.no_default_features:
-        command += ["--no-default-features"]
+    command += ["--no-default-features"]
     return command
 
 
