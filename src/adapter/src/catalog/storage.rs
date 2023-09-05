@@ -2055,7 +2055,7 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
     fn from(config: mz_controller::clusters::ReplicaConfig) -> Self {
         Self {
             location: config.location.into(),
-            logging: config.compute.logging.into(),
+            logging: config.compute.logging,
             idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
         }
     }

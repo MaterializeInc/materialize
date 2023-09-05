@@ -61,7 +61,7 @@ impl Coordinator {
                 ClusterVariant::Managed(ClusterVariantManaged {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
-                    logging: logging.into(),
+                    logging,
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
@@ -527,7 +527,7 @@ impl Coordinator {
                 new_config.variant = Managed(ClusterVariantManaged {
                     size,
                     availability_zones: Default::default(),
-                    logging: logging.into(),
+                    logging,
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,

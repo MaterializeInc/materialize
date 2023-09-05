@@ -8475,23 +8475,6 @@ pub enum ClusterVariant {
     Unmanaged,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SerializedReplicaLocation {
-    Unmanaged {
-        storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
-        computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
-    },
-    Managed {
-        size: String,
-        /// `Some(az)` if the AZ was specified by the user and must be respected;
-        availability_zone: Option<String>,
-        disk: bool,
-    },
-}
-
 impl ConnCatalog<'_> {
     fn resolve_item_name(
         &self,
