@@ -1608,6 +1608,11 @@ feature_flags!(
         "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
         false
     ),
+    (
+        enable_notices_for_index_empty_key,
+        "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
+        true
+    ),
 );
 
 /// Represents the input to a variable.
