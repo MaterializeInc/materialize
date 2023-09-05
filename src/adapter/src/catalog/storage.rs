@@ -2126,15 +2126,6 @@ pub struct ComputeReplicaLogging {
     pub interval: Option<Duration>,
 }
 
-impl From<mz_compute_client::controller::ComputeReplicaLogging> for ComputeReplicaLogging {
-    fn from(logging: mz_compute_client::controller::ComputeReplicaLogging) -> Self {
-        ComputeReplicaLogging {
-            log_logging: logging.log_logging,
-            interval: logging.interval,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
