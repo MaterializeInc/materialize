@@ -29,6 +29,7 @@ once_cell = "1.16.0"
 md-5 = "0.10.5"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network"] }
+mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-proto = { path = "../proto" }
 mz-regexp = { path = "../regexp" }
