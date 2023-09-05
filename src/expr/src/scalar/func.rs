@@ -2557,7 +2557,7 @@ impl BinaryFunc {
                 ScalarType::Timestamp { .. } => {
                     contains_range_elem::<CheckedTimestamp<NaiveDateTime>>(a, b)
                 }
-                ScalarType::TimestampTz { precision: None } => {
+                ScalarType::TimestampTz { .. } => {
                     contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>(a, b)
                 }
                 _ => unreachable!(),

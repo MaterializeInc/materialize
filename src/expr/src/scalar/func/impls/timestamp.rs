@@ -92,7 +92,7 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
 
     fn preserves_uniqueness(&self) -> bool {
         // Only preserves uniqueness if the output type is as precise as the
-        // input type, but we're not provided in the input type here.
+        // input type, but we're not provided the input type here.
         false
     }
 

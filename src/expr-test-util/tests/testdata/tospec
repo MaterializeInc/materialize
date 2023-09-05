@@ -19,6 +19,6 @@ cat
 ok
 
 rel-to-test
-(Reduce (Filter (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get u37)] [] Unimplemented) [(CallBinary Eq #0 #25) (CallBinary Eq #1 #23) (CallBinary Eq #2 #24) (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61)) (CallBinary Eq #22 #30) (CallBinary Eq #23 #31) (CallBinary Eq #24 #32) (CallBinary Eq #32 #41) (CallBinary Eq #34 #40) (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58)) (CallBinary Eq #61 #65) (CallBinary Eq #67 #69) (CallBinary Eq #70 ("EUROPE" String)) (CallBinary Gte (CallUnary CastDateToTimestamp #26) ("2007-01-02 00:00:00" Timestamp))]) [#66] [(SumNumeric #38 false)] false null)
+(Reduce (Filter (Join [(get u6) (get u16) (get u19) (get u26) (get u34) (get u31) (get u37)] [] Unimplemented) [(CallBinary Eq #0 #25) (CallBinary Eq #1 #23) (CallBinary Eq #2 #24) (CallBinary Eq #21 (CallUnary CastInt16ToInt32 #61)) (CallBinary Eq #22 #30) (CallBinary Eq #23 #31) (CallBinary Eq #24 #32) (CallBinary Eq #32 #41) (CallBinary Eq #34 #40) (CallBinary Eq #57 (CallUnary CastInt16ToInt32 #58)) (CallBinary Eq #61 #65) (CallBinary Eq #67 #69) (CallBinary Eq #70 ("EUROPE" String)) (CallBinary Gte (CallUnary (CastDateToString NULL) #26) ("2007-01-02 00:00:00" Timestamp))]) [#66] [(SumNumeric #38 false)] false null)
 ----
 ok

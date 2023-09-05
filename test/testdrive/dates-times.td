@@ -79,6 +79,7 @@ $ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=
   SELECT
     TRUE AS key,
     '1970-01-01T00:00:00.123456'::timestamp AS ts,
+    '1970-01-01T00:00:00.123456'::timestamp(0) AS ts0,
     '1970-01-01T00:00:00.123456'::timestamp(1) AS ts1,
     '1970-01-01T00:00:00.123456'::timestamp(2) AS ts2,
     '1970-01-01T00:00:00.123456'::timestamp(3) AS ts3,
@@ -86,6 +87,7 @@ $ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=
     '1970-01-01T00:00:00.123456'::timestamp(5) AS ts5,
     '1970-01-01T00:00:00.123456'::timestamp(6) AS ts6,
     '1970-01-01T00:00:00.123456'::timestamptz AS tstz,
+    '1970-01-01T00:00:00.123456'::timestamptz(0) AS tstz0,
     '1970-01-01T00:00:00.123456'::timestamptz(1) AS tstz1,
     '1970-01-01T00:00:00.123456'::timestamptz(2) AS tstz2,
     '1970-01-01T00:00:00.123456'::timestamptz(3) AS tstz3,
@@ -100,10 +102,16 @@ $ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-ts-precision-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key","type":"boolean"},{"name":"ts","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts1","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts2","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts3","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts4","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts5","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts6","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz1","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz2","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz3","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz4","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz5","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz6","type":{"type":"long","logicalType":"timestamp-micros"}}]}
+{"type":"record","name":"envelope","fields":[{"name":"key","type":"boolean"},{"name":"ts","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts0","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts1","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts2","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts3","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"ts4","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts5","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"ts6","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz0","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz1","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz2","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz3","type":{"type":"long","logicalType":"timestamp-millis"}},{"name":"tstz4","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz5","type":{"type":"long","logicalType":"timestamp-micros"}},{"name":"tstz6","type":{"type":"long","logicalType":"timestamp-micros"}}]}
 
 $ kafka-verify-data format=avro sink=materialize.public.ts_precision_sink sort-messages=true
-{"key": true} {"key": true, "ts": 123456, "ts1": 100, "ts2": 120, "ts3": 123, "ts4": 123500, "ts5": 123460, "ts6": 123456, "tstz": 123456, "tstz1": 100, "tstz2": 120, "tstz3": 123, "tstz4": 123500, "tstz5": 123460, "tstz6": 123456}
+{"key": true} {"key": true, "ts": 123456, "ts0": 0, "ts1": 100, "ts2": 120, "ts3": 123, "ts4": 123500, "ts5": 123460, "ts6": 123456, "tstz": 123456, "tstz0": 0, "tstz1": 100, "tstz2": 120, "tstz3": 123, "tstz4": 123500, "tstz5": 123460, "tstz6": 123456}
+
+! SELECT '1970-01-01T00:00:00.123456'::timestamp(-1)
+contains:Expected literal integer, found operator
+
+! SELECT '1970-01-01T00:00:00.123456'::timestamp(7)
+contains:precision for type timestamp or timestamptz must be between 0 and 6
 
 > SELECT INTERVAL '1' SECOND
 "00:00:01"

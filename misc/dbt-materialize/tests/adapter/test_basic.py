@@ -51,7 +51,6 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
     # Custom base test that removes the incremental portion and overrides the expected relations
 
     def test_base(self, project):
-
         # seed command
         results = run_dbt(["seed"])
         # seed result length
@@ -170,7 +169,7 @@ class TestDocsGenerateMaterialize(BaseDocsGenerate):
             role="materialize",
             id_type="integer",
             text_type="text",
-            time_type="timestamp",
+            time_type="timestamp without time zone",
             view_type="view",
             table_type="materializedview",
             model_stats=no_stats(),
@@ -185,7 +184,7 @@ class TestDocsGenReferencesMaterialize(BaseDocsGenReferences):
             role="materialize",
             id_type="integer",
             text_type="text",
-            time_type="timestamp",
+            time_type="timestamp without time zone",
             bigint_type="bigint",
             view_type="view",
             table_type="materializedview",

@@ -576,7 +576,7 @@ SELECT LIST[1,2,3]['dog']
 query error subscripting does not support casting from date to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][DATE '2001-01-01']
 
-query error subscripting does not support casting from timestamp to bigint
+query error subscripting does not support casting from timestamp without time zone to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
 
 query error invalid input syntax for type bigint: invalid digit found in string: "dog"
@@ -585,7 +585,7 @@ SELECT (LIST[1,2,3][1:'dog'])::text
 query error subscripting does not support casting from date to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
 
-query error subscripting does not support casting from timestamp to bigint
+query error subscripting does not support casting from timestamp without time zone to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']
 
 # 🔬 Built-in functions
