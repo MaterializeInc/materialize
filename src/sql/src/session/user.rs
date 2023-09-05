@@ -12,13 +12,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use once_cell::sync::Lazy;
 use uuid::Uuid;
 
+pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_system".into(),
+    name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
 });
 
+pub const SUPPORT_USER_NAME: &str = "mz_support";
 pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_support".into(),
+    name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
 });
 

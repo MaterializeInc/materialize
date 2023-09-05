@@ -87,6 +87,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use clap::Parser;
+use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
 use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
@@ -475,6 +476,18 @@ impl Usage {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
+                builtin_clusters: BUILTIN_CLUSTERS
+                    .into_iter()
+                    .map(|cluster| (*cluster).into())
+                    .collect(),
+                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                    .into_iter()
+                    .map(|replica| (*replica).into())
+                    .collect(),
+                builtin_roles: BUILTIN_ROLES
+                    .into_iter()
+                    .map(|role| (*role).into())
+                    .collect(),
             },
             None,
         )

@@ -107,7 +107,8 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
+    BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
 use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
@@ -3509,6 +3510,21 @@ impl Catalog {
         ),
         AdapterError,
     > {
+        for builtin_role in BUILTIN_ROLES {
+            assert!(
+                is_reserved_name(builtin_role.name),
+                "builtin role {builtin_role:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+        for builtin_cluster in BUILTIN_CLUSTERS {
+            assert!(
+                is_reserved_name(builtin_cluster.name),
+                "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -4995,6 +5011,18 @@ impl Catalog {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
+                builtin_clusters: BUILTIN_CLUSTERS
+                    .into_iter()
+                    .map(|cluster| (*cluster).into())
+                    .collect(),
+                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                    .into_iter()
+                    .map(|replica| (*replica).into())
+                    .collect(),
+                builtin_roles: BUILTIN_ROLES
+                    .into_iter()
+                    .map(|role| (*role).into())
+                    .collect(),
             },
             None,
         )
@@ -6325,7 +6353,10 @@ impl Catalog {
                         id,
                         &name,
                         linked_object_id,
-                        &introspection_sources,
+                        introspection_sources
+                            .iter()
+                            .map(|(builtin_log, gid)| ((*builtin_log).into(), gid))
+                            .collect(),
                         owner_id,
                         privileges.clone(),
                         config.clone(),
