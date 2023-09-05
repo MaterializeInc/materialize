@@ -26,7 +26,8 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes,
+    CatalogError as SqlCatalogError, CatalogItemType, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -43,10 +44,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
-use crate::catalog::{
-    is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, RoleMembership, SystemObjectMapping,
-};
+use crate::catalog::{is_reserved_name, ClusterConfig, ClusterVariant};
 use crate::coord::timeline;
 
 pub mod objects;
@@ -2133,6 +2131,22 @@ pub struct Item {
     pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+}
+
+/// Functions can share the same name as any other catalog item type
+/// within a given schema.
+/// For example, a function can have the same name as a type, e.g.
+/// 'date'.
+/// As such, system objects are keyed in the catalog storage by the
+/// tuple (schema_name, object_type, object_name), which is guaranteed
+/// to be unique.
+#[derive(Debug, Clone)]
+pub struct SystemObjectMapping {
+    pub schema_name: String,
+    pub object_type: CatalogItemType,
+    pub object_name: String,
+    pub id: GlobalId,
+    pub fingerprint: String,
 }
 
 // Structs used internally to represent on disk-state.
