@@ -1,6 +1,6 @@
 ---
-title: "Role-based access control"
-description: "Manage roles, privileges, and other access control options in Materialize"
+title: "Access control"
+description: "How to configure and manage access control in Materialize."
 disable_list: true
 menu:
   main:
@@ -10,116 +10,298 @@ menu:
     weight: 15
 ---
 
-This page introduces role-based access management (RBAC) in Materialize. RBAC
-allows you to apply granular privileges to your Materialize objects and clusters. Organizations
-using RBAC can manage user roles and privileges to ensure there is not
-unauthorized or improper access to sensitive objects.
+{{< note >}}
+Configuring and managing access control in Materialize requires **administrator** privileges.
+{{</ note >}}
 
-In Materialize, RBAC allows organization administrators to:
+Access control in Materialize is configured at two levels: access to the
+[Materialize console]((https://console.materialize.com/)) and access within the
+database. The privileges assigned on user invitation have implications at both
+levels, so we recommend carefully evaluating your access control needs ahead of
+expanding the number of users in your Materialize organization.
 
-* Determine which users have read or write privileges for specific objects
+## Account management
 
-* Control how users interact with clusters by giving them different levels of access to
-resources
+### Inviting users
 
-* Prevent accidental operations from unauthorized users
+As an **administrator**, you can invite new users via the Materialize console.
+Depending on the level of access each user should have, you can assign them
+`Organization Admin` or `Organization Member` privileges.
 
-* Isolate access to user-facing data from internal organization data
+   - `Organization Admin`: can perform adminstration tasks in the console, like
+     inviting new users, editing account and security information, or managing
+     billing. Admins have _superuser_ privileges in the database.
 
-Materialize object access is also dependent on cluster privileges.
-Roles that need access to an object that use compute resources must also have
-the same level of access to the cluster. Materialize objects that use compute
-resources are:
+   - `Organization Member`: can login to the console and has restricted access
+     to the database, depending  on the privileges defined via
+     [role-based access control (RBAC)](#role-based-access-control-rbac).
 
-* Replicas
-* Sources
-* Sinks
-* Indexes
-* Materialized views
+These privileges primarily determine a user's **access level to the console**,
+but also have implications in the **default access level to the database**.
+More granular permissions within the database must be handled separately using
+[role-based access control (RBAC)](#role-based-access-control-rbac).
 
-The next sections go over the concepts of authorization and authentication and
-the objects within Materialize.
+[//]: # "TODO(morsapaes) Add a specific anotation for tutorial call-outs, to
+make these more noticeable."
 
-## Authentication vs. authorization
+To invite users to your Materialize organization, follow [this step-by-step guide](/manage/access-control/invite-users).
 
-Authentication dictates who can log in to a system while authorization
-determines what a user can access within a system.
+### Configuring single sign-on (SSO)
 
-Authentication in Materialize is handled when you sign up or are invited to a
-Materialize organization. Your immediate privileges are determined by your
-invitation from an administrator or are assigned automatically by Materialize
-when you sign up.
+As an **administrator** of a Materialize organization, you can configure single
+sign-on (SSO) as an additional layer of account security using your existing
+[SAML](https://auth0.com/blog/how-saml-authentication-works/)- or
+[OpenID Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based
+identity provider. This ensures that all users can securely log in to the
+Materialize console using the same authentication scheme and credentials across
+all systems in your organization.
 
-Authorization is determined in RBAC by your organization administrator. When you
-invite users to your Materialize organization, you have the option to give the
-user more elevated privileges in the Materialize administrator console.
+To configure SSO for your Materialize organization, follow [this step-by-step
+guide](/manage/access-control/sso).
 
-## RBAC structure
+[//]: # "NOTE(morsapaes) This sits kind of awkward in here, but feels like the
+best place to plug it. Need to add some more meat if we keep it."
 
-RBAC in practice is a group of roles with assigned privileges.
-You can assign specific users to roles or assign privileges to users to inherit
-from other roles.
+### Using an external secret store
 
-### Roles
+Although Materialize does not integrate directly with external secret stores,
+it’s possible to manage this integration via [Terraform](/manage/terraform).
 
-A role is a collection of privileges you can apply to users. Roles make it
-easier to assign or revoke privileges on Materialize objects. You can group
-users into specified roles with different levels of privileges and adjust those
-privileges to ensure they have the correct level of access to objects.
+Check the [Terraform documentation](/manage/terraform/#external-secret-stores)
+for more details on how to integrate with common external secret stores, like
+HashiCorp Vault or AWS Secrets Manager.
 
-### Role attributes
+## Role-based access control (RBAC)
 
-Role attributes are actions available to any role you create. Attributes are
-independent of any other object in Materialize and apply to the entire
-organization. You can edit these actions when you create the role:
+[//]: # "NOTE(morsapaes) These instructions assume that RBAC is enabled at the
+time of region creation. For existing regions, we assume that migration to RBAC
+is whitegloved."
 
-| Name              | Description                                                                 |
-|-------------------|-----------------------------------------------------------------------------|
-| `INHERIT`         | **Read-only.** Can inherit privileges of other roles.                       |
+The default level of access to the database is determined by the
+organization-level role a user is assigned on invitation (`Organization Admin` or `Organization Member`).
 
-PostgreSQL uses role attributes to determine if a role is allowed to execute certain statements. In
-Materialize these have all been replaced by system privileges.
+The first user in an organization, and subsequently any user that is assigned
+`Organization Admin`, is a database _superuser_, and has unrestricted access to
+all resources in a Materialize region. Users that are assigned `Organization
+Member` are restricted to a default set of basic privileges that need to be
+configured and modified via role-based access control (RBAC).
 
-### Privileges
+RBAC allows you to configure granular access control to the resources in your
+Materialize region through a hierarchy of [roles](/sql/grant-role/) and
+[privileges](/sql/grant-privilege/). For a deep-dive into how RBAC works in
+Materialize, check [Role-based access control (RBAC)](./rbac).
 
-Privileges are the actions or operations a role is allowed to perform on a
-specific object. After you create a role, you can grant it the following
-object-specific privileges in Materialize:
+### Configuring basic RBAC
 
-| Privilege       | Description                                                                                    | `psql` |
-|-----------------|------------------------------------------------------------------------------------------------|--------|
-| `SELECT`        | Allows selecting rows from an object.                                                          | `r`    |
-| `INSERT`        | Allows inserting into an object.                                                               | `a`    |
-| `UPDATE`        | Allows updating an object (requires `SELECT`).                                                 | `w`    |
-| `DELETE`        | Allows deleting from an object (requires `SELECT`).                                            | `d`    |
-| `CREATE`        | Allows creating a new object within another object.                                            | `C`    |
-| `USAGE`         | Allows using an object or looking up members of an object.                                     | `U`    |
-| `CREATEROLE`    | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. | `R`    |
-| `CREATEDB`      | Allows creating databases.                                                                     | `B`    |
-| `CREATECLUSTER` | Allows creating clusters.                                                                      | `N`    |
+{{< warning >}}
+Here be dragons. 🐉 This setup is **not recommended** unless you are trialing
+Materialize.
+{{< /warning >}}
 
+If you're just getting started and haven't yet decided on an [RBAC strategy](#configuring-advanced-rbac)
+for your organization, we recommend [modifying default privileges](#modifying-default-privileges)
+or — if you just need to move fast and break things — [inviting users as administrators](#inviting-users-as-administrators).
 
-Note that the system catalog uses the abbreviation of the privilege name.
+#### Modifying default privileges
 
-Objects in Materialize have different levels of privileges available to them.
-Materialize supports the following object type privileges:
+Every Materialize region has a `PUBLIC` system role that determines the default
+privileges available to all other roles. On creation, users are automatically
+granted membership in `PUBLIC`, and inherit the privileges assigned to it. By
+default, members of this role (and therefore **all users**) have the following [privileges](/sql/grant-privilege/#privilege):
 
-| Object Type          | Privileges                                |
-|----------------------|-------------------------------------------|
-| `SYSTEM`             | `CREATEROLE`, `CREATEDB`, `CREATECLUSTER` |
-| `DATABASE`           | `USAGE`, `CREATE`                         |
-| `SCHEMA`             | `USAGE`, `CREATE`                         |
-| `TABLE`              | `INSERT`, `SELECT`, `UPDATE`, `DELETE`    |
-| `VIEW`               | `SELECT`                                  |
-| `MATERIALIZED  VIEW` | `SELECT`                                  |
-| `TYPE`               | `USAGE`                                   |
-| `SOURCE`             | `SELECT`                                  |
-| `CONNECTION`         | `USAGE`                                   |
-| `SECRET`             | `USAGE`                                   |
-| `CLUSTER`            | `USAGE`, `CREATE`                         |
+Privilege                            | Scope     |
+-------------------------------------|-----------|
+`USAGE`                            | All types, all system catalog schemas, the `materialize.public` schema, the `materialize` database, and the `default` cluster.|
+`SELECT`                               | All system catalog objects.  |
 
-### Inheritance
+This means that new, non-administrator users have limited access to resources in
+a Materialize region, and don't have the ability to e.g., create new clusters,
+databases, or schemas. To modify the default privileges available to all other
+roles in a Materialize region, you can use the [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/)
+command.
 
-Inheritance in RBAC allows you to create roles that inherit privileges from
-other roles. Inheritance only applies to role privileges. Role attributes are
-not inherited. Inheriting privileges allows you to minimize the number of roles you have to manage.
+```sql
+# Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
+SHOW ROLES;
+
+-- Example: grant read-only access to all object types, to all roles in the
+-- system via the PUBLIC role
+--For PostgreSQL compatibility reasons, TABLE is the object type for sources,
+--views, and materialized views
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON DATABASES TO PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON SCHEMAS TO PUBLIC;
+```
+
+#### Inviting users as administrators
+
+The path of least resistance to setting up RBAC is...not setting it up. If you
+invite all users as `Organization Admin`, all users will have the _superuser_
+role.
+
+Keep in mind that you will be giving all users unrestricted access to all
+resources in your Materialize region, as well as all features in the
+Materialize console. While this might be a viable solution when trialing
+Materialize with a small number of users, it can be **hard to revert** once you
+decide to roll out a RBAC strategy for your Materialize organization.
+
+As an alternative, you can approximate the set of privileges of a _superuser_ by
+instead modifying the default privileges to be wildly permissive:
+
+```sql
+-- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
+SHOW ROLES;
+
+-- Example: approximate full-blown admin access by modifying the default
+-- privileges inherited by all roles via the PUBLIC role
+GRANT USAGE, CREATE ON SCHEMA materialize.public TO PUBLIC;
+GRANT ALL PRIVILEGES ON DATABASE materialize TO PUBLIC;
+GRANT USAGE, CREATE ON CLUSTER default TO PUBLIC;
+GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO PUBLIC;
+GRANT CREATEROLE ON SYSTEM TO PUBLIC;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA materialize.public TO PUBLIC;
+GRANT ALL PRIVILEGES ON ALL TYPES IN SCHEMA materialize.public TO PUBLIC;
+GRANT ALL PRIVILEGES ON ALL SECRETS IN SCHEMA materialize.public TO PUBLIC;
+GRANT ALL PRIVILEGES ON ALL CONNECTIONS IN SCHEMA materialize.public TO PUBLIC;
+
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON TABLES TO PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON TYPES TO PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC;
+```
+
+### Configuring advanced RBAC
+
+There is no one-size-fits-all solution for RBAC: the right strategy will depend
+on your team size, and existing security policies. Being able to create an
+unbounded amount of custom roles with custom privileges and structural
+hierarchy can be overwhelming, so following are examples on how to roll out
+three common RBAC strategies: user roles, functional roles, and environment
+roles.
+
+#### User roles
+
+If your Materialize user base is small and you don't expect it to grow
+significantly over time, you can grant and revoke privileges directly to/from
+user roles.
+
+```sql
+-- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
+SHOW ROLES;
+
+-- Example: grant usage on a specific database & schema to individual roles
+GRANT USAGE ON DATABASE d1 TO "user1@company.com", "user2@company.com";
+GRANT USAGE ON SCHEMA d1.s1 TO "user1@company.com", "user2@company.com";
+GRANT USAGE ON CLUSTER c1 to "user1@company.com", "user2@company.com";
+
+-- Example: grant individual roles permission to create clusters and databases
+GRANT CREATECLUSTER, CREATEDB on system to "user1@company.com";
+```
+
+This strategy allows you to skip setting up a complex hierarchy of roles
+upfront, at the cost of manual work. As you might expect, this strategy does
+not scale, so you might want to rethink your RBAC strategy if your user base
+grows past a reasonable number (say, 10+).
+
+#### Functional roles
+
+If your Materialize user base is made up of business functions that clearly map
+to distinct access profiles, a common strategy is to map those functions to
+roles in your RBAC hierarchy. You can then grant and revoke privileges to/from
+functional roles, and any user that is a member of that role will inherit
+them.
+
+As an example, Data Engineers might need a larger scope of permissions to create
+and evolve the data model, while Data Analysts might only need read permissions
+to query Materialize using BI tools.
+
+```sql
+-- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
+SHOW ROLES;
+
+-- Step 1: create the data_analyst role
+CREATE ROLE data_analyst;
+
+-- Step 2: grant usage on the database & schema to the data_analyst role
+GRANT USAGE ON DATABASE d1 TO data_analyst;
+GRANT USAGE ON SCHEMA d1.s1 TO data_analyst;
+GRANT USAGE ON CLUSTER c1 to data_analyst;
+
+-- Step 3: grant select to all objects in the d1.s1 schema to the data_analyst role.
+-- For pre-existing objects in the schema (skip if there are none!)
+GRANT SELECT ON ALL TABLES IN SCHEMA d1.s1 TO data_analyst;
+-- For future objects created in the schema
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA d1.s1 GRANT SELECT ON TABLES TO data_analyst;
+
+-- Step 4: create the data_engineer role
+CREATE ROLE data_engineer;
+
+-- Step 5: grant usage & create on the database & schema to the data_engineer role
+GRANT USAGE, CREATE ON DATABASE d1 TO data_engineer;
+GRANT USAGE, CREATE ON SCHEMA d1.s1 TO data_engineer;
+GRANT USAGE, CREATE ON CLUSTER c1 to data_engineer;
+
+-- Step 6: grant all privileges to all objects in the d1.s1 schema to the data_engineer role
+-- For pre-existing objects in the schema (skip if there are none!)
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA d1.s1 TO read_write;
+-- For future objects created in the schema
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA d1.s1 GRANT ALL PRIVILEGES ON TABLES TO read_write;
+
+-- Step 7: add member(s) to the respective role
+GRANT data_analyst TO "user1@company.com", "user2@company.com";
+GRANT data_engineer TO "user3@company.com";
+```
+
+This strategy allows you to more efficiently manage permissions for multiple
+users at a time, as well as create an intuitive hierarchy based on each
+functional role's expected usage of Materialize.
+
+#### Environment roles
+
+[//]: # "NOTE(morsapaes) We are pointing users to different links when we ask
+them to reach out, across the documentation. Standardize on one."
+
+{{< warning >}}
+This strategy relies on the `NOINHERIT` role attribute and the `SET ROLE`
+command, which are unimplemented in Materialize {{% gh 19165 %}} {{% gh 19942 %}}.
+Please [reach out](https://materialize.com/contact/) if you're
+interested in this strategy!
+{{< /warning >}}
+
+If your Materialize user base frequently switches between multiple development
+environments, you might want to ensure that users don't accidentally run
+commands in the wrong environment e.g., production. You can create an
+environment-specific role with the `NOINHERIT` attribute, which prevents other
+roles from inheriting it. This means that users have to explicitly run e.g.,
+`SET ROLE production` before being able to run any commands in the specified
+environment.
+
+```sql
+-- Step 1: create the dev and prod roles
+CREATE ROLE dev;
+CREATE ROLE prod NOINHERIT;
+
+-- Step 2: grant usage & create on the respective database & cluster for each role
+GRANT ALL PRIVILEGES ON DATABASE d_dev TO dev;
+GRANT ALL PRIVILEGES ON DATABASE d_prod TO prod;
+GRANT ALL PRIVILEGES ON CLUSTER c_dev TO dev;
+GRANT ALL PRIVILEGES ON CLUSTER c_prod TO prod;
+
+-- Step 3: grant all privileges to all objects on the database to the respective roles
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN DATABASE d_dev GRANT ALL PRIVILEGES ON TABLES TO dev;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN DATABASE d_prod GRANT ALL PRIVILEGES ON TABLES TO prod;
+
+-- Step 4: add member(s) to the respective role - user1 has both prod & dev access, user2 has only dev access
+GRANT dev TO "user1@company.com", "user2@company.com";
+GRANT prod TO "user1@company.com";
+
+-- To run queries against the prod database and cluster, user1 will first need to run
+SET ROLE prod;
+```
+
+This strategy allows you to add an extra layer of access control to your
+critical environments, and ensure that any user with privileges to perform
+destructive actions is performing them intentionally in that specific
+environment. It's like `sudo` for your database!
+
+[//]: # "TODO(morsapaes) It feels too specific to add the RBAC observability views here. Need to think about where to work these in."
