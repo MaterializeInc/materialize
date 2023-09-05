@@ -128,10 +128,9 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         let message = (
                             output,
                             Ok(SourceMessage {
-                                upstream_time_millis: None,
                                 key: (),
                                 value,
-                                headers: None,
+                                metadata: Row::default(),
                             }),
                         );
 

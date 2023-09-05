@@ -122,7 +122,6 @@ pub fn run_script_source(
         }),
         encoding,
         envelope,
-        metadata_columns: vec![],
         timestamp_interval,
     };
 

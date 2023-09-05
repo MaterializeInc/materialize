@@ -1224,10 +1224,8 @@ async fn handle_message<K, V, T, D>(
                 Ok(SourceOutput::new(
                     message.key,
                     message.value,
+                    message.metadata,
                     offset,
-                    message.upstream_time_millis,
-                    partition.clone(),
-                    message.headers,
                 )),
             )
         }
