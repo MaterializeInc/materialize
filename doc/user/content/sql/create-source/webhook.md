@@ -21,10 +21,6 @@ Webhook sources expose a public URL that allow your other applications to push d
 
 {{< diagram "create-source-webhook.svg" >}}
 
-## `webhook_body_format`
-
-{{< diagram "webhook-body-format.svg" >}}
-
 ## `webhook_check_option`
 
 {{< diagram "webhook-check-option.svg" >}}
@@ -33,6 +29,7 @@ Field                            | Use
 ---------------------------------|--------------------------
   _src_name_                     | The name for the source
  **IN CLUSTER** _cluster_name_   | The [cluster](/sql/create-cluster) to maintain this source.
+ **INCLUDE HEADER**              | Map a header value from a request into a column.
  **INCLUDE HEADERS**             | Include a column named `'headers'` of type `map[text => text]` containing the headers of the request.
  **CHECK**                       | Specify a boolean expression that is used to validate each request received by the source.
 
@@ -61,6 +58,53 @@ Column     | Type                        | Optional?                            
 -----------|-----------------------------|------------------------------------------------|
  body      | `bytea`, `jsonb`, or `text` | No                                             |
  headers   | `map[text => text]`         | Yes, present if `INCLUDE HEADERS` is specified |
+
+### Including Headers
+
+#### Mapping Headers
+
+There are a couple options for mapping and filtering the headers of a request for your source. Using
+the `INCLUDE HEADER` syntax you can map a request header, if it exists, into a column.
+
+```
+CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  INCLUDE HEADER 'timestamp' as ts
+  INCLUDE HEADER 'x-event-type' as event_type
+```
+
+This example would have the following columns:
+
+Column      | Type    | Nullable? |
+------------|---------|-----------|
+ body       | `jsonb` | No        |
+ ts         | `text`  | Yes       |
+ event_type | `text`  | Yes       |
+
+All of the header columns are nullable, so if the headers of a request do not contain a specified
+header name, the `NULL` value will get used as a default.
+
+#### Filtering Headers
+
+If you want to include all headers, but with some filtering, you can use the `INCLUDE HEADERS` syntax.
+This can be useful if you need to accept a dynamic list of headers, but want to exclude sensitive
+headers like authorization.
+
+```
+CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  INCLUDE HEADERS ( NOT 'authorization, NOT 'x-api-key' )
+```
+
+This example would have the following columns:
+
+Column      | Type                | Nullable?  |
+------------|---------------------|------------|
+ body       | `jsonb`             | No         |
+ headers    | `map[text => text]` | No         |
+
+All headers will get included in a map, with the `'authorization'` and `'x-api-key'` headers
+filtered out.
 
 ## Webhook URL
 
@@ -247,7 +291,7 @@ The first step for setting up a webhook source is to create a shared secret. Whi
 required, it's the recommended best practice.
 
 ```
-CREATE SECRET segment_shared_secret AS 'abc123';
+CREATE SECRET segment_shared_secret AS 'abc123'
 ```
 
 Using this shared key, Segment will sign each request and we can use the signature to determine if
@@ -258,15 +302,17 @@ After defining a shared secret, we can create the source itself:
 ```
 CREATE SOURCE my_segment_source IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON
+  INCLUDE HEADER 'event-type' AS event_type
   INCLUDE HEADERS
   CHECK (
-    WITH ( BODY BYTES, HEADERs, SECRET segment_shared_secret AS secret BYTES)
+    WITH ( BODY BYTES, HEADERS, SECRET segment_shared_secret AS secret BYTES)
     decode(headers->'x-signature', 'hex') = hmac(body, secret, 'sha1')
   )
 ```
 
 This creates a source called _my_segment_source_ and installs it in cluster named _my_cluster_.
-The source will have two columns, _body_ of type `jsonb` and _headers_ of type `map[text=>text]`.
+The source will have three columns, _body_ of type `jsonb`, _headers_ of type `map[text=>text]`, and
+_event_type_ of type `text`.
 
 The `CHECK` statement defines how to validate each request. At the time of writing, Segment
 validates requests by signing them with an HMAC in the `X-Signature` request header. The HMAC is a
@@ -281,3 +327,42 @@ For the latest information on Segment's Webhook Destination, please see their
 [documentation](https://segment.com/docs/connections/destinations/catalog/actions-webhook/).
 
 {{< /note >}}
+
+### Connecting with Amazon EventBridge
+
+[Amazon EventBridge](https://aws.amazon.com/eventbridge/) is a serverless event bus that allows you
+to send events from your AWS services to external destinations. You can ingest these events into
+Materialize using a webhook source, and join them with your other data!
+
+The first step is to create a shared secret so Materialize can validate that requests are truly
+coming from EventBridge.
+
+```
+CREATE SECRET event_bridge_api_key AS 'abc123'
+```
+
+When we create a new EventBridge Rule, we'll make sure to include this shared secret as a header in
+each request, which Materialize will then check against.
+
+After defining the shared secret, we can create the source itself:
+
+```
+CREATE SOURCE my_event_bridge_source IN CLUSTER my_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  -- Includes all headers, but filters out our shared secret.
+  INCLUDE HEADERS ( NOT 'x-mz-api-key' )
+  CHECK (
+    WITH ( HEADERS, SECRET event_bridge_api_key AS secret)
+    headers->'x-mz-api-key' = secret
+  )
+```
+
+This creates a source called _my_event_bridge_source_ and installs it in cluster named _my_cluster_.
+The source will have two columns, _body_ of type `jsonb` and _headers_ of type `map[text=>text]`. We will
+use the shared secret to validate each request, but it will get filtered out of the map in the _headers_
+column.
+
+Now with the source created we need to connect with with EventBridge. You can follow [Amazon's tutorial
+for connecting with Datadog](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-tutorial-datadog.html),
+but for an **API key name, make sure to use `x-mz-api-key`** which is what we specified in our `CHECK`
+statement for request validation.
