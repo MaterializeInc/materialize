@@ -1585,7 +1585,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_WEBHOOKS_SOURCES),
             row: Row::pack_slice(&[
                 Datum::String(&id_str),
-                Datum::String(&name),
+                Datum::String(name),
                 Datum::String(&url),
             ]),
             diff,
