@@ -164,67 +164,35 @@ For a deeper dive into how indexes work, see [Arrangements](/overview/arrangemen
 
 ## Clusters
 
-Clusters are logical components that let you describe how to allocate compute
-resources for a group of dataflow-powered objects, i.e., sources, sinks,
-indexes, and materialized views. When creating dataflow-powered objects, you
-must specify which cluster you want to use. Not explicitly naming a cluster
-uses your session's default cluster.
+A cluster is a set of compute resources in Materialize, providing CPU, memory, and temporary storage.
+Materialize uses a cluster for performing the following operations: 
 
-Importantly, clusters are strictly a logical component; they rely on [cluster
-replicas](#cluster-replicas) to run dataflows. Said a slightly different way, a
-cluster with no replicas does no computation. For example, if you create an
-index on a cluster with no replicas, you cannot select from that index because
-there is no physical representation of the index to read from.
+- Execute SQL [SELECT](/sql/select/) statements that require compute resources.
+- Maintaining [indexes](#indexes) and [materialized views](#materialized-views). 
+- Running [sources](#sources), [sinks](#sinks), and [subscribes](/sql/subscribe/). 
 
-Though clusters only represent the logic of which objects you want to bundle
-together, this impacts the performance characteristics once you provision
-cluster replicas. Each object in a cluster gets instantiated on every replica,
-meaning that on a given physical replica, objects in the cluster are in
-contention for the same physical resources. To achieve the performance you need,
-this might require setting up more than one cluster.
+When running any of the above operations, you must specify which cluster you want to use.
+Not explicitly naming a cluster uses your session's default cluster.
+
+A cluster is defined by its size, replication factor, and other properties.
+Clusters can be created and dropped at any time.
+They can also be resized at any time, even while running, to accommodate the need for more or less compute resources. 
 
 See the [`CREATE CLUSTER`](/sql/create-cluster/) documentation for more details.
 
-### Cluster deployment options
+## Cluster Replicas 
 
-When building your Materialize deployment, you can change its performance
-characteristics by...
+Cluster replicas are the physical counterpart to clusters.
+Each cluster replica inherits the cluster's size and configurations.
+Materialize ensures the replica set matches the declared size and replication factor.
+The replicas of a cluster are visible in the system catalog but cannot be directly modified by users.
 
-Action | Outcome
--------|---------
-Adding clusters + decreasing dataflow density | Reduced resource contention among dataflows, decoupled dataflow availability
-Adding replicas to clusters | See [Cluster replica scaling](#cluster-replica-deployment-options)
+The number of cluster replicas spawned is based on the cluster's defined replication factor.
+Each replica receives a copy of all data from sources its dataflows use and uses the data to perform identical computations.
+This design provides Materialize with active replication, and so long as one replica is still reachable, the cluster continues making progress.
 
-## Cluster replicas
-
-Where clusters represent the logical set of dataflows you want to maintain,
-cluster replicas are their physical counterparts. Cluster replicas are where
-Materialize actually creates and maintains dataflows.
-
-Each cluster replica is essentially a clone, constructing the same dataflows.
-Each cluster replica receives a copy of all data that comes in from sources its
-dataflows use, and uses the data to perform identical computations. This design
-provides Materialize with active replication, and so long as one replica is
-still reachable, the cluster continues making progress.
-
-This also means that all of a cluster's dataflows contend for the same resources
-on each replica. This might mean, for instance, that instead of placing many
-complex materialized views on the same cluster, you choose some other
-distribution, or you replace all replicas in a cluster with more powerful
-machines.
-
-### Cluster replica deployment options
-
-Materialize is an active-replication-based system, which means you expect each
-cluster replica to have the same working set.
-
-With this in mind, when building your Materialize deployment, you can change its
-performance characteristics by...
-
-Action | Outcome
----------|---------
-Increase replicas' size | Ability to maintain more dataflows or more complex dataflows
-Add replicas to a cluster | Greater tolerance to replica failure
+This also means that a cluster's dataflows contend for the same resources on each replica. 
+For instance, instead of placing many complex materialized views on the same cluster, you choose another distribution or resize the cluster to provide you with more powerful machines.
 
 ## Related pages
 
@@ -234,7 +202,6 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE INDEX`](/sql/create-index)
 - [`CREATE SINK`](/sql/create-sink)
 - [`CREATE CLUSTER`](/sql/create-cluster)
-- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 
 [Clusters]: #clusters
 [Cluster replicas]: #cluster-replicas

@@ -7,6 +7,10 @@ menu:
     parent: commands
 ---
 
+{{< warning >}}
+`CREATE CLUSTER REPLICA` is for working with legacy unmanaged clusters. Consider migrating your cluster to [managed](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead.
+{{< /warning >}}
+
 `CREATE CLUSTER REPLICA` provisions physical resources to perform computations.
 
 ## Conceptual framework
@@ -55,30 +59,6 @@ between availability zones, see [Availability zone assignment](/sql/create-clust
 
 ## Details
 
-### Sizes
-
-Valid `size` options are:
-
-- `3xsmall`
-- `2xsmall`
-- `xsmall`
-- `small`
-- `medium`
-- `large`
-- `xlarge`
-- `2xlarge`
-- `3xlarge`
-- `4xlarge`
-- `5xlarge`
-- `6xlarge`
-
-The [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes) table lists the CPU, memory, and disk allocation for each replica size.
-
-{{< warning >}}
-The values in the `mz_internal.mz_cluster_replica_sizes` may change at any time.
-You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
-
 ### Disk-attached replicas
 
 {{< private-preview />}}
@@ -91,23 +71,7 @@ non-disk-attached replicas. In the future, disk-attached replicas will likely
 consume credits at a faster rate.
 {{< /warning >}}
 
-The `DISK` option attaches a disk to the replica.
-
-Attaching a disk allows you to trade off performance for cost. A replica of a
-given size has access to several times more disk than memory, allowing the
-processing of larger data sets at that replica size. Operations on a disk,
-however, are much slower than operations in memory, and so a workload that
-spills to disk will perform more slowly than a workload that does not. Note that
-exact storage medium for the attached disk is not specified, and its performance
-characteristics are subject to change.
-
-Consider attaching a disk to replicas that contain sources that use the
-[upsert envelope](/sql/create-source/#upsert-envelope) or the
-[Debezium envelope](/sql/create-source/#debezium-envelope). When you place
-these sources on a replica with an attached disk, they will automatically spill
-state to disk. These sources will therefore use less memory but may ingest
-data more slowly. See [Sizing a source](/sql/create-source/#sizing-a-source) for details.
-
+Disk-attached replicas work identically to [disk-attached clusters](/sql/create-cluster/#disk-attached-clusters), except they apply only to a single replica.
 
 ### Deployment options
 
@@ -121,6 +85,10 @@ Action | Outcome
 ---------|---------
 Increase all replicas' sizes | Ability to maintain more dataflows or more complex dataflows
 Add replicas to a cluster | Greater tolerance to replica failure
+
+### Sizes
+
+Cluster replica sizes work identically to [cluster sizes](/sql/create-cluster/#cluster-size), except they apply only to a single replica.
 
 ### Homogeneous vs. heterogeneous hardware provisioning
 

@@ -34,16 +34,12 @@ Alter cluster to size `xsmall`:
 ALTER CLUSTER c1 SET (SIZE 'xsmall');
 ```
 
-### Converting managed to unmanaged clusters
-Alter the `managed` status of a cluster to unmanaged:
+## Converting unmanaged to managed clusters
 
-```sql
-ALTER CLUSTER c1 SET (MANAGED false);
-```
+Unmanaged clusters are a legacy artifact of Materialize that 
+forced users to manually create and drop cluster replicas.
 
-### Converting unmanaged to managed clusters
-
-Alter the `managed` status of a cluster to unmanaged:
+Alter the `managed` status of a cluster to managed:
 
 ```sql
 ALTER CLUSTER c1 SET (MANAGED);
@@ -69,6 +65,5 @@ The privileges required to execute this statement are:
 ## See also
 
 - [`CREATE CLUSTER`](/sql/create-cluster/)
-- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 - [`CREATE SINK`](/sql/create-sink/)
 - [`SHOW SINKS`](/sql/show-sinks)

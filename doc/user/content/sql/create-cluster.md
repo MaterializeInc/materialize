@@ -8,8 +8,8 @@ menu:
 ---
 
 `CREATE CLUSTER` creates a logical [cluster](/get-started/key-concepts#clusters),
-which contains dataflow-powered objects. By default, a cluster named `default`
-with a single cluster replica will exist in every environment.
+which contains dataflow-powered objects.
+By default, each new environment contains cluster called `default` with a replication factor of `1`.
 
 To switch your active cluster, use the `SET` command:
 
@@ -19,65 +19,26 @@ SET cluster = other_cluster;
 
 ## Conceptual framework
 
-Clusters are logical components that let you express resource isolation for all
-dataflow-powered objects: sources, sinks, indexes, and materialized views. When
-creating dataflow-powered objects, you must specify which cluster you want to
-use.
+A cluster is a set of compute resources in Materialize, providing CPU, memory, and temporary storage.
+Materialize uses a cluster for performing the following operations: 
 
-For indexes and materialized views, not explicitly naming a cluster uses your
-session's default cluster.
+- Execute SQL [SELECT](/sql/select/) statements that require compute resources.
+- Maintaining [indexes](#indexes) and [materialized views](#materialized-views). 
+- Running [sources](#sources), [sinks](#sinks), and [subscribes](/sql/subscribe/). 
 
-{{< warning >}}
+{{< note >}}
 A given cluster may contain any number of indexes and materialized views *or*
 any number of sources and sinks, but not both types of objects. For example,
 you may not create a cluster with a source and an index.
 
 We plan to remove this restriction in a future version of Materialize.
-{{< /warning >}}
+{{< /note >}}
 
-Importantly, clusters are strictly a logical component; they rely on [cluster
-replicas](/get-started/key-concepts#cluster-replicas) to run dataflows. Said a
-slightly different way, a cluster with no replicas does no computation. For
-example, if you create an index on a cluster with no replicas, you cannot select
-from that index because there is no physical representation of the index to read
-from.
+When running any of the above operations, you must specify which cluster you want to use.
+Not explicitly naming a cluster uses your session's default cluster.
 
-Though clusters only represent the logic of which objects you want to bundle
-together, this impacts the performance characteristics once you provision
-cluster replicas. Each object in a cluster gets instantiated on every replica,
-meaning that on a given physical replica, objects in the cluster are in
-contention for the same physical resources. To achieve the performance you need,
-this might require setting up more than one cluster.
-
-{{< warning >}}
-Clusters containing sources and sinks can have at most one replica.
-
-We plan to remove this restriction in a future version of Materialize.
-{{< /warning >}}
-
-## Managed and unmanaged clusters
-
-A managed cluster is one with a declared size and replication factor, where
-Materialize is responsible for ensuring the replica set matches the declared
-size and replication factor. The replicas of a managed cluster are visible in
-the system catalog, but cannot be directly modified by users.
-
-An unmanaged cluster requires you to manage replicas manually, by creating and
-dropping replicas to achieve the desired replication factor and replica size.
-The replicas of unmanaged clusters appear in the system catalog and can be
-modified by users.
-
-
-{{< warning >}}
-Managed clusters with sources and sinks only support a replication factor of zero or one.
-
-We plan to remove this restriction in a future version of Materialize.
-{{< /warning >}}
-
-### Managed clusters
 
 ### Syntax
-
 
 {{< diagram "create-managed-cluster.svg" >}}
 
@@ -85,37 +46,57 @@ We plan to remove this restriction in a future version of Materialize.
 
 {{% cluster-options %}}
 
-## Unmanaged clusters
+## Details
 
-### Syntax
+### Cluster Size 
 
-{{< diagram "create-cluster.svg" >}}
+Size specifies the amount of compute resources available per cluster in a cluster.
+Materialize supports the following cluster sizes:
 
-### `replica_definition`
+| Size | Credits / Hour |
+|------|----------------|
+| 3xsmall | 0.25 |
+| 2xsmall | 0.5 |
+| xsmall | 1|
+| small | 2 |
+| medium | 4 |
+| large | 8 |
+| xlarge | 16 |
+| 2xlarge | 32 |
+| 3xlarge | 64 |
+| 4xlarge | 128 |
+| 5xlarge | 256 |
+| 6xlarge | 512 |
 
-{{< diagram "cluster-replica-def.svg" >}}
-
-Field | Use
-------|-----
-_name_ | A name for the cluster.
-_inline_replica_ | Any [replicas](#replica_definition) you want to immediately provision.
-_replica_name_ | A name for a cluster replica.
-
-### Replica options
-
-{{% replica-options %}}
-
-See [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) for details.
-
-## Availability zone assignment
-
-When assigning replicas of a [managed cluster](#managed-clusters) to
-availability zones, Materialize makes the following guarantees, within each
-cluster:
+The [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes) table lists the CPU, memory, and disk allocation for each cluster size.
 
 {{< warning >}}
-These guarantees do not apply to [unmanaged clusters](#unmanaged-clusters).
+The values in the `mz_internal.mz_cluster_replica_sizes` may change at any time.
+You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
+
+### Replication Factor
+
+{{< note >}}
+Clusters containing sources and sinks can only have a replication factor of 0 or 1.
+
+We plan to remove this restriction in a future version of Materialize.
+{{< /note >}}
+
+A clusters replication factor dictates the number of [cluster replicas](/get-started/key-concepts/#cluster-replicas) spawned for a cluster.
+Cluster replicas are the physical counterpart to clusters and inherit the cluster's size and configurations.
+Materialize ensures the replica set matches the declared size and replication factor.
+The replicas of a cluster are visible in the system catalog but cannot be directly modified by users.
+
+Each replica receives a copy of all data from sources its dataflows use and uses the data to perform identical computations.
+This design provides Materialize with active replication, and so long as one replica is still reachable, the cluster continues making progress.
+
+This also means that a cluster's dataflows contend for the same resources on each replica. 
+For instance, instead of placing many complex materialized views on the same cluster, you choose another distribution or resize the cluster to provide you with more powerful machines.
+
+### Availability zone assignment
+
+Materialize guarantees the following when scheduling each replica when a cluster has a replication factor greater than 1.
 
 - Different replicas are _never_ scheduled on the same node.
 - Different replicas are _always_ spread evenly across availability
@@ -123,50 +104,51 @@ These guarantees do not apply to [unmanaged clusters](#unmanaged-clusters).
   from this constraint. See [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes)
   to determine if that is the case for your replicas.
 
-## Details
+### Disk-attached clusters
 
-### Deployment options
+{{< private-preview />}}
 
-When building your Materialize deployment, you can change its performance characteristics by...
+{{< warning >}}
 
-Action | Outcome
--------|---------
-Adding clusters + decreasing dataflow density | Reduced contention among dataflows, decoupled dataflow availability
-Adding replicas to clusters | See [Cluster replica scaling](/sql/create-cluster#deployment-options)
+**Pricing for this feature is likely to change.**
+Disk-attached clusters currently consume credits at the same rate as
+non-disk-attached clusters. In the future, disk-attached clusters will likely
+consume credits at a faster rate.
+{{< /warning >}}
+
+The `DISK` option attaches a disk to the cluster.
+
+Attaching a disk allows you to trade off performance for cost. A cluster of a
+given size has access to several times more disk than memory, allowing the
+processing of larger data sets at that replica size. Operations on a disk,
+however, are much slower than operations in memory, and so a workload that
+spills to disk will perform more slowly than a workload that does not. Note that
+exact storage medium for the attached disk is not specified, and its performance
+characteristics are subject to change.
+
+Consider attaching a disk to clusters that contain sources that use the
+[upsert envelope](/sql/create-source/#upsert-envelope) or the
+[Debezium envelope](/sql/create-source/#debezium-envelope). When you place
+these sources on a cluster with an attached disk, they will automatically spill
+state to disk. These sources will therefore use less memory but may ingest
+data more slowly. See [Sizing a source](/sql/create-source/#sizing-a-source) for details.
 
 ## Examples
 
 ### Basic
 
-Create a managed cluster with two medium replicas:
+Create a cluster with two medium replicas:
 
 ```sql
 CREATE CLUSTER c1 SIZE = 'medium', REPLICATION FACTOR = 2;
 ```
 
-Alternatively, you can create an unmanaged cluster:
-
-```sql
-CREATE CLUSTER c1 REPLICAS (
-    r1 (SIZE = 'medium'),
-    r2 (SIZE = 'medium')
-);
-```
-
 ### Introspection disabled
 
-Create a managed cluster with a single replica with introspection disabled:
+Create a cluster with a single replica and introspection disabled:
 
 ```sql
 CREATE CLUSTER c  SIZE = 'xsmall', INTROSPECTION INTERVAL = 0;
-```
-
-Alternatively, you can create an unmanaged cluster:
-
-```sql
-CREATE CLUSTER c REPLICAS (
-    r1 (SIZE = 'xsmall', INTROSPECTION INTERVAL = 0)
-);
 ```
 
 Disabling introspection can yield a small performance improvement, but you lose
@@ -175,23 +157,13 @@ that cluster replica.
 
 ### Empty
 
-Create a managed cluster with no replicas:
+Create a cluster with no replicas:
 
 ```sql
-CREATE CLUSTER c1 SIZE 'xsmall', REPLICATION FACTOR 0;
+CREATE CLUSTER c1 SIZE 'xsmall', REPLICATION FACTOR = 0;
 ```
 
-You can later add replicas to this managed cluster with [`ALTER CLUSTER`](/sql/alter-cluster/.
-)
-
-Alternatively, you can create an unmanaged cluster:
-
-```sql
-CREATE CLUSTER c1 REPLICAS ();
-```
-
-You can later add replicas to this unmanaged cluster with [`CREATE CLUSTER
-REPLICA`](../create-cluster-replica).
+You can later add replicas to this cluster with [`ALTER CLUSTER`](/sql/alter-cluster/).
 
 ## Privileges
 
@@ -201,7 +173,6 @@ The privileges required to execute this statement are:
 
 ## See also
 
-- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 - [`ALTER CLUSTER`](/sql/alter-cluster/)
 - [`DROP CLUSTER`](/sql/drop-cluster/)
 
