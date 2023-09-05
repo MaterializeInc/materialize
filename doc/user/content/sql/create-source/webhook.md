@@ -66,11 +66,11 @@ Column     | Type                        | Optional?                            
 There are a couple options for mapping and filtering the headers of a request for your source. Using
 the `INCLUDE HEADER` syntax you can map a request header, if it exists, into a column.
 
-```
+```sql
 CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADER 'timestamp' as ts
-  INCLUDE HEADER 'x-event-type' as event_type
+  INCLUDE HEADER 'x-event-type' as event_type;
 ```
 
 This example would have the following columns:
@@ -90,10 +90,10 @@ If you want to include all headers, but with some filtering, you can use the `IN
 This can be useful if you need to accept a dynamic list of headers, but want to exclude sensitive
 headers like authorization.
 
-```
+```sql
 CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON
-  INCLUDE HEADERS ( NOT 'authorization, NOT 'x-api-key' )
+  INCLUDE HEADERS ( NOT 'authorization', NOT 'x-api-key' );
 ```
 
 This example would have the following columns:
@@ -131,7 +131,7 @@ Source.
 For example, the following source HMACs the request body using the SHA256 hashing algorithm, and
 asserts the result is equal to the value provided in the `x-signature` header, decoded with base64.
 
-```
+```sql
 CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
@@ -140,7 +140,7 @@ CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
       SECRET my_webhook_shared_secret,
     )
     decode(headers->'x-signature', 'base64') = hmac(request_body, my_webhook_shared_secret, 'sha256')
-  )
+  );
 ```
 
 The body and headers of the request are only provided for validation if `WITH ( BODY, HEADERS, ... )`
@@ -165,22 +165,22 @@ It can be difficult to get your `CHECK` statement correct, especially if your ap
 have a way to send test events. If you're having trouble with your `CHECK` statement, we recommend
 creating a temporary source without `CHECK` and using that to iterate more quickly.
 
-```
+```sql
 CREATE SOURCE my_webhook_temporary_debug IN CLUSTER my_cluster FROM WEBHOOK
   -- Specify the BODY FORMAT as TEXT or BYTES which is how it's provided to CHECK.
   BODY FORMAT TEXT
-  INCLUDE HEADERS
+  INCLUDE HEADERS;
 ```
 
 Once you have a few events in _my_webhook_temporary_debug_ you can query it with your would-be
 `CHECK` statement.
 
-```
+```sql
 SELECT
   -- Your would be CHECK statement.
   decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || body, 'my key', 'sha512')
 FROM my_webhook_temporary_debug
-LIMIT 10
+LIMIT 10;
 ```
 
 {{< note >}}
@@ -205,12 +205,12 @@ Given any number of conditions, e.g. a network hiccup, it's possible for your ap
 an event more than once. If your event contains a unique ID you can de-duplicate these events
 using a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the `DISCINCT ON` clause.
 
-```
+```sql
 CREATE MATERIALIZED VIEW my_webhook_idempotent IN CLUSTER my_compute_cluster AS (
   SELECT DISTINCT ON (body->>'unique_id') *
   FROM my_webhook_source
   ORDER BY id
-)
+);
 ```
 
 We can take this technique a bit further to handle partial events. Let's pretend our application
@@ -226,7 +226,7 @@ When a build job starts we receive an event containing _id_ and the _started_at_
 build finished, we'll receive a second event with the same _id_ but now a _finished_at_ timestamp.
 To merge these events into a single row, we can again use the `DISTINCT ON` clause.
 
-```
+```sql
 CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
   SELECT DISTINCT ON (id) *
   FROM (
@@ -237,7 +237,7 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
     FROM my_build_jobs_source
   )
   ORDER BY id, finished_at NULLS LAST, started_at NULLS LAST
-)
+);
 ```
 
 {{< note >}}
@@ -290,8 +290,8 @@ with your other data!
 The first step for setting up a webhook source is to create a shared secret. While this isn't
 required, it's the recommended best practice.
 
-```
-CREATE SECRET segment_shared_secret AS 'abc123'
+```sql
+CREATE SECRET segment_shared_secret AS 'abc123';
 ```
 
 Using this shared key, Segment will sign each request and we can use the signature to determine if
@@ -299,7 +299,7 @@ the request is legitmate.
 
 After defining a shared secret, we can create the source itself:
 
-```
+```sql
 CREATE SOURCE my_segment_source IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADER 'event-type' AS event_type
@@ -307,7 +307,7 @@ CREATE SOURCE my_segment_source IN CLUSTER my_cluster FROM WEBHOOK
   CHECK (
     WITH ( BODY BYTES, HEADERS, SECRET segment_shared_secret AS secret BYTES)
     decode(headers->'x-signature', 'hex') = hmac(body, secret, 'sha1')
-  )
+  );
 ```
 
 This creates a source called _my_segment_source_ and installs it in cluster named _my_cluster_.
@@ -337,8 +337,8 @@ Materialize using a webhook source, and join them with your other data!
 The first step is to create a shared secret so Materialize can validate that requests are truly
 coming from EventBridge.
 
-```
-CREATE SECRET event_bridge_api_key AS 'abc123'
+```sql
+CREATE SECRET event_bridge_api_key AS 'abc123';
 ```
 
 When we create a new EventBridge Rule, we'll make sure to include this shared secret as a header in
@@ -346,7 +346,7 @@ each request, which Materialize will then check against.
 
 After defining the shared secret, we can create the source itself:
 
-```
+```sql
 CREATE SOURCE my_event_bridge_source IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON
   -- Includes all headers, but filters out our shared secret.
@@ -354,7 +354,7 @@ CREATE SOURCE my_event_bridge_source IN CLUSTER my_cluster FROM WEBHOOK
   CHECK (
     WITH ( HEADERS, SECRET event_bridge_api_key AS secret)
     headers->'x-mz-api-key' = secret
-  )
+  );
 ```
 
 This creates a source called _my_event_bridge_source_ and installs it in cluster named _my_cluster_.
