@@ -34,7 +34,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
-use crate::cfg::{MiB, PersistFlag};
+use crate::cfg::{MiB, PersistFeatureFlag};
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
@@ -87,7 +87,9 @@ impl CompactConfig {
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
-            streaming_compact: value.dynamic.enabled(PersistFlag::STREAMING_COMPACTION),
+            streaming_compact: value
+                .dynamic
+                .enabled(PersistFeatureFlag::STREAMING_COMPACTION),
         }
     }
 }

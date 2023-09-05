@@ -80,7 +80,7 @@ use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::batch::UntrimmableColumns;
-use mz_persist_client::cfg::{PersistConfig, PersistFlag};
+use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_tracing::CloneableEnvFilter;
@@ -2313,7 +2313,7 @@ impl SystemVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             );
 
-        for flag in PersistFlag::ALL {
+        for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
         }
 
@@ -2856,7 +2856,7 @@ impl SystemVars {
     }
 
     pub fn persist_flags(&self) -> BTreeMap<String, bool> {
-        PersistFlag::ALL
+        PersistFeatureFlag::ALL
             .iter()
             .map(|f| (f.name.to_owned(), *self.expect_value(&f.into())))
             .collect()
@@ -3128,8 +3128,8 @@ where
     }
 }
 
-impl From<&'static PersistFlag> for ServerVar<bool> {
-    fn from(value: &'static PersistFlag) -> Self {
+impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
+    fn from(value: &'static PersistFeatureFlag) -> Self {
         Self {
             name: UncasedStr::new(value.name),
             // Awkward dance to get a static reference to a boolean...
@@ -4529,7 +4529,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
-        || PersistFlag::ALL.iter().any(|f| f.name == name)
+        || PersistFeatureFlag::ALL.iter().any(|f| f.name == name)
 }
 
 /// Returns whether the named variable is a cluster scheduling config
