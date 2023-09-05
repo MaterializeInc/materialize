@@ -20,7 +20,7 @@ fixed:
 prompts:
   threads:
     hint: '1 or more'
-    type: 'init'
+    type: 'int'
     default: 1
   host:
     hint: 'dev host'
@@ -40,3 +40,4 @@ prompts:
     default: 'public'
   cluster:
     hint: 'dev cluster'
+    default: 'default'

@@ -1,4 +1,3 @@
--- Copyright 2020 Josh Wills. All rights reserved.
 -- Copyright Materialize, Inc. and contributors. All rights reserved.
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,14 +13,11 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Most of these macros are direct copies of their PostgreSQL counterparts.
--- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
-
-{{ config(materialized='view', indexes=[{'columns': ['item']}]) }}
+{{ config(materialized='materializedview', indexes=[{'columns': ['item']}]) }}
 
 SELECT
   auctions.item,
-  avg(bids.amount) AS average_bid
+  count(bids.id) AS number_of_bids
 FROM {{ source('auction','bids') }} AS bids
 JOIN {{ source('auction','auctions') }} AS auctions
   ON bids.auction_id = auctions.id

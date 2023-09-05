@@ -1,4 +1,3 @@
-# Copyright 2020 Josh Wills. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +18,7 @@ version: 2
 # https://materialize.com/docs/get-started/quickstart/
 
 models:
-  - name: avg_bids
+  - name: my_first_dbt_model
     description: "The average price of bids that arrived before their auctions closed"
     columns:
       - name: item
@@ -28,7 +27,7 @@ models:
           - unique
           - not_null
 
-  - name: num_bids
+  - name: my_second_dbt_model
     description: "The number of eligible bids per item"
     columns:
       - name: item
