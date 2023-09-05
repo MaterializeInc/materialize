@@ -38,6 +38,8 @@ use crate::plan::query::ExprContext;
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
 
+use super::plan_utils::GroupSizeHints;
+
 #[allow(missing_debug_implementations)]
 pub struct Hir;
 
@@ -1678,7 +1680,7 @@ impl HirRelationExpr {
     pub fn finish_maintained(
         &mut self,
         finishing: &mut RowSetFinishing,
-        expected_group_size: Option<u64>,
+        group_size_hints: GroupSizeHints,
     ) {
         if !finishing.is_trivial(self.arity()) {
             let old_finishing =
@@ -1695,7 +1697,7 @@ impl HirRelationExpr {
                 order_key: old_finishing.order_by,
                 limit: old_finishing.limit,
                 offset: old_finishing.offset,
-                expected_group_size,
+                expected_group_size: group_size_hints.limit_input_group_size,
             }
             .project(old_finishing.project)
         }

@@ -3524,8 +3524,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW
     mz_internal.mz_expected_group_size_advice
     AS
-        -- The mz_expected_group_size_advice view provides tuning suggestions for the EXPECTED
-        -- GROUP SIZE. This tuning hint is effective for min/max/top-k patterns, where a stack
+        -- The mz_expected_group_size_advice view provides tuning suggestions for the GROUP SIZE
+        -- query hints. This tuning hint is effective for min/max/top-k patterns, where a stack
         -- of arrangements must be built. For each dataflow and region corresponding to one
         -- such pattern, we look for how many levels can be eliminated without hitting a level
         -- that actually substantially filters the input. The advice is constructed so that
@@ -3581,7 +3581,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                     WHERE
                         o2.dataflow_id = o1.dataflow_id
                         AND o2.region_id = o1.region_id
-                    OPTIONS (EXPECTED GROUP SIZE = 8)
+                    OPTIONS (AGGREGATE INPUT GROUP SIZE = 8)
                 )
         ),
         -- The fourth CTE, candidates, will look for operators where the number of records
@@ -3620,7 +3620,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
         -- cutting the height of the hierarchy further. This is because we will have way less
         -- groups in the next level, so there should be even further reduction happening or there
         -- is some substantial skew in the data. But if the latter is the case, then we should not
-        -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
+        -- tune the GROUP SIZE hints down anyway to avoid hurting latency upon updates directed
         -- at these unusually large groups. In addition to selecting the levels to cut, we also
         -- compute a conservative estimate of the memory savings in bytes that will result from
         -- cutting these levels from the hierarchy. The estimate is based on the sizes of the

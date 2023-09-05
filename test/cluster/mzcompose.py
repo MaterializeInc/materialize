@@ -665,7 +665,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- generating a SQL-level error, given the partial fix to bucketed
             -- aggregates introduced in PR #17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
-            SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
         )
         c.testdrive(
@@ -936,8 +936,9 @@ def workflow_test_github_17509(c: Composition) -> None:
     assertions are turned off.
 
     This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
-    It is still possible to trigger the behavior described in the issue by opting into
-    a smaller group size with a query hint (e.g., OPTIONS (EXPECTED GROUP SIZE = 1)).
+    The checks here are extended by opting into a smaller group size with a query hint (e.g.,
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
+    initially not covered, but eventually got supported as well.
     """
 
     c.down(destroy_volumes=True)
