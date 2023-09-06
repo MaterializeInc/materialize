@@ -28,7 +28,9 @@ use crate::names::{
     SystemObjectId,
 };
 use crate::plan;
-use crate::plan::{Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
+use crate::plan::{
+    DataSourceDesc, Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege,
+};
 use crate::session::user::{RoleMetadata, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::{SessionVars, SystemVars};
 
@@ -654,11 +656,13 @@ fn generate_required_privileges(
         }
         Plan::CreateSource(plan::CreateSourcePlan {
             name,
-            source: _,
+            source,
             if_not_exists: _,
             timeline: _,
             cluster_config,
-        }) => generate_required_source_privileges(name, cluster_config, role_id),
+        }) => {
+            generate_required_source_privileges(name, &source.data_source, cluster_config, role_id)
+        }
         Plan::CreateSources(plans) => plans
             .iter()
             .flat_map(
@@ -667,14 +671,20 @@ fn generate_required_privileges(
                      plan:
                          plan::CreateSourcePlan {
                              name,
-                             source: _,
+                             source,
                              if_not_exists: _,
                              timeline: _,
                              cluster_config,
                          },
                      resolved_ids: _,
                  }| {
-                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
+                    generate_required_source_privileges(
+                        name,
+                        &source.data_source,
+                        cluster_config,
+                        role_id,
+                    )
+                    .into_iter()
                 },
             )
             .collect(),
@@ -691,14 +701,20 @@ fn generate_required_privileges(
                      plan:
                          plan::CreateSourcePlan {
                              name,
-                             source: _,
+                             source,
                              if_not_exists: _,
                              timeline: _,
                              cluster_config,
                          },
                      resolved_ids: _,
                  }| {
-                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
+                    generate_required_source_privileges(
+                        name,
+                        &source.data_source,
+                        cluster_config,
+                        role_id,
+                    )
+                    .into_iter()
                 },
             )
             .collect(),
@@ -1265,6 +1281,7 @@ fn generate_required_privileges(
 
 fn generate_required_source_privileges(
     name: &QualifiedItemName,
+    data_source: &DataSourceDesc,
     cluster_config: &SourceSinkClusterConfig,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
@@ -1273,9 +1290,18 @@ fn generate_required_source_privileges(
         AclMode::CREATE,
         role_id,
     )];
-    match cluster_config.cluster_id() {
-        Some(id) => privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id)),
-        None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
+    match (data_source, cluster_config.cluster_id()) {
+        (_, Some(id)) => {
+            privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id))
+        }
+        (DataSourceDesc::Ingestion(_), None) => {
+            privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id))
+        }
+        // Non-ingestion data-sources have meaningless cluster config's (for now...) and they need
+        // to be ignored.
+        // This feels very brittle, but there's not much we can do until the UNDEFINED cluster
+        // config is removed.
+        (_, None) => {}
     }
     privileges
 }
