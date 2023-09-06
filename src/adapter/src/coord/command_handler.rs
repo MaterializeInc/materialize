@@ -616,9 +616,7 @@ impl Coordinator {
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
-                    if let Err(e) =
-                        rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids, None)
-                    {
+                    if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
                         return ctx.retire(Err(e));
                     }
 
