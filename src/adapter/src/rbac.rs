@@ -905,7 +905,7 @@ fn generate_required_privileges(
             explainee,
         }) => match explainee {
             Explainee::MaterializedView(id) | Explainee::Index(id) => {
-                let item = catalog.get_item(&id);
+                let item = catalog.get_item(id);
                 let schema_id: ObjectId = item.name().qualifiers.clone().into();
                 vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
             }
