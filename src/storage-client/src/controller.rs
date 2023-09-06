@@ -273,7 +273,7 @@ pub trait StorageController: Debug + Send {
     /// created with zero replicas.
     ///
     /// Panics if a storage instance with the given ID already exists.
-    fn create_instance(&mut self, id: StorageInstanceId);
+    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool);
 
     /// Drops the storage instance with the given ID.
     ///
@@ -1198,12 +1198,13 @@ where
         Box::new(self.state.collections.iter())
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId) {
+    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool) {
         let mut client = RehydratingStorageClient::new(
             self.build_info,
             self.metrics.for_instance(id),
             self.state.envd_epoch,
             self.state.config.grpc_client.clone(),
+            variable_length_row_encoding,
         );
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);
