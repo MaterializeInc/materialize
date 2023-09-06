@@ -17,6 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_persist_client::ShardId;
 use mz_persist_types::{Codec, Codec64};
+use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
@@ -136,8 +137,7 @@ where
                     .await
                     .expect("valid usage");
                 let batch = batch.into_transmittable_batch();
-                // TODO(txn): Proto not serde_json.
-                let batch_raw = serde_json::to_string(&batch).expect("valid json");
+                let batch_raw = batch.encode_to_vec();
                 let batch = data_write.batch_from_transmittable_batch(batch);
                 txn_batches.push(batch);
                 debug!(

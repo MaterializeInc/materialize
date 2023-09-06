@@ -65,7 +65,7 @@ use crate::StepForward;
 #[derive(Debug)]
 pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
     pub(crate) progress_exclusive: T,
-    txns_subscribe: Subscribe<ShardId, String, T, i64>,
+    txns_subscribe: Subscribe<ShardId, Vec<u8>, T, i64>,
 
     next_batch_id: usize,
     /// The batches needing application as of the current progress.
@@ -74,9 +74,9 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    unapplied_batches: BTreeMap<usize, (ShardId, String, T)>,
+    unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
-    batch_idx: HashMap<String, usize>,
+    batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
     ///
     /// Invariant: Times in the Vec are in ascending order.
@@ -86,14 +86,14 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
     pub(crate) async fn init(
         init_ts: T,
-        txns_read: ReadHandle<ShardId, String, T, i64>,
-        txns_write: &mut WriteHandle<ShardId, String, T, i64>,
+        txns_read: ReadHandle<ShardId, Vec<u8>, T, i64>,
+        txns_write: &mut WriteHandle<ShardId, Vec<u8>, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         Self::open(init_ts, txns_read).await
     }
 
-    async fn open(init_ts: T, txns_read: ReadHandle<ShardId, String, T, i64>) -> Self {
+    async fn open(init_ts: T, txns_read: ReadHandle<ShardId, Vec<u8>, T, i64>) -> Self {
         // TODO(txn): Figure out the compaction story. This might require
         // sorting inserts before retractions within each timestamp.
         let subscribe = txns_read
@@ -160,7 +160,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
     }
 
     /// Returns the batches needing application as of the current progress.
-    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, String, T)> {
+    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, Vec<u8>, T)> {
         self.unapplied_batches.values()
     }
 
@@ -180,8 +180,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
     pub(crate) fn filter_retractions<'a>(
         &'a self,
         expected_txns_upper: &T,
-        retractions: impl Iterator<Item = (&'a String, &'a ShardId)>,
-    ) -> impl Iterator<Item = (&'a String, &'a ShardId)> {
+        retractions: impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)>,
+    ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)> {
         assert!(&self.progress_exclusive >= expected_txns_upper);
         retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
     }
@@ -235,7 +235,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
         );
     }
 
-    fn push(&mut self, data_id: ShardId, batch: String, ts: T, diff: i64) {
+    fn push(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
         if batch.is_empty() {
             assert_eq!(diff, 1);
             // This is just a data registration.

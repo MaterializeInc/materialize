@@ -270,9 +270,11 @@ use std::fmt::Debug;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64};
+use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
@@ -416,7 +418,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// to get the same answer.)
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
-    batch_raw: &str,
+    batch_raw: &[u8],
     commit_ts: T,
 ) where
     K: Debug + Codec,
@@ -424,7 +426,7 @@ async fn apply_caa<K, V, T, D>(
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let batch = serde_json::from_str(batch_raw).expect("valid batch");
+    let batch = ProtoBatch::decode(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let mut upper = data_write
         .upper()

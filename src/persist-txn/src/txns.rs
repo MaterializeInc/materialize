@@ -17,7 +17,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId, ShardIdSchema};
-use mz_persist_types::codec_impls::StringSchema;
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -101,7 +101,7 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) txns_cache: TxnsCache<T>,
-    pub(crate) txns_write: WriteHandle<ShardId, String, T, i64>,
+    pub(crate) txns_write: WriteHandle<ShardId, Vec<u8>, T, i64>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
@@ -134,7 +134,7 @@ where
             .open(
                 txns_id,
                 Arc::new(ShardIdSchema),
-                Arc::new(StringSchema),
+                Arc::new(VecU8Schema),
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
@@ -205,7 +205,7 @@ where
                 return Err(txns_upper);
             }
 
-            const TABLE_INIT: &String = &String::new();
+            const TABLE_INIT: &Vec<u8> = &Vec::new();
             let updates = vec![((&data_id, TABLE_INIT), &register_ts, 1)];
             let res = crate::small_caa(
                 || format!("txns register {:.9}", data_id.to_string()),
@@ -318,7 +318,7 @@ where
 /// a normal txn with [Txn::tidy].
 #[derive(Debug, Default)]
 pub struct Tidy {
-    pub(crate) retractions: BTreeMap<String, ShardId>,
+    pub(crate) retractions: BTreeMap<Vec<u8>, ShardId>,
 }
 
 impl Tidy {
@@ -372,7 +372,7 @@ where
 }
 
 pub(crate) async fn recent_upper<T: Timestamp + Lattice + TotalOrder + Codec64>(
-    txns_or_data_write: &mut WriteHandle<ShardId, String, T, i64>,
+    txns_or_data_write: &mut WriteHandle<ShardId, Vec<u8>, T, i64>,
 ) -> T {
     // TODO(txn): Replace this fetch_recent_upper call with pubsub in
     // maelstrom.
