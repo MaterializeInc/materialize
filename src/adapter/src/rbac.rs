@@ -25,7 +25,9 @@ use mz_sql::names::{
     SystemObjectId,
 };
 use mz_sql::plan;
-use mz_sql::plan::{DataSourceDesc, Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
+use mz_sql::plan::{
+    DataSourceDesc, Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege,
+};
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
