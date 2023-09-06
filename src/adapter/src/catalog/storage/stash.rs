@@ -32,7 +32,6 @@ use crate::catalog::storage::{
     SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
     USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
-use crate::rbac;
 
 /// The key used within the "config" collection where we store the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
@@ -114,7 +113,7 @@ const INFORMATION_SCHEMA_ID: u64 = 5;
 #[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize(
     tx: &mut Transaction<'_>,
-    options: &BootstrapArgs,
+    options: BootstrapArgs,
     now: EpochMillis,
     deploy_generation: Option<u64>,
 ) -> Result<(), StashError> {
@@ -305,7 +304,7 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
+        (options.owner_privilege_fn)(mz_sql::catalog::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
             .into_proto(),
     ];
     // Optionally add a privilege for the bootstrap role.
@@ -314,7 +313,7 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(SystemObjectType::Object(
+                (options.all_object_privileges_fn)(SystemObjectType::Object(
                     mz_sql::catalog::ObjectType::Database,
                 ))
                 .into_proto(),
@@ -370,7 +369,7 @@ pub async fn initialize(
                     object_id: ObjectId::Database(MATERIALIZE_DATABASE_ID).to_string(),
                     grantee_id: role_id.to_string(),
                     grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
-                    privileges: rbac::all_object_privileges(SystemObjectType::Object(
+                    privileges: (options.all_object_privileges_fn)(SystemObjectType::Object(
                         mz_sql::catalog::ObjectType::Database,
                     ))
                     .to_string(),
@@ -380,13 +379,15 @@ pub async fn initialize(
     }
 
     let schema_privileges = vec![
-        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
+        (options.default_builtin_object_privilege_fn)(mz_sql::catalog::ObjectType::Schema)
+            .into_proto(),
         proto::MzAclItem {
             grantee: Some(MZ_SUPPORT_ROLE_ID.into_proto()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID).into_proto(),
+        (options.owner_privilege_fn)(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
+            .into_proto(),
     ];
 
     let mz_catalog_schema_key = proto::SchemaKey {
@@ -447,7 +448,7 @@ pub async fn initialize(
                 grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 acl_mode: Some(AclMode::USAGE.into_proto()),
             },
-            rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
+            (options.owner_privilege_fn)(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
                 .into_proto(),
         ]
         .into_iter()
@@ -457,7 +458,7 @@ pub async fn initialize(
                 grantee: Some(role_id.clone()),
                 grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 acl_mode: Some(
-                    rbac::all_object_privileges(SystemObjectType::Object(
+                    (options.all_object_privileges_fn)(SystemObjectType::Object(
                         mz_sql::catalog::ObjectType::Schema,
                     ))
                     .into_proto(),
@@ -502,7 +503,7 @@ pub async fn initialize(
                     .to_string(),
                     grantee_id: role_id.to_string(),
                     grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
-                    privileges: rbac::all_object_privileges(SystemObjectType::Object(
+                    privileges: (options.all_object_privileges_fn)(SystemObjectType::Object(
                         mz_sql::catalog::ObjectType::Schema,
                     ))
                     .to_string(),
@@ -522,7 +523,8 @@ pub async fn initialize(
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(AclMode::USAGE.into_proto()),
         },
-        rbac::owner_privilege(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID).into_proto(),
+        (options.owner_privilege_fn)(mz_sql::catalog::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID)
+            .into_proto(),
     ];
 
     // Optionally add a privilege for the bootstrap role.
@@ -531,7 +533,7 @@ pub async fn initialize(
             grantee: Some(role_id.clone()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
             acl_mode: Some(
-                rbac::all_object_privileges(SystemObjectType::Object(
+                (options.all_object_privileges_fn)(SystemObjectType::Object(
                     mz_sql::catalog::ObjectType::Cluster,
                 ))
                 .into_proto(),
@@ -551,7 +553,7 @@ pub async fn initialize(
                     linked_object_id: None,
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: cluster_privileges,
-                    config: Some(default_cluster_config(options)),
+                    config: Some(default_cluster_config(&options)),
                 },
             )],
         )
@@ -587,7 +589,7 @@ pub async fn initialize(
                     object_id: ObjectId::Cluster(DEFAULT_USER_CLUSTER_ID).to_string(),
                     grantee_id: role_id.to_string(),
                     grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
-                    privileges: rbac::all_object_privileges(SystemObjectType::Object(
+                    privileges: (options.all_object_privileges_fn)(SystemObjectType::Object(
                         mz_sql::catalog::ObjectType::Cluster,
                     ))
                     .to_string(),
@@ -606,7 +608,7 @@ pub async fn initialize(
                 proto::ClusterReplicaValue {
                     cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                     name: DEFAULT_USER_REPLICA_NAME.to_string(),
-                    config: Some(default_replica_config(options)),
+                    config: Some(default_replica_config(&options)),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 },
             )],
@@ -633,7 +635,7 @@ pub async fn initialize(
             grantor: MZ_SYSTEM_ROLE_ID,
         },
         SystemPrivilegesValue {
-            acl_mode: rbac::all_object_privileges(SystemObjectType::System),
+            acl_mode: (options.all_object_privileges_fn)(SystemObjectType::System),
         },
     )]
     .into_iter()
@@ -645,7 +647,7 @@ pub async fn initialize(
                 grantor: MZ_SYSTEM_ROLE_ID,
             },
             SystemPrivilegesValue {
-                acl_mode: rbac::all_object_privileges(SystemObjectType::System),
+                acl_mode: (options.all_object_privileges_fn)(SystemObjectType::System),
             },
         )
     }))

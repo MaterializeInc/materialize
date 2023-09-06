@@ -475,6 +475,10 @@ impl Usage {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
+                owner_privilege_fn: mz_adapter::rbac::owner_privilege,
+                all_object_privileges_fn: mz_adapter::rbac::all_object_privileges,
+                default_builtin_object_privilege_fn:
+                    mz_adapter::rbac::default_builtin_object_privilege,
             },
             None,
         )

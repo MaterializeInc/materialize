@@ -5019,6 +5019,9 @@ impl Catalog {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
+                owner_privilege_fn: rbac::owner_privilege,
+                all_object_privileges_fn: rbac::all_object_privileges,
+                default_builtin_object_privilege_fn: rbac::default_builtin_object_privilege,
             },
             None,
         )

@@ -1345,7 +1345,7 @@ fn check_superuser_required(plan: &Plan) -> Result<(), UnauthorizedError> {
     }
 }
 
-pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
+pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const TABLE_ACL_MODE: AclMode = AclMode::INSERT
         .union(AclMode::SELECT)
         .union(AclMode::UPDATE)
@@ -1375,7 +1375,7 @@ pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclM
     }
 }
 
-pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
+pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
     MzAclItem {
         grantee: owner_id,
         grantor: owner_id,
@@ -1383,7 +1383,7 @@ pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -
     }
 }
 
-pub(crate) const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
+pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
     let acl_mode = match object_type {
         ObjectType::Table
         | ObjectType::View

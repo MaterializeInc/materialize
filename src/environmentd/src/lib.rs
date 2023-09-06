@@ -404,6 +404,10 @@ impl Listeners {
                             .bootstrap_builtin_cluster_replica_size
                             .clone(),
                         bootstrap_role: config.bootstrap_role.clone(),
+                        owner_privilege_fn: mz_adapter::rbac::owner_privilege,
+                        all_object_privileges_fn: mz_adapter::rbac::all_object_privileges,
+                        default_builtin_object_privilege_fn:
+                            mz_adapter::rbac::default_builtin_object_privilege,
                     },
                     None,
                 )
@@ -457,6 +461,10 @@ impl Listeners {
                 default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
                 builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
                 bootstrap_role: config.bootstrap_role,
+                owner_privilege_fn: mz_adapter::rbac::owner_privilege,
+                all_object_privileges_fn: mz_adapter::rbac::all_object_privileges,
+                default_builtin_object_privilege_fn:
+                    mz_adapter::rbac::default_builtin_object_privilege,
             },
             config.deploy_generation,
         )

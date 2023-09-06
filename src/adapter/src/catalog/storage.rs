@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::once;
 use std::pin;
@@ -27,7 +28,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
+    DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -173,6 +174,9 @@ pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
+    pub owner_privilege_fn: fn(ObjectType, RoleId) -> MzAclItem,
+    pub all_object_privileges_fn: fn(SystemObjectType) -> AclMode,
+    pub default_builtin_object_privilege_fn: fn(ObjectType) -> MzAclItem,
 }
 
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
@@ -242,7 +246,7 @@ impl Connection {
             match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
-                        stash::initialize(&mut tx, &args, boot_ts, deploy_generation).await
+                        stash::initialize(&mut tx, args, boot_ts, deploy_generation).await
                     })
                 })
                 .await
