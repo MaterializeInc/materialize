@@ -27,7 +27,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan;
 use mz_sql::plan::{
-    Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
+    UpdatePrivilege,
 };
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -338,14 +339,19 @@ fn generate_rbac_requirements(
         },
         Plan::CreateSource(plan::CreateSourcePlan {
             name,
-            source: _,
+            source,
             if_not_exists: _,
             timeline: _,
             cluster_config,
         }) => RbacRequirements {
             role_membership: BTreeSet::new(),
             ownership: Vec::new(),
-            privileges: generate_required_source_privileges(name, cluster_config, role_id),
+            privileges: generate_required_source_privileges(
+                name,
+                &source.data_source,
+                cluster_config,
+                role_id,
+            ),
             item_usage: true,
             superuser_action: None,
         },
@@ -360,15 +366,20 @@ fn generate_rbac_requirements(
                          plan:
                              plan::CreateSourcePlan {
                                  name,
-                                 source: _,
+                                 source,
                                  if_not_exists: _,
                                  timeline: _,
                                  cluster_config,
                              },
                          resolved_ids: _,
                      }| {
-                        generate_required_source_privileges(name, cluster_config, role_id)
-                            .into_iter()
+                        generate_required_source_privileges(
+                            name,
+                            &source.data_source,
+                            cluster_config,
+                            role_id,
+                        )
+                        .into_iter()
                     },
                 )
                 .collect(),
@@ -1448,6 +1459,7 @@ fn ownership_err(
 
 fn generate_required_source_privileges(
     name: &QualifiedItemName,
+    data_source: &DataSourceDesc,
     cluster_config: &SourceSinkClusterConfig,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
@@ -1456,9 +1468,18 @@ fn generate_required_source_privileges(
         AclMode::CREATE,
         role_id,
     )];
-    match cluster_config.cluster_id() {
-        Some(id) => privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id)),
-        None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
+    match (data_source, cluster_config.cluster_id()) {
+        (_, Some(id)) => {
+            privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id))
+        }
+        (DataSourceDesc::Ingestion(_), None) => {
+            privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id))
+        }
+        // Non-ingestion data-sources have meaningless cluster config's (for now...) and they need
+        // to be ignored.
+        // This feels very brittle, but there's not much we can do until the UNDEFINED cluster
+        // config is removed.
+        (_, None) => {}
     }
     privileges
 }

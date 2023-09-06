@@ -139,6 +139,8 @@ pub struct TimelyConfig {
     ///
     /// See `differential_dataflow::Config::idle_merge_effort`.
     pub idle_arrangement_merge_effort: u32,
+    /// Whether to enable variable-length row encoding.
+    pub variable_length_row_encoding: bool,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -148,6 +150,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
             idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
+            variable_length_row_encoding: self.variable_length_row_encoding,
         }
     }
 
@@ -157,6 +160,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
             idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
+            variable_length_row_encoding: proto.variable_length_row_encoding,
         })
     }
 }

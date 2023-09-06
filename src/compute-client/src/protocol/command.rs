@@ -35,15 +35,6 @@ include!(concat!(
     "/mz_compute_client.protocol.command.rs"
 ));
 
-/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
-/// if the controller attempt to reconcile them with different values
-/// for anything in this struct.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct InstanceConfig {
-    pub logging_config: LoggingConfig,
-    pub variable_length_row_encoding: bool,
-}
-
 /// Compute protocol commands, sent by the compute controller to replicas.
 ///
 /// Command sequences sent by the compute controller must be valid according to the [Protocol
@@ -240,13 +231,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     config: Some(config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
-                ComputeCommand::CreateInstance(InstanceConfig {
-                    logging_config,
-                    variable_length_row_encoding,
-                }) => CreateInstance(ProtoInstanceConfig {
-                    logging_config: Some(logging_config.into_proto()),
-                    variable_length_row_encoding: *variable_length_row_encoding,
-                }),
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
@@ -274,14 +259,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
                 })
             }
-            Some(CreateInstance(ProtoInstanceConfig {
-                logging_config,
-                variable_length_row_encoding,
-            })) => Ok(ComputeCommand::CreateInstance(InstanceConfig {
-                logging_config: logging_config
-                    .into_rust_if_some("ProtoCreateInstance::logging_config")?,
-                variable_length_row_encoding,
-            })),
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
@@ -312,13 +290,8 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            (any::<LoggingConfig>(), any::<bool>())
-                .prop_map(|(logging_config, variable_length_row_encoding)| {
-                    ComputeCommand::CreateInstance(InstanceConfig {
-                        logging_config,
-                        variable_length_row_encoding,
-                    })
-                })
+            any::<InstanceConfig>()
+                .prop_map(ComputeCommand::CreateInstance)
                 .boxed(),
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
@@ -334,6 +307,30 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 .prop_map(|uuid| ComputeCommand::CancelPeek { uuid })
                 .boxed(),
         ])
+    }
+}
+
+/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
+/// if the controller attempt to reconcile them with different values
+/// for anything in this struct.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct InstanceConfig {
+    pub logging: LoggingConfig,
+}
+
+impl RustType<ProtoInstanceConfig> for InstanceConfig {
+    fn into_proto(&self) -> ProtoInstanceConfig {
+        ProtoInstanceConfig {
+            logging: Some(self.logging.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            logging: proto
+                .logging
+                .into_rust_if_some("ProtoCreateInstance::logging")?,
+        })
     }
 }
 

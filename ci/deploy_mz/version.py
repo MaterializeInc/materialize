@@ -17,7 +17,8 @@ def main() -> None:
     boto3.client("s3").put_object(
         Body=f"{VERSION}\n",
         Bucket=BINARIES_BUCKET,
-        Key="mz.version",
+        Key="mz-latest.version",
+        ContentType="text/plain",
     )
 
 

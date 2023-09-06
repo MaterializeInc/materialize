@@ -33,11 +33,6 @@ message ProtoComputeCommand {
         mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
     }
 
-    message ProtoInstanceConfig {
-        logging.ProtoLoggingConfig logging_config = 1;
-        bool variable_length_row_encoding = 2;
-    }
-
     oneof kind {
         ProtoCreateTimely create_timely = 1;
         ProtoInstanceConfig create_instance = 2;
@@ -48,6 +43,10 @@ message ProtoComputeCommand {
         google.protobuf.Empty initialization_complete = 7;
         ProtoComputeParameters update_configuration = 8;
     }
+}
+
+message ProtoInstanceConfig {
+    logging.ProtoLoggingConfig logging = 1;
 }
 
 message ProtoPeek {

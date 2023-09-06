@@ -567,6 +567,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  sub_id  uint8
 4  comment  text
 
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
+----
+1  id  text
+2  name  text
+3  url  text
+
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
 ----
@@ -688,3 +695,4 @@ mz_subscriptions
 mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys
+mz_webhook_sources
