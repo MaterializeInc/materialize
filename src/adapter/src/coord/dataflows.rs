@@ -39,6 +39,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use mz_sql::rbac;
 use mz_transform::dataflow::DataflowMetainfo;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -53,7 +54,7 @@ use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
-use crate::{rbac, AdapterError};
+use crate::AdapterError;
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
 /// to exist after this has been made.

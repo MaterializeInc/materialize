@@ -23,6 +23,7 @@ use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
+use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
@@ -30,7 +31,7 @@ use smallvec::SmallVec;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
-use crate::{catalog, rbac};
+use crate::catalog;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]

@@ -24,6 +24,7 @@ use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
     FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
 };
+use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
@@ -37,7 +38,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{rbac, ExecuteContext, ExecuteResponseKind};
+use crate::{ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this

@@ -25,6 +25,7 @@ use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
+use mz_sql::rbac;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -47,7 +48,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics, rbac, ExecuteContext};
+use crate::{catalog, metrics, ExecuteContext};
 
 use super::ExecuteContextExtra;
 

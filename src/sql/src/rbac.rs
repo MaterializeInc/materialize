@@ -11,25 +11,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
 use itertools::Itertools;
+
 use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, MirRelationExpr};
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{
+use mz_sql_parser::ast::QualifiedReplica;
+
+use crate::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
 };
-use mz_sql::names::{
+use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     SystemObjectId,
 };
-use mz_sql::plan;
-use mz_sql::plan::{Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
-use mz_sql::session::user::{RoleMetadata, SUPPORT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{SessionVars, SystemVars};
-
-use mz_sql_parser::ast::QualifiedReplica;
+use crate::plan;
+use crate::plan::{Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
+use crate::session::user::{RoleMetadata, SUPPORT_USER, SYSTEM_USER};
+use crate::session::vars::{SessionVars, SystemVars};
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
 macro_rules! rbac_preamble {
@@ -1455,7 +1456,7 @@ fn check_superuser_required(plan: &Plan) -> Result<(), UnauthorizedError> {
     }
 }
 
-pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
+pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const TABLE_ACL_MODE: AclMode = AclMode::INSERT
         .union(AclMode::SELECT)
         .union(AclMode::UPDATE)
@@ -1485,7 +1486,7 @@ pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclM
     }
 }
 
-pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
+pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
     MzAclItem {
         grantee: owner_id,
         grantor: owner_id,
@@ -1493,7 +1494,7 @@ pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -
     }
 }
 
-pub(crate) const fn default_builtin_object_privilege(
+pub const fn default_builtin_object_privilege(
     object_type: ObjectType,
     mz_system_role_id: RoleId,
 ) -> MzAclItem {
