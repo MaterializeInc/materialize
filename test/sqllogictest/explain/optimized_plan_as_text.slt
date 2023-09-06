@@ -1278,3 +1278,24 @@ Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
 
 EOF
+
+# Index with an empty key.
+
+statement ok
+CREATE INDEX t_idx_empty_key ON t();
+
+query T multiline
+EXPLAIN INDEX t_idx_empty_key;
+----
+materialize.public.t_idx_empty_key:
+  ArrangeBy keys=[[]]
+    Get materialize.public.t
+
+Used Indexes:
+  - materialize.public.t_a_idx_1 (*** full scan ***, index export)
+
+Notices:
+  - Notice: Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
+    Hint: CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
+
+EOF

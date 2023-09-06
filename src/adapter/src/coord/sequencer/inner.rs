@@ -1126,6 +1126,8 @@ impl Coordinator {
             return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
+        let empty_key = index.keys.is_empty();
+
         let id = self.catalog_mut().allocate_user_id().await?;
         let index = catalog::Index {
             create_sql: index.create_sql,
@@ -1156,7 +1158,11 @@ impl Coordinator {
             })
             .await
         {
-            Ok((df, df_metainfo)) => {
+            Ok((df, mut df_metainfo)) => {
+                if empty_key {
+                    df_metainfo.push_optimizer_notice_dedup(OptimizerNotice::IndexKeyEmpty);
+                }
+
                 self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
 
                 self.catalog_mut().set_optimized_plan(id, df.clone());
@@ -5146,13 +5152,16 @@ impl Coordinator {
         session: &Session,
         optimizer_notices: &Vec<OptimizerNotice>,
     ) {
-        if self
-            .catalog
-            .system_config()
-            .enable_notices_for_index_too_wide_for_literal_constraints()
-        {
-            let humanizer = self.catalog().for_session(session);
-            for optimizer_notice in optimizer_notices {
+        let humanizer = self.catalog().for_session(session);
+        for optimizer_notice in optimizer_notices {
+            let system_vars = self.catalog.system_config();
+            let notice_enabled = match optimizer_notice {
+                OptimizerNotice::IndexTooWideForLiteralConstraints(..) => {
+                    system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
+                }
+                OptimizerNotice::IndexKeyEmpty => system_vars.enable_notices_for_index_empty_key(),
+            };
+            if notice_enabled {
                 let (notice, hint) = optimizer_notice.to_string(&humanizer);
                 session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
             }

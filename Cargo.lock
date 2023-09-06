@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -3789,6 +3789,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
+ "mz-stash",
  "mz-storage-client",
  "mz-timely-util",
  "mz-tracing",
@@ -3976,8 +3977,10 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist-types",
  "mz-pgrepr",
  "mz-proto",
+ "mz-regexp",
  "mz-repr",
  "mz-sql-parser",
  "num",
@@ -4469,6 +4472,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "chrono",
  "hex",
  "mz-ore",
  "mz-proto",
@@ -4648,6 +4652,18 @@ dependencies = [
  "tokio-postgres",
  "url",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-regexp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
+ "mz-repr",
+ "postgres",
+ "regex",
  "workspace-hack",
 ]
 
@@ -4980,6 +4996,7 @@ dependencies = [
  "once_cell",
  "postgres-protocol",
  "regex",
+ "reqwest",
  "serde_json",
  "shell-words",
  "tempfile",

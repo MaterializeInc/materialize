@@ -57,8 +57,8 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-    EnvironmentId, IdReference, NameReference, RoleAttributes, SessionCatalog, SystemObjectType,
-    TypeReference,
+    EnvironmentId, IdReference, NameReference, RoleAttributes, RoleMembership, SessionCatalog,
+    SystemObjectType, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -97,7 +97,6 @@ use mz_storage_client::types::sources::{
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
@@ -110,17 +109,18 @@ use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{timeline, ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
+mod consistency;
 mod error;
 mod migrate;
 
@@ -1960,6 +1960,17 @@ pub struct Database {
     pub privileges: PrivilegeMap,
 }
 
+impl From<Database> for storage::Database {
+    fn from(database: Database) -> storage::Database {
+        storage::Database {
+            id: database.id,
+            name: database.name,
+            owner_id: database.owner_id,
+            privileges: database.privileges.into_all_values().collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct Schema {
     pub name: QualifiedSchemaName,
@@ -1970,6 +1981,18 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+}
+
+impl Schema {
+    fn into_durable_schema(self, database_id: Option<DatabaseId>) -> storage::Schema {
+        storage::Schema {
+            id: self.id.into(),
+            name: self.name.schema,
+            database_id,
+            owner_id: self.owner_id,
+            privileges: self.privileges.into_all_values().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1988,48 +2011,14 @@ impl Role {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-// These attributes are needed because the key of a map must be a string. We also
-// get the added benefit of flattening this struct in it's serialized form.
-#[serde(into = "BTreeMap<String, RoleId>")]
-#[serde(try_from = "BTreeMap<String, RoleId>")]
-pub struct RoleMembership {
-    /// Key is the role that some role is a member of, value is the grantor role ID.
-    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
-    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
-    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
-    // migration.
-    pub map: BTreeMap<RoleId, RoleId>,
-}
-
-impl RoleMembership {
-    fn new() -> RoleMembership {
-        RoleMembership {
-            map: BTreeMap::new(),
+impl From<Role> for storage::Role {
+    fn from(role: Role) -> storage::Role {
+        storage::Role {
+            id: role.id,
+            name: role.name,
+            attributes: role.attributes,
+            membership: role.membership,
         }
-    }
-}
-
-impl From<RoleMembership> for BTreeMap<String, RoleId> {
-    fn from(value: RoleMembership) -> Self {
-        value
-            .map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect()
-    }
-}
-
-impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
-    type Error = anyhow::Error;
-
-    fn try_from(value: BTreeMap<String, RoleId>) -> Result<Self, Self::Error> {
-        Ok(RoleMembership {
-            map: value
-                .into_iter()
-                .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
-                .collect::<Result<_, anyhow::Error>>()?,
-        })
     }
 }
 
@@ -2070,6 +2059,19 @@ impl Cluster {
     }
 }
 
+impl From<Cluster> for storage::Cluster {
+    fn from(cluster: Cluster) -> storage::Cluster {
+        storage::Cluster {
+            id: cluster.id,
+            name: cluster.name,
+            linked_object_id: cluster.linked_object_id,
+            owner_id: cluster.owner_id,
+            privileges: cluster.privileges.into_all_values().collect(),
+            config: cluster.config,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ClusterReplica {
     pub name: String,
@@ -2101,6 +2103,18 @@ impl ClusterReplica {
                     ClusterStatus::NotReady(reason_x.or(reason_y))
                 }
             })
+    }
+}
+
+impl From<ClusterReplica> for storage::ClusterReplica {
+    fn from(replica: ClusterReplica) -> storage::ClusterReplica {
+        storage::ClusterReplica {
+            cluster_id: replica.cluster_id,
+            replica_id: replica.replica_id,
+            name: replica.name,
+            config: replica.config.into(),
+            owner_id: replica.owner_id,
+        }
     }
 }
 
@@ -2136,6 +2150,18 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+}
+
+impl From<CatalogEntry> for storage::Item {
+    fn from(entry: CatalogEntry) -> storage::Item {
+        storage::Item {
+            id: entry.id,
+            name: entry.name,
+            create_sql: entry.item.into_serialized(),
+            owner_id: entry.owner_id,
+            privileges: entry.privileges.into_all_values().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2830,6 +2856,50 @@ impl CatalogItem {
             | CatalogItem::Connection(_) => false,
         }
     }
+
+    pub(crate) fn to_serialized(&self) -> String {
+        match self {
+            CatalogItem::Table(table) => table.create_sql.clone(),
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
+                    "cannot serialize introspection/builtin sources",
+                );
+                source.create_sql.clone()
+            }
+            CatalogItem::View(view) => view.create_sql.clone(),
+            CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
+            CatalogItem::Index(index) => index.create_sql.clone(),
+            CatalogItem::Sink(sink) => sink.create_sql.clone(),
+            CatalogItem::Type(typ) => typ.create_sql.clone(),
+            CatalogItem::Secret(secret) => secret.create_sql.clone(),
+            CatalogItem::Connection(connection) => connection.create_sql.clone(),
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        }
+    }
+
+    pub(crate) fn into_serialized(self) -> String {
+        match self {
+            CatalogItem::Table(table) => table.create_sql,
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
+                    "cannot serialize introspection/builtin sources",
+                );
+                source.create_sql
+            }
+            CatalogItem::View(view) => view.create_sql,
+            CatalogItem::MaterializedView(mview) => mview.create_sql,
+            CatalogItem::Index(index) => index.create_sql,
+            CatalogItem::Sink(sink) => sink.create_sql,
+            CatalogItem::Type(typ) => typ.create_sql,
+            CatalogItem::Secret(secret) => secret.create_sql,
+            CatalogItem::Connection(connection) => connection.create_sql,
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -3161,6 +3231,7 @@ pub struct DefaultPrivileges {
 // map_key_to_string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
 struct RoleDefaultPrivileges(
+    /// Denormalized, the key is the grantee Role.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     BTreeMap<RoleId, DefaultPrivilegeAclItem>,
 );
@@ -3320,22 +3391,6 @@ impl DefaultPrivileges {
             .iter()
             .map(|(object, acl_map)| (object, acl_map.values()))
     }
-}
-
-/// Functions can share the same name as any other catalog item type
-/// within a given schema.
-/// For example, a function can have the same name as a type, e.g.
-/// 'date'.
-/// As such, system objects are keyed in the catalog storage by the
-/// tuple (schema_name, object_type, object_name), which is guaranteed
-/// to be unique.
-#[derive(Debug)]
-pub struct SystemObjectMapping {
-    schema_name: String,
-    object_type: CatalogItemType,
-    object_name: String,
-    id: GlobalId,
-    fingerprint: String,
 }
 
 #[derive(Debug)]
@@ -3508,6 +3563,28 @@ impl Catalog {
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
 
+        // Choose a time at which to boot. This is the time at which we will run
+        // internal migrations.
+        //
+        // This time is usually the current system time, but with protection
+        // against backwards time jumps, even across restarts.
+        let boot_ts = {
+            let mut storage = catalog.storage().await;
+            let previous_ts = storage
+                .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
+                .await?
+                .expect("missing EpochMilliseconds timeline");
+            let boot_ts = timeline::monotonic_now(config.now, previous_ts);
+            if !storage.is_read_only() {
+                // IMPORTANT: we durably record the new timestamp before using it.
+                storage
+                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .await?;
+            }
+
+            boot_ts
+        };
+
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
@@ -3621,6 +3698,7 @@ impl Catalog {
             .load_system_configuration(
                 config.system_parameter_defaults,
                 config.system_parameter_sync_config,
+                boot_ts,
             )
             .await?;
         // We need to set this variable ASAP, so that builtins get planned with the correct value
@@ -3898,23 +3976,23 @@ impl Catalog {
             cluster_id,
             replica_id,
             name,
-            serialized_config,
+            config,
             owner_id,
         } in replicas
         {
             let logging = ReplicaLogging {
-                log_logging: serialized_config.logging.log_logging,
-                interval: serialized_config.logging.interval,
+                log_logging: config.logging.log_logging,
+                interval: config.logging.interval,
             };
             let config = ReplicaConfig {
                 location: catalog.concretize_replica_location(
-                    serialized_config.location,
+                    config.location,
                     &vec![],
                     cluster_azs.get(&cluster_id).map(|zones| &**zones),
                 )?,
                 compute: ComputeReplicaConfig {
                     logging,
-                    idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
+                    idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
                 },
             };
 
@@ -3922,7 +4000,13 @@ impl Catalog {
             catalog
                 .storage()
                 .await
-                .set_replica_config(replica_id, cluster_id, name.clone(), &config, owner_id)
+                .set_replica_config(
+                    replica_id,
+                    cluster_id,
+                    name.clone(),
+                    config.clone().into(),
+                    owner_id,
+                )
                 .await?;
 
             catalog
@@ -4172,7 +4256,7 @@ impl Catalog {
         let storage_usage_events = catalog
             .storage()
             .await
-            .fetch_and_prune_storage_usage(config.storage_usage_retention_period)
+            .fetch_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
             .await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
@@ -4212,13 +4296,10 @@ impl Catalog {
         &mut self,
         system_parameter_defaults: BTreeMap<String, String>,
         system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+        boot_ts: mz_repr::Timestamp,
     ) -> Result<(), AdapterError> {
-        let (system_config, boot_ts) = {
-            let mut storage = self.storage().await;
-            let system_config = storage.load_system_configuration().await?;
-            let boot_ts = storage.boot_ts();
-            (system_config, boot_ts)
-        };
+        let system_config = self.storage().await.load_system_configuration().await?;
+
         for (name, value) in &system_parameter_defaults {
             match self
                 .state
@@ -4244,7 +4325,9 @@ impl Catalog {
             };
         }
         if let Some(system_parameter_sync_config) = system_parameter_sync_config {
-            if !self.state.system_config().config_has_synced_once() {
+            if self.storage().await.is_read_only() {
+                tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
+            } else if !self.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
 
                 // We intentionally block initial startup, potentially forever,
@@ -4712,7 +4795,7 @@ impl Catalog {
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
             let entry = self.get_entry(&id);
             let item = entry.item();
-            let serialized_item = Self::serialize_item(item);
+            let serialized_item = item.to_serialized();
             tx.insert_item(
                 id,
                 schema_id,
@@ -4769,7 +4852,7 @@ impl Catalog {
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some(item) = items.pop_front() {
-            let d_c = item.definition.clone();
+            let d_c = item.create_sql.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -4845,7 +4928,7 @@ impl Catalog {
             let storage::Item {
                 id,
                 name,
-                definition: _,
+                create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
@@ -4864,7 +4947,7 @@ impl Catalog {
             let storage::Item {
                 id,
                 name,
-                definition: _,
+                create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
@@ -5512,12 +5595,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: SerializedReplicaLocation,
+        location: storage::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            SerializedReplicaLocation::Unmanaged {
+            storage::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -5538,7 +5621,7 @@ impl Catalog {
                     workers,
                 })
             }
-            SerializedReplicaLocation::Managed {
+            storage::ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,
@@ -5777,7 +5860,7 @@ impl Catalog {
                     }
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
-                    tx.update_role(id, existing_role.clone())?;
+                    tx.update_role(id, existing_role.clone().into())?;
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {
                         builtin_table_updates.push(builtin_update);
                     }
@@ -5876,7 +5959,7 @@ impl Catalog {
                         ..(entry.clone())
                     };
 
-                    tx.update_item(id, &sink)?;
+                    tx.update_item(id, sink.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -5976,7 +6059,7 @@ impl Catalog {
                         ..(entry.clone())
                     };
 
-                    tx.update_item(id, &source)?;
+                    tx.update_item(id, source.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -6446,7 +6529,7 @@ impl Catalog {
                             }
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
-                        let serialized_item = Self::serialize_item(&item);
+                        let serialized_item = item.to_serialized();
                         tx.insert_item(
                             id,
                             schema_id,
@@ -6846,7 +6929,7 @@ impl Catalog {
                     }
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.insert(role_id, grantor_id);
-                    tx.update_role(member_id, member_role.clone())?;
+                    tx.update_role(member_id, member_role.clone().into())?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, 1));
 
@@ -6880,7 +6963,7 @@ impl Catalog {
                         .push(state.pack_role_members_update(role_id, member_id, -1));
                     let member_role = state.get_role_mut(&member_id);
                     member_role.membership.map.remove(&role_id);
-                    tx.update_role(member_id, member_role.clone())?;
+                    tx.update_role(member_id, member_role.clone().into())?;
 
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -6922,7 +7005,7 @@ impl Catalog {
                                     .push(state.pack_cluster_update(&cluster_name, -1));
                                 let cluster = state.get_cluster_mut(*id);
                                 update_privilege_fn(&mut cluster.privileges);
-                                tx.update_cluster(*id, cluster)?;
+                                tx.update_cluster(*id, cluster.clone().into())?;
                                 builtin_table_updates
                                     .push(state.pack_cluster_update(&cluster_name, 1));
                             }
@@ -6933,7 +7016,7 @@ impl Catalog {
                                 let database = state.get_database_mut(id);
                                 update_privilege_fn(&mut database.privileges);
                                 let database = state.get_database(id);
-                                tx.update_database(*id, database)?;
+                                tx.update_database(*id, database.clone().into())?;
                                 builtin_table_updates.push(state.pack_database_update(database, 1));
                             }
                             ObjectId::Schema((database_spec, schema_spec)) => {
@@ -6955,7 +7038,11 @@ impl Catalog {
                                     ResolvedDatabaseSpecifier::Ambient => None,
                                     ResolvedDatabaseSpecifier::Id(id) => Some(*id),
                                 };
-                                tx.update_schema(database_id, schema_id, schema)?;
+                                tx.update_schema(
+                                    database_id,
+                                    schema_id,
+                                    schema.clone().into_durable_schema(database_id),
+                                )?;
                                 builtin_table_updates.push(state.pack_schema_update(
                                     database_spec,
                                     &schema_id,
@@ -6967,7 +7054,7 @@ impl Catalog {
                                 let entry = state.get_entry_mut(id);
                                 update_privilege_fn(&mut entry.privileges);
                                 if !entry.item().is_temporary() {
-                                    tx.update_item(*id, entry)?;
+                                    tx.update_item(*id, entry.clone().into())?;
                                 }
                                 builtin_table_updates.extend(state.pack_item_update(*id, 1));
                             }
@@ -7257,14 +7344,14 @@ impl Catalog {
                             })?;
 
                         if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, &to_entry)?;
+                            tx.update_item(*id, to_entry.clone().into())?;
                         }
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
 
                         updates.push((id.clone(), dependent_item.name().clone(), to_entry.item));
                     }
                     if !new_entry.item().is_temporary() {
-                        tx.update_item(id, &new_entry)?;
+                        tx.update_item(id, new_entry.clone().into())?;
                     }
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, new_entry.item));
@@ -7303,7 +7390,7 @@ impl Catalog {
                                 new_owner,
                             );
                             cluster.owner_id = new_owner;
-                            tx.update_cluster(*id, cluster)?;
+                            tx.update_cluster(*id, cluster.clone().into())?;
                             builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
                         }
                         ObjectId::ClusterReplica((cluster_id, replica_id)) => {
@@ -7335,7 +7422,11 @@ impl Catalog {
                                 .get_mut(replica_id)
                                 .expect("catalog out of sync");
                             replica.owner_id = new_owner;
-                            tx.update_cluster_replica(*cluster_id, *replica_id, replica)?;
+                            tx.update_cluster_replica(
+                                *cluster_id,
+                                *replica_id,
+                                replica.clone().into(),
+                            )?;
                             builtin_table_updates.push(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
@@ -7353,7 +7444,7 @@ impl Catalog {
                             );
                             database.owner_id = new_owner;
                             let database = state.get_database(id);
-                            tx.update_database(*id, database)?;
+                            tx.update_database(*id, database.clone().into())?;
                             builtin_table_updates.push(state.pack_database_update(database, 1));
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
@@ -7374,7 +7465,11 @@ impl Catalog {
                                 ResolvedDatabaseSpecifier::Ambient => None,
                                 ResolvedDatabaseSpecifier::Id(id) => Some(id),
                             };
-                            tx.update_schema(database_id.cloned(), schema_id, schema)?;
+                            tx.update_schema(
+                                database_id.copied(),
+                                schema_id,
+                                schema.clone().into_durable_schema(database_id.copied()),
+                            )?;
                             builtin_table_updates.push(state.pack_schema_update(
                                 database_spec,
                                 &schema_id,
@@ -7401,7 +7496,7 @@ impl Catalog {
                             );
                             entry.owner_id = new_owner;
                             if !entry.item().is_temporary() {
-                                tx.update_item(*id, entry)?;
+                                tx.update_item(*id, entry.clone().into())?;
                             }
                             builtin_table_updates.extend(state.pack_item_update(*id, 1));
                         }
@@ -7427,7 +7522,7 @@ impl Catalog {
                     builtin_table_updates.push(state.pack_cluster_update(&name, -1));
                     let cluster = state.get_cluster_mut(id);
                     cluster.config = config;
-                    tx.update_cluster(id, cluster)?;
+                    tx.update_cluster(id, cluster.clone().into())?;
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     info!("update cluster {}", name);
                 }
@@ -7465,7 +7560,7 @@ impl Catalog {
                         drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
-                    tx.update_item(id, entry)?;
+                    tx.update_item(id, entry.clone().into())?;
 
                     if Self::should_audit_log_item(&to_item) {
                         let name = Self::full_name_detail(
@@ -7742,53 +7837,10 @@ impl Catalog {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    pub(crate) fn serialize_item(item: &CatalogItem) -> SerializedCatalogItem {
-        match item {
-            CatalogItem::Table(table) => SerializedCatalogItem::V1 {
-                create_sql: table.create_sql.clone(),
-            },
-            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-            CatalogItem::Source(source) => {
-                assert!(
-                    match source.data_source {
-                        DataSourceDesc::Introspection(_) => false,
-                        _ => true,
-                    },
-                    "cannot serialize introspection/builtin sources",
-                );
-                SerializedCatalogItem::V1 {
-                    create_sql: source.create_sql.clone(),
-                }
-            }
-            CatalogItem::View(view) => SerializedCatalogItem::V1 {
-                create_sql: view.create_sql.clone(),
-            },
-            CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
-                create_sql: mview.create_sql.clone(),
-            },
-            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
-                create_sql: index.create_sql.clone(),
-            },
-            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
-                create_sql: sink.create_sql.clone(),
-            },
-            CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
-                create_sql: typ.create_sql.clone(),
-            },
-            CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
-                create_sql: secret.create_sql.clone(),
-            },
-            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
-                create_sql: connection.create_sql.clone(),
-            },
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-        }
-    }
-
     fn deserialize_item(
         &self,
         id: GlobalId,
-        SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
+        create_sql: String,
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
@@ -7976,6 +8028,17 @@ impl Catalog {
     /// identically.
     pub fn dump(&self) -> Result<CatalogDump, Error> {
         Ok(CatalogDump::new(self.state.dump()?))
+    }
+
+    /// Checks the [`Catalog`]s internal consistency.
+    ///
+    /// Returns a JSON object describing the inconsistencies, if there are any.
+    pub fn check_consistency(&self) -> Result<(), serde_json::Value> {
+        self.state.check_consistency().map_err(|inconsistencies| {
+            serde_json::to_value(inconsistencies).unwrap_or_else(|_| {
+                serde_json::Value::String("failed to serialize inconsistencies".to_string())
+            })
+        })
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -8364,11 +8427,6 @@ pub enum Op {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
-pub enum SerializedCatalogItem {
-    V1 { create_sql: String },
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
@@ -8378,7 +8436,7 @@ pub struct ClusterConfig {
 pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
-    pub logging: SerializedReplicaLogging,
+    pub logging: ReplicaLogging,
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
@@ -8388,101 +8446,6 @@ pub struct ClusterVariantManaged {
 pub enum ClusterVariant {
     Managed(ClusterVariantManaged),
     Unmanaged,
-}
-
-/// Serialized (stored alongside the replica) logging configuration of
-/// a replica. Serialized variant of `ReplicaLogging`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SerializedReplicaLogging {
-    pub(crate) log_logging: bool,
-    pub(crate) interval: Option<Duration>,
-}
-
-impl From<ReplicaLogging> for SerializedReplicaLogging {
-    fn from(
-        ReplicaLogging {
-            log_logging,
-            interval,
-        }: ReplicaLogging,
-    ) -> Self {
-        Self {
-            log_logging,
-            interval,
-        }
-    }
-}
-
-/// A [`ReplicaConfig`] that is serialized as JSON and persisted to the catalog
-/// stash. This is a separate type to allow us to evolve the on-disk format
-/// independently from the SQL layer.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub struct SerializedReplicaConfig {
-    pub location: SerializedReplicaLocation,
-    pub logging: SerializedReplicaLogging,
-    pub idle_arrangement_merge_effort: Option<u32>,
-}
-
-impl From<ReplicaConfig> for SerializedReplicaConfig {
-    fn from(config: ReplicaConfig) -> Self {
-        SerializedReplicaConfig {
-            location: config.location.into(),
-            logging: config.compute.logging.into(),
-            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SerializedReplicaLocation {
-    Unmanaged {
-        storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
-        computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
-    },
-    Managed {
-        size: String,
-        /// `Some(az)` if the AZ was specified by the user and must be respected;
-        availability_zone: Option<String>,
-        disk: bool,
-    },
-}
-
-impl From<ReplicaLocation> for SerializedReplicaLocation {
-    fn from(loc: ReplicaLocation) -> Self {
-        match loc {
-            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            }) => Self::Unmanaged {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            },
-            ReplicaLocation::Managed(ManagedReplicaLocation {
-                allocation: _,
-                size,
-                availability_zones,
-                disk,
-            }) => SerializedReplicaLocation::Managed {
-                size,
-                availability_zone: if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
-                    availability_zones
-                {
-                    Some(az)
-                } else {
-                    None
-                },
-                disk,
-            },
-        }
-    }
 }
 
 impl ConnCatalog<'_> {

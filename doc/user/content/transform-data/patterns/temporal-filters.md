@@ -251,7 +251,7 @@ In the examples above, the `event_ts` value in each event correlates with the ti
 However, the values in the `content` column are not correlated with insertion time in any way, so filters against `content` will probably not be pushed down to the storage layer.
 
 Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
-However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](/sql/explain/#output-modifiers) in an `EXPLAIN` statement. For example:
+However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](/sql/explain-plan/#output-modifiers) in an `EXPLAIN` statement. For example:
 
 ```sql
 EXPLAIN WITH(filter_pushdown)

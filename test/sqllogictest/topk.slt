@@ -60,12 +60,12 @@ TX  Houston
 TX  San_Antonio
 TX  Dallas
 
-# EXPECTED GROUP SIZE hint should not affect the results
+# LIMIT INPUT GROUP SIZE hint should not affect the results
 query TT rowsort
 SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name FROM cities WHERE state = grp.state
-             OPTIONS (EXPECTED GROUP SIZE = 1)
+             OPTIONS (LIMIT INPUT GROUP SIZE = 1)
              ORDER BY pop DESC NULLS LAST LIMIT 3)
 ----
 AZ  Phoenix
@@ -156,7 +156,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name FROM cities WHERE state = grp.state
-             OPTIONS (EXPECTED GROUP SIZE = 1)
+             OPTIONS (LIMIT INPUT GROUP SIZE = 1)
              ORDER BY pop DESC NULLS LAST LIMIT 3)
 ----
 Explained Query:

@@ -365,3 +365,113 @@ error: incomplete escape sequence, reached end of pattern prematurely"))
     Get materialize.public.t
 
 EOF
+
+mode cockroach
+
+query T
+SELECT regexp_split_to_array(txt, re) FROM (VALUES
+  ('hello world'),
+  ('12  34'),
+  (' 12  34 '),
+  (''),
+  (' ')
+) TXT(txt),
+(VALUES
+  (''),
+  (' '),
+  ('\s+'),
+  ('\s*'),
+  ('\s')
+) RE(re)
+ORDER BY 1
+----
+{""}
+{""}
+{""}
+{""}
+{""}
+{"",""}
+{"",""}
+{"",""}
+{"",""}
+{"",1,2,3,4,""}
+{"",12,"",34,""}
+{"",12,"",34,""}
+{"",12,34,""}
+{" "}
+{" ",1,2," "," ",3,4," "}
+{1,2," "," ",3,4}
+{1,2,3,4}
+{12,"",34}
+{12,"",34}
+{12,34}
+{h,e,l,l,o," ",w,o,r,l,d}
+{h,e,l,l,o,w,o,r,l,d}
+{hello,world}
+{hello,world}
+{hello,world}
+
+# TODO: Correct ordering when #16464 is fixed.
+query T
+SELECT foo FROM regexp_split_to_table('the quick brown fox jumps over the lazy dog', '\s+') AS foo ORDER BY 1
+----
+brown
+dog
+fox
+jumps
+lazy
+over
+quick
+the
+the
+
+# TODO: Correct ordering when #16464 is fixed.
+query T
+SELECT foo FROM regexp_split_to_table('the quick brown fox', '\s*') AS foo ORDER BY 1
+----
+b
+c
+e
+f
+h
+i
+k
+n
+o
+o
+q
+r
+t
+u
+w
+x
+
+query T
+SELECT regexp_split_to_array('no match', 'nope')
+----
+{"no match"}
+
+query T
+SELECT regexp_split_to_table('no match', 'nope')
+----
+no match
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X')
+----
+fooXbaz
+
+query T
+SELECT regexp_replace('foobarbaz', 'b..', 'X', 'g')
+----
+fooXX
+
+query T
+SELECT regexp_replace('foobarbaz', 'b(..)', 'X${1}Y', 'g')
+----
+fooXarYXazY
+
+query T
+SELECT regexp_replace('foobarbaz', 'no match', 'X')
+----
+foobarbaz

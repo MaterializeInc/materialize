@@ -412,7 +412,7 @@ steps:
 
   - id: checks-parallel-restart-clusterd-compute
     label: "Checks parallel + restart compute clusterd"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
@@ -686,6 +686,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=1, --runtime=3000]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
@@ -697,6 +701,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=15, --explain-only, --runtime=3000]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: sqlancer-pqs
     label: "SQLancer PQS"
@@ -708,6 +716,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=PQS, --no-qpg]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: sqlancer-norec
     label: "SQLancer NoREC"
@@ -719,6 +731,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=NOREC]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: sqlancer-query-partitioning
     label: "SQLancer QueryPartitioning"
@@ -730,6 +746,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=QUERY_PARTITIONING]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: sqlancer-having
     label: "SQLancer Having"
@@ -741,6 +761,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=HAVING]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
@@ -769,6 +793,10 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: parallel-workload-dml
     label: "Parallel Workload (DML)"
@@ -780,6 +808,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           args: [--runtime=3000, --complexity=dml, --threads=16]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: parallel-workload
     label: "Parallel Workload"
@@ -791,6 +823,10 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           args: [--runtime=3000]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   - id: parallel-workload-100-threads
     label: "Parallel Workload (100 threads)"
@@ -802,18 +838,25 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           args: [--runtime=3000, --threads=100]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
-  # TODO(def-) Enable after https://github.com/MaterializeInc/materialize/issues/20404 is fixed
-  #- id: parallel-workload-cancel
-  #  label: "Parallel Workload (cancel)"
-  #  artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-  #  timeout_in_minutes: 60
-  #  agents:
-  #    queue: builder-linux-x86_64
-  #  plugins:
-  #    - ./ci/plugins/mzcompose:
-  #        composition: parallel-workload
-  #        args: [--runtime=3000, --scenario=cancel]
+  - id: parallel-workload-cancel
+    label: "Parallel Workload (cancel)"
+    artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=3000, --scenario=cancel]
+    # Allow retrying generally flaky tests even when they are green
+    retry:
+      manual:
+        permit_on_passed: true
 
   # TODO(def-) Enable after figuring out restoring catalog
   #- id: parallel-workload-kill
@@ -826,6 +869,10 @@ steps:
   #    - ./ci/plugins/mzcompose:
   #        composition: parallel-workload
   #        args: [--runtime=3000, --scenario=kill]
+  #  # Allow retrying generally flaky tests even when they are green
+  #  retry:
+  #    manual:
+  #      permit_on_passed: true
 
   - wait: ~
     continue_on_failure: true

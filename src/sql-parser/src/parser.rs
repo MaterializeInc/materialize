@@ -5883,8 +5883,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_select_option(&mut self) -> Result<SelectOption<Raw>, ParserError> {
-        self.expect_keywords(&[EXPECTED, GROUP, SIZE])?;
-        let name = SelectOptionName::ExpectedGroupSize;
+        let name = match self.expect_one_of_keywords(&[EXPECTED, AGGREGATE, DISTINCT, LIMIT])? {
+            EXPECTED => {
+                self.expect_keywords(&[GROUP, SIZE])?;
+                SelectOptionName::ExpectedGroupSize
+            }
+            AGGREGATE => {
+                self.expect_keywords(&[INPUT, GROUP, SIZE])?;
+                SelectOptionName::AggregateInputGroupSize
+            }
+            DISTINCT => {
+                self.expect_keywords(&[ON, INPUT, GROUP, SIZE])?;
+                SelectOptionName::DistinctOnInputGroupSize
+            }
+            LIMIT => {
+                self.expect_keywords(&[INPUT, GROUP, SIZE])?;
+                SelectOptionName::LimitInputGroupSize
+            }
+            _ => unreachable!(),
+        };
         Ok(SelectOption {
             name,
             value: self.parse_optional_option_value()?,

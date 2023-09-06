@@ -33,6 +33,7 @@ class TextByteaTypes(Check):
                   FROM text_bytea_types_table
                   WHERE text_col >= ''::TEXT AND bytea_col >= ''::BYTEA;
 
+                > SET statement_timeout = '60s';
                 > INSERT INTO text_bytea_types_table SELECT DISTINCT text_col, bytea_col FROM text_bytea_types_table;
                 """,
                 """
@@ -41,6 +42,7 @@ class TextByteaTypes(Check):
                   FROM text_bytea_types_table
                   WHERE text_col >= ''::TEXT AND bytea_col >= ''::BYTEA;
 
+                > SET statement_timeout = '60s';
                 > INSERT INTO text_bytea_types_table SELECT DISTINCT text_col, bytea_col FROM text_bytea_types_table;
                 """,
             ]

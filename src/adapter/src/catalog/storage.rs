@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
+use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLogging};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
@@ -26,8 +26,8 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
-    CatalogSchema, ObjectType, RoleAttributes,
+    CatalogError as SqlCatalogError, CatalogItemType, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -44,12 +44,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
-use crate::catalog::{
-    self, is_reserved_name, Catalog, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
-    SerializedReplicaLocation, SerializedReplicaLogging, SystemObjectMapping,
-};
-use crate::coord::timeline;
+use crate::catalog::{is_reserved_name, ClusterConfig, ClusterVariant};
 
 pub mod objects;
 pub mod stash;
@@ -76,9 +71,7 @@ const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-) -> Result<(), catalog::error::Error> {
+fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -113,7 +106,7 @@ fn add_new_builtin_clusters_migration(
 fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     bootstrap_args: &BootstrapArgs,
-) -> Result<(), catalog::error::Error> {
+) -> Result<(), Error> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .clusters
         .items()
@@ -156,9 +149,9 @@ fn add_new_builtin_cluster_replicas_migration(
     Ok(())
 }
 
-fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedReplicaConfig {
-    SerializedReplicaConfig {
-        location: SerializedReplicaLocation::Managed {
+fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
+    ReplicaConfig {
+        location: ReplicaLocation::Managed {
             size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: None,
             disk: false,
@@ -168,8 +161,8 @@ fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> SerializedR
     }
 }
 
-fn default_logging_config() -> SerializedReplicaLogging {
-    SerializedReplicaLogging {
+fn default_logging_config() -> ReplicaLogging {
+    ReplicaLogging {
         log_logging: false,
         interval: Some(Duration::from_secs(1)),
     }
@@ -191,7 +184,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection {
     stash: Stash,
-    boot_ts: mz_repr::Timestamp,
 }
 
 impl Connection {
@@ -240,16 +232,17 @@ impl Connection {
                 return Err((stash, e.into()));
             }
         } {
-            // Get the current timestamp so we can record when we booted.
-            let previous_now = mz_repr::Timestamp::MIN;
-            let boot_ts = timeline::monotonic_now(now, previous_now);
+            // Get the current timestamp so we can record when we booted. We don't have to worry
+            // about `boot_ts` being less than a previously used timestamp because the stash is
+            // uninitialized and there are no previous timestamps.
+            let boot_ts = now();
 
             // Initialize the Stash
             let args = bootstrap_args.clone();
             match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
-                        stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
+                        stash::initialize(&mut tx, &args, boot_ts, deploy_generation).await
                     })
                 })
                 .await
@@ -258,7 +251,7 @@ impl Connection {
                 Err(e) => return Err((stash, e.into())),
             }
 
-            Connection { stash, boot_ts }
+            Connection { stash }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
@@ -271,34 +264,9 @@ impl Connection {
                 }
             }
 
-            // Choose a time at which to boot. This is the time at which we will run
-            // internal migrations, and is also exposed upwards in case higher
-            // layers want to run their own migrations at the same timestamp.
-            //
-            // This time is usually the current system time, but with protection
-            // against backwards time jumps, even across restarts.
-            let previous =
-                match try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds).await {
-                    Ok(ts) => ts.unwrap_or(mz_repr::Timestamp::MIN),
-                    Err(e) => {
-                        return Err((stash, e));
-                    }
-                };
-            let boot_ts = timeline::monotonic_now(now, previous);
-
-            let mut conn = Connection { stash, boot_ts };
+            let mut conn = Connection { stash };
 
             if !conn.stash.is_readonly() {
-                // IMPORTANT: we durably record the new timestamp before using it.
-                match conn
-                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(e) => {
-                        return Err((conn.stash, e));
-                    }
-                }
                 if let Some(deploy_generation) = deploy_generation {
                     match conn.persist_deploy_generation(deploy_generation).await {
                         Ok(()) => {}
@@ -348,17 +316,8 @@ impl Connection {
         self.stash.set_connect_timeout(connect_timeout).await;
     }
 
-    /// Returns the timestamp at which the storage layer booted.
-    ///
-    /// This is the timestamp that will have been used to write any data during
-    /// migrations. It is exposed so that higher layers performing their own
-    /// migrations can write data at the same timestamp, if desired.
-    ///
-    /// The boot timestamp is derived from the durable timestamp oracle and is
-    /// guaranteed to never go backwards, even in the face of backwards time
-    /// jumps across restarts.
-    pub fn boot_ts(&self) -> mz_repr::Timestamp {
-        self.boot_ts
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.stash.is_readonly()
     }
 
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
@@ -477,7 +436,7 @@ impl Connection {
                     cluster_id: v.cluster_id,
                     replica_id: k.id,
                     name: v.name,
-                    serialized_config: v.config,
+                    config: v.config,
                     owner_id: v.owner_id,
                 },
             )
@@ -504,13 +463,15 @@ impl Connection {
     pub async fn fetch_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
+        boot_ts: mz_repr::Timestamp,
     ) -> Result<Vec<VersionedStorageUsage>, Error> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
             None => u128::MIN,
-            Some(period) => u128::from(self.boot_ts).saturating_sub(period.as_millis()),
+            Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
+        let is_read_only = self.is_read_only();
         Ok(self
             .stash
             .with_transaction(move |tx| {
@@ -530,7 +491,7 @@ impl Connection {
                     // Delete things only if a retention period is
                     // specified (otherwise opening readonly catalogs
                     // can fail).
-                    if retention_period.is_some() {
+                    if retention_period.is_some() && !is_read_only {
                         tx.append(vec![batch]).await?;
                     }
                     Ok(events)
@@ -735,14 +696,14 @@ impl Connection {
         replica_id: ReplicaId,
         cluster_id: ClusterId,
         name: String,
-        config: &ReplicaConfig,
+        config: ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         let key = ClusterReplicaKey { id: replica_id }.into_proto();
         let val = ClusterReplicaValue {
             cluster_id,
             name,
-            config: config.clone().into(),
+            config,
             owner_id,
         }
         .into_proto();
@@ -828,6 +789,25 @@ impl Connection {
         Ok((id..next.next_id).collect())
     }
 
+    /// Gets a global timestamp for a timeline that has been persisted to disk.
+    ///
+    /// Returns `None` if no persisted timestamp for the specified timeline exists.
+    pub async fn try_get_persisted_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<Option<mz_repr::Timestamp>, Error> {
+        let key = proto::TimestampKey {
+            id: timeline.to_string(),
+        };
+        let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
+            .peek_key_one(&mut self.stash, key)
+            .await?
+            .map(RustType::from_proto)
+            .transpose()?;
+
+        Ok(val.map(|v| v.ts))
+    }
+
     /// Get all global timestamps that has been persisted to disk.
     pub async fn get_all_persisted_timestamps(
         &mut self,
@@ -891,27 +871,6 @@ impl Connection {
     pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
         Ok(self.stash.confirm_leadership().await?)
     }
-}
-
-/// Gets a global timestamp for a timeline that has been persisted to disk.
-///
-/// Returns `None` if no persisted timestamp for the specified timeline exists.
-async fn try_get_persisted_timestamp(
-    stash: &mut Stash,
-    timeline: &Timeline,
-) -> Result<Option<mz_repr::Timestamp>, Error>
-where
-{
-    let key = proto::TimestampKey {
-        id: timeline.to_string(),
-    };
-    let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
-        .peek_key_one(stash, key)
-        .await?
-        .map(RustType::from_proto)
-        .transpose()?;
-
-    Ok(val.map(|v| v.ts))
 }
 
 #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
@@ -1058,7 +1017,7 @@ impl<'a> Transaction<'a> {
                     },
                     item: v.name.clone(),
                 },
-                definition: v.definition.clone(),
+                create_sql: v.create_sql.clone(),
                 owner_id: v.owner_id,
                 privileges: v.privileges.clone(),
             });
@@ -1312,7 +1271,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
-        config: &SerializedReplicaConfig,
+        config: &ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         if let Err(_) = self.cluster_replicas.insert(
@@ -1370,7 +1329,7 @@ impl<'a> Transaction<'a> {
         id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
-        item: SerializedCatalogItem,
+        create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<(), Error> {
@@ -1379,7 +1338,7 @@ impl<'a> Transaction<'a> {
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
-                definition: item,
+                create_sql,
                 owner_id,
                 privileges,
             },
@@ -1516,20 +1475,21 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub(crate) fn update_item(
-        &mut self,
-        id: GlobalId,
-        entry: &catalog::CatalogEntry,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
-                let definition = Catalog::serialize_item(entry.item());
+                let item = item.clone();
+                // Schema IDs cannot change.
+                assert_eq!(
+                    SchemaId::from(item.name.qualifiers.schema_spec),
+                    v.schema_id
+                );
                 Some(ItemValue {
                     schema_id: v.schema_id,
-                    name: entry.name().item.clone(),
-                    definition,
-                    owner_id: *entry.owner_id(),
-                    privileges: entry.privileges().all_values_owned().collect(),
+                    name: item.name.item,
+                    create_sql: item.create_sql,
+                    owner_id: item.owner_id,
+                    privileges: item.privileges,
                 })
             } else {
                 None
@@ -1553,10 +1513,15 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
+                // Schema IDs cannot change.
+                assert_eq!(
+                    SchemaId::from(item.name.qualifiers.schema_spec),
+                    v.schema_id
+                );
                 Some(ItemValue {
                     schema_id: v.schema_id,
                     name: item.name.item.clone(),
-                    definition: item.definition.clone(),
+                    create_sql: item.create_sql.clone(),
                     owner_id: item.owner_id.clone(),
                     privileges: item.privileges.clone(),
                 })
@@ -1582,10 +1547,11 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub(crate) fn update_role(&mut self, id: RoleId, role: catalog::Role) -> Result<(), Error> {
+    pub(crate) fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), Error> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
-                Some(RoleValue::from(role.clone()))
+                let role = role.clone();
+                Some(RoleValue::from(role))
             } else {
                 None
             }
@@ -1638,19 +1604,16 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
     /// DO NOT call this function in a loop.
-    pub(crate) fn update_cluster(
-        &mut self,
-        id: ClusterId,
-        cluster: &catalog::Cluster,
-    ) -> Result<(), Error> {
+    pub(crate) fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), Error> {
         let n = self.clusters.update(|k, _v| {
             if k.id == id {
+                let cluster = cluster.clone();
                 Some(ClusterValue {
-                    name: cluster.name().to_string(),
-                    linked_object_id: cluster.linked_object_id(),
+                    name: cluster.name,
+                    linked_object_id: cluster.linked_object_id,
                     owner_id: cluster.owner_id,
-                    privileges: cluster.privileges().all_values_owned().collect(),
-                    config: cluster.config.clone(),
+                    privileges: cluster.privileges,
+                    config: cluster.config,
                 })
             } else {
                 None
@@ -1674,14 +1637,15 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        replica: &catalog::ClusterReplica,
+        replica: ClusterReplica,
     ) -> Result<(), Error> {
         let n = self.cluster_replicas.update(|k, _v| {
             if k.id == replica_id {
+                let replica = replica.clone();
                 Some(ClusterReplicaValue {
                     cluster_id,
-                    name: replica.name.clone(),
-                    config: replica.config.clone().into(),
+                    name: replica.name,
+                    config: replica.config,
                     owner_id: replica.owner_id,
                 })
             } else {
@@ -1705,14 +1669,15 @@ impl<'a> Transaction<'a> {
     pub(crate) fn update_database(
         &mut self,
         id: DatabaseId,
-        database: &catalog::Database,
+        database: Database,
     ) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
             if id == k.id {
+                let database = database.clone();
                 Some(DatabaseValue {
-                    name: database.name().to_string(),
+                    name: database.name,
                     owner_id: database.owner_id,
-                    privileges: database.privileges().all_values_owned().collect(),
+                    privileges: database.privileges,
                 })
             } else {
                 None
@@ -1736,15 +1701,16 @@ impl<'a> Transaction<'a> {
         &mut self,
         database_id: Option<DatabaseId>,
         schema_id: SchemaId,
-        schema: &catalog::Schema,
+        schema: Schema,
     ) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
             if schema_id == k.id {
+                let schema = schema.clone();
                 Some(SchemaValue {
                     database_id,
-                    name: schema.name().schema.clone(),
+                    name: schema.name,
                     owner_id: schema.owner_id,
-                    privileges: schema.privileges().all_values_owned().collect(),
+                    privileges: schema.privileges,
                 })
             } else {
                 None
@@ -1993,6 +1959,7 @@ impl<'a> Transaction<'a> {
 
 // Structs used to pass information to outside modules.
 
+#[derive(Debug, Clone)]
 pub struct Database {
     pub id: DatabaseId,
     pub name: String,
@@ -2000,6 +1967,7 @@ pub struct Database {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Schema {
     pub id: SchemaId,
     pub name: String,
@@ -2008,6 +1976,7 @@ pub struct Schema {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Role {
     pub id: RoleId,
     pub name: String,
@@ -2015,6 +1984,7 @@ pub struct Role {
     pub membership: RoleMembership,
 }
 
+#[derive(Debug, Clone)]
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
@@ -2024,21 +1994,124 @@ pub struct Cluster {
     pub config: ClusterConfig,
 }
 
+#[derive(Debug, Clone)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub name: String,
-    pub serialized_config: SerializedReplicaConfig,
+    pub config: ReplicaConfig,
     pub owner_id: RoleId,
 }
 
-#[derive(Debug)]
+// The on-disk replica configuration does not match the in-memory replica configuration, so we need
+// separate structs. As of writing this comment, it is mainly due to the fact that we don't persist
+// the replica allocation.
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReplicaConfig {
+    pub location: ReplicaLocation,
+    pub logging: ReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
+}
+
+impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
+    fn from(config: mz_controller::clusters::ReplicaConfig) -> Self {
+        Self {
+            location: config.location.into(),
+            logging: config.compute.logging,
+            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ReplicaLocation {
+    Unmanaged {
+        storagectl_addrs: Vec<String>,
+        storage_addrs: Vec<String>,
+        computectl_addrs: Vec<String>,
+        compute_addrs: Vec<String>,
+        workers: usize,
+    },
+    Managed {
+        size: String,
+        /// `Some(az)` if the AZ was specified by the user and must be respected;
+        availability_zone: Option<String>,
+        disk: bool,
+    },
+}
+
+impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
+    fn from(loc: mz_controller::clusters::ReplicaLocation) -> Self {
+        match loc {
+            mz_controller::clusters::ReplicaLocation::Unmanaged(
+                mz_controller::clusters::UnmanagedReplicaLocation {
+                    storagectl_addrs,
+                    storage_addrs,
+                    computectl_addrs,
+                    compute_addrs,
+                    workers,
+                },
+            ) => Self::Unmanaged {
+                storagectl_addrs,
+                storage_addrs,
+                computectl_addrs,
+                compute_addrs,
+                workers,
+            },
+            mz_controller::clusters::ReplicaLocation::Managed(
+                mz_controller::clusters::ManagedReplicaLocation {
+                    allocation: _,
+                    size,
+                    availability_zones,
+                    disk,
+                },
+            ) => ReplicaLocation::Managed {
+                size,
+                availability_zone:
+                    if let mz_controller::clusters::ManagedReplicaAvailabilityZones::FromReplica(
+                        Some(az),
+                    ) = availability_zones
+                    {
+                        Some(az)
+                    } else {
+                        None
+                    },
+                disk,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComputeReplicaLogging {
+    pub log_logging: bool,
+    pub interval: Option<Duration>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
     pub name: QualifiedItemName,
-    pub definition: SerializedCatalogItem,
+    pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+}
+
+/// Functions can share the same name as any other catalog item type
+/// within a given schema.
+/// For example, a function can have the same name as a type, e.g.
+/// 'date'.
+/// As such, system objects are keyed in the catalog storage by the
+/// tuple (schema_name, object_type, object_name), which is guaranteed
+/// to be unique.
+#[derive(Debug, Clone)]
+pub struct SystemObjectMapping {
+    pub schema_name: String,
+    pub object_type: CatalogItemType,
+    pub object_name: String,
+    pub id: GlobalId,
+    pub fingerprint: String,
 }
 
 // Structs used internally to represent on disk-state.
@@ -2110,7 +2183,7 @@ pub struct ClusterReplicaKey {
 pub struct ClusterReplicaValue {
     cluster_id: ClusterId,
     name: String,
-    config: SerializedReplicaConfig,
+    config: ReplicaConfig,
     owner_id: RoleId,
 }
 
@@ -2148,7 +2221,7 @@ pub struct ItemKey {
 pub struct ItemValue {
     schema_id: SchemaId,
     name: String,
-    definition: SerializedCatalogItem,
+    create_sql: String,
     owner_id: RoleId,
     privileges: Vec<MzAclItem>,
 }
@@ -2176,8 +2249,8 @@ pub struct RoleValue {
     membership: RoleMembership,
 }
 
-impl From<catalog::Role> for RoleValue {
-    fn from(role: catalog::Role) -> Self {
+impl From<Role> for RoleValue {
+    fn from(role: Role) -> Self {
         RoleValue {
             name: role.name,
             attributes: role.attributes,

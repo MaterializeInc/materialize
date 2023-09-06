@@ -42,21 +42,19 @@ part 0
 # most importantly, we expect there to be a single run, as each input has a single run of ordered parts
 compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=50 memory_bound=10000
 ----
-parts=3 len=4
+parts=2 len=4
 
 fetch-batch input=b0_1
 ----
 <part 0>
 a 6 2
-<part 1>
 b 6 2
-<part 2>
+<part 1>
 c 6 1
 d 6 1
 <run 0>
 part 0
 part 1
-part 2
 
 write-batch output=b2 lower=6 upper=9 target_size=0 parts_size_override=25
 a 8 1
@@ -83,32 +81,25 @@ f 8 1
 part 0
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
-# we expect `aaaa` to appear twice because we calculate part size by unconsolidated updates.
 compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=1000
 ----
-parts=5 len=8
+parts=3 len=6
 
 fetch-batch input=b0_1_2
 ----
 <part 0>
-a 8 2
+a 8 3
+b 8 2
 <part 1>
-a 8 1
-b 8 1
-<part 2>
-b 8 1
 c 8 1
-<part 3>
 d 8 1
+<part 2>
 e 8 1
-<part 4>
 f 8 1
 <run 0>
 part 0
 part 1
 part 2
-part 3
-part 4
 
 # compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
 # b0 and b1 will be physically compacted together, but b2 will be compacted in isolation.
@@ -164,29 +155,27 @@ ok
 
 compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
 ----
-parts=5 len=7
+parts=4 len=7
 
 fetch-batch input=b0_1_2
 ----
 <part 0>
 a 8 2
-<part 1>
 b 8 2
-<part 2>
+<part 1>
 c 8 1
 d 8 1
-<part 3>
+<part 2>
 a 8 1
 e 8 1
-<part 4>
+<part 3>
 f 8 1
 <run 0>
 part 0
 part 1
-part 2
 <run 1>
+part 2
 part 3
-part 4
 
 # compact b0, b1, b2 even though our memory isn't enough to hold any 2 runs at a time. this is an edge case
 # where we still force 2 runs to be merged together when possible, even at the expense of our memory requirement.
@@ -206,29 +195,27 @@ ok
 
 compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
 ----
-parts=5 len=7
+parts=4 len=7
 
 fetch-batch input=b0_1_2
 ----
 <part 0>
 a 8 2
-<part 1>
 b 8 2
-<part 2>
+<part 1>
 c 8 1
 d 8 1
-<part 3>
+<part 2>
 a 8 1
 e 8 1
-<part 4>
+<part 3>
 f 8 1
 <run 0>
 part 0
 part 1
-part 2
 <run 1>
+part 2
 part 3
-part 4
 
 # for good measure, repeatedly compacting a single batch of several runs should eventually
 # converge to 1 run even if there isn't enough memory to hold more than 2 runs at a time
@@ -246,8 +233,8 @@ fetch-batch input=b0_1_2_iter1
 a 8 3
 b 8 2
 c 8 1
-<part 1>
 d 8 1
+<part 1>
 e 8 1
 f 8 1
 <run 0>
