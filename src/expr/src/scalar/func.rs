@@ -1606,35 +1606,6 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn map_get_values<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let map = a.unwrap_map();
-    let values: Vec<Datum> = b
-        .unwrap_array()
-        .elements()
-        .iter()
-        .map(
-            |target_key| match map.iter().find(|(key, _v)| target_key.unwrap_str() == *key) {
-                Some((_k, v)) => v,
-                None => Datum::Null,
-            },
-        )
-        .collect();
-
-    Ok(temp_storage.try_make_datum(|packer| {
-        packer.push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: values.len(),
-            }],
-            values,
-        )
-    })?)
-}
-
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -2263,7 +2234,6 @@ pub enum BinaryFunc {
     JsonbDeleteString,
     MapContainsKey,
     MapGetValue,
-    MapGetValues,
     MapContainsAllKeys,
     MapContainsAnyKeys,
     MapContainsMap,
@@ -2511,7 +2481,6 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(map_contains_key(a, b)),
             BinaryFunc::MapGetValue => Ok(map_get_value(a, b)),
-            BinaryFunc::MapGetValues => map_get_values(a, b, temp_storage),
             BinaryFunc::MapContainsAllKeys => Ok(map_contains_all_keys(a, b)),
             BinaryFunc::MapContainsAnyKeys => Ok(map_contains_any_keys(a, b)),
             BinaryFunc::MapContainsMap => Ok(map_contains_map(a, b)),
@@ -2698,11 +2667,6 @@ impl BinaryFunc {
                 .unwrap_map_value_type()
                 .clone()
                 .nullable(true),
-
-            MapGetValues => ScalarType::Array(Box::new(
-                input1_type.scalar_type.unwrap_map_value_type().clone(),
-            ))
-            .nullable(true),
 
             ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int32.nullable(true),
 
@@ -2947,8 +2911,6 @@ impl BinaryFunc {
             | UuidGenerateV5
             | MzAclItemContainsPrivilege
             | ParseIdent => false,
-            // can produce nulls inside the resulting array for missing keys, but always produces an outer array
-            MapGetValues => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3075,7 +3037,6 @@ impl BinaryFunc {
             | JsonbDeleteString
             | MapContainsKey
             | MapGetValue
-            | MapGetValues
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
@@ -3325,7 +3286,6 @@ impl BinaryFunc {
             | BinaryFunc::JsonbDeleteString
             | BinaryFunc::MapContainsKey
             | BinaryFunc::MapGetValue
-            | BinaryFunc::MapGetValues
             | BinaryFunc::MapContainsAllKeys
             | BinaryFunc::MapContainsAnyKeys
             | BinaryFunc::MapContainsMap => (false, false),
@@ -3524,7 +3484,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
-            BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
+            BinaryFunc::MapGetValue => f.write_str("->"),
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundNumeric => f.write_str("round"),
@@ -3737,7 +3697,6 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::JsonbDeleteString).boxed(),
             Just(BinaryFunc::MapContainsKey).boxed(),
             Just(BinaryFunc::MapGetValue).boxed(),
-            Just(BinaryFunc::MapGetValues).boxed(),
             Just(BinaryFunc::MapContainsAllKeys).boxed(),
             Just(BinaryFunc::MapContainsAnyKeys).boxed(),
             Just(BinaryFunc::MapContainsMap).boxed(),
@@ -3931,7 +3890,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::JsonbDeleteString => JsonbDeleteString(()),
             BinaryFunc::MapContainsKey => MapContainsKey(()),
             BinaryFunc::MapGetValue => MapGetValue(()),
-            BinaryFunc::MapGetValues => MapGetValues(()),
             BinaryFunc::MapContainsAllKeys => MapContainsAllKeys(()),
             BinaryFunc::MapContainsAnyKeys => MapContainsAnyKeys(()),
             BinaryFunc::MapContainsMap => MapContainsMap(()),
@@ -4129,7 +4087,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 JsonbDeleteString(()) => Ok(BinaryFunc::JsonbDeleteString),
                 MapContainsKey(()) => Ok(BinaryFunc::MapContainsKey),
                 MapGetValue(()) => Ok(BinaryFunc::MapGetValue),
-                MapGetValues(()) => Ok(BinaryFunc::MapGetValues),
                 MapContainsAllKeys(()) => Ok(BinaryFunc::MapContainsAllKeys),
                 MapContainsAnyKeys(()) => Ok(BinaryFunc::MapContainsAnyKeys),
                 MapContainsMap(()) => Ok(BinaryFunc::MapContainsMap),
