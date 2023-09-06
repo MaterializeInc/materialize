@@ -261,11 +261,11 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         if let ComputeCommand::CreateInstance(InstanceConfig {
-            logging_config,
+            logging,
             variable_length_row_encoding: _,
         }) = command
         {
-            *logging_config = self.config.logging.clone();
+            *logging = self.config.logging.clone();
         }
 
         if let ComputeCommand::CreateTimely { config, epoch } = command {

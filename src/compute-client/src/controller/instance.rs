@@ -308,7 +308,7 @@ where
 
         let dummy_logging_config = Default::default();
         instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging_config: dummy_logging_config,
+            logging: dummy_logging_config,
             variable_length_row_encoding,
         }));
 
