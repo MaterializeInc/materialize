@@ -151,6 +151,10 @@ pub fn check_item_usage(
     Ok(())
 }
 
+/// true if the plan requires USAGE privileges on all applicable items, false otherwise.
+///
+/// Most plans will return true but some plans, like SHOW CREATE, can reference an item without
+/// requiring any privileges on that item.
 fn requires_item_usage_privileges(plan: &Plan) -> bool {
     match plan {
         Plan::CreateConnection(_)
@@ -898,8 +902,17 @@ fn generate_required_privileges(
             stage: _,
             format: _,
             config: _,
-            explainee: _,
-        }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
+            explainee,
+        }) => match explainee {
+            Explainee::MaterializedView(id) | Explainee::Index(id) => {
+                let item = catalog.get_item(&id);
+                let schema_id: ObjectId = item.name().qualifiers.clone().into();
+                vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
+            }
+            Explainee::Query { .. } => {
+                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id)
+            }
+        },
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
             raw_plan: _,

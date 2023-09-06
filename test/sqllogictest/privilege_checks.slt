@@ -1854,6 +1854,88 @@ DROP ROLE view_owner;
 ----
 COMPLETE 0
 
+## EXPLAIN MATERIALIZED VIEW
+
+### We use the materialize role for these tests because we need the multiline functionality
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT 1
+----
+COMPLETE 0
+
+query error permission denied for SCHEMA "materialize.public"
+EXPLAIN MATERIALIZED VIEW mv;
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO materialize;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Constant
+    - (1)
+
+EOF
+
+simple conn=mz_system,user=mz_system
+DROP MATERIALIZED VIEW mv
+----
+COMPLETE 0
+
+## EXPLAIN INDEX
+
+### We use the materialize role for these tests because we need the multiline functionality
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t (a INT)
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX i IN CLUSTER default ON t(a)
+----
+COMPLETE 0
+
+query error permission denied for SCHEMA "materialize.public"
+EXPLAIN INDEX i;
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO materialize;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN INDEX i;
+----
+materialize.public.i:
+  ArrangeBy keys=[[#0]]
+    Get materialize.public.t
+
+EOF
+
+simple conn=mz_system,user=mz_system
+DROP INDEX i
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t
+----
+COMPLETE 0
+
 # INSERT
 
 simple conn=mz_system,user=mz_system
