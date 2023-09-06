@@ -19,6 +19,7 @@ use mz_sql_parser::ast::{
     ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
+use mz_storage_client::types::connections::inline::ReferencedConnection;
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
@@ -192,7 +193,7 @@ pub fn describe(
         // SCL statements.
         Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
         Statement::Deallocate(stmt) => scl::describe_deallocate(&scx, stmt)?,
-        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt)?,
+        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt, param_types_in)?,
         Statement::Discard(stmt) => scl::describe_discard(&scx, stmt)?,
         Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
@@ -339,7 +340,7 @@ pub fn plan(
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
-        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, None),
+        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, params, None),
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
@@ -370,7 +371,7 @@ pub fn plan(
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
         Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
-        Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
+        Statement::Declare(stmt) => scl::plan_declare(scx, stmt, params),
         Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
         Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
@@ -805,16 +806,16 @@ impl<'a> StatementContext<'a> {
         &self,
         ssh_tunnel: Option<with_options::Object>,
         aws_privatelink: Option<with_options::Object>,
-    ) -> Result<Tunnel, PlanError> {
+    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
                 let id = GlobalId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
-                    Connection::Ssh(connection) => Ok(Tunnel::Ssh(SshTunnel {
+                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
                         connection_id: id,
-                        connection: connection.clone(),
+                        connection: id,
                     })),
                     _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
                 }

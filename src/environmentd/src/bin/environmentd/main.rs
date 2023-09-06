@@ -584,6 +584,12 @@ pub struct Args {
     )]
     aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
 
+    /// The external host name to connect to the HTTP server of this instance.
+    ///
+    /// Note: Primarily for user facing notices.
+    #[clap(long, env = "HTTP_HOST_NAME")]
+    http_host_name: Option<String>,
+
     #[clap(long, env = "DEPLOY_GENERATION")]
     deploy_generation: Option<u64>,
 
@@ -1022,6 +1028,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 config_sync_loop_interval: args.config_sync_loop_interval,
                 bootstrap_role: args.bootstrap_role,
                 deploy_generation: args.deploy_generation,
+                http_host_name: args.http_host_name,
             })
             .await
     })?;

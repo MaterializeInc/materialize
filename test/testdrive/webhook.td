@@ -280,6 +280,46 @@ will_work
 > SELECT * FROM "webhook_with_/"
 "will_work"
 
+> CREATE SOURCE webhook_text_headers_block_list IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADERS (NOT 'accept', NOT 'host')
+
+$ webhook-append name=webhook_text_headers_block_list
+foo
+
+> SELECT body, headers::text FROM webhook_text_headers_block_list
+foo "{content-length=>3}"
+
+> CREATE SOURCE webhook_text_headers_allow_list IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADERS ('x-random')
+
+$ webhook-append name=webhook_text_headers_allow_list x-random=bar
+anotha_one
+
+> SELECT body, headers::text FROM webhook_text_headers_allow_list
+anotha_one "{x-random=>bar}"
+
+> CREATE SOURCE webhook_text_filtering_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-timestamp' as event_timestamp
+  INCLUDE HEADER 'x-id' as event_id
+  INCLUDE HEADERS (NOT 'accept', NOT 'content-length', NOT 'host', NOT 'x-api-key')
+  CHECK ( WITH (HEADERS) headers->'x-api-key' = 'abc123' )
+
+$ webhook-append name=webhook_text_filtering_headers x-timestamp=100 x-id=a x-api-key=abc123 content-type=text/example
+request_1
+
+$ webhook-append name=webhook_text_filtering_headers x-api-key=wrong_key status=400
+request_bad
+
+$ webhook-append name=webhook_text_filtering_headers x-api-key=abc123 x-random=foo
+request_missing_some_mapped_headers
+
+> SELECT body, headers::text, event_timestamp, event_id FROM webhook_text_filtering_headers
+request_1 "{content-type=>text/example,x-id=>a,x-timestamp=>100}" 100 a
+request_missing_some_mapped_headers "{x-random=>foo}" <null> <null>
+
 # Dropping a webhook source should drop the underlying persist shards.
 
 $ set-from-sql var=webhook-source-id

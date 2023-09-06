@@ -569,6 +569,7 @@ mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys
 mz_object_dependencies
+mz_webhook_sources
 
 > SHOW VIEWS FROM mz_internal
 name
@@ -655,7 +656,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-52
+53
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

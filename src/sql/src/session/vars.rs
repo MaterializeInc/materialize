@@ -80,7 +80,7 @@ use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::batch::UntrimmableColumns;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_tracing::CloneableEnvFilter;
@@ -1540,6 +1540,14 @@ feature_flags!(
         enable_multi_worker_storage_persist_sink,
         "multi-worker storage persist sink"
     ),
+    (
+        enable_persist_streaming_snapshot_and_fetch,
+        "use the new streaming consolidate for snapshot_and_fetch"
+    ),
+    (
+        enable_persist_streaming_compaction,
+        "use the new streaming consolidate for compaction"
+    ),
     (enable_raise_statement, "RAISE statement"),
     (enable_repeat_row, "the repeat_row function"),
     (
@@ -1606,6 +1614,11 @@ feature_flags!(
         enable_notices_for_index_too_wide_for_literal_constraints,
         "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
         false
+    ),
+    (
+        enable_notices_for_index_empty_key,
+        "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
+        true
     ),
 );
 
@@ -2313,11 +2326,15 @@ impl SystemVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             );
 
+        for flag in PersistFeatureFlag::ALL {
+            vars = vars.with_var(&flag.into())
+        }
+
         vars.refresh_internal_state();
         vars
     }
 
-    fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
+    fn with_var<V>(mut self, var: &ServerVar<V>) -> Self
     where
         V: Value + Debug + PartialEq + Clone + 'static,
         V::Owned: Debug + Send + Clone + Sync,
@@ -2851,6 +2868,13 @@ impl SystemVars {
         *self.expect_value(&PERSIST_ROLLUP_THRESHOLD)
     }
 
+    pub fn persist_flags(&self) -> BTreeMap<String, bool> {
+        PersistFeatureFlag::ALL
+            .iter()
+            .map(|f| (f.name.to_owned(), *self.expect_value(&f.into())))
+            .collect()
+    }
+
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.expect_value(&METRICS_RETENTION)
@@ -3082,6 +3106,19 @@ where
     internal: bool,
 }
 
+// ServerVar is mostly just a bundle of static refs, so cloning is cheap and does not require
+// cloning the value.
+impl<V: Debug + 'static> Clone for ServerVar<V> {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name,
+            value: self.value,
+            description: self.description,
+            internal: self.internal,
+        }
+    }
+}
+
 impl<V> Var for ServerVar<V>
 where
     V: Value + Debug + PartialEq + 'static,
@@ -3118,6 +3155,18 @@ where
     }
 }
 
+impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
+    fn from(value: &'static PersistFeatureFlag) -> Self {
+        Self {
+            name: UncasedStr::new(value.name),
+            // Awkward dance to get a static reference to a boolean...
+            value: &value.default,
+            description: value.description,
+            internal: true,
+        }
+    }
+}
+
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
 /// the server default is used instead.
 #[derive(Debug)]
@@ -3128,7 +3177,7 @@ where
 {
     persisted_value: Option<V::Owned>,
     dynamic_default: Option<V::Owned>,
-    parent: &'static ServerVar<V>,
+    parent: ServerVar<V>,
     constraints: Vec<ValueConstraint<V>>,
 }
 
@@ -3142,7 +3191,7 @@ where
         SystemVar {
             persisted_value: self.persisted_value.clone(),
             dynamic_default: self.dynamic_default.clone(),
-            parent: self.parent,
+            parent: self.parent.clone(),
             constraints: self.constraints.clone(),
         }
     }
@@ -3153,11 +3202,11 @@ where
     V: Value + Debug + PartialEq + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
-    fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
+    fn new(parent: &ServerVar<V>) -> SystemVar<V> {
         SystemVar {
             persisted_value: None,
             dynamic_default: None,
-            parent,
+            parent: parent.clone(),
             constraints: vec![],
         }
     }
@@ -4507,6 +4556,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+        || PersistFeatureFlag::ALL.iter().any(|f| f.name == name)
 }
 
 /// Returns whether the named variable is a cluster scheduling config

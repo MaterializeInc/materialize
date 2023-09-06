@@ -64,6 +64,10 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    TooManyColumns {
+        max_num_columns: usize,
+        req_num_columns: usize,
+    },
     AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
@@ -220,6 +224,7 @@ pub enum PlanError {
         max: Duration,
         requested: Duration,
     },
+    InvalidGroupSizeHints,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -398,6 +403,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::TooManyColumns { max_num_columns, req_num_columns } => write!(
+                f,
+                "attempt to create relation with too many columns, {} max: {}",
+                req_num_columns, max_num_columns
             ),
             Self::AmbiguousTable(table) => write!(
                 f,
@@ -583,6 +593,9 @@ impl fmt::Display for PlanError {
             Self::InvalidTimestampInterval { min, max, requested } => {
                 write!(f, "invalid timestamp interval of {}ms, must be in the range [{}ms, {}ms]", requested.as_millis(), min.as_millis(), max.as_millis())
             }
+            Self::InvalidGroupSizeHints => f.write_str("EXPECTED GROUP SIZE cannot be provided \
+                simultaneously with any of AGGREGATE INPUT GROUP SIZE, DISTINCT ON INPUT GROUP SIZE, \
+                or LIMIT INPUT GROUP SIZE"),
         }
     }
 }

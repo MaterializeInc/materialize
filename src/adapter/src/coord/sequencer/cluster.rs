@@ -28,9 +28,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
-use crate::catalog::{
-    ClusterConfig, ClusterVariant, ClusterVariantManaged, Op, SerializedReplicaLocation,
-};
+use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, Op};
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
@@ -63,7 +61,7 @@ impl Coordinator {
                 ClusterVariant::Managed(ClusterVariantManaged {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
-                    logging: logging.into(),
+                    logging,
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
@@ -170,7 +168,7 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = SerializedReplicaLocation::Managed {
+        let location = catalog::storage::ReplicaLocation::Managed {
             size: size.clone(),
             availability_zone: None,
             disk,
@@ -272,7 +270,7 @@ impl Coordinator {
                     workers,
                     compute,
                 } => {
-                    let location = SerializedReplicaLocation::Unmanaged {
+                    let location = catalog::storage::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
                         storage_addrs,
                         computectl_addrs,
@@ -287,7 +285,7 @@ impl Coordinator {
                     compute,
                     disk,
                 } => {
-                    let location = SerializedReplicaLocation::Managed {
+                    let location = catalog::storage::ReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
                         disk,
@@ -395,7 +393,7 @@ impl Coordinator {
                 workers,
                 compute,
             } => {
-                let location = SerializedReplicaLocation::Unmanaged {
+                let location = catalog::storage::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -417,7 +415,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
-                let location = SerializedReplicaLocation::Managed {
+                let location = catalog::storage::ReplicaLocation::Managed {
                     size,
                     availability_zone,
                     disk,
@@ -529,7 +527,7 @@ impl Coordinator {
                 new_config.variant = Managed(ClusterVariantManaged {
                     size,
                     availability_zones: Default::default(),
-                    logging: logging.into(),
+                    logging,
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,

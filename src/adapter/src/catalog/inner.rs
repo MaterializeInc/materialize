@@ -138,7 +138,7 @@ impl Catalog {
             ..entry.clone()
         };
 
-        tx.update_item(id, &new_entry)?;
+        tx.update_item(id, new_entry.into())?;
 
         state.add_to_audit_log(
             oracle_write_ts,

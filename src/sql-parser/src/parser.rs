@@ -2848,7 +2848,38 @@ impl<'a> Parser<'a> {
             BYTES => Format::Bytes,
             _ => unreachable!(),
         };
-        let include_headers = self.parse_keywords(&[INCLUDE, HEADERS]);
+
+        let mut include_headers = CreateWebhookSourceIncludeHeaders::default();
+        while self.parse_keyword(INCLUDE) {
+            match self.expect_one_of_keywords(&[HEADER, HEADERS])? {
+                HEADER => {
+                    let header_name = self.parse_literal_string()?;
+                    self.expect_keyword(AS)?;
+                    let column_name = self.parse_identifier()?;
+                    let use_bytes = self.parse_keyword(BYTES);
+
+                    include_headers.mappings.push(CreateWebhookSourceMapHeader {
+                        header_name,
+                        column_name,
+                        use_bytes,
+                    });
+                }
+                HEADERS => {
+                    let header_filters = include_headers.column.get_or_insert_with(Vec::default);
+                    if self.consume_token(&Token::LParen) {
+                        let filters = self.parse_comma_separated(|f| {
+                            let block = f.parse_keyword(NOT);
+                            let header_name = f.parse_literal_string()?;
+                            Ok(CreateWebhookSourceFilterHeader { block, header_name })
+                        })?;
+                        header_filters.extend(filters);
+
+                        self.expect_token(&Token::RParen)?;
+                    }
+                }
+                k => unreachable!("programming error, didn't expect {k}"),
+            }
+        }
 
         let validate_using = if self.parse_keyword(CHECK) {
             self.expect_token(&Token::LParen)?;
@@ -5852,8 +5883,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_select_option(&mut self) -> Result<SelectOption<Raw>, ParserError> {
-        self.expect_keywords(&[EXPECTED, GROUP, SIZE])?;
-        let name = SelectOptionName::ExpectedGroupSize;
+        let name = match self.expect_one_of_keywords(&[EXPECTED, AGGREGATE, DISTINCT, LIMIT])? {
+            EXPECTED => {
+                self.expect_keywords(&[GROUP, SIZE])?;
+                SelectOptionName::ExpectedGroupSize
+            }
+            AGGREGATE => {
+                self.expect_keywords(&[INPUT, GROUP, SIZE])?;
+                SelectOptionName::AggregateInputGroupSize
+            }
+            DISTINCT => {
+                self.expect_keywords(&[ON, INPUT, GROUP, SIZE])?;
+                SelectOptionName::DistinctOnInputGroupSize
+            }
+            LIMIT => {
+                self.expect_keywords(&[INPUT, GROUP, SIZE])?;
+                SelectOptionName::LimitInputGroupSize
+            }
+            _ => unreachable!(),
+        };
         Ok(SelectOption {
             name,
             value: self.parse_optional_option_value()?,

@@ -704,6 +704,10 @@ mz_internal
 mz_view_keys
 BASE TABLE
 materialize
+mz_internal
+mz_webhook_sources
+BASE TABLE
+materialize
 pg_catalog
 pg_aggregate
 VIEW

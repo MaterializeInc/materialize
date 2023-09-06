@@ -2254,6 +2254,16 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     is_retained_metrics_object: false,
 });
 
+pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_webhook_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("url", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3524,8 +3534,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
     sql: "CREATE VIEW
     mz_internal.mz_expected_group_size_advice
     AS
-        -- The mz_expected_group_size_advice view provides tuning suggestions for the EXPECTED
-        -- GROUP SIZE. This tuning hint is effective for min/max/top-k patterns, where a stack
+        -- The mz_expected_group_size_advice view provides tuning suggestions for the GROUP SIZE
+        -- query hints. This tuning hint is effective for min/max/top-k patterns, where a stack
         -- of arrangements must be built. For each dataflow and region corresponding to one
         -- such pattern, we look for how many levels can be eliminated without hitting a level
         -- that actually substantially filters the input. The advice is constructed so that
@@ -3540,7 +3550,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 dod.dataflow_id,
                 dor.id AS region_id,
                 dod.id,
-                ars.records
+                ars.records,
+                ars.size
             FROM
                 mz_internal.mz_dataflow_operator_dataflows dod
                 JOIN mz_internal.mz_dataflow_addresses doa
@@ -3580,7 +3591,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                     WHERE
                         o2.dataflow_id = o1.dataflow_id
                         AND o2.region_id = o1.region_id
-                    OPTIONS (EXPECTED GROUP SIZE = 8)
+                    OPTIONS (AGGREGATE INPUT GROUP SIZE = 8)
                 )
         ),
         -- The fourth CTE, candidates, will look for operators where the number of records
@@ -3602,7 +3613,8 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 o.dataflow_id,
                 o.region_id,
                 o.id,
-                o.records
+                o.records,
+                o.size
             FROM
                 operators o
                 JOIN pivot p
@@ -3618,10 +3630,15 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
         -- cutting the height of the hierarchy further. This is because we will have way less
         -- groups in the next level, so there should be even further reduction happening or there
         -- is some substantial skew in the data. But if the latter is the case, then we should not
-        -- tune the EXPECTED GROUP SIZE down anyway to avoid hurting latency upon updates directed
-        -- at these unusually large groups.
+        -- tune the GROUP SIZE hints down anyway to avoid hurting latency upon updates directed
+        -- at these unusually large groups. In addition to selecting the levels to cut, we also
+        -- compute a conservative estimate of the memory savings in bytes that will result from
+        -- cutting these levels from the hierarchy. The estimate is based on the sizes of the
+        -- input arrangements for each level to be cut. These arrangements should dominate the
+        -- size of each level that can be cut, since the reduction gadget internal to the level
+        -- does not remove much data at these levels.
         cuts AS (
-            SELECT c.dataflow_id, c.region_id, COUNT(*) to_cut
+            SELECT c.dataflow_id, c.region_id, COUNT(*) AS to_cut, SUM(c.size) AS savings
             FROM candidates c
             GROUP BY c.dataflow_id, c.region_id
             HAVING COUNT(*) > 0
@@ -3637,6 +3654,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
             dod.name AS region_name,
             l.levels,
             c.to_cut,
+            c.savings,
             pow(16, l.levels - c.to_cut) - 1 AS hint
         FROM cuts c
             JOIN levels l
@@ -3783,7 +3801,7 @@ SELECT
 FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
-WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
+WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -3814,7 +3832,7 @@ pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW information_schema.enabled_roles AS
 SELECT name AS role_name
 FROM mz_roles
-WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
+WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
 };
 
 pub const INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: BuiltinView = BuiltinView {
@@ -3972,7 +3990,7 @@ WHERE
     -- to pg_has_role. Therefore we need to use a CASE statement.
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE mz_internal.mz_is_superuser()
+        ELSE mz_catalog.mz_is_superuser()
             OR pg_has_role(current_role, grantee, 'USAGE')
             OR pg_has_role(current_role, grantor, 'USAGE')
     END",
@@ -5107,6 +5125,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_PREPARED_STATEMENT_HISTORY),
         Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::Table(&MZ_COMMENTS),
+        Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),

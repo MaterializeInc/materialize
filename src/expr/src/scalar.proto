@@ -431,6 +431,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty acl_item_grantor = 302;
         google.protobuf.Empty acl_item_grantee = 303;
         google.protobuf.Empty acl_item_privileges = 304;
+        mz_repr.adt.regex.ProtoRegex regexp_split_to_array = 305;
     }
 }
 
@@ -672,6 +673,8 @@ message ProtoVariadicFunc {
         google.protobuf.Empty date_diff_time = 36;
         google.protobuf.Empty timezone_time = 37;
         google.protobuf.Empty make_acl_item = 38;
+        google.protobuf.Empty regexp_split_to_array = 39;
+        google.protobuf.Empty regexp_replace = 40;
     }
 }
 

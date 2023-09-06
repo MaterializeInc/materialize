@@ -111,6 +111,7 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
 };
+use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::Timeline;
@@ -279,7 +280,7 @@ pub struct SinkConnectionReady {
     pub id: GlobalId,
     pub oid: u32,
     pub create_export_token: CreateExportToken,
-    pub result: Result<StorageSinkConnection, AdapterError>,
+    pub result: Result<StorageSinkConnection<ReferencedConnection>, AdapterError>,
 }
 
 #[derive(Debug)]
@@ -483,6 +484,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
 }
 
@@ -1165,15 +1167,20 @@ impl Coordinator {
         let mut collections_to_create = Vec::new();
 
         fn source_desc<T>(
+            catalog: &Catalog,
             source_status_collection_id: Option<GlobalId>,
             source: &Source,
         ) -> CollectionDescription<T> {
             let (data_source, status_collection_id) = match &source.data_source {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => (
-                    DataSource::Ingestion(ingestion.clone()),
-                    source_status_collection_id,
-                ),
+                DataSourceDesc::Ingestion(ingestion) => {
+                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+
+                    (
+                        DataSource::Ingestion(ingestion.clone()),
+                        source_status_collection_id,
+                    )
+                }
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (
                     DataSource::Other(DataSourceOther::Source),
@@ -1195,33 +1202,34 @@ impl Coordinator {
             }
         }
 
+        let migratable_collections = entries
+            .iter()
+            .filter_map(|entry| match entry.item() {
+                CatalogItem::Source(source) => Some((
+                    entry.id(),
+                    source_desc(self.catalog(), source_status_collection_id, source),
+                )),
+                CatalogItem::Table(table) => {
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
+                    Some((entry.id(), collection_desc))
+                }
+                CatalogItem::MaterializedView(mview) => {
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
+                    Some((entry.id(), collection_desc))
+                }
+                _ => None,
+            })
+            .collect();
+
         self.controller
             .storage
-            .migrate_collections(
-                entries
-                    .iter()
-                    .filter_map(|entry| match entry.item() {
-                        CatalogItem::Source(source) => {
-                            Some((entry.id(), source_desc(source_status_collection_id, source)))
-                        }
-                        CatalogItem::Table(table) => {
-                            let collection_desc = CollectionDescription::from_desc(
-                                table.desc.clone(),
-                                DataSourceOther::TableWrites,
-                            );
-                            Some((entry.id(), collection_desc))
-                        }
-                        CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = CollectionDescription::from_desc(
-                                mview.desc.clone(),
-                                DataSourceOther::Compute,
-                            );
-                            Some((entry.id(), collection_desc))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-            )
+            .migrate_collections(migratable_collections)
             .await?;
 
         // Do a first pass looking for collections to create so we can call
@@ -1241,8 +1249,10 @@ impl Coordinator {
                 // User sources can have dependencies, so do avoid them in the
                 // batch.
                 CatalogItem::Source(source) if entry.id().is_system() => {
-                    collections_to_create
-                        .push((entry.id(), source_desc(source_status_collection_id, source)));
+                    collections_to_create.push((
+                        entry.id(),
+                        source_desc(self.catalog(), source_status_collection_id, source),
+                    ));
                 }
                 _ => {
                     // No collections to create.
@@ -1285,7 +1295,8 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // System sources were created above, add others here.
                     if !entry.id().is_system() {
-                        let source_desc = source_desc(source_status_collection_id, source);
+                        let source_desc =
+                            source_desc(self.catalog(), source_status_collection_id, source);
                         self.controller
                             .storage
                             .create_collections(vec![(entry.id(), source_desc)])
@@ -1432,6 +1443,9 @@ impl Coordinator {
                         .prepare_export(id, sink.from)
                         .unwrap_or_terminate("cannot fail to prepare export");
 
+                    let referenced_builder = builder.clone();
+                    let builder = builder.into_inline_connection(self.catalog().state());
+
                     task::spawn(
                         || format!("sink_connection_ready:{}", sink.from),
                         async move {
@@ -1439,10 +1453,12 @@ impl Coordinator {
                                 .max_tries(usize::MAX)
                                 .clamp_backoff(Duration::from_secs(60 * 10))
                                 .retry_async(|_| async {
+                                    let referenced_builder = referenced_builder.clone();
                                     let builder = builder.clone();
                                     let connection_context = connection_context.clone();
                                     mz_storage_client::sink::build_sink_connection(
                                         builder,
+                                        referenced_builder,
                                         connection_context,
                                     )
                                     .await
@@ -1960,6 +1976,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
+        http_host_name,
         tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
@@ -2014,6 +2031,7 @@ pub async fn serve(
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
+            http_host_name,
         })
         .await?;
     let session_id = catalog.config().session_id;

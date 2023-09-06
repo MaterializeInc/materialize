@@ -957,6 +957,7 @@ hierarchical scheme for either aggregation or Top K computations.
 | `region_name`   | [`text`]             | The internal name of the root operator scope for the min/max aggregation or Top K.                        |
 | `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
 | `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
+| `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
 | `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy. |
 
 ### `mz_message_counts`
@@ -1065,6 +1066,17 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
 | `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
+
+### `mz_webhook_sources`
+
+The `mz_webhook_sources` table contains a row for each webhook source in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
+| `name`         | [`text`]    | The name of the webhook source.                                                              |
+| `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

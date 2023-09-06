@@ -43,6 +43,7 @@ use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
 use crate::types::connections::aws::AwsConfig;
 
 pub mod aws;
+pub mod inline;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -168,16 +169,31 @@ impl ConnectionContext {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum Connection {
-    Kafka(KafkaConnection),
-    Csr(CsrConnection),
-    Postgres(PostgresConnection),
+pub enum Connection<C: ConnectionAccess = InlinedConnection> {
+    Kafka(KafkaConnection<C>),
+    Csr(CsrConnection<C>),
+    Postgres(PostgresConnection<C>),
     Ssh(SshConnection),
     Aws(AwsConfig),
     AwsPrivatelink(AwsPrivatelinkConnection),
 }
 
-impl Connection {
+impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
+    for Connection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> Connection {
+        match self {
+            Connection::Kafka(kafka) => Connection::Kafka(kafka.into_inline_connection(r)),
+            Connection::Csr(csr) => Connection::Csr(csr.into_inline_connection(r)),
+            Connection::Postgres(pg) => Connection::Postgres(pg.into_inline_connection(r)),
+            Connection::Ssh(ssh) => Connection::Ssh(ssh),
+            Connection::Aws(aws) => Connection::Aws(aws),
+            Connection::AwsPrivatelink(awspl) => Connection::AwsPrivatelink(awspl),
+        }
+    }
+}
+
+impl<C: ConnectionAccess> Connection<C> {
     /// Whether this connection should be validated by default on creation.
     pub fn validate_by_default(&self) -> bool {
         match self {
@@ -189,7 +205,9 @@ impl Connection {
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
         }
     }
+}
 
+impl Connection<InlinedConnection> {
     /// Validates this connection by attempting to connect to the upstream system.
     pub async fn validate(
         &self,
@@ -203,6 +221,27 @@ impl Connection {
             Connection::Ssh(conn) => conn.validate(id, connection_context).await,
             Connection::Aws(conn) => conn.validate(id, connection_context).await,
             Connection::AwsPrivatelink(conn) => conn.validate(id, connection_context).await,
+        }
+    }
+
+    pub fn unwrap_kafka(self) -> <InlinedConnection as ConnectionAccess>::Kafka {
+        match self {
+            Self::Kafka(conn) => conn,
+            o => unreachable!("{o:?} is not a Kafka connection"),
+        }
+    }
+
+    pub fn unwrap_pg(self) -> <InlinedConnection as ConnectionAccess>::Pg {
+        match self {
+            Self::Postgres(conn) => conn,
+            o => unreachable!("{o:?} is not a Postgres connection"),
+        }
+    }
+
+    pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
+        match self {
+            Self::Ssh(conn) => conn,
+            o => unreachable!("{o:?} is not an SSH connection"),
         }
     }
 }
@@ -270,11 +309,23 @@ impl From<SaslConfig> for KafkaSecurity {
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct KafkaBroker {
+pub struct KafkaBroker<C: ConnectionAccess = InlinedConnection> {
     /// The address of the Kafka broker.
     pub address: String,
     /// An optional tunnel to use when connecting to the broker.
-    pub tunnel: Tunnel,
+    pub tunnel: Tunnel<C>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaBroker, R>
+    for KafkaBroker<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaBroker {
+        let KafkaBroker { address, tunnel } = self;
+        KafkaBroker {
+            address,
+            tunnel: tunnel.into_inline_connection(r),
+        }
+    }
 }
 
 impl RustType<ProtoKafkaBroker> for KafkaBroker {
@@ -296,11 +347,42 @@ impl RustType<ProtoKafkaBroker> for KafkaBroker {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct KafkaConnection {
-    pub brokers: Vec<KafkaBroker>,
+pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
+    pub brokers: Vec<KafkaBroker<C>>,
     pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
     pub options: BTreeMap<String, StringOrSecret>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
+    for KafkaConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> KafkaConnection {
+        let KafkaConnection {
+            brokers,
+            progress_topic,
+            security,
+            options,
+        } = self;
+
+        let brokers = brokers
+            .into_iter()
+            .map(|broker| broker.into_inline_connection(&r))
+            .collect();
+
+        KafkaConnection {
+            brokers,
+            progress_topic,
+            security,
+            options,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> KafkaConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
 }
 
 impl KafkaConnection {
@@ -444,10 +526,6 @@ impl KafkaConnection {
         .await??;
         Ok(())
     }
-
-    fn validate_by_default(&self) -> bool {
-        true
-    }
 }
 
 impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
@@ -543,7 +621,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
 
 /// A connection to a Confluent Schema Registry.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct CsrConnection {
+pub struct CsrConnection<C: ConnectionAccess = InlinedConnection> {
     /// The URL of the schema registry.
     pub url: Url,
     /// Trusted root TLS certificate in PEM format.
@@ -554,7 +632,34 @@ pub struct CsrConnection {
     /// Optional HTTP authentication credentials for the schema registry.
     pub http_auth: Option<CsrConnectionHttpAuth>,
     /// A tunnel through which to route traffic.
-    pub tunnel: Tunnel,
+    pub tunnel: Tunnel<C>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<CsrConnection, R>
+    for CsrConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> CsrConnection {
+        let CsrConnection {
+            url,
+            tls_root_cert,
+            tls_identity,
+            http_auth,
+            tunnel,
+        } = self;
+        CsrConnection {
+            url,
+            tls_root_cert,
+            tls_identity,
+            http_auth,
+            tunnel: tunnel.into_inline_connection(r),
+        }
+    }
+}
+
+impl<C: ConnectionAccess> CsrConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
 }
 
 impl CsrConnection {
@@ -699,10 +804,6 @@ impl CsrConnection {
         self.connect(connection_context).await?;
         Ok(())
     }
-
-    fn validate_by_default(&self) -> bool {
-        true
-    }
 }
 
 impl RustType<ProtoCsrConnection> for CsrConnection {
@@ -729,7 +830,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
     }
 }
 
-impl Arbitrary for CsrConnection {
+impl<C: ConnectionAccess> Arbitrary for CsrConnection<C> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -739,7 +840,7 @@ impl Arbitrary for CsrConnection {
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
             any::<Option<CsrConnectionHttpAuth>>(),
-            any::<Tunnel>(),
+            any::<Tunnel<C>>(),
         )
             .prop_map(
                 |(url, tls_root_cert, tls_identity, http_auth, tunnel)| CsrConnection {
@@ -809,7 +910,7 @@ impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
 
 /// A connection to a PostgreSQL server.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct PostgresConnection {
+pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
     /// The port of the server.
@@ -821,7 +922,7 @@ pub struct PostgresConnection {
     /// An optional password for authentication.
     pub password: Option<GlobalId>,
     /// A tunnel through which to route traffic.
-    pub tunnel: Tunnel,
+    pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, authentication, or both.
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
@@ -831,7 +932,43 @@ pub struct PostgresConnection {
     pub tls_identity: Option<TlsIdentity>,
 }
 
-impl PostgresConnection {
+impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
+    for PostgresConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> PostgresConnection {
+        let PostgresConnection {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel,
+            tls_mode,
+            tls_root_cert,
+            tls_identity,
+        } = self;
+
+        PostgresConnection {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel: tunnel.into_inline_connection(r),
+            tls_mode,
+            tls_root_cert,
+            tls_identity,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> PostgresConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
+}
+
+impl PostgresConnection<InlinedConnection> {
     pub async fn config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
@@ -893,10 +1030,6 @@ impl PostgresConnection {
         config.connect("connection validation").await?;
         Ok(())
     }
-
-    fn validate_by_default(&self) -> bool {
-        true
-    }
 }
 
 impl RustType<ProtoPostgresConnection> for PostgresConnection {
@@ -935,7 +1068,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
     }
 }
 
-impl Arbitrary for PostgresConnection {
+impl<C: ConnectionAccess> Arbitrary for PostgresConnection<C> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -946,7 +1079,7 @@ impl Arbitrary for PostgresConnection {
             any::<String>(),
             any::<StringOrSecret>(),
             any::<Option<GlobalId>>(),
-            any::<Tunnel>(),
+            any::<Tunnel<C>>(),
             any_ssl_mode(),
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
@@ -982,16 +1115,26 @@ impl Arbitrary for PostgresConnection {
 
 /// Specifies how to tunnel a connection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum Tunnel {
+pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     /// No tunneling.
     Direct,
     /// Via the specified SSH tunnel connection.
-    Ssh(SshTunnel),
+    Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
 }
 
-impl RustType<ProtoTunnel> for Tunnel {
+impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
+    fn into_inline_connection(self, r: R) -> Tunnel {
+        match self {
+            Tunnel::Direct => Tunnel::Direct,
+            Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
+            Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+        }
+    }
+}
+
+impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
     fn into_proto(&self) -> ProtoTunnel {
         use proto_tunnel::Tunnel as ProtoTunnelField;
         ProtoTunnel {
@@ -1024,6 +1167,11 @@ pub struct SshConnection {
 }
 
 use proto_ssh_connection::ProtoPublicKeys;
+
+use self::inline::{
+    ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
+    ReferencedConnection,
+};
 
 impl RustType<ProtoPublicKeys> for (String, String) {
     fn into_proto(&self) -> ProtoPublicKeys {
@@ -1092,14 +1240,28 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
 
 /// Specifies an AWS PrivateLink service for a [`Tunnel`].
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct SshTunnel {
+pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
     pub connection_id: GlobalId,
     /// ssh connection object
-    pub connection: SshConnection,
+    pub connection: C::Ssh,
 }
 
-impl RustType<ProtoSshTunnel> for SshTunnel {
+impl<R: ConnectionResolver> IntoInlineConnection<SshTunnel, R> for SshTunnel<ReferencedConnection> {
+    fn into_inline_connection(self, r: R) -> SshTunnel {
+        let SshTunnel {
+            connection,
+            connection_id,
+        } = self;
+
+        SshTunnel {
+            connection: r.resolve_connection(connection).unwrap_ssh(),
+            connection_id,
+        }
+    }
+}
+
+impl RustType<ProtoSshTunnel> for SshTunnel<InlinedConnection> {
     fn into_proto(&self) -> ProtoSshTunnel {
         ProtoSshTunnel {
             connection_id: Some(self.connection_id.into_proto()),
@@ -1119,7 +1281,7 @@ impl RustType<ProtoSshTunnel> for SshTunnel {
     }
 }
 
-impl SshTunnel {
+impl SshTunnel<InlinedConnection> {
     /// Like [`SshTunnelConfig::connect`], but the SSH key is loaded from a
     /// secret.
     async fn connect(

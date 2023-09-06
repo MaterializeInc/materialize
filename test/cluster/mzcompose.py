@@ -10,6 +10,7 @@
 import json
 import re
 import time
+from copy import copy
 from datetime import datetime
 from textwrap import dedent
 from threading import Thread
@@ -84,6 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-query-without-default-cluster",
         "test-clusterd-death-detection",
         "test-replica-metrics",
+        "test-compute-controller-metrics",
         "test-metrics-retention-across-restart",
     ]:
         with c.test_case(name):
@@ -663,7 +665,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- generating a SQL-level error, given the partial fix to bucketed
             -- aggregates introduced in PR #17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
-            SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
         )
         c.testdrive(
@@ -934,8 +936,9 @@ def workflow_test_github_17509(c: Composition) -> None:
     assertions are turned off.
 
     This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
-    It is still possible to trigger the behavior described in the issue by opting into
-    a smaller group size with a query hint (e.g., OPTIONS (EXPECTED GROUP SIZE = 1)).
+    The checks here are extended by opting into a smaller group size with a query hint (e.g.,
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
+    initially not covered, but eventually got supported as well.
     """
 
     c.down(destroy_volumes=True)
@@ -2026,6 +2029,13 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
+    def for_instance(self, id: str) -> "Metrics":
+        new = copy(self)
+        new.metrics = {
+            k: v for k, v in self.metrics.items() if f'instance_id="{id}"' in k
+        }
+        return new
+
     def with_name(self, metric_name: str) -> dict[str, float]:
         items = {}
         for key, value in self.metrics.items():
@@ -2039,6 +2049,54 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_command_count(self, metric: str, command_type: str) -> float:
+        metrics = self.with_name(metric)
+        values = [
+            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
+    def get_response_count(self, metric: str, response_type: str) -> float:
+        metrics = self.with_name(metric)
+        values = [
+            v for k, v in metrics.items() if f'response_type="{response_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
+    def get_replica_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_replica_history_command_count", command_type
+        )
+
+    def get_controller_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_controller_history_command_count", command_type
+        )
+
+    def get_commands_total(self, command_type: str) -> float:
+        return self.get_command_count("mz_compute_commands_total", command_type)
+
+    def get_command_bytes_total(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_command_message_bytes_total", command_type
+        )
+
+    def get_responses_total(self, response_type: str) -> float:
+        return self.get_response_count("mz_compute_responses_total", response_type)
+
+    def get_response_bytes_total(self, response_type: str) -> float:
+        return self.get_response_count(
+            "mz_compute_response_message_bytes_total", response_type
+        )
+
+    def get_peeks_total(self, result: str) -> float:
+        metrics = self.with_name("mz_compute_peeks_total")
+        values = [v for k, v in metrics.items() if f'result="{result}"' in k]
+        assert len(values) == 1
+        return values[0]
+
     def get_initial_output_duration(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
         values = [
@@ -2046,14 +2104,6 @@ class Metrics:
         ]
         assert len(values) <= 1
         return next(iter(values), None)
-
-    def get_command_count(self, command_type: str) -> float:
-        metrics = self.with_name("mz_compute_replica_history_command_count")
-        values = [
-            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
-        ]
-        assert len(values) <= 1
-        return values[0]
 
 
 def workflow_test_replica_metrics(c: Composition) -> None:
@@ -2098,39 +2148,167 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+
+    count = metrics.get_replica_history_command_count("create_timely")
+    assert count == 0, f"unexpected create_timely count: {count}"
+    count = metrics.get_replica_history_command_count("create_instance")
+    assert count == 1, f"unexpected create_instance count: {count}"
+    count = metrics.get_replica_history_command_count("allow_compaction")
+    assert count > 0, f"unexpected allow_compaction count: {count}"
+    count = metrics.get_replica_history_command_count("create_dataflow")
+    assert count > 0, f"unexpected create_dataflow count: {count}"
+    count = metrics.get_replica_history_command_count("peek")
+    assert count <= 2, f"unexpected peek count: {count}"
+    count = metrics.get_replica_history_command_count("cancel_peek")
+    assert count <= 2, f"unexpected cancel_peek count: {count}"
+    count = metrics.get_replica_history_command_count("initialization_complete")
+    assert count == 0, f"unexpected initialization_complete count: {count}"
+    count = metrics.get_replica_history_command_count("update_configuration")
+    assert count == 1, f"unexpected update_configuration count: {count}"
+
+    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
+    assert count >= 2, f"unexpected dataflow count: {count}"
+
+    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
+    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+
+
+def workflow_test_compute_controller_metrics(c: Composition) -> None:
+    """Test metrics exposed by the compute controller."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp).for_instance("u2")
+
+    # Set up a cluster with a couple dataflows.
+    c.sql(
+        """
+        CREATE CLUSTER test MANAGED, SIZE '1';
+        SET cluster = test;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+
+        CREATE INDEX idx ON t (a);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+        SELECT * FROM t;
+        SELECT * FROM mv;
+        """
+    )
+
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
-    count = metrics.get_command_count("create_timely")
-    assert count == 0, f"unexpected create_timely count: {count}"
-    count = metrics.get_command_count("create_instance")
-    assert count == 1, f"unexpected create_instance count: {count}"
-    count = metrics.get_command_count("allow_compaction")
-    assert count > 0, f"unexpected allow_compaction count: {count}"
-    count = metrics.get_command_count("create_dataflow")
-    assert count > 0, f"unexpected create_dataflow count: {count}"
-    count = metrics.get_command_count("peek")
-    assert count <= 2, f"unexpected peek count: {count}"
-    count = metrics.get_command_count("cancel_peek")
-    assert count == 0, f"unexpected cancel_peek count: {count}"
-    count = metrics.get_command_count("initialization_complete")
-    assert count == 0, f"unexpected initialization_complete count: {count}"
-    count = metrics.get_command_count("update_configuration")
-    assert count == 1, f"unexpected update_configuration count: {count}"
+    # mz_compute_commands_total
+    count = metrics.get_commands_total("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("create_instance")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_commands_total("create_dataflow")
+    assert count == 3, f"got {count}"
+    count = metrics.get_commands_total("peek")
+    assert count == 2, f"got {count}"
+    count = metrics.get_commands_total("cancel_peek")
+    assert count == 2, f"got {count}"
+    count = metrics.get_commands_total("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("update_configuration")
+    assert count == 1, f"got {count}"
 
-    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
-    assert count >= 2, f"unexpected dataflow count: {count}"
+    # mz_compute_command_message_bytes_total
+    count = metrics.get_command_bytes_total("create_timely")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("create_instance")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("create_dataflow")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("peek")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("cancel_peek")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("initialization_complete")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("update_configuration")
+    assert count > 0, f"got {count}"
 
-    index_iod = metrics.get_initial_output_duration(index_id)
-    assert index_iod, f"unexpected index iod: {index_iod}"
-    mv_iod = metrics.get_initial_output_duration(mv_id)
-    assert mv_iod, f"unexpected mv iod: {mv_iod}"
+    # mz_compute_responses_total
+    count = metrics.get_responses_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics.get_responses_total("peek_response")
+    assert count == 2, f"got {count}"
+    count = metrics.get_responses_total("subscribe_response")
+    assert count == 0, f"got {count}"
 
-    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
-    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+    # mz_compute_response_message_bytes_total
+    count = metrics.get_response_bytes_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics.get_response_bytes_total("peek_response")
+    assert count > 0, f"got {count}"
+    count = metrics.get_response_bytes_total("subscribe_response")
+    assert count == 0, f"got {count}"
+
+    count = metrics.get_value("mz_compute_controller_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_collection_count")
+    assert count > 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_peek_count")
+    assert count == 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_subscribe_count")
+    assert count == 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_command_queue_size")
+    assert count < 10, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_response_queue_size")
+    assert count < 10, f"got {count}"
+
+    # mz_compute_controller_history_command_count
+    count = metrics.get_controller_history_command_count("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("create_instance")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_controller_history_command_count("create_dataflow")
+    assert count > 0, f"got {count}"
+    count = metrics.get_controller_history_command_count("peek")
+    assert count <= 2, f"got {count}"
+    count = metrics.get_controller_history_command_count("cancel_peek")
+    assert count <= 2, f"got {count}"
+    count = metrics.get_controller_history_command_count("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("update_configuration")
+    assert count == 1, f"got {count}"
+
+    count = metrics.get_value("mz_compute_controller_history_dataflow_count")
+    assert count >= 2, f"got {count}"
+
+    # mz_compute_peeks_total
+    count = metrics.get_peeks_total("rows")
+    assert count == 2, f"got {count}"
+    count = metrics.get_peeks_total("error")
+    assert count == 0, f"got {count}"
+    count = metrics.get_peeks_total("canceled")
+    assert count == 0, f"got {count}"
+
+    # mz_dataflow_initial_output_duration_seconds
+    duration = metrics.get_initial_output_duration(index_id)
+    assert duration, f"got {duration}"
+    duration = metrics.get_initial_output_duration(mv_id)
+    assert duration, f"got {duration}"
 
     # Drop the dataflows.
     c.sql(
@@ -2140,10 +2318,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
-    # Wait for the drop commands to reach the replica.
-    time.sleep(1)
-
-    # Check that the dataflow metrics have been cleaned up.
+    # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None

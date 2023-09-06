@@ -95,6 +95,7 @@ use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::result::ResultExt;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
@@ -3346,4 +3347,59 @@ fn test_pg_cancel_backend() {
         client1.batch_execute("SELECT 1").unwrap_err().to_string(),
         "current transaction is aborted"
     );
+}
+
+// Test params in interesting places.
+#[mz_ore::test]
+fn test_params() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    assert_eq!(
+        client
+            .query_one("SELECT $1", &[&"test"])
+            .unwrap()
+            .get::<_, String>(0),
+        "test"
+    );
+    assert_eq!(
+        client
+            .query_one("SUBSCRIBE (SELECT $1 as c)", &[&"test"])
+            .unwrap()
+            .get::<_, String>("c"),
+        "test"
+    );
+
+    client.batch_execute("BEGIN").unwrap();
+    client
+        .execute("DECLARE c CURSOR FOR SELECT $1", &[&"test"])
+        .map_err_to_string_with_causes()
+        .unwrap();
+    assert_eq!(
+        client
+            .query_one("FETCH c", &[])
+            .map_err_to_string_with_causes()
+            .unwrap()
+            .get::<_, String>(0),
+        "test"
+    );
+    client.batch_execute("COMMIT").unwrap();
+
+    client.batch_execute("BEGIN").unwrap();
+    client
+        .execute("DECLARE c CURSOR FOR SUBSCRIBE(SELECT $1 as c)", &[&"test"])
+        .map_err_to_string_with_causes()
+        .unwrap();
+    assert_eq!(
+        client
+            .query_one("FETCH c", &[])
+            .map_err_to_string_with_causes()
+            .unwrap()
+            .get::<_, String>("c"),
+        "test"
+    );
+    client.batch_execute("COMMIT").unwrap();
 }

@@ -25,7 +25,9 @@ use mz_sql::names::{
     SystemObjectId,
 };
 use mz_sql::plan;
-use mz_sql::plan::{MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege};
+use mz_sql::plan::{
+    DataSourceDesc, Explainee, MutationKind, Plan, SourceSinkClusterConfig, UpdatePrivilege,
+};
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
@@ -116,8 +118,13 @@ pub fn check_item_usage(
     catalog: &impl SessionCatalog,
     session: &Session,
     resolved_ids: &ResolvedIds,
+    plan: Option<&Plan>,
 ) -> Result<(), AdapterError> {
     rbac_preamble!(catalog, session);
+
+    if matches!(plan, Some(plan) if !requires_item_usage_privileges(plan)) {
+        return Ok(());
+    }
 
     // Obtain all roles that the current session is a member of.
     let current_role_id = session.current_role_id();
@@ -146,6 +153,90 @@ pub fn check_item_usage(
     Ok(())
 }
 
+/// true if the plan requires USAGE privileges on all applicable items, false otherwise.
+///
+/// Most plans will return true but some plans, like SHOW CREATE, can reference an item without
+/// requiring any privileges on that item.
+fn requires_item_usage_privileges(plan: &Plan) -> bool {
+    match plan {
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateType(_)
+        | Plan::Comment(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowColumns(_)
+        | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::Select(_)
+        | Plan::Subscribe(_)
+        | Plan::CopyFrom(_)
+        | Plan::ExplainTimestamp(_)
+        | Plan::Insert(_)
+        | Plan::AlterCluster(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterIndexSetOptions(_)
+        | Plan::AlterIndexResetOptions(_)
+        | Plan::AlterSetCluster(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSource(_)
+        | Plan::PurifiedAlterSource { .. }
+        | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterOwner(_)
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::ReadThenWrite(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::RotateKeys(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::ReassignOwned(_)
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(_) => true,
+        Plan::ShowCreate(_) => false,
+        Plan::ExplainPlan(plan) => match plan.explainee {
+            Explainee::MaterializedView(_) | Explainee::Index(_) => false,
+            Explainee::Query { .. } => true,
+        },
+    }
+}
+
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     coord: &Coordinator,
@@ -157,7 +248,7 @@ pub fn check_plan(
 ) -> Result<(), AdapterError> {
     rbac_preamble!(catalog, session);
 
-    check_item_usage(catalog, session, resolved_ids)?;
+    check_item_usage(catalog, session, resolved_ids, Some(plan))?;
 
     // Obtain all roles that the current session is a member of.
     let current_role_id = session.current_role_id();
@@ -552,11 +643,13 @@ fn generate_required_privileges(
         }
         Plan::CreateSource(plan::CreateSourcePlan {
             name,
-            source: _,
+            source,
             if_not_exists: _,
             timeline: _,
             cluster_config,
-        }) => generate_required_source_privileges(name, cluster_config, role_id),
+        }) => {
+            generate_required_source_privileges(name, &source.data_source, cluster_config, role_id)
+        }
         Plan::CreateSources(plans) => plans
             .iter()
             .flat_map(
@@ -565,14 +658,20 @@ fn generate_required_privileges(
                      plan:
                          plan::CreateSourcePlan {
                              name,
-                             source: _,
+                             source,
                              if_not_exists: _,
                              timeline: _,
                              cluster_config,
                          },
                      resolved_ids: _,
                  }| {
-                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
+                    generate_required_source_privileges(
+                        name,
+                        &source.data_source,
+                        cluster_config,
+                        role_id,
+                    )
+                    .into_iter()
                 },
             )
             .collect(),
@@ -589,14 +688,20 @@ fn generate_required_privileges(
                      plan:
                          plan::CreateSourcePlan {
                              name,
-                             source: _,
+                             source,
                              if_not_exists: _,
                              timeline: _,
                              cluster_config,
                          },
                      resolved_ids: _,
                  }| {
-                    generate_required_source_privileges(name, cluster_config, role_id).into_iter()
+                    generate_required_source_privileges(
+                        name,
+                        &source.data_source,
+                        cluster_config,
+                        role_id,
+                    )
+                    .into_iter()
                 },
             )
             .collect(),
@@ -813,8 +918,17 @@ fn generate_required_privileges(
             stage: _,
             format: _,
             config: _,
-            explainee: _,
-        }) => generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
+            explainee,
+        }) => match explainee {
+            Explainee::MaterializedView(id) | Explainee::Index(id) => {
+                let item = catalog.get_item(id);
+                let schema_id: ObjectId = item.name().qualifiers.clone().into();
+                vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
+            }
+            Explainee::Query { .. } => {
+                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id)
+            }
+        },
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
             raw_plan: _,
@@ -1119,6 +1233,7 @@ fn generate_required_privileges(
             name: _,
             stmt: _,
             sql: _,
+            params: _,
         })
         | Plan::Fetch(plan::FetchPlan {
             name: _,
@@ -1153,6 +1268,7 @@ fn generate_required_privileges(
 
 fn generate_required_source_privileges(
     name: &QualifiedItemName,
+    data_source: &DataSourceDesc,
     cluster_config: &SourceSinkClusterConfig,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
@@ -1161,9 +1277,18 @@ fn generate_required_source_privileges(
         AclMode::CREATE,
         role_id,
     )];
-    match cluster_config.cluster_id() {
-        Some(id) => privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id)),
-        None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
+    match (data_source, cluster_config.cluster_id()) {
+        (_, Some(id)) => {
+            privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id))
+        }
+        (DataSourceDesc::Ingestion(_), None) => {
+            privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id))
+        }
+        // Non-ingestion data-sources have meaningless cluster config's (for now...) and they need
+        // to be ignored.
+        // This feels very brittle, but there's not much we can do until the UNDEFINED cluster
+        // config is removed.
+        (_, None) => {}
     }
     privileges
 }

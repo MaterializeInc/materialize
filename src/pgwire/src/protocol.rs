@@ -598,11 +598,10 @@ where
     async fn one_query(&mut self, stmt: Statement<Raw>, sql: String) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
-        let param_types = vec![];
         const EMPTY_PORTAL: &str = "";
         if let Err(e) = self
             .adapter_client
-            .declare(EMPTY_PORTAL.to_string(), stmt, sql, param_types)
+            .declare(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
             return self
@@ -1705,7 +1704,6 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
-            | ExecuteResponse::CreatedWebhookSource
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)

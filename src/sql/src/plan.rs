@@ -48,6 +48,7 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
+use mz_storage_client::types::connections::inline::ReferencedConnection;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
@@ -557,7 +558,15 @@ pub enum SourceSinkClusterConfig {
         /// The size of the replica to create in the linked cluster.
         size: String,
     },
-    /// The user did not specify a cluster behavior, so use the default.
+    /// The user did not specify a cluster behavior, so the actual behavior depends on
+    /// the context. For sources the behavior depends on the data source:
+    ///
+    ///   - Ingestion: Use the default behavior.
+    ///   - Source: Use the same cluster as the data source source.
+    ///   - Progress: Use the same cluster as the non-progress source.
+    ///   - Webhook: Does not allow undefined configs.
+    ///
+    /// For sinks, always use the default behavior.
     ///
     /// NOTE(benesch): we plan to remove this variant in the future by having
     /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
@@ -567,8 +576,7 @@ pub enum SourceSinkClusterConfig {
 }
 
 impl SourceSinkClusterConfig {
-    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
-    /// one doesn't exist, then a new cluster will be created.
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
     pub fn cluster_id(&self) -> Option<&ClusterId> {
         match self {
             SourceSinkClusterConfig::Existing { id } => Some(id),
@@ -589,7 +597,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -990,6 +998,7 @@ pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
     pub sql: String,
+    pub params: Params,
 }
 
 #[derive(Debug)]
@@ -1129,12 +1138,15 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
-    Webhook(Option<WebhookValidation>),
+    Webhook {
+        validate_using: Option<WebhookValidation>,
+        headers: WebhookHeaders,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub struct Ingestion {
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<ReferencedConnection>,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
@@ -1154,6 +1166,30 @@ pub struct WebhookValidation {
     pub secrets: Vec<WebhookValidationSecret>,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaders {
+    /// Optionally include a column named `headers` whose content is possibly filtered.
+    pub header_column: Option<WebhookHeaderFilters>,
+    /// The column index to provide the specific request header, and whether to provide it as bytes.
+    pub mapped_headers: BTreeMap<usize, (String, bool)>,
+}
+
+impl WebhookHeaders {
+    /// Returns the number of columns needed to represent our headers.
+    pub fn num_columns(&self) -> usize {
+        let header_column = self.header_column.as_ref().map(|_| 1).unwrap_or(0);
+        let mapped_headers = self.mapped_headers.len();
+
+        header_column + mapped_headers
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaderFilters {
+    pub block: BTreeSet<String>,
+    pub allow: BTreeSet<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`GlobalId`].
@@ -1167,7 +1203,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]
@@ -1180,7 +1216,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 

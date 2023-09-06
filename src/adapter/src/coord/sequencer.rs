@@ -25,6 +25,7 @@ use mz_sql::plan::{
     FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
 };
 use mz_sql_parser::ast::{Raw, Statement};
+use mz_storage_client::types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
@@ -410,8 +411,7 @@ impl Coordinator {
                 ctx.retire(ret);
             }
             Plan::Declare(plan) => {
-                let param_types = vec![];
-                self.declare(ctx, plan.name, plan.stmt, plan.sql, param_types);
+                self.declare(ctx, plan.name, plan.stmt, plan.sql, plan.params);
             }
             Plan::Fetch(FetchPlan {
                 name,
@@ -527,8 +527,11 @@ impl Coordinator {
             }
             Plan::ValidateConnection(plan) => {
                 let connection_context = self.connection_context.clone();
+                let connection = plan
+                    .connection
+                    .into_inline_connection(self.catalog().state());
                 mz_ore::task::spawn(|| "coord::validate_connection", async move {
-                    let res = match plan.connection.validate(plan.id, &connection_context).await {
+                    let res = match connection.validate(plan.id, &connection_context).await {
                         Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
                         Err(err) => Err(err.into()),
                     };

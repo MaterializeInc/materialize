@@ -7,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import subprocess
 import sys
 from collections.abc import Callable
 from functools import partial
+from textwrap import dedent
 from time import sleep
 from typing import Any, cast
 
@@ -103,3 +105,22 @@ def is_subdict(
                 )
                 return False
     return True
+
+
+def run_process_with_error_information(
+    cmd: list[str], input: str | None = None
+) -> None:
+    try:
+        subprocess.run(cmd, text=True, input=input, check=True)
+    except subprocess.CalledProcessError as e:
+        print(
+            dedent(
+                f"""
+                cmd: {e.cmd}
+                returncode: {e.returncode}
+                stdout: {e.stdout}
+                stderr: {e.stderr}
+                """
+            )
+        )
+        raise e

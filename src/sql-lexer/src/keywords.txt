@@ -27,6 +27,7 @@ Access
 Acks
 Add
 Addresses
+Aggregate
 All
 Alter
 And
@@ -177,6 +178,7 @@ Info
 Inherit
 Inline
 Inner
+Input
 Insert
 Inspect
 Int

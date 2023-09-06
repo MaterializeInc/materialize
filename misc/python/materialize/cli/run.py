@@ -245,6 +245,19 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
+    # NB[btv] - Hack to ensure that test results are sorted the same
+    # way as in CI.
+    #
+    # For most system parameters, we don't need to do this, as we can just
+    # use `ALTER SYSTEM` to set them to whatever we want within the SLT (or other)
+    # test itself. However, that doesn't work for `variable_length_row_encoding`,
+    # as it's only read once on startup and doesn't take effect until restart.
+    if os.environ.get("MZ_SYSTEM_PARAMETER_DEFAULT"):
+        os.environ[
+            "MZ_SYSTEM_PARAMETER_DEFAULT"
+        ] += ";variable_length_row_encoding=true"
+    else:
+        os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] = "variable_length_row_encoding=true"
     print(f"$ {' '.join(command)}")
     # We go through a dance here familiar to shell authors where both
     # the parent and child try to put the child into its own process

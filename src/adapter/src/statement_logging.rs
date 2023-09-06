@@ -165,7 +165,6 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedTable
             | ExecuteResponse::CreatedView
             | ExecuteResponse::CreatedViews
-            | ExecuteResponse::CreatedWebhookSource { .. }
             | ExecuteResponse::CreatedMaterializedView
             | ExecuteResponse::CreatedType
             | ExecuteResponse::Deallocate { .. }

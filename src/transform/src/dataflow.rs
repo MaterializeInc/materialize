@@ -941,6 +941,7 @@ impl IndexUsageContext {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataflowMetainfo {
     /// Notices that the optimizer wants to show to users.
+    /// For pushing a new element, use `push_optimizer_notice_dedup`.
     pub optimizer_notices: Vec<OptimizerNotice>,
 }
 

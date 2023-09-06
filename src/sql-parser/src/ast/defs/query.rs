@@ -190,12 +190,18 @@ impl_display!(SetOperator);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SelectOptionName {
     ExpectedGroupSize,
+    AggregateInputGroupSize,
+    DistinctOnInputGroupSize,
+    LimitInputGroupSize,
 }
 
 impl AstDisplay for SelectOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             SelectOptionName::ExpectedGroupSize => "EXPECTED GROUP SIZE",
+            SelectOptionName::AggregateInputGroupSize => "AGGREGATE INPUT GROUP SIZE",
+            SelectOptionName::DistinctOnInputGroupSize => "DISTINCT ON INPUT GROUP SIZE",
+            SelectOptionName::LimitInputGroupSize => "LIMIT INPUT GROUP SIZE",
         })
     }
 }

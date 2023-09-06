@@ -22,9 +22,7 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::SourceSinkClusterConfig;
 
-use crate::catalog::{
-    self, ClusterConfig, ClusterVariant, SerializedReplicaLocation, LINKED_CLUSTER_REPLICA_NAME,
-};
+use crate::catalog::{self, ClusterConfig, ClusterVariant, LINKED_CLUSTER_REPLICA_NAME};
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -82,7 +80,7 @@ impl Coordinator {
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = SerializedReplicaLocation::Managed {
+        let location = catalog::storage::ReplicaLocation::Managed {
             size: size.to_string(),
             availability_zone: None,
             disk,

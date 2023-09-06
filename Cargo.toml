@@ -77,6 +77,7 @@ members = [
     "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
+    "src/regexp",
 ]
 # Use Cargo's new feature resolver, which can handle target-specific features.
 # Explicit opt-in is required even with the 2021 edition because we use a
@@ -86,7 +87,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.71.0"
+rust-version = "1.72.0"
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even

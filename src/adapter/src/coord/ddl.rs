@@ -35,6 +35,7 @@ use mz_sql::session::vars::{
 use mz_storage_client::controller::{
     CreateExportToken, ExportDescription, ReadPolicy, StorageError,
 };
+use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
@@ -137,6 +138,9 @@ impl Coordinator {
                             if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                                 match &ingestion.desc.connection {
                                     GenericSourceConnection::Postgres(conn) => {
+                                        let conn = conn
+                                            .clone()
+                                            .into_inline_connection(self.catalog().state());
                                         let config = conn
                                             .connection
                                             .config(&*self.connection_context.secrets_reader)
@@ -518,6 +522,10 @@ impl Coordinator {
             }
         }
 
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if sort assertions are enabled.
+        mz_ore::soft_assert_eq!(self.catalog().check_consistency(), Ok(()));
+
         Ok(result)
     }
 
@@ -794,8 +802,10 @@ impl Coordinator {
         &mut self,
         create_export_token: CreateExportToken,
         sink: &Sink,
-        connection: StorageSinkConnection,
+        connection: StorageSinkConnection<ReferencedConnection>,
     ) -> Result<(), AdapterError> {
+        let connection = connection.into_inline_connection(self.catalog().state());
+
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
@@ -853,7 +863,7 @@ impl Coordinator {
         &mut self,
         id: GlobalId,
         oid: u32,
-        connection: StorageSinkConnection,
+        connection: StorageSinkConnection<ReferencedConnection>,
         create_export_token: CreateExportToken,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {

@@ -11,15 +11,8 @@ use std::collections::BTreeMap;
 
 use crate::objects::{wire_compatible, WireCompatible};
 use crate::upgrade::MigrationAction;
+use crate::upgrade::{objects_v33 as v33, objects_v34 as v34};
 use crate::{StashError, Transaction, TypedCollection};
-
-pub mod v33 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v33.rs"));
-}
-
-pub mod v34 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v34.rs"));
-}
 
 wire_compatible!(v33::ClusterReplicaValue with v34::ClusterReplicaValue);
 wire_compatible!(v33::IdAllocKey with v34::IdAllocKey);
@@ -94,7 +87,7 @@ async fn migrate_cluster_replicas(tx: &mut Transaction<'_>) -> Result<(), StashE
                 value: Some(new_id),
             }),
         };
-        let new_value = WireCompatible::convert(value.clone());
+        let new_value = WireCompatible::convert(value);
         MigrationAction::Update(key.clone(), (new_key, new_value))
     };
 
