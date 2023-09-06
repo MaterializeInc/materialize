@@ -346,6 +346,11 @@ CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE SOURCE s2 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
