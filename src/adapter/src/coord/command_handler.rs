@@ -25,7 +25,7 @@ use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
-use mz_sql::session::user::User;
+use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
@@ -45,7 +45,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{RoleMetadata, Session, TransactionOps, TransactionStatus};
+use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::{catalog, metrics, rbac, ExecuteContext};
 
@@ -616,10 +616,14 @@ impl Coordinator {
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
-                    if let Err(e) =
-                        rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids, None)
-                    {
-                        return ctx.retire(Err(e));
+                    if let Err(e) = rbac::check_item_usage(
+                        &catalog,
+                        ctx.session().role_metadata(),
+                        ctx.session().vars(),
+                        &resolved_ids,
+                        None,
+                    ) {
+                        return ctx.retire(Err(e.into()));
                     }
 
                     let result =

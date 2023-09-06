@@ -380,7 +380,11 @@ pub async fn initialize(
     }
 
     let schema_privileges = vec![
-        rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema).into_proto(),
+        rbac::default_builtin_object_privilege(
+            mz_sql::catalog::ObjectType::Schema,
+            MZ_SYSTEM_ROLE_ID,
+        )
+        .into_proto(),
         proto::MzAclItem {
             grantee: Some(MZ_SUPPORT_ROLE_ID.into_proto()),
             grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),

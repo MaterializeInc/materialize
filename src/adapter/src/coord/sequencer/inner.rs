@@ -107,7 +107,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::rbac::{self, is_rbac_enabled_for_session};
+use crate::rbac::{self};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -1440,7 +1440,7 @@ impl Coordinator {
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
         let session_catalog = self.catalog().for_session(session);
-        if is_rbac_enabled_for_session(session_catalog.system_vars(), session)
+        if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session.vars())
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.

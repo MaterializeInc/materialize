@@ -97,14 +97,19 @@ impl Coordinator {
             .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
-            self,
             &session_catalog,
-            ctx.session(),
+            &self
+                .active_conns()
+                .into_iter()
+                .map(|(conn_id, conn_meta)| (conn_id.unhandled(), conn_meta.authenticated_role))
+                .collect(),
+            ctx.session().role_metadata(),
+            ctx.session().vars(),
             &plan,
             target_cluster_id,
             &resolved_ids,
         ) {
-            return ctx.retire(Err(e));
+            return ctx.retire(Err(e.into()));
         }
 
         match plan {
@@ -647,7 +652,7 @@ impl Coordinator {
     }
 
     fn maybe_send_rbac_notice(&self, session: &Session) {
-        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
+        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session.vars()) {
             if !self.catalog.system_config().enable_ld_rbac_checks() {
                 session.add_notice(AdapterNotice::RbacSystemDisabled);
             } else {

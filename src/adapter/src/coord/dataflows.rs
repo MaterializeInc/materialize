@@ -803,7 +803,7 @@ fn eval_unmaterializable_func(
             state.get_role(session.session_role_id()).name(),
         )),
         UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
-            rbac::is_rbac_enabled_for_session(state.system_config(), session),
+            rbac::is_rbac_enabled_for_session(state.system_config(), session.vars()),
         )),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))

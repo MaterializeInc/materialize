@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_repr::role_id::RoleId;
 use once_cell::sync::Lazy;
 use uuid::Uuid;
 
@@ -98,4 +99,13 @@ impl User {
     pub fn limit_max_connections(&self) -> bool {
         !self.is_internal() && !self.is_external_admin()
     }
+}
+
+/// Metadata about a Session's role.
+#[derive(Debug, Clone)]
+pub struct RoleMetadata {
+    /// The role of the current execution context.
+    pub current_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    pub session_role: RoleId,
 }

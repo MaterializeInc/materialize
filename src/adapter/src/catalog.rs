@@ -3780,6 +3780,7 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
+                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Source,
@@ -3810,6 +3811,7 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Table,
+                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Table,
@@ -3850,6 +3852,7 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::View,
+                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::View,
@@ -3899,6 +3902,7 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
+                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Source,
@@ -4475,7 +4479,10 @@ impl Catalog {
                 }),
                 MZ_SYSTEM_ROLE_ID,
                 PrivilegeMap::from_mz_acl_items(vec![
-                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Type),
+                    rbac::default_builtin_object_privilege(
+                        mz_sql::catalog::ObjectType::Type,
+                        MZ_SYSTEM_ROLE_ID,
+                    ),
                     rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
                 ]),
             );
