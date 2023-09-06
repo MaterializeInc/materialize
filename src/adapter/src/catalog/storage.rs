@@ -45,7 +45,6 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
 use crate::catalog::{is_reserved_name, ClusterConfig, ClusterVariant};
-use crate::coord::timeline;
 
 pub mod objects;
 pub mod stash;
@@ -185,7 +184,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection {
     stash: Stash,
-    boot_ts: mz_repr::Timestamp,
 }
 
 impl Connection {
@@ -234,16 +232,17 @@ impl Connection {
                 return Err((stash, e.into()));
             }
         } {
-            // Get the current timestamp so we can record when we booted.
-            let previous_now = mz_repr::Timestamp::MIN;
-            let boot_ts = timeline::monotonic_now(now, previous_now);
+            // Get the current timestamp so we can record when we booted. We don't have to worry
+            // about `boot_ts` being less than a previously used timestamp because the stash is
+            // uninitialized and there are no previous timestamps.
+            let boot_ts = now();
 
             // Initialize the Stash
             let args = bootstrap_args.clone();
             match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
-                        stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
+                        stash::initialize(&mut tx, &args, boot_ts, deploy_generation).await
                     })
                 })
                 .await
@@ -252,7 +251,7 @@ impl Connection {
                 Err(e) => return Err((stash, e.into())),
             }
 
-            Connection { stash, boot_ts }
+            Connection { stash }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
@@ -265,34 +264,9 @@ impl Connection {
                 }
             }
 
-            // Choose a time at which to boot. This is the time at which we will run
-            // internal migrations, and is also exposed upwards in case higher
-            // layers want to run their own migrations at the same timestamp.
-            //
-            // This time is usually the current system time, but with protection
-            // against backwards time jumps, even across restarts.
-            let previous =
-                match try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds).await {
-                    Ok(ts) => ts.unwrap_or(mz_repr::Timestamp::MIN),
-                    Err(e) => {
-                        return Err((stash, e));
-                    }
-                };
-            let boot_ts = timeline::monotonic_now(now, previous);
-
-            let mut conn = Connection { stash, boot_ts };
+            let mut conn = Connection { stash };
 
             if !conn.stash.is_readonly() {
-                // IMPORTANT: we durably record the new timestamp before using it.
-                match conn
-                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(e) => {
-                        return Err((conn.stash, e));
-                    }
-                }
                 if let Some(deploy_generation) = deploy_generation {
                     match conn.persist_deploy_generation(deploy_generation).await {
                         Ok(()) => {}
@@ -342,17 +316,8 @@ impl Connection {
         self.stash.set_connect_timeout(connect_timeout).await;
     }
 
-    /// Returns the timestamp at which the storage layer booted.
-    ///
-    /// This is the timestamp that will have been used to write any data during
-    /// migrations. It is exposed so that higher layers performing their own
-    /// migrations can write data at the same timestamp, if desired.
-    ///
-    /// The boot timestamp is derived from the durable timestamp oracle and is
-    /// guaranteed to never go backwards, even in the face of backwards time
-    /// jumps across restarts.
-    pub fn boot_ts(&self) -> mz_repr::Timestamp {
-        self.boot_ts
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.stash.is_readonly()
     }
 
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
@@ -498,13 +463,15 @@ impl Connection {
     pub async fn fetch_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
+        boot_ts: mz_repr::Timestamp,
     ) -> Result<Vec<VersionedStorageUsage>, Error> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
             None => u128::MIN,
-            Some(period) => u128::from(self.boot_ts).saturating_sub(period.as_millis()),
+            Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
+        let is_read_only = self.is_read_only();
         Ok(self
             .stash
             .with_transaction(move |tx| {
@@ -524,7 +491,7 @@ impl Connection {
                     // Delete things only if a retention period is
                     // specified (otherwise opening readonly catalogs
                     // can fail).
-                    if retention_period.is_some() {
+                    if retention_period.is_some() && !is_read_only {
                         tx.append(vec![batch]).await?;
                     }
                     Ok(events)
@@ -822,6 +789,25 @@ impl Connection {
         Ok((id..next.next_id).collect())
     }
 
+    /// Gets a global timestamp for a timeline that has been persisted to disk.
+    ///
+    /// Returns `None` if no persisted timestamp for the specified timeline exists.
+    pub async fn try_get_persisted_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<Option<mz_repr::Timestamp>, Error> {
+        let key = proto::TimestampKey {
+            id: timeline.to_string(),
+        };
+        let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
+            .peek_key_one(&mut self.stash, key)
+            .await?
+            .map(RustType::from_proto)
+            .transpose()?;
+
+        Ok(val.map(|v| v.ts))
+    }
+
     /// Get all global timestamps that has been persisted to disk.
     pub async fn get_all_persisted_timestamps(
         &mut self,
@@ -885,27 +871,6 @@ impl Connection {
     pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
         Ok(self.stash.confirm_leadership().await?)
     }
-}
-
-/// Gets a global timestamp for a timeline that has been persisted to disk.
-///
-/// Returns `None` if no persisted timestamp for the specified timeline exists.
-async fn try_get_persisted_timestamp(
-    stash: &mut Stash,
-    timeline: &Timeline,
-) -> Result<Option<mz_repr::Timestamp>, Error>
-where
-{
-    let key = proto::TimestampKey {
-        id: timeline.to_string(),
-    };
-    let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
-        .peek_key_one(stash, key)
-        .await?
-        .map(RustType::from_proto)
-        .transpose()?;
-
-    Ok(val.map(|v| v.ts))
 }
 
 #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
