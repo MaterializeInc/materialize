@@ -111,6 +111,7 @@ impl Coordinator {
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
+        let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut timelines_to_drop = vec![];
@@ -177,6 +178,7 @@ impl Coordinator {
                         }) => {
                             materialized_views_to_drop.push((*cluster_id, *id));
                         }
+                        CatalogItem::View(_) => views_to_drop.push(*id),
                         CatalogItem::Secret(_) => {
                             secrets_to_drop.push(*id);
                         }
@@ -241,6 +243,7 @@ impl Coordinator {
             .chain(storage_sinks_to_drop.iter())
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(views_to_drop.iter())
             .collect();
 
         // Clean up any active subscribes that rely on dropped relations.
