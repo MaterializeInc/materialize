@@ -572,7 +572,7 @@ where
     Ok(())
 }
 
-/// A decoded version of [ProtoRollup::state] for which we have not yet checked
+/// The decoded state of [ProtoRollup] for which we have not yet checked
 /// that codecs match the ones in durable state.
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
