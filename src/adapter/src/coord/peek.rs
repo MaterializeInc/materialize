@@ -14,9 +14,9 @@
 
 use differential_dataflow::consolidation::consolidate;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
+use std::{fmt, mem};
 
 use futures::TryFutureExt;
 use mz_cluster_client::ReplicaId;
@@ -36,12 +36,14 @@ use mz_repr::{DatumVec, Diff, GlobalId, RelationType, Row, RowArena};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tracing::info;
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::Message;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
@@ -494,9 +496,9 @@ impl crate::coord::Coordinator {
                 .snapshot_cursor(id, timestamp)
                 .await?;
 
-            return Ok(ExecuteResponse::SendingRows {
-                future: Box::pin(async move {
-                    let limit = finishing.limit.unwrap_or(usize::MAX);
+            let handle: JoinHandle<Result<PeekResponseUnary, String>> =
+                mz_ore::task::spawn(|| "persist::peek", async move {
+                    let mut limit_remaining = finishing.limit.unwrap_or(usize::MAX);
 
                     // Re-used state for processing and building rows.
                     let mut accum = vec![];
@@ -506,43 +508,35 @@ impl crate::coord::Coordinator {
 
                     let start = Instant::now();
                     let mut last_fetch = Duration::ZERO;
-                    while row_count < limit {
+                    while limit_remaining > 0 {
                         let Some(batch) = cursor.next().await else {
                             break;
                         };
                         last_fetch = start.elapsed();
-                        for ((k, v), _, d) in batch.take(limit - accum.len()) {
-                            let row = match k {
-                                Ok(k) => match k.0 {
-                                    Ok(row) => row,
-                                    Err(e) => return PeekResponseUnary::Error(e.to_string()),
-                                },
-                                Err(e) => return PeekResponseUnary::Error(e),
-                            };
-                            let () = match v {
-                                Ok(()) => (),
-                                Err(e) => return PeekResponseUnary::Error(e),
+                        for ((k, v), _, d) in batch {
+                            let row = k?.0.map_err(|e| e.to_string())?;
+                            let () = v?;
+                            let count: usize = d
+                                .try_into()
+                                .map_err(|_| "Negative count for thing in snapshot".to_owned())?;
+                            let Some(count) = NonZeroUsize::new(count) else {
+                                continue;
                             };
                             let mut datum_local = datum_vec.borrow_with(&row);
-                            let eval_result =
-                                mfp_plan.evaluate_into(&mut datum_local, &arena, &mut row_builder);
-                            match eval_result {
-                                Ok(Some(row)) => {
-                                    for _ in 0..d {
-                                        accum.push(row.clone())
-                                    }
+                            let eval_result = mfp_plan
+                                .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                                .map_err(|e| e.to_string())?;
+                            if let Some(row) = eval_result {
+                                accum.push((row, count));
+                                limit_remaining = limit_remaining.saturating_sub(count.get());
+                                if limit_remaining == 0 {
+                                    break;
                                 }
-                                Ok(None) => {
-                                    // Noop!
-                                }
-                                Err(e) => return PeekResponseUnary::Error(e.to_string()),
                             }
                         }
                     }
 
-                    if let Some(limit) = finishing.limit {
-                        accum.truncate(limit);
-                    }
+                    let res = finishing.finish(accum, max_result_size)?;
                     let total_duration = start.elapsed();
                     info!(
                         collection =? id,
@@ -550,7 +544,38 @@ impl crate::coord::Coordinator {
                         total_duration =? total_duration,
                         "persist peek success"
                     );
-                    PeekResponseUnary::Rows(accum)
+                    Ok(PeekResponseUnary::Rows(res))
+                });
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let ctx_extra = mem::take(ctx_extra);
+            return Ok(ExecuteResponse::SendingRows {
+                future: Box::pin(async move {
+                    let res = match handle.await {
+                        Ok(Ok(res)) => res,
+                        Ok(Err(err)) => PeekResponseUnary::Error(err.to_string()),
+                        Err(_join_error) => PeekResponseUnary::Canceled,
+                    };
+
+                    let reason = match &res {
+                        PeekResponseUnary::Rows(rows) => StatementEndedExecutionReason::Success {
+                            rows_returned: Some(u64::cast_from(rows.len())),
+                            execution_strategy: Some(StatementExecutionStrategy::FastPath),
+                        },
+                        PeekResponseUnary::Error(e) => {
+                            StatementEndedExecutionReason::Errored { error: e.clone() }
+                        }
+                        PeekResponseUnary::Canceled => StatementEndedExecutionReason::Canceled,
+                    };
+
+                    let tx_send = internal_cmd_tx.send(Message::RetireExecute {
+                        data: ctx_extra,
+                        reason,
+                    });
+                    if tx_send.is_err() {
+                        return PeekResponseUnary::Canceled;
+                    }
+
+                    res
                 }),
                 span: tracing::Span::current(),
             });
