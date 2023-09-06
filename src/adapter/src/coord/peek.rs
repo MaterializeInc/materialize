@@ -16,6 +16,7 @@ use differential_dataflow::consolidation::consolidate;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::time::{Duration, Instant};
 
 use futures::TryFutureExt;
 use mz_cluster_client::ReplicaId;
@@ -487,7 +488,6 @@ impl crate::coord::Coordinator {
         let timestamp = determination.timestamp_context.timestamp_or_default();
 
         if let PeekPlan::FastPath(FastPathPlan::PeekPersist(id, mfp_plan)) = fast_path {
-            info!("Persist fast path peek against collection {id}");
             let mut cursor = self
                 .controller
                 .storage
@@ -496,17 +496,21 @@ impl crate::coord::Coordinator {
 
             return Ok(ExecuteResponse::SendingRows {
                 future: Box::pin(async move {
-                    let mut accum = vec![];
                     let limit = finishing.limit.unwrap_or(usize::MAX);
+
                     // Re-used state for processing and building rows.
+                    let mut accum = vec![];
                     let mut datum_vec = DatumVec::new();
                     let mut row_builder = Row::default();
-
                     let arena = RowArena::new();
-                    while accum.len() < limit {
+
+                    let start = Instant::now();
+                    let mut last_fetch = Duration::ZERO;
+                    while row_count < limit {
                         let Some(batch) = cursor.next().await else {
                             break;
                         };
+                        last_fetch = start.elapsed();
                         for ((k, v), _, d) in batch.take(limit - accum.len()) {
                             let row = match k {
                                 Ok(k) => match k.0 {
@@ -539,6 +543,13 @@ impl crate::coord::Coordinator {
                     if let Some(limit) = finishing.limit {
                         accum.truncate(limit);
                     }
+                    let total_duration = start.elapsed();
+                    info!(
+                        collection =? id,
+                        fetch_duration =? last_fetch,
+                        total_duration =? total_duration,
+                        "persist peek success"
+                    );
                     PeekResponseUnary::Rows(accum)
                 }),
                 span: tracing::Span::current(),
