@@ -3640,7 +3640,6 @@ dependencies = [
  "futures",
  "mz-build-info",
  "mz-cluster-client",
- "mz-expr",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
