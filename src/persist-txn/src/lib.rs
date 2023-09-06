@@ -291,7 +291,6 @@ pub mod txns;
 // - Add frontier advancement operator.
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?
-// - Unit tests.
 // - Figure out the compaction story for both txn and data shard.
 
 /// Advance a timestamp by the least amount possible such that
@@ -558,19 +557,35 @@ impl StepForward for u64 {
 pub mod tests {
     use std::sync::Arc;
 
+    use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-    use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use super::*;
 
     pub(crate) async fn writer(
         client: &PersistClient,
         data_id: ShardId,
-    ) -> WriteHandle<Vec<u8>, (), u64, i64> {
+    ) -> WriteHandle<String, (), u64, i64> {
         client
             .open_writer(
                 data_id,
-                Arc::new(VecU8Schema),
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("codecs should not change")
+    }
+
+    pub(crate) async fn reader(
+        client: &PersistClient,
+        data_id: ShardId,
+    ) -> ReadHandle<String, (), u64, i64> {
+        client
+            .open_leased_reader(
+                data_id,
+                Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
             )
