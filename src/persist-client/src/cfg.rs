@@ -12,6 +12,7 @@
 //! The tunable knobs for persist.
 
 use once_cell::sync::Lazy;
+use std::collections::BTreeMap;
 use std::string::ToString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -28,6 +29,31 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
+
+#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
+pub struct PersistFeatureFlag {
+    pub name: &'static str,
+    pub default: bool,
+    pub description: &'static str,
+}
+
+impl PersistFeatureFlag {
+    pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_streaming_compaction_enabled",
+        default: false,
+        description: "use the new streaming consolidate during compaction",
+    };
+    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_streaming_snapshot_and_fetch_enabled",
+        default: false,
+        description: "use the new streaming consolidate during snapshot_and_fetch",
+    };
+
+    pub const ALL: &'static [PersistFeatureFlag] = &[
+        Self::STREAMING_COMPACTION,
+        Self::STREAMING_SNAPSHOT_AND_FETCH,
+    ];
+}
 
 /// The tunable knobs for persist.
 ///
@@ -175,6 +201,13 @@ impl PersistConfig {
                 pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
+                feature_flags: {
+                    // NB: initialized with the full set of feature flags, so the map never needs updating.
+                    PersistFeatureFlag::ALL
+                        .iter()
+                        .map(|f| (f.name, AtomicBool::new(f.default)))
+                        .collect()
+                },
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -223,6 +256,10 @@ impl PersistConfig {
 
         let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
+        cfg.dynamic
+            .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
+        cfg.dynamic
+            .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
         cfg
     }
 }
@@ -391,6 +428,8 @@ pub struct DynamicConfig {
     pubsub_push_diff_enabled: AtomicBool,
     rollup_threshold: AtomicUsize,
 
+    feature_flags: BTreeMap<&'static str, AtomicBool>,
+
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
     // and to logically group them together.
@@ -444,6 +483,14 @@ impl DynamicConfig {
     // TODO: Decide if we can relax these.
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
+
+    pub fn enabled(&self, flag: PersistFeatureFlag) -> bool {
+        self.feature_flags[flag.name].load(DynamicConfig::LOAD_ORDERING)
+    }
+
+    pub fn set_feature_flag(&self, flag: PersistFeatureFlag, to: bool) {
+        self.feature_flags[flag.name].store(to, DynamicConfig::STORE_ORDERING);
+    }
 
     /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
@@ -532,6 +579,7 @@ impl DynamicConfig {
             .read()
             .expect("lock poisoned")
     }
+
     /// The duration to wait for a Consensus Postgres/CRDB connection to be made before retrying.
     pub fn consensus_connect_timeout(&self) -> Duration {
         *self
@@ -728,6 +776,8 @@ pub struct PersistParameters {
     pub pubsub_push_diff_enabled: Option<bool>,
     /// Configures [`DynamicConfig::rollup_threshold`]
     pub rollup_threshold: Option<usize>,
+    /// Updates to various feature flags.
+    pub feature_flags: BTreeMap<String, bool>,
 }
 
 impl PersistParameters {
@@ -754,6 +804,7 @@ impl PersistParameters {
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
             rollup_threshold: self_rollup_threshold,
+            feature_flags: self_feature_flags,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -774,6 +825,7 @@ impl PersistParameters {
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
             rollup_threshold: other_rollup_threshold,
+            feature_flags: other_feature_flags,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -829,6 +881,7 @@ impl PersistParameters {
         if let Some(v) = other_rollup_threshold {
             *self_rollup_threshold = Some(v)
         }
+        self_feature_flags.extend(other_feature_flags);
     }
 
     /// Return whether all parameters are unset.
@@ -856,6 +909,7 @@ impl PersistParameters {
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
+            feature_flags,
         } = self;
         blob_target_size.is_none()
             && blob_cache_mem_limit_bytes.is_none()
@@ -875,6 +929,7 @@ impl PersistParameters {
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
             && rollup_threshold.is_none()
+            && feature_flags.is_empty()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -903,6 +958,7 @@ impl PersistParameters {
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
+            feature_flags,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -1016,6 +1072,11 @@ impl PersistParameters {
                 .rollup_threshold
                 .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
         }
+        for flag in PersistFeatureFlag::ALL {
+            if let Some(value) = feature_flags.get(flag.name) {
+                cfg.dynamic.set_feature_flag(*flag, *value);
+            }
+        }
     }
 }
 
@@ -1044,6 +1105,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
             rollup_threshold: self.rollup_threshold.into_proto(),
+            feature_flags: self.feature_flags.clone(),
         }
     }
 
@@ -1071,6 +1133,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
             rollup_threshold: proto.rollup_threshold.into_rust()?,
+            feature_flags: proto.feature_flags,
         })
     }
 }

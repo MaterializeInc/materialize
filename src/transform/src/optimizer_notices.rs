@@ -24,6 +24,17 @@ use mz_repr::{GlobalId, Row};
 #[allow(missing_docs)]
 pub enum OptimizerNotice {
     IndexTooWideForLiteralConstraints(IndexTooWideForLiteralConstraints),
+    /// An index with an empty key is maximally skewed (all of the data goes to a single worker),
+    /// and is almost never really useful. It's slightly useful for a cross join, because a cross
+    /// join also has an empty key, so we avoid rearranging the input. However, this is still
+    /// not very useful, because
+    ///  - Rearranging the input shouldn't take too much memory, because if a cross join has a big
+    ///    input, then we have a serious problem anyway.
+    ///  - Even with the arrangement already there, the cross join will read every input record, so
+    ///    the orders of magnitude performance improvements that can happen with other joins when an
+    ///    input arrangement exists can't happen with a cross join.
+    /// Also note that skew is hard to debug, so it's good to avoid this problem in the first place.
+    IndexKeyEmpty,
 }
 
 impl OptimizerNotice {
@@ -113,6 +124,11 @@ impl OptimizerNotice {
                     Some(format!("If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: ({recommended_cols_display}).")),
                 )
             }
+            OptimizerNotice::IndexKeyEmpty =>
+                (
+                    "Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.".to_string(),
+                    Some("CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)".to_string()),
+                )
         }
     }
 
@@ -147,6 +163,7 @@ impl OptimizerNotice {
                     ..
                 },
             ) => humanizer.id_exists(*index_id) && humanizer.id_exists(*index_on_id),
+            OptimizerNotice::IndexKeyEmpty => true,
         }
     }
 }

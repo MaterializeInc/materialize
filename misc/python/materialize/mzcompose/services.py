@@ -62,6 +62,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
     "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+    # Advance coverage on some Persist internals changes
+    "persist_streaming_compaction_enabled": "true",
+    "persist_streaming_snapshot_and_fetch_enabled": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

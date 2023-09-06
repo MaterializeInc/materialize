@@ -1135,7 +1135,7 @@ impl From<ObjectId> for SystemObjectId {
 /// to represent these different types and their IDs (e.g. [`GlobalId`] and [`RoleId`]), as well as
 /// the inner kind of object that is represented, e.g. [`GlobalId`] is used to identify both Tables
 /// and Views. No other kind of ID encapsulates all of this, hence this new "*Id" type.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub enum CommentObjectId {
     Table(GlobalId),
     View(GlobalId),

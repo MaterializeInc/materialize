@@ -140,6 +140,7 @@ pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
 }
+pub mod iter;
 pub mod read;
 pub mod rpc;
 pub mod stats;

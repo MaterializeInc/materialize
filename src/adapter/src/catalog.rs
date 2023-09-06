@@ -114,13 +114,14 @@ use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, M
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{timeline, ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
+mod consistency;
 mod error;
 mod migrate;
 
@@ -3231,6 +3232,7 @@ pub struct DefaultPrivileges {
 // map_key_to_string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Default)]
 struct RoleDefaultPrivileges(
+    /// Denormalized, the key is the grantee Role.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     BTreeMap<RoleId, DefaultPrivilegeAclItem>,
 );
@@ -3577,6 +3579,28 @@ impl Catalog {
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
 
+        // Choose a time at which to boot. This is the time at which we will run
+        // internal migrations.
+        //
+        // This time is usually the current system time, but with protection
+        // against backwards time jumps, even across restarts.
+        let boot_ts = {
+            let mut storage = catalog.storage().await;
+            let previous_ts = storage
+                .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
+                .await?
+                .expect("missing EpochMilliseconds timeline");
+            let boot_ts = timeline::monotonic_now(config.now, previous_ts);
+            if !storage.is_read_only() {
+                // IMPORTANT: we durably record the new timestamp before using it.
+                storage
+                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .await?;
+            }
+
+            boot_ts
+        };
+
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
@@ -3690,6 +3714,7 @@ impl Catalog {
             .load_system_configuration(
                 config.system_parameter_defaults,
                 config.system_parameter_sync_config,
+                boot_ts,
             )
             .await?;
         // We need to set this variable ASAP, so that builtins get planned with the correct value
@@ -4247,7 +4272,7 @@ impl Catalog {
         let storage_usage_events = catalog
             .storage()
             .await
-            .fetch_and_prune_storage_usage(config.storage_usage_retention_period)
+            .fetch_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
             .await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
@@ -4287,13 +4312,10 @@ impl Catalog {
         &mut self,
         system_parameter_defaults: BTreeMap<String, String>,
         system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+        boot_ts: mz_repr::Timestamp,
     ) -> Result<(), AdapterError> {
-        let (system_config, boot_ts) = {
-            let mut storage = self.storage().await;
-            let system_config = storage.load_system_configuration().await?;
-            let boot_ts = storage.boot_ts();
-            (system_config, boot_ts)
-        };
+        let system_config = self.storage().await.load_system_configuration().await?;
+
         for (name, value) in &system_parameter_defaults {
             match self
                 .state
@@ -4319,7 +4341,9 @@ impl Catalog {
             };
         }
         if let Some(system_parameter_sync_config) = system_parameter_sync_config {
-            if !self.state.system_config().config_has_synced_once() {
+            if self.storage().await.is_read_only() {
+                tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
+            } else if !self.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
 
                 // We intentionally block initial startup, potentially forever,
@@ -8035,6 +8059,17 @@ impl Catalog {
     /// identically.
     pub fn dump(&self) -> Result<CatalogDump, Error> {
         Ok(CatalogDump::new(self.state.dump()?))
+    }
+
+    /// Checks the [`Catalog`]s internal consistency.
+    ///
+    /// Returns a JSON object describing the inconsistencies, if there are any.
+    pub fn check_consistency(&self) -> Result<(), serde_json::Value> {
+        self.state.check_consistency().map_err(|inconsistencies| {
+            serde_json::to_value(inconsistencies).unwrap_or_else(|_| {
+                serde_json::Value::String("failed to serialize inconsistencies".to_string())
+            })
+        })
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
