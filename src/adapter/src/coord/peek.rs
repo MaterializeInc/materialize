@@ -48,8 +48,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementExecution
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 
-const SMALL_LIMIT: usize = 1000;
-
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
@@ -231,6 +229,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
     dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
+    persist_fast_path_limit: usize,
 ) -> Result<Option<FastPathPlan>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -298,7 +297,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
-                    // If there is no arrangement but there is a backing persist shard, peek it directly
+                    // If there is no arrangement, consider peeking the persist shard directly
                     let safe_mfp = mfp
                         .clone()
                         .into_plan()
@@ -319,8 +318,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             ..
                         }) => {
                             order_by.is_empty()
-                                && limit.iter().any(|l| *l < SMALL_LIMIT)
-                                && *offset == 0
+                                && limit.iter().any(|l| *l + *offset < persist_fast_path_limit)
                         }
                     };
                     if filters.is_empty() && small_finish {
@@ -389,7 +387,12 @@ impl crate::coord::Coordinator {
         finishing: &RowSetFinishing,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id, Some(finishing))?;
+        let fast_path_plan = create_fast_path_plan(
+            &mut dataflow,
+            view_id,
+            Some(finishing),
+            self.catalog.system_config().persist_fast_path_limit(),
+        )?;
         // derive a PeekPlan from the optional FastPathPlan
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default

@@ -645,6 +645,16 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_fast_path_limit"),
+    value: &0,
+    description:
+        "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
+        queries that may return more results will follow the normal / slow path. \
+        Setting this to 0 disables the feature.",
+    internal: true,
+};
+
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
@@ -2379,6 +2389,7 @@ impl SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -2863,6 +2874,10 @@ impl SystemVars {
     /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
     pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+    }
+
+    pub fn persist_fast_path_limit(&self) -> usize {
+        *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
 
     pub fn persist_reader_lease_duration(&self) -> Duration {
@@ -4779,6 +4794,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_FAST_PATH_LIMIT.name()
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()

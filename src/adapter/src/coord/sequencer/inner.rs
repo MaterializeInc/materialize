@@ -3377,7 +3377,12 @@ impl Coordinator {
                 |r| prep_relation_expr(state, r, style),
                 |s| prep_scalar_expr(state, s, style),
             )?;
-            peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain, finishing.as_ref())?
+            peek::create_fast_path_plan(
+                &mut dataflow,
+                GlobalId::Explain,
+                finishing.as_ref(),
+                self.catalog.system_config().persist_fast_path_limit(),
+            )?
         };
 
         if let Some(fast_path_plan) = &fast_path_plan {
