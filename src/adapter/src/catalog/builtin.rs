@@ -3791,7 +3791,7 @@ SELECT
 FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
-WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
+WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -3822,7 +3822,7 @@ pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW information_schema.enabled_roles AS
 SELECT name AS role_name
 FROM mz_roles
-WHERE mz_internal.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
+WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
 };
 
 pub const INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: BuiltinView = BuiltinView {
@@ -3980,7 +3980,7 @@ WHERE
     -- to pg_has_role. Therefore we need to use a CASE statement.
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE mz_internal.mz_is_superuser()
+        ELSE mz_catalog.mz_is_superuser()
             OR pg_has_role(current_role, grantee, 'USAGE')
             OR pg_has_role(current_role, grantor, 'USAGE')
     END",
