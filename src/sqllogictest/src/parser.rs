@@ -18,6 +18,11 @@ use regex::Regex;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 
+static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
+static DOUBLE_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
+static EOF_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
+
 #[derive(Debug, Clone)]
 pub struct Parser<'a> {
     contents: &'a str,
@@ -188,8 +193,6 @@ impl<'a> Parser<'a> {
             Some("error") => expected_error = Some(parse_expected_error(first_line)),
             _ => bail!("invalid statement disposition: {}", first_line),
         };
-        static DOUBLE_LINE_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
         let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
         Ok(Record::Statement {
             expected_error,
@@ -207,8 +210,6 @@ impl<'a> Parser<'a> {
         let location = self.location();
         if words.peek() == Some(&"error") {
             let error = parse_expected_error(first_line);
-            static DOUBLE_LINE_REGEX: Lazy<Regex> =
-                Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
             let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
             return Ok(Record::Query {
                 sql,
@@ -250,11 +251,7 @@ impl<'a> Parser<'a> {
         static LINE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("\r?(\n|$)").unwrap());
         static HASH_REGEX: Lazy<Regex> =
             Lazy::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
-        static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
-        static EOF_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
-        static DOUBLE_LINE_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
         let mut output_str = self
             .split_at(if multiline {
                 &EOF_REGEX
@@ -337,12 +334,15 @@ impl<'a> Parser<'a> {
         let location = self.location();
         let mut conn = None;
         let mut user = None;
+        let mut multiline = false;
         if let Some(options) = words.next() {
             for option in options.split(',') {
                 if let Some(value) = option.strip_prefix("conn=") {
                     conn = Some(value);
                 } else if let Some(value) = option.strip_prefix("user=") {
                     user = Some(value);
+                } else if option == "multiline" {
+                    multiline = true;
                 } else {
                     bail!("Unrecognized option {:?} in {:?}", option, options);
                 }
@@ -351,12 +351,25 @@ impl<'a> Parser<'a> {
         if user.is_some() && conn.is_none() {
             bail!("cannot set user without also setting conn");
         }
-        static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
-        static DOUBLE_LINE_REGEX: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
-        let output_str = self.split_at(&DOUBLE_LINE_REGEX)?.trim_start();
-        let output = Output::Values(output_str.lines().map(String::from).collect());
+        let output_str = self
+            .split_at(if multiline {
+                &EOF_REGEX
+            } else {
+                &DOUBLE_LINE_REGEX
+            })?
+            .trim_start();
+        let output = if multiline {
+            Output::Values({
+                let mut v = vec![output_str.to_owned()];
+                // for simple queries we still have to pass the COMPLETE string after the EOF
+                let complete_str = self.split_at(&DOUBLE_LINE_REGEX)?.trim_start();
+                v.extend(complete_str.lines().map(String::from));
+                v
+            })
+        } else {
+            Output::Values(output_str.lines().map(String::from).collect())
+        };
         Ok(Record::Simple {
             location,
             conn,
