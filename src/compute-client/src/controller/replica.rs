@@ -260,11 +260,7 @@ where
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
-        if let ComputeCommand::CreateInstance(InstanceConfig {
-            logging,
-            variable_length_row_encoding: _,
-        }) = command
-        {
+        if let ComputeCommand::CreateInstance(InstanceConfig { logging }) = command {
             *logging = self.config.logging.clone();
         }
 
@@ -274,6 +270,7 @@ where
                 process: 0,
                 addresses: self.config.location.dataflow_addrs.clone(),
                 idle_arrangement_merge_effort: self.config.idle_arrangement_merge_effort,
+                variable_length_row_encoding: config.variable_length_row_encoding,
             };
             *epoch = self.epoch;
         }

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::TraceReader;
@@ -186,16 +186,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_create_instance(
-        &mut self,
-        InstanceConfig {
-            logging,
-            variable_length_row_encoding,
-        }: InstanceConfig,
-    ) {
-        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
-        self.initialize_logging(&logging);
+    fn handle_create_instance(&mut self, config: InstanceConfig) {
+        self.initialize_logging(&config.logging);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {

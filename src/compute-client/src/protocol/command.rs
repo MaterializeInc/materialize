@@ -316,14 +316,12 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
     pub logging: LoggingConfig,
-    pub variable_length_row_encoding: bool,
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
-            variable_length_row_encoding: self.variable_length_row_encoding.into_proto(),
         }
     }
 
@@ -332,7 +330,6 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
             logging: proto
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
-            variable_length_row_encoding: proto.variable_length_row_encoding.into_rust()?,
         })
     }
 }

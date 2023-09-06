@@ -47,7 +47,6 @@ message ProtoComputeCommand {
 
 message ProtoInstanceConfig {
     logging.ProtoLoggingConfig logging = 1;
-    bool variable_length_row_encoding = 2;
 }
 
 message ProtoPeek {
