@@ -39,19 +39,19 @@ SHOW COLUMNS FROM webhook_bytes
 ----
 body false bytea
 
-query TTT
-SELECT id, name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+query TT
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
 ----
-u1 webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
+webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
 
 statement ok
 CREATE SOURCE "weird-name-(]%/'" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
 
-query TTT
-SELECT id, name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+query TT
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
 ----
-u1 webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
-u2 weird-name-(]%/' {/api/webhook/materialize/public/weird-name-(]%25%2F'}
+webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
+weird-name-(]%/' {/api/webhook/materialize/public/weird-name-(]%25%2F'}
 
 statement ok
 DROP SOURCE "weird-name-(]%/'"
