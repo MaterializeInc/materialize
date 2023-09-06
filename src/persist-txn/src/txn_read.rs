@@ -33,27 +33,34 @@ use crate::StepForward;
 ///
 /// Reads of data shards are almost as straightforward as writes. A data shard
 /// may be read normally, using snapshots, subscriptions, shard_source, etc,
-/// through the most recent non-empty write. However, the upper of the txn shard
-/// (and thus the logical upper of the data shard) may be arbitrarily far ahead
-/// of the upper of the data shard. As a result, we have to "translate"
-/// timestamps by synthesizing ranges of empty time that have not yet been
-/// committed (but eventually will be):
+/// through the most recent non-empty write. However, the upper of the txns
+/// shard (and thus the logical upper of the data shard) may be arbitrarily far
+/// ahead of the physical upper of the data shard. As a result, we have to
+/// "translate" timestamps by synthesizing ranges of empty time that have not
+/// yet been committed (but are guaranteed to remain empty):
 ///
 /// - To take a snapshot of a data shard, the `as_of` is passed through
 ///   unchanged if the timestamp of that shard's latest non-empty write is past
 ///   it. Otherwise, the timestamp of the latest non-empty write is used.
+///   Concretely, to read a snapshot as of `T`:
+///   - We read the txns shard contents up through and including `T`, blocking
+///     until the upper passes `T` if necessary.
+///   - We then find, for the requested data shard, the latest non-empty write
+///     at a timestamp `T' <= T`.
+///   - We then take a normal snapshot on the data shard at `T'`.
 /// - To iterate a listen on a data shard, when writes haven't been read yet
-///   they are passed through unchanged, otherwise if the txn shard indicates
-///   that there are ranges of empty time progress is returned, otherwise the
-///   txn shard will indicate when new information is available.
+///   they are passed through unchanged, otherwise if the txns shard indicates
+///   that there are ranges of empty time progress is returned, otherwise
+///   progress to the txns shard will indicate when new information is
+///   available.
 ///
 /// Note that all of the above can be determined solely by information in the
-/// txn shard. In particular, non-empty writes are indicated by updates with
+/// txns shard. In particular, non-empty writes are indicated by updates with
 /// positive diffs.
 ///
 /// Also note that the above is structured such that it is possible to write a
 /// timely operator with the data shard as an input, passing on all payloads
-/// unchanged and simply manipulating capabilities in response to data and txn
+/// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. TODO(txn): Link to operator once it's added.
 #[derive(Debug)]
 pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {

@@ -93,12 +93,12 @@
 //! [TxnsHandle]: crate::txns::TxnsHandle
 //!
 //! Benefits of these txns:
-//! - _Key_: A transactional write costs in proportion to the total size of data
-//!   written, and the number of data shards involved (plus one for the txn
-//!   shard).
-//! - _Key_: The upper of every data shard is logically (but not physically)
-//!   advanced en masse with a single write to the txn shard. (Data writes may
-//!   also be bundled into this, if necessary.)
+//! - _Key idea_: A transactional write costs in proportion to the total size of
+//!   data written, and the number of data shards involved (plus one for the
+//!   txns shard).
+//! - _Key idea_: As time progresses, the upper of every data shard is logically
+//!   (but not physically) advanced en masse with a single write to the txns
+//!   shard. (Data writes may also be bundled into this, if desired.)
 //! - Transactions are write-only, but read-then-write transactions can be built
 //!   on top by using read and write timestamps selected to have no possible
 //!   writes in between (e.g. `write_ts/commit_ts = read_ts + 1`).
@@ -113,7 +113,7 @@
 //!   strict-serializable isolation on top of this interface via write and read
 //!   timestamp selections (see [#Isolation](#isolation) below for details).
 //! - It is possible to serialize and communicate an uncommitted [Txn] between
-//!   processes and also to combine uncommitted [Txn]s, if necessary (e.g.
+//!   processes and also to merge uncommitted [Txn]s, if necessary (e.g.
 //!   consolidating all monitoring collections, statement logging, etc into the
 //!   periodic timestamp advancement). This is not initially implemented, but
 //!   could be.
@@ -122,58 +122,56 @@
 //!
 //! Restrictions:
 //! - Data shards must all use the same codecs for `K, V, T, D`. However, each
-//!   data shard may have a independent `K` and `V` schemas. The txn shard
+//!   data shard may have a independent `K` and `V` schemas. The txns shard
 //!   inherits the `T` codec from the data shards (and uses its own `K, V, D`
 //!   ones).
-//! - All txns are linearized through the txn shard, so there is some limit to
-//!   horizontal and geographical scale out.
+//! - All txn writes are linearized through the txns shard, so there is some
+//!   limit to horizontal and geographical scale out.
 //! - Performance has been tuned for _throughput_ and _un-contended latency_.
-//!   Latency on contended workloads will likely be quite bad (TBD some more
-//!   precise description, also ideally some guarantee that a contended txn
-//!   eventually commits). At a high level, if N txns are run concurrently, 1
-//!   will commit and N-1 will have to retry. (However, note that it is also
-//!   possible to combine and commit multiple txns at the same timestamp, as
-//!   mentioned above, which gives us some amount of knobs for doing something
-//!   different here.)
+//!   Latency on contended workloads will likely be quite bad. At a high level,
+//!   if N txns are run concurrently, 1 will commit and N-1 will have to
+//!   (usually cheaply) retry. (However, note that it is also possible to
+//!   combine and commit multiple txns at the same timestamp, as mentioned
+//!   above, which gives us some amount of knobs for doing something different
+//!   here.)
 //!
 //! # Intuition and Jargon
 //!
-//! - A _txns shard_ is the source of truth for what has (and has not) committed
-//!   to a set of _data shards_.
+//! - The _txns shard_ is the source of truth for what has (and has not)
+//!   committed to a set of _data shards_.
 //! - Each data shard must be _registered_ at some `register_ts` before being
 //!   used in transactions. Registration is for bookkeeping only, there is no
 //!   particular meaning to the timestamp other than it being a lower bound on
 //!   when txns using this data shard can commit. Registration only needs to be
 //!   run once-ever per data shard, but it is idempotent, so can also be run
 //!   at-least-once.
-//! - A txn is broken into two phases:
+//! - A txn is broken into three phases:
 //!   - (Elided: A pre-txn phase where MZ might perform reads for
 //!     read-then-write txns or might buffer writes.)
 //!   - _commit_: The txn is committed by writing lightweight pointers to
-//!     (potentially large) batches of data as updates in txn_shard with a
+//!     (potentially large) batches of data as updates in txns_shard with a
 //!     timestamp of `commit_ts`. Feel free to think of this as a WAL. This
 //!     makes the txn durable (thus "definite") and also advances the _logical
 //!     upper_ of every data shard registered at a timestamp before commit_ts,
-//!     including those not involved in the txn. However, it is not yet possible
-//!     to read at the commit ts.
+//!     including those not involved in the txn. However, at this point, it is
+//!     not yet possible to read at the commit ts.
 //!   - _apply_: We could serve reads of data shards from the information in the
-//!     txns shard, but instead we serve them from the physical data shard
-//!     itself so that we may reuse existing persist infrastructure (e.g.
+//!     txns shard, but instead we choose to serve them from the physical data
+//!     shard itself so that we may reuse existing persist infrastructure (e.g.
 //!     multi-worker persist-source). This means we must take the batch pointers
 //!     written to the txns shard and, in commit_ts order, "denormalize" them
-//!     into each data shard with compare_and_append. We call this process
+//!     into each data shard with `compare_and_append`. We call this process
 //!     applying the txn. Feel free to think of this as applying the WAL.
 //!
 //!     (Note that this means each data shard's _physical upper_ reflects the
 //!     last committed txn touching that shard, and so the _logical upper_ may
 //!     be greater than this. See [TxnsCache] for more details.)
-//!
-//!     After a committed txn has been applied, the updates for that txn are
-//!     retracted from the txns shard. (To handle races, both application and
-//!     retraction are written to be idempotent.) This prevents the txns shard
-//!     from growing unboundedly and also means that, at any given time, the
-//!     contents of the txns shard is exactly the set of txns that need to be
-//!     applied.
+//!   - _tidy_: After a committed txn has been applied, the updates for that txn
+//!     are retracted from the txns shard. (To handle races, both application
+//!     and retraction are written to be idempotent.) This prevents the txns
+//!     shard from growing unboundedly and also means that, at any given time,
+//!     the txns shard contains the set of txns that need to be applied (as well
+//!     as the set of registered data shards).
 //!
 //! [TxnsCache]: crate::txn_read::TxnsCache
 //!

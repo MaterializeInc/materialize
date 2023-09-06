@@ -35,12 +35,12 @@ use crate::StepForward;
 ///
 /// # Implementation Details
 ///
-/// The structure of the txn shard is `(ShardId, Vec<u8>)` updates.
+/// The structure of the txns shard is `(ShardId, Vec<u8>)` updates.
 ///
 /// The core mechanism is that a txn commits a set of transmittable persist
 /// _batch handles_ as `(ShardId, <opaque blob>)` pairs at a single timestamp.
-/// This contractually both commits the txn and advances the upper of every data
-/// shard.
+/// This contractually both commits the txn and advances the logical upper of
+/// _every_ data shard (not just the ones involved in the txn).
 ///
 /// Example:
 ///
@@ -54,7 +54,7 @@ use crate::StepForward;
 /// ```
 ///
 /// However, the new commit is not yet readable until the txn apply has run,
-/// which is expected to be promptly run by the committer, except in the event
+/// which is expected to be promptly done by the committer, except in the event
 /// of a crash. This, in ts order, moves the batch handles into the data shards
 /// with a [compare_and_append_batch] (similar to how the multi-worker
 /// persist_sink works).
@@ -62,16 +62,17 @@ use crate::StepForward;
 /// [compare_and_append_batch]:
 ///     mz_persist_client::write::WriteHandle::compare_and_append_batch
 ///
-/// Once apply is run, this is noted in the txn shard by retracting the update
-/// adding the batch. As a result, the contents of the txn shard at any given
-/// timestamp is exactly the set of outstanding apply work.
+/// Once apply is run, we "tidy" the txns shard by retracting the update adding
+/// the batch. As a result, the contents of the txns shard at any given
+/// timestamp is exactly the set of outstanding apply work (plus registrations,
+/// see below).
 ///
 /// Example (building on the above):
 ///
 /// ```text
-/// // Apply for the first txn at ts=3
+/// // Tidy for the first txn at ts=3
 /// (d0, <opaque blob A>, 3, -1)
-/// // Apply for the second txn (the timestamps can be different for each
+/// // Tidy for the second txn (the timestamps can be different for each
 /// // retraction in a txn, but don't need to be)
 /// (d0, <opaque blob B>, 5, -1)
 /// (d0, <opaque blob C>, 6, -1)
