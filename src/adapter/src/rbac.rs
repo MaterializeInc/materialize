@@ -77,7 +77,10 @@ struct RbacRequirements {
     /// The privileges required. The tuples are of the form:
     /// (What object the privilege is on, What privilege is required, Who must possess the privilege).
     privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
-    /// Whether or not referenced item usage privileges are required.
+    /// true if the plan requires USAGE privileges on all applicable items, false otherwise.
+    ///
+    /// Most plans will be true but some plans, like SHOW CREATE, can reference an item without
+    /// requiring any privileges on that item.
     item_usage: bool,
     /// Some action if superuser is required to perform that action, None otherwise.
     superuser_action: Option<String>,
@@ -969,15 +972,20 @@ fn generate_rbac_requirements(
                          plan:
                              plan::CreateSourcePlan {
                                  name,
-                                 source: _,
+                                 source,
                                  if_not_exists: _,
                                  timeline: _,
                                  cluster_config,
                              },
                          resolved_ids: _,
                      }| {
-                        generate_required_source_privileges(name, cluster_config, role_id)
-                            .into_iter()
+                        generate_required_source_privileges(
+                            name,
+                            &source.data_source,
+                            cluster_config,
+                            role_id,
+                        )
+                        .into_iter()
                     },
                 )
                 .collect(),
