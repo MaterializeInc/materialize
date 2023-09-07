@@ -679,7 +679,14 @@ WHERE
         "mz_internal.mz_statement_execution_history",
         "mz_internal.mz_prepared_statement_history",
         "mz_internal.mz_session_history",
-    ] {}
+    ] {
+        let result: i64 = client
+            .query_one(format!("SELECT count(*) FROM {tbl}"))
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(result, 1);
+    }
 }
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
