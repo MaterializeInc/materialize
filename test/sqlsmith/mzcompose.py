@@ -273,10 +273,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     for frozen_key, errors in new_errors.items():
         key = dict(frozen_key)
-        occurences = f" ({len(errors)} occurences)" if len(errors) > 1 else ""
-        print(
-            f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurences}"
-        )
+        occurrences = f" ({len(errors)} occurrences)" if len(errors) > 1 else ""
+        # Print out crashes differently so that we don't get notified twice in ci_logged_errors_detect
+        if "server closed the connection unexpectedly" in key["message"]:
+            print(f"--- Server crash, check panics and segfaults {occurrences}")
+        else:
+            print(
+                f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurrences}"
+            )
         if len(errors) > 1:
             from_time = datetime.fromtimestamp(errors[0]["timestamp"]).strftime(
                 "%H:%M:%S"

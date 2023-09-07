@@ -110,7 +110,6 @@ mod coord;
 mod error;
 mod explain;
 mod notice;
-mod rbac;
 mod severity;
 mod subscribe;
 mod util;

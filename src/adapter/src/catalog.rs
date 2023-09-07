@@ -74,11 +74,11 @@ use mz_sql::plan::{
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookHeaders,
     WebhookValidation,
 };
-use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
-use mz_sql::{plan, DEFAULT_SCHEMA};
+use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
 };
@@ -109,14 +109,14 @@ use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::{timeline, ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
+use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
@@ -9268,12 +9268,12 @@ mod tests {
         ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::StatementContext;
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::VarInput;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
     use mz_stash::DebugStashFactory;
 
-    use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };
