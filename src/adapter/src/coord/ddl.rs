@@ -741,59 +741,38 @@ impl Coordinator {
             })),
             SINCE_GRANULARITY,
         );
-        let storage_policies = self
-            .catalog()
-            .entries()
-            .filter(|entry| {
-                entry.item().is_retained_metrics_object()
-                    && entry.item().is_compute_object_on_cluster().is_none()
-            })
-            .map(|entry| (entry.id(), policy.clone()))
-            .collect::<Vec<_>>();
-        let compute_policies = self
-            .catalog()
-            .entries()
-            .filter_map(|entry| {
-                if let (true, Some(cluster_id)) = (
-                    entry.item().is_retained_metrics_object(),
-                    entry.item().is_compute_object_on_cluster(),
-                ) {
-                    Some((cluster_id, entry.id(), policy.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(storage_policies);
-        self.update_compute_base_read_policies(compute_policies);
+        self.update_retention(policy, |item| item.is_retained_metrics_object())
     }
 
     fn update_default_retention(&mut self) {
         let lag = self.catalog().system_config().default_retention_timestamp();
         let policy = ReadPolicy::lag_writes_by(lag, SINCE_GRANULARITY);
+        self.update_retention(policy, |item| item.uses_default_retention())
+    }
+
+    fn update_retention(
+        &mut self,
+        policy: ReadPolicy<Timestamp>,
+        update_item: impl Fn(&CatalogItem) -> bool,
+    ) {
         let storage_policies = self
-            .catalog()
-            .entries()
-            .filter(|entry| {
-                entry.item().uses_default_retention()
-                    && entry.item().is_compute_object_on_cluster().is_none()
-            })
-            .map(|entry| (entry.id(), policy.clone()))
+            .storage_read_capabilities
+            .iter()
+            .map(|(id, _)| (id, self.catalog().get_entry(id).item()))
+            .filter_map(|(id, item)| update_item(item).then(|| (*id, policy.clone())))
             .collect::<Vec<_>>();
+
         let compute_policies = self
-            .catalog()
-            .entries()
-            .filter_map(|entry| {
-                if let (true, Some(cluster_id)) = (
-                    entry.item().uses_default_retention(),
-                    entry.item().is_compute_object_on_cluster(),
-                ) {
-                    Some((cluster_id, entry.id(), policy.clone()))
-                } else {
-                    None
-                }
+            .compute_read_capabilities
+            .iter()
+            .map(|(id, _)| (id, self.catalog().get_entry(id).item()))
+            .filter_map(|(id, item)| {
+                item.cluster_id().and_then(|cluster_id| {
+                    update_item(item).then(|| (cluster_id, *id, policy.clone()))
+                })
             })
             .collect::<Vec<_>>();
+
         self.update_storage_base_read_policies(storage_policies);
         self.update_compute_base_read_policies(compute_policies);
     }
