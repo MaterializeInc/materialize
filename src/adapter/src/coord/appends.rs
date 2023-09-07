@@ -23,7 +23,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_storage_client::client::TimestamplessUpdate;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
-use tracing::{warn, Instrument, Span};
+use tracing::{debug, warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
@@ -191,6 +191,7 @@ impl Coordinator {
             .any(|write| write.is_async_system());
 
         if timestamp > now && !contains_async_system_write {
+            debug!(timestamp = ?timestamp, now = ?now, "delayed group commit");
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
@@ -211,6 +212,7 @@ impl Coordinator {
                 .instrument(Span::current()),
             );
         } else {
+            debug!(timestamp = ?timestamp, now = ?now, "immediate group commit");
             self.group_commit_initiate(None, permit).await;
         }
     }
@@ -363,6 +365,7 @@ impl Coordinator {
             .observe(histogram);
 
         if should_block {
+            debug!("blocking group_commit_apply");
             // We may panic here if the storage controller has shut down, because we cannot
             // correctly return control, nor can we simply hang here.
             // TODO: Clean shutdown.
@@ -373,6 +376,7 @@ impl Coordinator {
             self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
                 .await;
         } else {
+            debug!("async group_commit_apply");
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(
                 || "group_commit_apply",
