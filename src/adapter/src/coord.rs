@@ -1704,7 +1704,7 @@ impl Coordinator {
         }
 
         // Advancing the `as_of` to the write frontier means that we lose some historical data.
-        // That might be acceptable for the default 1-second index compaction window, but not for
+        // That might be acceptable for the default index compaction window, but not for
         // retained-metrics indexes. So we need to regress the write frontier by the retention
         // duration of the index.
         //
