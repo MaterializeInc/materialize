@@ -1110,6 +1110,7 @@ where
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
+            Arc::clone(&self.metrics),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
             },
@@ -1132,7 +1133,7 @@ where
                     &self.blob,
                     |m| &m.snapshot,
                     &self.machine.applier.shard_metrics,
-                    self.lease_returner.clone(),
+                    &self.lease_returner,
                     leased_parts.into_iter(),
                 );
             }

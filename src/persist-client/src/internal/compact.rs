@@ -687,6 +687,7 @@ where
         );
 
         let mut consolidator = Consolidator::new(
+            Arc::clone(&metrics),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
