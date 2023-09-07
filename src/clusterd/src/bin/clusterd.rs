@@ -224,7 +224,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
             configured by the `opentelemetry_filter` system variable. In the rare case the filter \
             is needed before the process has access to the system variable, use \
-            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
+            `MZ_STARTUP_OPENTELEMETRY_FILTER` / `--startup-opentelemetry-filter`."
         )
     }
 
