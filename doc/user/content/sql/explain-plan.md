@@ -10,10 +10,6 @@ menu:
 
 `EXPLAIN PLAN` displays the plans used for `SELECT` statements, indexes, and materialized views.
 
-{{< note >}}
-The `EXPLAIN TIMESTAMP` documentation now lives in [its own page](/sql/explain-timestamp).
-{{</ note >}}
-
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
