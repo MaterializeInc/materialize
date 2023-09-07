@@ -12,7 +12,10 @@
 use std::cmp::Reverse;
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
+use std::future::Future;
 use std::marker::PhantomData;
+use std::mem;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
@@ -20,18 +23,18 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
-use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 use mz_persist::location::Blob;
 use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, Instrument};
 
-use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter};
+use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::HollowBatchPart;
 use crate::metrics::Metrics;
+use crate::read::SubscriptionLeaseReturner;
 use crate::ShardId;
 
 type Tuple<T, D> = ((Vec<u8>, Vec<u8>), T, D);
@@ -45,48 +48,10 @@ fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
     ((k.to_vec(), v.to_vec()), t, d)
 }
 
-/// The data needed to fetch a batch part, bundled up to make it easy
-/// to send between threads.
-#[derive(Debug)]
-pub(crate) struct FetchData<T> {
-    shard_id: ShardId,
-    blob: Arc<dyn Blob + Send + Sync>,
-    metrics: Arc<Metrics>,
-    read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
-    shard_metrics: Arc<ShardMetrics>,
-    part_key: PartialBatchKey,
-    part_desc: Description<T>,
-}
-
-impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
-    async fn fetch(self) -> anyhow::Result<EncodedPart<T>> {
-        let Self {
-            shard_id,
-            blob,
-            metrics,
-            read_metrics,
-            shard_metrics,
-            part_key,
-            part_desc,
-        } = self;
-        metrics.compaction.parts_prefetched.inc();
-        fetch_batch_part(
-            &shard_id,
-            &*blob,
-            &metrics,
-            &shard_metrics,
-            read_metrics(&metrics.read),
-            &part_key,
-            &part_desc,
-        )
-        .await
-    }
-}
-
-#[derive(Debug)]
 pub(crate) enum ConsolidationPart<T, D> {
     Queued {
-        data: Option<FetchData<T>>,
+        future: Pin<Box<dyn Future<Output = anyhow::Result<EncodedPart<T>>> + Send>>,
+        metrics: Arc<Metrics>,
     },
     Prefetched {
         handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
@@ -100,6 +65,15 @@ pub(crate) enum ConsolidationPart<T, D> {
         data: Vec<((Vec<u8>, Vec<u8>), T, D)>,
         index: usize,
     },
+}
+
+impl<T, D> Default for ConsolidationPart<T, D> {
+    fn default() -> Self {
+        Self::Sorted {
+            data: vec![],
+            index: 0,
+        }
+    }
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> ConsolidationPart<T, D> {
@@ -123,10 +97,10 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 
     async fn join(&mut self, filter: &'a FetchBatchFilter<T>) -> anyhow::Result<()> {
         match self {
-            ConsolidationPart::Queued { data } => {
-                let data = data.take().expect("unfetched");
-                data.metrics.compaction.parts_waited.inc();
-                *self = Self::from_encoded(data.fetch().await?, filter);
+            ConsolidationPart::Queued { future, metrics } => {
+                metrics.compaction.parts_waited.inc();
+                let part = future.await;
+                *self = Self::from_encoded(part?, filter);
             }
             ConsolidationPart::Prefetched { handle, metrics } => {
                 metrics.compaction.parts_waited.inc();
@@ -162,7 +136,6 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 /// return  an iterator over a consolidated subset of the data. To read an entire dataset, the
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
-#[derive(Debug)]
 pub(crate) struct Consolidator<T, D> {
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
@@ -213,19 +186,72 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         let run = parts
             .into_iter()
             .map(|part: &HollowBatchPart| {
+                let part_key = part.key.clone();
+                let blob = Arc::clone(blob);
+                let metrics = Arc::clone(metrics);
+                let shard_metrics = Arc::clone(shard_metrics);
+                let desc = desc.clone();
                 let c_part = ConsolidationPart::Queued {
-                    data: Some(FetchData {
-                        shard_id,
-                        blob: Arc::clone(blob),
-                        metrics: Arc::clone(metrics),
-                        read_metrics,
-                        shard_metrics: Arc::clone(shard_metrics),
-                        part_key: part.key.clone(),
-                        part_desc: desc.clone(),
+                    metrics: Arc::clone(&metrics),
+                    future: Box::pin(async move {
+                        fetch_batch_part(
+                            &shard_id,
+                            &*blob,
+                            &metrics,
+                            &shard_metrics,
+                            read_metrics(&metrics.read),
+                            &part_key,
+                            &desc,
+                        )
+                        .await
                     }),
                 };
-                let size = part.encoded_size_bytes;
-                (c_part, size)
+                (c_part, part.encoded_size_bytes)
+            })
+            .collect();
+        self.runs.push(run);
+    }
+
+    /// Add a leased run of data to be consolidated.
+    pub fn enqueue_leased_run(
+        &mut self,
+        blob: &Arc<dyn Blob + Send + Sync>,
+        read_metrics: fn(&BatchPartReadMetrics) -> &ReadMetrics,
+        shard_metrics: &Arc<ShardMetrics>,
+        lease_returner: SubscriptionLeaseReturner,
+        parts: impl IntoIterator<Item = LeasedBatchPart<T>>,
+    ) {
+        let run = parts
+            .into_iter()
+            .map(|part: LeasedBatchPart<T>| {
+                let size_bytes = part.encoded_size_bytes;
+                let blob = Arc::clone(blob);
+                let metrics = Arc::clone(&part.metrics);
+                let shard_metrics = Arc::clone(shard_metrics);
+                let mut lease_returner = lease_returner.clone();
+                let future = async move {
+                    // We do not use fetch_leased_part, since that requires more type info
+                    // than we have available here.
+                    let fetched = fetch_batch_part(
+                        &part.shard_id,
+                        &*blob,
+                        &part.metrics,
+                        &*shard_metrics,
+                        read_metrics(&part.metrics.read),
+                        &part.key,
+                        &part.desc,
+                    )
+                    .await;
+                    lease_returner.return_leased_part(part);
+                    fetched
+                };
+                (
+                    ConsolidationPart::Queued {
+                        future: Box::pin(future),
+                        metrics,
+                    },
+                    size_bytes,
+                )
             })
             .collect();
         self.runs.push(run);
@@ -289,7 +315,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
     /// Wait until the next part in every run is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
-    pub(crate) async fn next(&mut self) -> Option<ConsolidatingIter<T, D>> {
+    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<T, D>>> {
         self.trim();
         let futures: FuturesUnordered<_> = self
             .runs
@@ -300,11 +326,10 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     .0
                     .join(&self.filter)
                     .await
-                    .expect("fetching data to succeed")
             })
             .collect();
-        let () = futures.collect().await;
-        self.iter()
+        let () = futures.try_collect().await?;
+        Ok(self.iter())
     }
 
     /// The size of the data that we _might_ be holding concurrently in memory. While this is
@@ -352,18 +377,18 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         let max_run_len = self.runs.iter().map(|x| x.len()).max().unwrap_or_default();
         for idx in 0..max_run_len {
             for run in self.runs.iter_mut() {
-                let Some((c_part, size)) = run.get_mut(idx) else {
-                    continue;
-                };
-
-                if let ConsolidationPart::Queued { data } = c_part {
+                if let Some((c_part @ ConsolidationPart::Queued { .. }, size)) = run.get_mut(idx) {
                     check_budget(*size)?;
-                    let data = data.take().expect("unfetched");
-                    let metrics = Arc::clone(&data.metrics);
+
+                    let ConsolidationPart::Queued { future, metrics } = mem::take(c_part) else {
+                        panic!("just checked this");
+                    };
+
                     let span = debug_span!("compaction::prefetch");
+                    metrics.compaction.parts_prefetched.inc();
                     let handle = mz_ore::task::spawn(
                         || "persist::compaction::prefetch",
-                        async move { data.fetch().await }.instrument(span),
+                        async move { future.await }.instrument(span),
                     );
                     *c_part = ConsolidationPart::Prefetched { handle, metrics };
                 }
