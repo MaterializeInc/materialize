@@ -539,10 +539,12 @@ fn generate_rbac_requirements(
             let (ownership, privileges) = match object_id {
                 // Roles don't have owners, instead we require the current session to have the
                 // `CREATEROLE` privilege.
-                CommentObjectId::Role(_) => (Vec::new(), vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)]),
+                CommentObjectId::Role(_) => (
+                    Vec::new(),
+                    vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+                ),
                 _ => (vec![ObjectId::from(*object_id)], Vec::new()),
             };
-            let
             RbacRequirements {
                 role_membership: BTreeSet::new(),
                 ownership,
@@ -550,7 +552,7 @@ fn generate_rbac_requirements(
                 item_usage: true,
                 superuser_action: None,
             }
-        },
+        }
         Plan::DiscardTemp => RbacRequirements {
             role_membership: BTreeSet::new(),
             ownership: Vec::new(),
