@@ -326,19 +326,14 @@ impl<'a> DataflowBuilder<'a> {
             }
 
             // A valid index is any index on `id` that is known to index oracle.
-            //
-            // TODO: indexes should be imported after the optimization process,
-            // and only those actually used by the optimized plan
-            //
-            // NOTE(benesch): is the above TODO still true? The dataflow layer
-            // has gotten increasingly smart about index selection. Maybe it's
-            // now fine to present all indexes?
+            // Here, we import all indexes that belong to all imported collections. Later,
+            // `prune_and_annotate_dataflow_index_imports` runs at the end of the MIR
+            // pipeline, and removes unneeded index imports based on the optimized plan.
             let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
                 // Deduplicate indexes by keys, in case we have redundant indexes.
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
                 valid_indexes.sort_by_key(|(_, idx)| &idx.keys);
-                valid_indexes.dedup_by_key(|(_, idx)| &idx.keys);
                 for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,

@@ -442,6 +442,7 @@ message ProtoBinaryFunc {
     }
 
     reserved 93; // timezone_time
+    reserved 108; // map_get_values
     reserved "timezone_time";
     oneof kind {
         google.protobuf.Empty add_int16 = 46;
@@ -548,7 +549,6 @@ message ProtoBinaryFunc {
         google.protobuf.Empty jsonb_delete_string = 105;
         google.protobuf.Empty map_contains_key = 106;
         google.protobuf.Empty map_get_value = 107;
-        google.protobuf.Empty map_get_values = 108;
         google.protobuf.Empty map_contains_all_keys = 109;
         google.protobuf.Empty map_contains_any_keys = 110;
         google.protobuf.Empty map_contains_map = 111;
