@@ -385,6 +385,7 @@ impl Coordinator {
                             write_lock_guard,
                             notifies,
                             permit,
+                            Span::current(),
                         )) {
                             warn!("Server closed with non-responded writes, {e}");
                         }

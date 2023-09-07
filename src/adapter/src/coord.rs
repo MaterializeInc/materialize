@@ -217,6 +217,8 @@ pub enum Message<T = mz_repr::Timestamp> {
         Vec<oneshot::Sender<()>>,
         /// Permit which limits how many group commits we run at once.
         Option<GroupCommitPermit>,
+        /// Tracing span.
+        Span,
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),

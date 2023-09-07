@@ -65,8 +65,16 @@ impl Coordinator {
             Message::GroupCommitInitiate(span, permit) => {
                 self.try_group_commit(permit).instrument(span).await
             }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard, notifies, permit) => {
+            Message::GroupCommitApply(
+                timestamp,
+                responses,
+                write_lock_guard,
+                notifies,
+                permit,
+                span,
+            ) => {
                 self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
+                    .instrument(span)
                     .await;
             }
             Message::AdvanceTimelines => {
