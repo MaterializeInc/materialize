@@ -1002,7 +1002,14 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
 
     pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize {
         Rollup::from_state_without_diffs(
-            self.state.clone(),
+            State {
+                applier_version: self.state.applier_version.clone(),
+                shard_id: self.state.shard_id.clone(),
+                seqno: self.state.seqno.clone(),
+                walltime_ms: self.state.walltime_ms.clone(),
+                hostname: self.state.hostname.clone(),
+                collections: self.state.collections.clone(),
+            },
             self.key_codec.clone(),
             self.val_codec.clone(),
             T::codec_name(),
