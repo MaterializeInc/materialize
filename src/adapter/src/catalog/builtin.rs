@@ -37,13 +37,12 @@ use mz_sql::catalog::{
     TypeReference,
 };
 use mz_sql::rbac;
-use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use crate::catalog::storage::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 
 pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_", "external_"]);

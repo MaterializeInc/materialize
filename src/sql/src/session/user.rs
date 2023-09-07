@@ -101,6 +101,9 @@ impl User {
     }
 }
 
+pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
+pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
+
 /// Metadata about a Session's role.
 #[derive(Debug, Clone)]
 pub struct RoleMetadata {

@@ -74,7 +74,7 @@ use mz_sql::plan::{
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookHeaders,
     WebhookValidation,
 };
-use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
@@ -109,7 +109,7 @@ use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -3780,7 +3780,6 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
-                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Source,
@@ -3811,7 +3810,6 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Table,
-                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Table,
@@ -3852,7 +3850,6 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::View,
-                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::View,
@@ -3902,7 +3899,6 @@ impl Catalog {
                             PrivilegeMap::from_mz_acl_items(vec![
                                 rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
-                                    MZ_SYSTEM_ROLE_ID,
                                 ),
                                 rbac::owner_privilege(
                                     mz_sql::catalog::ObjectType::Source,
@@ -4479,10 +4475,7 @@ impl Catalog {
                 }),
                 MZ_SYSTEM_ROLE_ID,
                 PrivilegeMap::from_mz_acl_items(vec![
-                    rbac::default_builtin_object_privilege(
-                        mz_sql::catalog::ObjectType::Type,
-                        MZ_SYSTEM_ROLE_ID,
-                    ),
+                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Type),
                     rbac::owner_privilege(mz_sql::catalog::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
                 ]),
             );
