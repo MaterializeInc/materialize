@@ -492,7 +492,7 @@ fn force_apply_diff_single<X: PartialEq + Debug>(
                     "{}: update didn't match: {:?} vs {:?}, continuing to force apply diff to {:?} for shard {} and seqno {}",
                     name, single, &from, &to, shard_id, seqno
                 );
-                metrics.state.force_apply_hostname_total.inc();
+                metrics.state.force_apply_hostname.inc();
             }
             *single = to
         }
