@@ -68,12 +68,11 @@ query T multiline
 EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
-  Project (#2..=#5)
-    Filter (#0 = "u3")
-      ReadExistingIndex mz_internal.mz_show_sources_ind
+  Project (#1..=#4)
+    ReadExistingIndex mz_internal.mz_show_sources_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_sources_ind (*** full scan ***)
+  - mz_internal.mz_show_sources_ind (lookup)
 
 EOF
 
@@ -144,12 +143,11 @@ query T multiline
 EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
-  Project (#2..=#5)
-    Filter (#0 = "u3")
-      ReadExistingIndex mz_internal.mz_show_sinks_ind
+  Project (#1..=#4)
+    ReadExistingIndex mz_internal.mz_show_sinks_ind lookup_value=("u3")
 
 Used Indexes:
-  - mz_internal.mz_show_sinks_ind (*** full scan ***)
+  - mz_internal.mz_show_sinks_ind (lookup)
 
 EOF
 
