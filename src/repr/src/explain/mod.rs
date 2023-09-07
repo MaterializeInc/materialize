@@ -30,15 +30,15 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::Indent;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_ore::str::{separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -53,8 +53,6 @@ pub mod tracing;
 
 #[cfg(feature = "tracing_")]
 pub use crate::explain::tracing::trace_plan;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.explain.rs"));
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -570,7 +568,7 @@ impl Default for UsedIndexes {
     }
 }
 
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -581,18 +579,21 @@ pub enum IndexUsageType {
     /// When later input batches are arriving, all inputs are fully read.
     DeltaJoin(bool),
     /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
-    Lookup,
-    /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
-    /// situation that I know of when it occurs is if one index is used to build another index
-    /// without any transformations (but possibly with a different key). Note that we won't be able
-    /// to actually observe this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or
-    /// `EXPLAIN CREATE INDEX`. (`export_index` is what inserts this `ArrangeBy`.)
-    PlanRoot,
+    /// This also stores the id of the index that we want to do the lookup from. (This id is already
+    /// chosen by `LiteralConstraints`, and then `IndexUsageType::Lookup` communicates this inside
+    /// `CollectIndexRequests` from the `IndexedFilter` to the `Get`.)
+    Lookup(GlobalId),
+    /// This is a rare case that happens when the user creates an index that is identical to an
+    /// existing one (i.e., on the same object, and with the same keys). We'll re-use the
+    /// arrangement of the existing index. The plan is an `ArrangeBy` + `Get`, where the `ArrangeBy`
+    /// is requesting the same key as an already existing index. (`export_index` is what inserts
+    /// this `ArrangeBy`.)
+    PlanRootNoArrangement,
     /// The index is used for directly writing to a sink. Can happen with a SUBSCRIBE to an indexed
     /// view.
     SinkExport,
-    /// The index is used for creating a new index. Currently, a `PlanRoot` usage will always
-    /// additionally be present together with an `IndexExport` usage.
+    /// The index is used for creating a new index. Note that either a `FullScan` or a
+    /// `PlanRootNoArrangement` usage will always accompany an `IndexExport` usage.
     IndexExport,
     /// When a fast path peek has a LIMIT, but no ORDER BY, then we read from the index only as many
     /// records (approximately), as the OFFSET + LIMIT needs.
@@ -616,7 +617,7 @@ impl std::fmt::Display for IndexUsageType {
             "{}",
             match self {
                 IndexUsageType::FullScan => "*** full scan ***",
-                IndexUsageType::Lookup => "lookup",
+                IndexUsageType::Lookup(_idx_id) => "lookup",
                 IndexUsageType::DifferentialJoin => "differential join",
                 IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
                 // Technically, this is a lookup only for a snapshot. For later update batches, all
@@ -626,7 +627,7 @@ impl std::fmt::Display for IndexUsageType {
                 // number of records anyway. In other words, something is always scanning new
                 // updates, but we can avoid scanning records again and again in snapshots.
                 IndexUsageType::DeltaJoin(false) => "delta join lookup",
-                IndexUsageType::PlanRoot => "plan root",
+                IndexUsageType::PlanRootNoArrangement => "plan root (no new arrangement)",
                 IndexUsageType::SinkExport => "sink export",
                 IndexUsageType::IndexExport => "index export",
                 IndexUsageType::FastPathLimit => "fast path limit",
@@ -637,43 +638,12 @@ impl std::fmt::Display for IndexUsageType {
     }
 }
 
-impl RustType<ProtoIndexUsageType> for IndexUsageType {
-    fn into_proto(&self) -> ProtoIndexUsageType {
-        use crate::explain::proto_index_usage_type::Kind::*;
-        ProtoIndexUsageType {
-            kind: Some(match self {
-                IndexUsageType::FullScan => FullScan(()),
-                IndexUsageType::Lookup => Lookup(()),
-                IndexUsageType::DifferentialJoin => DifferentialJoin(()),
-                IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
-                IndexUsageType::PlanRoot => PlanRoot(()),
-                IndexUsageType::SinkExport => SinkExport(()),
-                IndexUsageType::IndexExport => IndexExport(()),
-                IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
-                IndexUsageType::Unknown => Unknown(()),
-                IndexUsageType::FastPathLimit => FastPathLimit(()),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoIndexUsageType) -> Result<Self, TryFromProtoError> {
-        use crate::explain::proto_index_usage_type::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIndexUsageType::Kind"))?;
-
-        match kind {
-            FullScan(()) => Ok(IndexUsageType::FullScan),
-            Lookup(()) => Ok(IndexUsageType::Lookup),
-            DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
-            DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
-            PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
-            SinkExport(()) => Ok(IndexUsageType::SinkExport),
-            IndexExport(()) => Ok(IndexUsageType::IndexExport),
-            DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),
-            Unknown(()) => Ok(IndexUsageType::Unknown),
-            FastPathLimit(()) => Ok(IndexUsageType::FastPathLimit),
-        }
+impl IndexUsageType {
+    pub fn display_vec<'a, I>(usage_types: I) -> impl Display + Sized + 'a
+    where
+        I: IntoIterator<Item = &'a IndexUsageType>,
+    {
+        separated(", ", usage_types.into_iter().sorted().dedup())
     }
 }
 

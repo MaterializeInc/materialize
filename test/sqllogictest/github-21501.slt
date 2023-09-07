@@ -52,6 +52,6 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF

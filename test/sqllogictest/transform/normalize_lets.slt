@@ -131,7 +131,7 @@ Explained Query:
       Distinct group_by=[#0]
         Union
           Filter (#0 < 27)
-            Get materialize.public.t1
+            ReadStorage materialize.public.t1
           Project (#1)
             Map ((#0 + 1))
               Get l0
@@ -244,7 +244,7 @@ Explained Query:
                 Join on=(#0 = #2) type=differential
                   ArrangeBy keys=[[#0]]
                     Filter (#0) IS NOT NULL
-                      Get materialize.public.edges
+                      ReadStorage materialize.public.edges
                   ArrangeBy keys=[[#0]]
                     Filter (#0) IS NOT NULL
                       Get l1
@@ -253,12 +253,12 @@ Explained Query:
       Reduce group_by=[#0] aggregates=[min(#1)]
         Union
           Project (#1, #1)
-            Get materialize.public.edges
+            ReadStorage materialize.public.edges
           Project (#1, #3)
             Join on=(#0 = #2) type=differential
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
-                  Get materialize.public.edges
+                  ReadStorage materialize.public.edges
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
                   Get l0
@@ -507,7 +507,7 @@ Explained Query:
                 Join on=(#0 = #2) type=differential
                   ArrangeBy keys=[[#0]]
                     Filter (#0) IS NOT NULL
-                      Get materialize.public.edges
+                      ReadStorage materialize.public.edges
                   ArrangeBy keys=[[#0]]
                     Filter (#0) IS NOT NULL
                       Get l1
@@ -516,12 +516,12 @@ Explained Query:
       Reduce group_by=[#0] aggregates=[min(#1)]
         Union
           Project (#1, #1)
-            Get materialize.public.edges
+            ReadStorage materialize.public.edges
           Project (#1, #3)
             Join on=(#0 = #2) type=differential
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
-                  Get materialize.public.edges
+                  ReadStorage materialize.public.edges
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
                   Get l0

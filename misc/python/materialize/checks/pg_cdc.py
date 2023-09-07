@@ -201,7 +201,7 @@ class PgCdcBase:
                     ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
                     Explained Query (fast path):
                       Project (#0, #1)
-                        ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
+                        ReadIndex on=materialize.public.postgres_source_tablea postgres_source_tablea_primary_idx=[*** full scan ***]
 
                     Used Indexes:
                       - materialize.public.postgres_source_tablea_primary_idx (*** full scan ***)

@@ -44,9 +44,9 @@ Explained Query:
       ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
         Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
           Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
-            Get materialize.public.x // { arity: 2, keys: "()" }
+            ReadStorage materialize.public.x // { arity: 2, keys: "()" }
       ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
-        Get materialize.public.y // { arity: 2, keys: "([1])" }
+        ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
@@ -83,9 +83,9 @@ Explained Query:
             ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
               Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
                 Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
-                  Get materialize.public.x // { arity: 2, keys: "()" }
+                  ReadStorage materialize.public.x // { arity: 2, keys: "()" }
             ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
-              Get materialize.public.y // { arity: 2, keys: "([1])" }
+              ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
         Get l0 // { arity: 4, keys: "()" }
 
 Source materialize.public.x
@@ -124,9 +124,9 @@ Explained Query:
               ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
                 Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
                   Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
-                    Get materialize.public.x // { arity: 2, keys: "()" }
+                    ReadStorage materialize.public.x // { arity: 2, keys: "()" }
               ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
-                Get materialize.public.y // { arity: 2, keys: "([1])" }
+                ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
           Distinct group_by=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
             Get l0 // { arity: 4, keys: "()" }
 
