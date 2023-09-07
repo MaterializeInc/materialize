@@ -683,8 +683,8 @@ WHERE
         let result: i64 = client
             .query_one(&format!("SELECT count(*) FROM {tbl}"), &[])
             .unwrap()
-            .get(0)
-            .unwrap();
+            .get(0);
+
         assert_eq!(result, 1);
     }
 }
