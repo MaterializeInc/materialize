@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::Collection;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
@@ -28,12 +29,12 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, InspectCore};
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::operators::{Filter, InspectCore, Operator};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::logging::WorkerIdentifier;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
-use timely::Container;
+use timely::{Container, Data};
 use tracing::error;
 use uuid::Uuid;
 
@@ -112,6 +113,13 @@ pub enum ComputeEvent {
     DataflowShutdown {
         /// Timely worker index of the dataflow.
         dataflow_index: usize,
+    },
+    /// The number of errors in a dataflow export has changed.
+    ErrorCount {
+        /// Identifier of the export.
+        export_id: GlobalId,
+        /// The change in error count.
+        diff: i64,
     },
 }
 
@@ -548,6 +556,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 self.handle_arrangement_heap_size_operator_dropped(operator)
             }
             DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
+            ErrorCount { .. } => { /* TODO */ }
         }
     }
 
@@ -829,6 +838,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 }
 
+/// Extension trait to attach `ComputeEvent::ImportFrontier` logging operators to streams and
+/// arrangements.
 pub(crate) trait LogImportFrontiers {
     fn log_import_frontiers(
         self,
@@ -921,4 +932,80 @@ impl Drop for RetractImportFrontiers {
     fn drop(&mut self) {
         self.log();
     }
+}
+
+/// Extension trait to attach `ComputeEvent::DataflowError` logging operators to collections and
+/// batch streams.
+pub(crate) trait LogDataflowErrors {
+    fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
+}
+
+impl<G, D> LogDataflowErrors for Collection<G, D, Diff>
+where
+    G: Scope,
+    D: Data,
+{
+    fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
+        self.inner
+            .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
+                let mut buffer = Vec::new();
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        data.swap(&mut buffer);
+
+                        let diff = buffer.iter().map(|(_d, _t, r)| r).sum();
+                        logger.log(ComputeEvent::ErrorCount { export_id, diff });
+
+                        output.session(&cap).give_vec(&mut buffer);
+                    });
+                }
+            })
+            .as_collection()
+    }
+}
+
+impl<G, B> LogDataflowErrors for Stream<G, B>
+where
+    G: Scope,
+    B: BatchReader<R = Diff> + Clone + 'static,
+{
+    fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
+        self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
+            let mut buffer = Vec::new();
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    data.swap(&mut buffer);
+
+                    let diff = buffer.iter().map(sum_batch_diffs).sum();
+                    logger.log(ComputeEvent::ErrorCount { export_id, diff });
+
+                    output.session(&cap).give_vec(&mut buffer);
+                });
+            }
+        })
+    }
+}
+
+/// Return the sum of all diffs within the given batch.
+///
+/// Note that this operation can be expensive: Its runtime is O(N) with N being the number of
+/// unique (key, value, time) tuples. We only use it on error streams, which are expected to
+/// contain only a small number of records, so this doesn't matter much. But avoid using it when
+/// batches might become large.
+fn sum_batch_diffs<B>(batch: &B) -> Diff
+where
+    B: BatchReader<R = Diff>,
+{
+    let mut sum = 0;
+    let mut cursor = batch.cursor();
+
+    while cursor.key_valid(batch) {
+        while cursor.val_valid(batch) {
+            cursor.map_times(batch, |_t, r| sum += r);
+            cursor.step_val(batch);
+        }
+        cursor.step_key(batch);
+    }
+
+    sum
 }
