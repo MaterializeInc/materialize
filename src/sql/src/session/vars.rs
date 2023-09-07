@@ -404,6 +404,21 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     internal: false,
 };
 
+pub const MAX_KAFKA_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_kafka_connections"),
+    value: &1000,
+    description:
+        "The maximum number of Kafka connections in the region, across all schemas (Materialize).",
+    internal: false,
+};
+
+pub const MAX_POSTGRES_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_postgres_connections"),
+    value: &1000,
+    description: "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize).",
+    internal: false
+};
+
 pub const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
     value: &0,
@@ -2203,6 +2218,8 @@ impl SystemVars {
         let mut vars = vars
             .with_feature_flags()
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
+            .with_var(&MAX_KAFKA_CONNECTIONS)
+            .with_var(&MAX_POSTGRES_CONNECTIONS)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
             .with_var(&MAX_SOURCES)
@@ -2538,6 +2555,16 @@ impl SystemVars {
     /// Returns the `config_has_synced_once` configuration parameter.
     pub fn config_has_synced_once(&self) -> bool {
         *self.expect_value(&CONFIG_HAS_SYNCED_ONCE)
+    }
+
+    /// Returns the value of the `max_kafka_connections` configuration parameter.
+    pub fn max_kafka_connections(&self) -> u32 {
+        *self.expect_value(&MAX_KAFKA_CONNECTIONS)
+    }
+
+    /// Returns the value of the `max_postgres_connections` configuration parameter.
+    pub fn max_postgres_connections(&self) -> u32 {
+        *self.expect_value(&MAX_POSTGRES_CONNECTIONS)
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
