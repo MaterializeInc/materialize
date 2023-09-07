@@ -949,7 +949,7 @@ impl RustType<ProtoVersionedData> for VersionedData {
     fn from_proto(proto: ProtoVersionedData) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             seqno: proto.seqno.into_rust()?,
-            data: Bytes::clone(&proto.data),
+            data: proto.data,
         })
     }
 }

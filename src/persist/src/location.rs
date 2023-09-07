@@ -17,7 +17,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
-use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -87,26 +86,6 @@ impl RustType<u64> for SeqNo {
 
     fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
         Ok(SeqNo(proto))
-    }
-}
-
-impl Default for SeqNo {
-    fn default() -> Self {
-        Self::minimum()
-    }
-}
-
-impl Codec64 for SeqNo {
-    fn codec_name() -> String {
-        "seqno".to_string()
-    }
-
-    fn encode(&self) -> [u8; 8] {
-        self.0.to_le_bytes()
-    }
-
-    fn decode(buf: [u8; 8]) -> Self {
-        SeqNo(u64::from_le_bytes(buf))
     }
 }
 
