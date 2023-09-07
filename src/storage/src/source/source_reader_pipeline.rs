@@ -36,6 +36,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -70,6 +71,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::exchange::Exchange as _;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Enter, Leave, Map, Partition};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
@@ -230,7 +232,10 @@ where
 
             // The use of an _unbounded_ queue here is justified as it matches the unbounded
             // buffers that lie between ordinary timely operators.
-            source.inner.capture_into(UnboundedTokioCapture(source_tx));
+            source
+                .inner
+                .exchange(move |_| Instant::now().hashed() % u64::cast_from(config.worker_count))
+                .capture_into(UnboundedTokioCapture(source_tx));
             source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
 
             (health_stream.leave(), token)
