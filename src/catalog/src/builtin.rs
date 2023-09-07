@@ -1396,6 +1396,12 @@ pub const MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
 
+pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_records_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
+};
+
 pub const MZ_ARRANGEMENT_BATCHES_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1430,6 +1436,12 @@ pub const MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_compute_error_counts_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ErrorCount),
 };
 
 pub const MZ_ACTIVE_PEEKS_PER_WORKER: BuiltinLog = BuiltinLog {
@@ -1496,12 +1508,6 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_reachability_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
-};
-
-pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_records_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
 };
 
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -3242,6 +3248,26 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_compute_delays_histogram_per_worker
 GROUP BY export_id, import_id, delay_ns",
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_compute_error_counts_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_error_counts_per_worker AS
+SELECT export_id, worker_id, count
+FROM mz_internal.mz_compute_error_counts_raw",
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS: BuiltinView = BuiltinView {
+    name: "mz_compute_error_counts",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_error_counts AS
+SELECT
+    export_id,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_compute_error_counts_per_worker
+GROUP BY export_id
+HAVING pg_catalog.sum(count) != 0",
 };
 
 pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
@@ -5175,6 +5201,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
@@ -5271,6 +5298,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
