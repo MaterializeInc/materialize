@@ -20,7 +20,7 @@ use mz_persist_types::Codec64;
 use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
@@ -360,6 +360,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             "hostname",
             diff_hostname,
             &mut self.hostname,
+            metrics,
         )?;
 
         // Deconstruct collections so we get a compile failure if new fields are
@@ -468,9 +469,10 @@ fn force_apply_diffs_single<X: PartialEq + Debug>(
     name: &str,
     diffs: Vec<StateFieldDiff<(), X>>,
     single: &mut X,
+    metrics: &Metrics,
 ) -> Result<(), String> {
     for diff in diffs {
-        force_apply_diff_single(shard_id, seqno, name, diff, single)?;
+        force_apply_diff_single(shard_id, seqno, name, diff, single, metrics)?;
     }
     Ok(())
 }
@@ -481,14 +483,16 @@ fn force_apply_diff_single<X: PartialEq + Debug>(
     name: &str,
     diff: StateFieldDiff<(), X>,
     single: &mut X,
+    metrics: &Metrics,
 ) -> Result<(), String> {
     match diff.val {
         Update(from, to) => {
             if single != &from {
-                error!(
+                debug!(
                     "{}: update didn't match: {:?} vs {:?}, continuing to force apply diff to {:?} for shard {} and seqno {}",
                     name, single, &from, &to, shard_id, seqno
                 );
+                metrics.state.force_apply_hostname_total.inc();
             }
             *single = to
         }

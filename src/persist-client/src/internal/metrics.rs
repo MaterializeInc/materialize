@@ -1051,6 +1051,7 @@ pub struct StateMetrics {
     pub(crate) fetch_recent_live_diffs_slow_path: IntCounter,
     pub(crate) writer_added: IntCounter,
     pub(crate) writer_removed: IntCounter,
+    pub(crate) force_apply_hostname_total: IntCounter,
 }
 
 impl StateMetrics {
@@ -1111,6 +1112,10 @@ impl StateMetrics {
             writer_removed: registry.register(metric!(
                 name: "mz_persist_state_writer_removed",
                 help: "count of writers removed from the state",
+            )),
+            force_apply_hostname_total: registry.register(metric!(
+                name: "mz_persist_state_force_apply_hostname_total",
+                help: "count of when hostname diffs needed to be force applied",
             )),
         }
     }
