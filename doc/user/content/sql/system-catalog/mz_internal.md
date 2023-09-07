@@ -138,6 +138,18 @@ each replica, including the times at which it was created and dropped
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
 
+### `mz_comments`
+
+The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+
+<!-- RELATION_SPEC mz_internal.mz_comments -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
+| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
+| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `comment`      | [`text`]    | The comment itself.                                                                          |
+
 ### `mz_compute_dependencies`
 
 The `mz_compute_dependencies` table describes the dependency structure between each compute object (index, materialized view, or subscription) and the sources of its data.
@@ -690,6 +702,16 @@ operations in the system.
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
+### `mz_webhook_sources`
+
+The `mz_webhook_sources` table contains a row for each webhook source in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
+| `name`         | [`text`]    | The name of the webhook source.                                                              |
+| `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
 ## Replica Introspection Relations
 
@@ -1054,29 +1076,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
-
-### `mz_comments`
-
-The `mz_comments` table stores optional comments (descriptions) for objects in the database.
-
-<!-- RELATION_SPEC mz_internal.mz_comments -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
-| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
-| `comment`      | [`text`]    | The comment itself.                                                                          |
-
-### `mz_webhook_sources`
-
-The `mz_webhook_sources` table contains a row for each webhook source in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
-| `name`         | [`text`]    | The name of the webhook source.                                                              |
-| `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

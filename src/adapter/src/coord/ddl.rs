@@ -28,9 +28,9 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
-    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_MATERIALIZED_VIEWS, MAX_OBJECTS_PER_SCHEMA,
-    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_TABLES,
+    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
+    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
+    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::{
     CreateExportToken, ExportDescription, ReadPolicy, StorageError,
@@ -888,6 +888,8 @@ impl Coordinator {
         ops: &Vec<catalog::Op>,
         conn_id: &ConnectionId,
     ) -> Result<(), AdapterError> {
+        let mut new_kafka_connections = 0;
+        let mut new_postgres_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -948,14 +950,17 @@ impl Coordinator {
                         ))
                         .or_insert(0) += 1;
                     match item {
-                        CatalogItem::Connection(connection) => match connection.connection {
-                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                _,
-                            ) => {
-                                new_aws_privatelink_connections += 1;
+                        CatalogItem::Connection(connection) => {
+                            use mz_storage_client::types::connections::Connection;
+                            match connection.connection {
+                                Connection::Kafka(_) => new_kafka_connections += 1,
+                                Connection::Postgres(_) => new_postgres_connections += 1,
+                                Connection::AwsPrivatelink(_) => {
+                                    new_aws_privatelink_connections += 1
+                                }
+                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
                             }
-                            _ => (),
-                        },
+                        }
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
@@ -1069,18 +1074,38 @@ impl Coordinator {
             }
         }
 
+        let mut current_aws_privatelink_connections = 0;
+        let mut current_postgres_connections = 0;
+        let mut current_kafka_connections = 0;
+        for c in self.catalog().user_connections() {
+            let connection = c
+                .connection()
+                .expect("`user_connections()` only returns connection objects");
+
+            use mz_storage_client::types::connections::Connection;
+            match connection.connection {
+                Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
+                Connection::Postgres(_) => current_postgres_connections += 1,
+                Connection::Kafka(_) => current_kafka_connections += 1,
+                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+            }
+        }
         self.validate_resource_limit(
-            self.catalog()
-                .user_connections()
-                .filter(|c| {
-                    matches!(
-                        c.connection()
-                            .expect("`user_connections()` only returns connection objects")
-                            .connection,
-                        mz_storage_client::types::connections::Connection::AwsPrivatelink(_),
-                    )
-                })
-                .count(),
+            current_kafka_connections,
+            new_kafka_connections,
+            SystemVars::max_kafka_connections,
+            "Kafka Connection",
+            MAX_KAFKA_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_postgres_connections,
+            new_postgres_connections,
+            SystemVars::max_postgres_connections,
+            "PostgreSQL Connection",
+            MAX_POSTGRES_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_aws_privatelink_connections,
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",
