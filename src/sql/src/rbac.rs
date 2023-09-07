@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
 use itertools::Itertools;
-use maplit::btreeset;
 use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, MirRelationExpr};
 use mz_ore::str::StrExt;
@@ -29,7 +28,8 @@ use crate::names::{
 };
 use crate::plan;
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan,SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
+    UpdatePrivilege,
 };
 use crate::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::{SessionVars, SystemVars};
@@ -197,16 +197,11 @@ pub fn check_plan(
         active_conns,
         target_cluster_id,
         resolved_ids,
-        role_metadata.current_role,,
+        role_metadata.current_role,
     );
 
     if rbac_requirements.item_usage {
-        check_item_usage(
-            catalog,
-            role_metadata,
-            session_vars,
-            resolved_ids,
-        )?;
+        check_item_usage(catalog, role_metadata, session_vars, resolved_ids)?;
     }
 
     // Validate that the current session has the required role membership to execute the provided
@@ -240,9 +235,7 @@ pub fn check_plan(
     )?;
 
     if let Some(action) = rbac_requirements.superuser_action {
-        return Err(AdapterError::Unauthorized(UnauthorizedError::Superuser {
-            action,
-        }));
+        return Err(UnauthorizedError::Superuser { action });
     }
 
     Ok(())
@@ -1118,7 +1111,7 @@ fn generate_rbac_requirements(
                 ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
             };
             RbacRequirements {
-                role_membership: btreeset![*new_owner],
+                role_membership: BTreeSet::from([*new_owner]),
                 ownership: vec![id.clone()],
                 privileges,
                 item_usage: true,
@@ -1397,7 +1390,7 @@ fn generate_rbac_requirements(
             let role_membership = match func {
                 SideEffectingFunc::PgCancelBackend { connection_id } => {
                     match active_conns.get(connection_id) {
-                        Some(conn) => btreeset![conn.authenticated_role],
+                        Some(authenticated_role) => BTreeSet::from([*authenticated_role]),
                         None => BTreeSet::new(),
                     }
                 }
@@ -1647,7 +1640,7 @@ fn check_object_privileges(
     Ok(())
 }
 
-pub(crate) const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
+pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const TABLE_ACL_MODE: AclMode = AclMode::INSERT
         .union(AclMode::SELECT)
         .union(AclMode::UPDATE)
