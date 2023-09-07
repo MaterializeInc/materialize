@@ -8,10 +8,6 @@ menu:
 
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement -- valuable information to acknowledge query delays.
 
-{{< note >}}
-The `EXPLAIN PLAN` documentation now lives in [its own page](/sql/explain-plan).
-{{</ note >}}
-
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may

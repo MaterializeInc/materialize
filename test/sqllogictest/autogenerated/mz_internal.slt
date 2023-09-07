@@ -91,6 +91,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  credits_per_hour  numeric
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
+----
+1  id  text
+2  object_type  text
+3  sub_id  uint8
+4  comment  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -373,6 +381,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  referenced_object_ids  list
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
+----
+1  id  text
+2  name  text
+3  url  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
 ----
 1  id  uuid
@@ -558,21 +573,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  slept_for_ns  uint8
 2  requested_ns  uint8
 3  count  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
-----
-1  id  text
-2  object_type  text
-3  sub_id  uint8
-4  comment  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
-----
-1  id  text
-2  name  text
-3  url  text
 
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
