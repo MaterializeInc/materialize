@@ -713,6 +713,16 @@ impl<T: TimestampManipulation> Session<T> {
         });
     }
 
+    /// Returns the session's role metadata.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn role_metadata(&self) -> &RoleMetadata {
+        self.role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+    }
+
     /// Returns the session's current role ID.
     ///
     /// # Panics

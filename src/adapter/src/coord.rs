@@ -443,6 +443,7 @@ pub struct PlanValidity {
     dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
+    role_metadata: RoleMetadata,
 }
 
 impl PlanValidity {
@@ -472,6 +473,15 @@ impl PlanValidity {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan);
             }
+        }
+        if catalog
+            .try_get_role(&self.role_metadata.current_role)
+            .is_none()
+            || catalog
+                .try_get_role(&self.role_metadata.session_role)
+                .is_none()
+        {
+            return Err(AdapterError::ChangedPlan);
         }
         self.transient_revision = catalog.transient_revision();
         Ok(())
