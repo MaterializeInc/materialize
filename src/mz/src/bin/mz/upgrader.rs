@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use std::{env, path::Path};
 use std::{
     fs::{File, OpenOptions},
@@ -114,11 +114,18 @@ impl UpgradeChecker {
     /// Fetches and returns the latest tag version from the
     /// body returned at the endpoint [BINARIES_LATEST_VERSION_URL].
     async fn get_latest_tag_version(&self) -> Result<Version, Error> {
-        // If the server returns a redirect, you can usually find the location header.
-        let version = reqwest::get(BINARIES_LATEST_VERSION_URL)
+        // Use a timeout to avoid infinite waiting times.
+        let client = reqwest::Client::new();
+        let version = client
+            .get(BINARIES_LATEST_VERSION_URL)
+            .timeout(Duration::from_secs(5))
+            .send()
             .await?
             .text()
             .await?;
+
+        // TODO: Remove this line after fixing the content of `BINARIES_LATEST_VERSION_URL`
+        let version = version.replace('\n', "");
         let latest_version = Version::parse(&version).map_err(Error::SemVerParseError)?;
         Ok(latest_version)
     }
