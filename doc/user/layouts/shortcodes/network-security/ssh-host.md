@@ -1,6 +1,7 @@
 Materialize can connect to data sources like Kafka, Confluent, and PostgreSQL with a
-secure SSH bastion server. This section covers how to create an `SSH TUNNEL`
-connection and configure your Materialize authentication settings.
+secure SSH bastion server. In this guide, you will create an `SSH TUNNEL`
+connection, configure your Materialize authentication settings, and create a
+source connection.
 
 ## Prerequisites
 
@@ -52,18 +53,19 @@ created in the previous step.
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
     ```
 
-3. Configure your internal firewall to allow the SSH bastion host to connect to your Kafka cluster.
+3. Configure your internal firewall to allow the SSH bastion host to connect to your Kafka cluster or PostgreSQL instance.
 
-    If you are using a cloud provider like AWS or GCP, update the security group or firewall rules for your Kafka brokers.
+    If you are using a cloud provider like AWS or GCP, update the security group or firewall rules for your PostgreSQL instance or Kafka brokers.
 
     Allow incoming traffic from the SSH bastion host IP address on the necessary ports.
 
-    For example, use ports `9092`, `9094`, and `9096` for Kafka.
+    For example, use port `5432` for PostgreSQL and ports `9092`, `9094`, and `9096` for Kafka.
 
-    Test the connection from the bastion host to the Kafka cluster.
+    Test the connection from the bastion host to the Kafka cluster or PostgreSQL instance.
 
     ```bash
     telnet <KAFKA_BROKER_HOST> <KAFKA_BROKER_PORT>
+    telnet <POSTGRES_HOST> <POSTGRES_PORT>
     ```
 
     If the command hangs, double-check your security group and firewall settings. If the connection is successful, you can proceed to the next step.
@@ -75,7 +77,7 @@ created in the previous step.
     ssh -L 9092:kafka-broker:9092 <SSH_BASTION_USER>@<SSH_BASTION_HOST>
     ```
 
-    Verify that you can connect to the Kafka broker via the tunnel:
+    Verify that you can connect to the Kafka broker or PostgreSQL instance via the tunnel:
 
     ```bash
     telnet localhost 9092
@@ -114,16 +116,12 @@ created in the previous step.
     XXX.100.27.23
     ```
 
-## Create a source connection
+## Validate the SSH tunnel connection
 
-In Materialize, create a source connection that uses the SSH tunnel connection you configured in the previous section:
+To confirm that the SSH tunnel connection is correctly configured, use the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
 ```sql
-CREATE CONNECTION kafka_connection TO KAFKA (
-BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
-    -- Add all Kafka brokers
-    )
-);
+VALIDATE CONNECTION ssh_connection;
 ```
+
+If no validation errors are returned, the connection can be used to create a source connection.

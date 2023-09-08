@@ -41,13 +41,27 @@ Materialize provides Terraform modules for both [MSK cluster](https://github.com
 the TCP listeners (step 3) and the VPC endpoint service (step 5).
 {{< /note >}}
 
-{{% privatelink/kafka %}}
+{{% network-security/privatelink-kafka %}}
 
 {{< /tab >}}
 
 {{< tab "SSH Tunnel">}}
 
-{{% ssh/kafka %}}
+{{% network-security/ssh-host %}}
+
+## Create a source connection
+
+In Materialize, create a source connection that uses the SSH tunnel connection you configured in the previous section:
+
+```sql
+CREATE CONNECTION kafka_connection TO KAFKA (
+BROKERS (
+    'broker1:9092' USING SSH TUNNEL ssh_connection,
+    'broker2:9092' USING SSH TUNNEL ssh_connection
+    -- Add all Kafka brokers
+    )
+);
+```
 
 {{< /tab >}}
 

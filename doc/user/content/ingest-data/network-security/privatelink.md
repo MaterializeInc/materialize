@@ -28,13 +28,13 @@ Materialize provides Terraform modules for both [MSK cluster](https://github.com
 the TCP listeners (step 3) and the VPC endpoint service (step 5).
 {{< /note >}}
 
-{{% privatelink/kafka %}}
+{{% network-security/privatelink-kafka %}}
 
 {{< /tab >}}
 
 {{< tab "AWS RDS">}}
 
-{{% privatelink/postgres %}}
+{{% network-security/privatelink-postgres %}}
 
 {{< /tab >}}
 
