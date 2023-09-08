@@ -117,10 +117,13 @@ In general these URLs have the following format:
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 ```
 
-Where `<HOST>` is the URL for your Materialize instance, which can be found on the [Materialize Web
-Console](https://console.materialize.com/). Then `<database>` and `<schema>` are the database and
-schema where you created your source, and `<src_name>` is the name you provided for your source at
-the time of creation.
+A breakdown of each component is as follows:
+
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize Web
+Console](https://console.materialize.com/).
+- `<database>`: The name of the database where the source is created (default is `materialize`).
+- `<schema>`: The schema name where the source gets created (default is `public`).
+- `<src_name>`: The name you provided for your source at the time of creation. For this guide, use `my_webhook_source`.
 
 {{< note >}}
 

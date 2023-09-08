@@ -82,16 +82,12 @@ On the Connection Settings page:
 
 - **Webhook URL**: Define the endpoint where events will be dispatched by RudderStack.
 
-    The webhook URL structure is:
+    [The webhook URL structure](/sql/create-source/webhook/#webhook-url) is:
 
     ```
     https://<HOST>/api/webhook/<database>/<schema>/<src_name>
     ```
 
-    - `<HOST>`: The hostname of your Materialize cluster.
-    - `<database>`: The name of the database where the source is created (default is `materialize`).
-    - `<schema>`: The schema name where the source gets created (default is `public`).
-    - `<src_name>`: The source's name. For this guide, use `rudderstack_source`.
 - **URL Method**: Use the `POST` method to send events to Materialize.
 
 - **Headers**: These headers get added to the RudderStack request sent to your webhook. For this setup, ensure that the following headers are added:
