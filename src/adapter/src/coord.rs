@@ -106,7 +106,7 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
-use mz_sql::session::user::{RoleMetadata, User};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
@@ -536,11 +536,6 @@ pub struct ConnMeta {
     connected_at: EpochMillis,
     user: User,
     application_name: String,
-    /// Information about the connection's roles.
-    ///
-    /// WARNING: These role references are not updated when the role is dropped.
-    /// Consumers should not assume that these role's exist.
-    role_metadata: RoleMetadata,
     uuid: Uuid,
     conn_id: ConnectionId,
 
@@ -550,6 +545,11 @@ pub struct ConnMeta {
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    /// WARNING: This role reference is not updated when the role is dropped.
+    /// Consumers should not assume that this role exist.
+    pub authenticated_role: RoleId,
 }
 
 impl ConnMeta {
@@ -566,15 +566,7 @@ impl ConnMeta {
     }
 
     pub fn authenticated_role_id(&self) -> &RoleId {
-        &self.role_metadata.authenticated_role
-    }
-
-    pub fn session_role_id(&self) -> &RoleId {
-        &self.role_metadata.session_role
-    }
-
-    pub fn current_role_id(&self) -> &RoleId {
-        &self.role_metadata.current_role
+        &self.authenticated_role
     }
 
     pub fn uuid(&self) -> Uuid {

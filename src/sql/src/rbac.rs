@@ -58,6 +58,14 @@ macro_rules! rbac_preamble {
                 $role_metadata.session_role.clone(),
             ));
         };
+        if $catalog
+            .try_get_role(&$role_metadata.authenticated_role)
+            .is_none()
+        {
+            return Err(UnauthorizedError::ConcurrentRoleDrop(
+                $role_metadata.authenticated_role.clone(),
+            ));
+        };
 
         // Skip RBAC checks if RBAC is disabled.
         if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars) {

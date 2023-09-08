@@ -26,7 +26,7 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
 use mz_sql::rbac;
-use mz_sql::session::user::{RoleMetadata, User};
+use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
@@ -257,13 +257,9 @@ impl Coordinator {
                     connected_at: self.now(),
                     user,
                     application_name,
-                    role_metadata: RoleMetadata {
-                        authenticated_role: role_id,
-                        session_role: role_id,
-                        current_role: role_id,
-                    },
                     uuid,
                     conn_id: conn_id.clone(),
+                    authenticated_role: role_id,
                 };
                 let update = self.catalog().state().pack_session_update(&conn, 1);
                 self.begin_session_for_statement_logging(&conn);
