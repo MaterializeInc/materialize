@@ -24,7 +24,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::error::NotRegistered;
-use crate::StepForward;
+use crate::{StepForward, TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -33,32 +33,39 @@ use crate::StepForward;
 ///
 /// Reads of data shards are almost as straightforward as writes. A data shard
 /// may be read normally, using snapshots, subscriptions, shard_source, etc,
-/// through the most recent non-empty write. However, the upper of the txn shard
-/// (and thus the logical upper of the data shard) may be arbitrarily far ahead
-/// of the upper of the data shard. As a result, we have to "translate"
-/// timestamps by synthesizing ranges of empty time that have not yet been
-/// committed (but eventually will be):
+/// through the most recent non-empty write. However, the upper of the txns
+/// shard (and thus the logical upper of the data shard) may be arbitrarily far
+/// ahead of the physical upper of the data shard. As a result, we have to
+/// "translate" timestamps by synthesizing ranges of empty time that have not
+/// yet been committed (but are guaranteed to remain empty):
 ///
 /// - To take a snapshot of a data shard, the `as_of` is passed through
 ///   unchanged if the timestamp of that shard's latest non-empty write is past
 ///   it. Otherwise, the timestamp of the latest non-empty write is used.
+///   Concretely, to read a snapshot as of `T`:
+///   - We read the txns shard contents up through and including `T`, blocking
+///     until the upper passes `T` if necessary.
+///   - We then find, for the requested data shard, the latest non-empty write
+///     at a timestamp `T' <= T`.
+///   - We then take a normal snapshot on the data shard at `T'`.
 /// - To iterate a listen on a data shard, when writes haven't been read yet
-///   they are passed through unchanged, otherwise if the txn shard indicates
-///   that there are ranges of empty time progress is returned, otherwise the
-///   txn shard will indicate when new information is available.
+///   they are passed through unchanged, otherwise if the txns shard indicates
+///   that there are ranges of empty time progress is returned, otherwise
+///   progress to the txns shard will indicate when new information is
+///   available.
 ///
 /// Note that all of the above can be determined solely by information in the
-/// txn shard. In particular, non-empty writes are indicated by updates with
+/// txns shard. In particular, non-empty writes are indicated by updates with
 /// positive diffs.
 ///
 /// Also note that the above is structured such that it is possible to write a
 /// timely operator with the data shard as an input, passing on all payloads
-/// unchanged and simply manipulating capabilities in response to data and txn
+/// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. TODO(txn): Link to operator once it's added.
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
+pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
     pub(crate) progress_exclusive: T,
-    txns_subscribe: Subscribe<ShardId, String, T, i64>,
+    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
     next_batch_id: usize,
     /// The batches needing application as of the current progress.
@@ -67,26 +74,26 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64> {
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    unapplied_batches: BTreeMap<usize, (ShardId, String, T)>,
+    unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
-    batch_idx: HashMap<String, usize>,
+    batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
     ///
     /// Invariant: Times in the Vec are in ascending order.
     pub(crate) datas: BTreeMap<ShardId, Vec<T>>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
     pub(crate) async fn init(
         init_ts: T,
-        txns_read: ReadHandle<ShardId, String, T, i64>,
-        txns_write: &mut WriteHandle<ShardId, String, T, i64>,
+        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
+        txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
         Self::open(init_ts, txns_read).await
     }
 
-    async fn open(init_ts: T, txns_read: ReadHandle<ShardId, String, T, i64>) -> Self {
+    pub(crate) async fn open(init_ts: T, txns_read: ReadHandle<C::Key, C::Val, T, i64>) -> Self {
         // TODO(txn): Figure out the compaction story. This might require
         // sorting inserts before retractions within each timestamp.
         let subscribe = txns_read
@@ -152,9 +159,44 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
             })
     }
 
+    /// Returns the minimum timestamp not known to be applied by this cache.
+    pub fn min_unapplied_ts(&self) -> &T {
+        // We maintain an invariant that the values in the unapplied_batches map
+        // are sorted by timestamp, thus the first one must be the minimum.
+        self.unapplied_batches
+            .first_key_value()
+            .map(|(_, (_, _, ts))| ts)
+            // If we don't have any known unapplied batches, then the next
+            // timestamp that could be written must potentially have an
+            // unapplied batch.
+            .unwrap_or(&self.progress_exclusive)
+    }
+
     /// Returns the batches needing application as of the current progress.
-    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, String, T)> {
+    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, Vec<u8>, T)> {
         self.unapplied_batches.values()
+    }
+
+    /// Filters out retractions known to have made it into the txns shard.
+    ///
+    /// This is called with a set of things that are known to have been applied
+    /// and in preparation for retracting them. The caller will attempt to
+    /// retract everything not filtered out by this method in a CaA with an
+    /// expected upper of `expected_txns_upper`. So, we catch up to that point,
+    /// and keep everything that is still outstanding. If the CaA fails with an
+    /// expected upper mismatch, then it must call this method again on the next
+    /// attempt with the new expected upper (new retractions may have made it
+    /// into the txns shard in the meantime).
+    ///
+    /// Callers must first wait for `update_ge` with the same or later timestamp
+    /// to return. Panics otherwise.
+    pub(crate) fn filter_retractions<'a>(
+        &'a self,
+        expected_txns_upper: &T,
+        retractions: impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)>,
+    ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)> {
+        assert!(&self.progress_exclusive >= expected_txns_upper);
+        retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
@@ -187,12 +229,17 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
                     ListenEvent::Updates(updates) => updates,
                 };
                 // Persist emits the times sorted by little endian encoding,
-                // which is not what we want
-                updates.sort_by(|(akv, at, _), (bkv, bt, _)| (at, akv).cmp(&(bt, bkv)));
+                // which is not what we want. If we ever expose an interface for
+                // registering and committing to a data shard at the same
+                // timestamp, this will also have to sort registrations first.
+                updates.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
                 for ((k, v), t, d) in updates {
-                    let data_id = k.expect("valid data_id");
-                    let batch = v.expect("valid batch");
-                    self.push(data_id, batch, t, d);
+                    let k = k.expect("valid key");
+                    let v = v.expect("valid val");
+                    match C::decode(k, v) {
+                        TxnsEntry::Register(data_id) => self.push_register(data_id, t, d),
+                        TxnsEntry::Append(data_id, batch) => self.push_append(data_id, batch, t, d),
+                    }
                 }
             }
         }
@@ -206,21 +253,22 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
         );
     }
 
-    fn push(&mut self, data_id: ShardId, batch: String, ts: T, diff: i64) {
-        if batch.is_empty() {
-            assert_eq!(diff, 1);
-            // This is just a data registration.
-            debug!(
-                "cache learned {:.9} registered t={:?}",
-                data_id.to_string(),
-                ts
-            );
-            let prev = self.datas.insert(data_id, vec![ts.clone()]);
-            if let Some(prev) = prev {
-                panic!("{} registered at both {:?} and {:?}", data_id, prev, ts);
-            }
-            return;
+    fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64) {
+        debug!(
+            "cache learned {:.9} registered t={:?}",
+            data_id.to_string(),
+            ts
+        );
+        debug_assert!(ts >= self.progress_exclusive);
+        assert_eq!(diff, 1);
+
+        let prev = self.datas.insert(data_id, [ts.clone()].into());
+        if let Some(prev) = prev {
+            panic!("{} registered at both {:?} and {:?}", data_id, prev, ts);
         }
+    }
+
+    fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
         debug!(
             "cache learned {:.9} b={} t={:?} d={}",
             data_id.to_string(),
@@ -228,6 +276,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
             ts,
             diff,
         );
+        debug_assert!(ts >= self.progress_exclusive);
+
         if diff == 1 {
             let idx = self.next_batch_id;
             self.next_batch_id += 1;
@@ -284,5 +334,110 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCache<T> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mz_persist_client::{Diagnostics, PersistClient, ShardIdSchema};
+    use mz_persist_types::codec_impls::VecU8Schema;
+
+    use crate::tests::reader;
+    use crate::txns::TxnsHandle;
+
+    use super::*;
+
+    impl TxnsCache<u64, TxnsCodecDefault> {
+        pub(crate) async fn expect_open(
+            init_ts: u64,
+            txns: &TxnsHandle<String, (), u64, i64>,
+        ) -> Self {
+            let txns_read = txns
+                .datas
+                .client
+                .open_leased_reader(
+                    txns.txns_id(),
+                    Arc::new(ShardIdSchema),
+                    Arc::new(VecU8Schema),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap();
+            TxnsCache::open(init_ts, txns_read).await
+        }
+
+        pub(crate) async fn expect_snapshot(
+            &mut self,
+            client: &PersistClient,
+            data_id: ShardId,
+            as_of: u64,
+        ) -> Vec<String> {
+            let mut data_read = reader(client, data_id).await;
+            self.update_gt(&as_of).await;
+            let translated_as_of = self
+                .to_data_inclusive(&data_read.shard_id(), as_of)
+                .unwrap();
+            let mut snapshot = data_read
+                .snapshot_and_fetch(Antichain::from_elem(translated_as_of))
+                .await
+                .unwrap();
+            snapshot.sort();
+            snapshot
+                .into_iter()
+                .flat_map(|((k, v), _t, d)| {
+                    let (k, ()) = (k.unwrap(), v.unwrap());
+                    std::iter::repeat(k).take(usize::try_from(d).unwrap())
+                })
+                .collect()
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn txns_cache_to_data_inclusive() {
+        let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
+        let d0 = ShardId::new();
+        txns.expect_commit_at(3, d0, &[]).await;
+
+        let mut cache = TxnsCache::expect_open(3, &txns).await;
+        assert_eq!(cache.progress_exclusive, 4);
+
+        // We can answer inclusive queries at < progress. The data shard isn't
+        // registered yet, so it errors.
+        assert!(cache.to_data_inclusive(&d0, 3).is_err());
+
+        // Register a data shard. Registration advances the physical upper, so
+        // we're able to read at the register ts.
+        cache.push_register(d0, 4, 1);
+        cache.progress_exclusive = 5;
+        assert_eq!(cache.to_data_inclusive(&d0, 4), Ok(4));
+
+        // Advance time. Now we can resolve queries at higher times. Nothing got
+        // written at 5, so we still read as_of 4.
+        cache.progress_exclusive = 6;
+        assert_eq!(cache.to_data_inclusive(&d0, 5), Ok(4));
+
+        // Write a batch. Apply will advance the physical upper, so we read
+        // as_of the commit ts.
+        cache.push_append(d0, vec![0xA0], 6, 1);
+        cache.progress_exclusive = 7;
+        assert_eq!(cache.to_data_inclusive(&d0, 6), Ok(6));
+
+        // An unrelated batch doesn't change the answer. Neither does retracting
+        // the batch.
+        let other = ShardId::new();
+        cache.push_register(other, 7, 1);
+        cache.push_append(other, vec![0xB0], 7, 1);
+        cache.push_append(d0, vec![0xA0], 7, -1);
+        cache.progress_exclusive = 8;
+        assert_eq!(cache.to_data_inclusive(&d0, 7), Ok(6));
+
+        // All of the previous answers are still the same.
+        assert!(cache.to_data_inclusive(&d0, 3).is_err());
+        assert_eq!(cache.to_data_inclusive(&d0, 4), Ok(4));
+        assert_eq!(cache.to_data_inclusive(&d0, 5), Ok(4));
+        assert_eq!(cache.to_data_inclusive(&d0, 6), Ok(6));
     }
 }
