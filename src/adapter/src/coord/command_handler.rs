@@ -622,7 +622,6 @@ impl Coordinator {
                         ctx.session().role_metadata(),
                         ctx.session().vars(),
                         &resolved_ids,
-                        None,
                     ) {
                         return ctx.retire(Err(e.into()));
                     }
