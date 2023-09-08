@@ -344,17 +344,12 @@ ALTER SYSTEM SET enable_arrangement_size_logging = true
 "Dataflow: materialize.public.ii_t6_plus_1" true
 
 # Test dataflow error introspection.
-#
-# Note that we are not able to see errors in index dataflows that just reuse
-# existing indexes (`idx2_div_by_zero`), because we are not able to attach a
-# logging operator to the reused arrangement.
 
 > CREATE TABLE zeros (a int)
 > CREATE VIEW v_div_by_zero AS SELECT 1 / a AS x FROM zeros
 > CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
-> CREATE INDEX idx2_div_by_zero ON v_div_by_zero (x)
 > CREATE MATERIALIZED VIEW mv_div_by_zero AS SELECT 1 / a AS x FROM zeros
-> CREATE INDEX idx3_div_by_zero ON mv_div_by_zero (x)
+> CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
 
 > SELECT name, count
   FROM mz_internal.mz_compute_error_counts c
@@ -368,7 +363,7 @@ ALTER SYSTEM SET enable_arrangement_size_logging = true
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 1
-idx3_div_by_zero 1
+idx2_div_by_zero 1
 mv_div_by_zero   1
 
 > INSERT INTO zeros VALUES (0), (0)
@@ -378,7 +373,7 @@ mv_div_by_zero   1
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 3
-idx3_div_by_zero 3
+idx2_div_by_zero 3
 mv_div_by_zero   3
 
 > DELETE FROM zeros
@@ -397,7 +392,7 @@ mv_div_by_zero   3
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 2
-idx3_div_by_zero 2
+idx2_div_by_zero 2
 mv_div_by_zero   2
 
 > DROP INDEX idx1_div_by_zero
@@ -406,10 +401,10 @@ mv_div_by_zero   2
   FROM mz_internal.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
-idx3_div_by_zero 2
+idx2_div_by_zero 2
 mv_div_by_zero   2
 
-> DROP TABLE zeros CASCADE
+> DROP MATERIALIZED VIEW mv_div_by_zero
 
 > SELECT name, count
   FROM mz_internal.mz_compute_error_counts c
@@ -426,3 +421,36 @@ mv_div_by_zero   2
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 mv2_div_by_zero 1
+
+> DROP MATERIALIZED VIEW mv_zero CASCADE
+
+# Test logging of errors in reused indexes.
+
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx2_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx3_div_by_zero ON v_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+idx3_div_by_zero 2
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+idx3_div_by_zero 3
+
+> DROP TABLE zeros CASCADE
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name

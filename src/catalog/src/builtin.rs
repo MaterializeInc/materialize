@@ -3254,8 +3254,33 @@ pub const MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_compute_error_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_compute_error_counts_per_worker AS
-SELECT export_id, worker_id, count
-FROM mz_internal.mz_compute_error_counts_raw",
+WITH MUTUALLY RECURSIVE
+    -- Indexes that reuse existing indexes rather than maintaining separate dataflows.
+    -- For these we don't log error counts separately, so we need to forward the error counts from
+    -- their dependencies instead.
+    index_reuses(reuse_id text, index_id text) AS (
+        SELECT d.object_id, d.dependency_id
+        FROM mz_internal.mz_compute_dependencies d
+        JOIN mz_internal.mz_compute_exports e ON (e.export_id = d.object_id)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM mz_internal.mz_dataflows
+            WHERE id = e.dataflow_id
+        )
+    ),
+    -- Error counts that were directly logged on compute exports.
+    direct_errors(export_id text, worker_id uint8, count int8) AS (
+        SELECT export_id, worker_id, count
+        FROM mz_internal.mz_compute_error_counts_raw
+    ),
+    -- Error counts propagated to index reused.
+    all_errors(export_id text, worker_id uint8, count int8) AS (
+        SELECT * FROM direct_errors
+        UNION
+        SELECT r.reuse_id, e.worker_id, e.count
+        FROM all_errors e
+        JOIN index_reuses r ON (r.index_id = e.export_id)
+    )
+SELECT * FROM all_errors",
 };
 
 pub const MZ_COMPUTE_ERROR_COUNTS: BuiltinView = BuiltinView {
