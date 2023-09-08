@@ -16,7 +16,7 @@ from materialize.util import MzVersion
 class StatementLogging(Check):
     def _can_run(self) -> bool:
         return self.base_version >= MzVersion(0, 69, 0)
-    
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
