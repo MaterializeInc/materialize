@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -42,8 +43,32 @@ class StartMz(MzcomposeAction):
 
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
         print(f"Starting Mz using image {image}")
+        if self._tag_or_cargo_version() >= MzVersion.parse("0.71.0-dev"):
+            print("Using statically configured replicas")
+            static_replicas = {
+                "clusterd": {
+                    "allocation": {
+                        "workers": 1,
+                        "scale": 1,
+                        "credits_per_hour": "0",
+                    },
+                    "ports": {
+                        "storagectl": ["clusterd_compute_1:2100"],
+                        "storage": ["clusterd_compute_1:2103"],
+                        "compute": ["clusterd_compute_1:2102"],
+                        "computectl": ["clusterd_compute_1:2101"],
+                    },
+                }
+            }
+
+            options = [f"--orchestrator-static-replicas={json.dumps(static_replicas)}"]
+        else:
+            print("Using legacy remote replicas")
+            options = []
+
         mz = Materialized(
             image=image,
+            options=options,
             external_cockroach=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
@@ -53,17 +78,18 @@ class StartMz(MzcomposeAction):
             c.up("materialized")
 
         mz_version = MzVersion.parse_sql(c)
-        if self.tag:
-            assert (
-                self.tag == mz_version
-            ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
-        else:
-            version_cargo = MzVersion.parse_cargo()
-            assert (
-                version_cargo == mz_version
-            ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
+        tag_or_cargo_verion = self._tag_or_cargo_version()
+        assert (
+            tag_or_cargo_verion == mz_version
+        ), f"Materialize version mismatch, expected {tag_or_cargo_verion}, but got {mz_version}"
 
         e.current_mz_version = mz_version
+
+    def _tag_or_cargo_version(self) -> MzVersion:
+        if self.tag:
+            return self.tag
+        else:
+            return MzVersion.parse_cargo()
 
 
 class ConfigureMz(MzcomposeAction):
@@ -148,6 +174,17 @@ class UseClusterdCompute(MzcomposeAction):
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
+        if e.current_mz_version >= MzVersion.parse("0.71.0-dev"):
+            c.sql(
+                """
+
+            DROP CLUSTER REPLICA default.r1;
+            CREATE CLUSTER REPLICA default.r1 SIZE 'clusterd';
+            """,
+                port=6877,
+                user="mz_system",
+            )
+            return
 
         storage_addresses = (
             """STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],

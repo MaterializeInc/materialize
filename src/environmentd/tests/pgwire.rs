@@ -578,10 +578,6 @@ fn test_pgtest_mz() {
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
     pg_test_inner(
         dir,
-        &[
-            "enable_raise_statement",
-            "enable_unmanaged_cluster_replicas",
-            "enable_dangerous_functions",
-        ],
+        &["enable_raise_statement", "enable_dangerous_functions"],
     );
 }

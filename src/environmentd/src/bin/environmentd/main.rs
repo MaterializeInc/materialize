@@ -107,6 +107,7 @@ use mz_orchestrator_kubernetes::{
 use mz_orchestrator_process::{
     ProcessOrchestrator, ProcessOrchestratorConfig, ProcessOrchestratorTcpProxyConfig,
 };
+use mz_orchestrator_static::StaticOrchestrator;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
@@ -346,6 +347,9 @@ pub struct Args {
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
     orchestrator_kubernetes_coverage: bool,
+    /// Static replica configuration
+    #[clap(long, env = "ORCHESTRATOR_STATIC_REPLICAS")]
+    orchestrator_static_replicas: Option<String>,
     /// The secrets controller implementation to use.
     #[structopt(
         long,
@@ -845,6 +849,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let (orchestrator, static_orchestrator): (Arc<dyn Orchestrator>, _) =
+        if let Some(static_replicas) = args.orchestrator_static_replicas {
+            let orchestrator = StaticOrchestrator::new(
+                orchestrator,
+                serde_json::from_str(&static_replicas).context("parsing replica size map")?,
+            );
+            (Arc::new(orchestrator.clone()), Some(orchestrator))
+        } else {
+            (orchestrator, None)
+        };
+
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -873,10 +888,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
     };
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
+    let mut cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
         None => Default::default(),
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
+
+    if let Some(static_orchestrator) = &static_orchestrator {
+        static_orchestrator.update_replica_size_map(&mut cluster_replica_sizes);
+    }
 
     // Ensure default storage cluster size actually exists in the passed map
     if let Some(default_storage_cluster_size) = &args.default_storage_host_size {

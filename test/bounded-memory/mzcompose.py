@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
@@ -28,8 +29,29 @@ ITERATIONS = 128
 MATERIALIZED_MEMORY = "5Gb"
 CLUSTERD_MEMORY = "3.5Gb"
 
+static_replicas = {
+    "clusterd": {
+        "allocation": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": ["clusterd:2100"],
+            "storage": ["clusterd:2103"],
+            "compute": ["clusterd:2102"],
+            "computectl": ["clusterd:2101"],
+        },
+    }
+}
+
 SERVICES = [
-    Materialized(memory=MATERIALIZED_MEMORY),
+    Materialized(
+        options=[
+            f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+        ],
+        memory=MATERIALIZED_MEMORY,
+    ),
     Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
     Redpanda(),
     Postgres(),
@@ -363,22 +385,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.up("redpanda", "materialized", "postgres", "clusterd")
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            """
-            CREATE CLUSTER clusterd REPLICAS (r1 (
-                STORAGECTL ADDRESSES ['clusterd:2100'],
-                STORAGE ADDRESSES ['clusterd:2103'],
-                COMPUTECTL ADDRESSES ['clusterd:2101'],
-                COMPUTE ADDRESSES ['clusterd:2102']
-            ))
-        """
-        )
+        c.sql("CREATE CLUSTER clusterd REPLICAS (r1 (SIZE 'clusterd'))")
 
         c.up("testdrive", persistent=True)
         c.testdrive(scenario.pre_restart)

@@ -49,6 +49,7 @@ mz-interchange = { path = "../interchange" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-orchestrator-static = { path = "../orchestrator-static" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }

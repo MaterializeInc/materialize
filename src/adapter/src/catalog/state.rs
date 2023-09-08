@@ -96,6 +96,7 @@ pub struct CatalogState {
     pub(super) config: mz_sql::catalog::CatalogConfig,
     #[serde(skip)]
     pub(super) oid_counter: u32,
+    #[serde(skip)]
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(super) default_storage_cluster_size: Option<String>,

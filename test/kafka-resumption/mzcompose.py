@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import random
 
 from materialize.mzcompose.composition import Composition
@@ -18,11 +19,29 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
+static_replicas = {
+    "clusterd": {
+        "allocation": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": ["clusterd:2100"],
+            "storage": ["clusterd:2103"],
+            "compute": ["clusterd:2102"],
+            "computectl": ["clusterd:2101"],
+        },
+    }
+}
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(),
+    Materialized(
+        options=[f"--orchestrator-static-replicas={json.dumps(static_replicas)}"]
+    ),
     Clusterd(),
     Toxiproxy(),
     Testdrive(default_timeout="120s"),

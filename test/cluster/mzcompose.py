@@ -33,6 +33,42 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
+
+def generate_replica(
+    name: list[str], workers: int
+) -> dict[str, dict[str, int | str | list[str]]]:
+    return {
+        "allocation": {
+            "workers": workers,
+            "scale": len(name),
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": list(map(lambda name: f"{name}:2100", name)),
+            "storage": list(map(lambda name: f"{name}:2103", name)),
+            "compute": list(map(lambda name: f"{name}:2102", name)),
+            "computectl": list(map(lambda name: f"{name}:2101", name)),
+        },
+    }
+
+
+static_replicas = {
+    "clusterd1+2-1": generate_replica(["clusterd1", "clusterd2"], 1),
+    "clusterd1+2-2": generate_replica(["clusterd1", "clusterd2"], 2),
+    "clusterd1+2-4": generate_replica(["clusterd1", "clusterd2"], 4),
+    "clusterd1-1": generate_replica(["clusterd1"], 1),
+    "clusterd1-2": generate_replica(["clusterd1"], 2),
+    "clusterd2-2": generate_replica(["clusterd2"], 2),
+    "clusterd3+4-2": generate_replica(["clusterd3", "clusterd4"], 2),
+    "clusterd_nopanic-2": generate_replica(["clusterd_nopanic"], 2),
+    "clusterd_nopanic-4": generate_replica(["clusterd_nopanic"], 4),
+    "toxiproxy-2": generate_replica(["toxiproxy"], 2),
+    "storage-1": generate_replica(["storage"], 1),
+    "storage-4": generate_replica(["storage"], 4),
+}
+
+print(static_replicas)
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
@@ -44,7 +80,11 @@ SERVICES = [
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False, external_cockroach=True),
+    Materialized(
+        options=[f"--orchestrator-static-replicas={json.dumps(static_replicas)}"],
+        propagate_crashes=False,
+        external_cockroach=True,
+    ),
     Redpanda(),
     Toxiproxy(),
     Testdrive(
@@ -124,44 +164,14 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 2
-        ));
-    """
-    )
+    c.sql("CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1+2-2')); ")
     c.run("testdrive", *args.glob)
 
     # Add a replica to that cluster and verify that tests still pass.
     c.up("clusterd3")
     c.up("clusterd4")
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """CREATE CLUSTER REPLICA cluster1.replica2
-            STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
-            STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
-            COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
-            COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
-            WORKERS 2
-    """
-    )
+    c.sql("CREATE CLUSTER REPLICA cluster1.replica2 SIZE 'clusterd3+4-2'")
     c.run("testdrive", *args.glob)
 
     # Kill one of the nodes in the first replica of the compute cluster and
@@ -183,35 +193,12 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.up("clusterd1")
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
 
-    c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 2
-        ));
-    """
-    )
+    c.sql("CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1+2-2'))")
     c.sql("DROP CLUSTER cluster1 CASCADE;")
 
     # Note the different WORKERS argument
-    c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 1
-        ));
-    """
-    )
+    c.sql("CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1+2-1'))")
 
     # This should ensure that compute crashed (and does not just hang forever)
     c1 = c.invoke("logs", "clusterd1", capture=True)
@@ -316,22 +303,10 @@ def workflow_test_github_15531(c: Composition) -> None:
             replica_dataflow_count,
         )
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     # Set up a cluster with an indexed table and an unindexed one.
     c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-1'));
         SET cluster = cluster1;
         -- table for fast-path peeks
         CREATE TABLE t (a int);
@@ -421,22 +396,10 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     # Set up a dataflow on clusterd.
     c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-2'));
         SET cluster = cluster1;
         CREATE TABLE t (a int);
         CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
@@ -484,29 +447,10 @@ def workflow_test_github_15799(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (
-            logging_on (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 2
-            ),
-            logging_off (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
-                WORKERS 2,
-                INTROSPECTION INTERVAL 0
-            )
+            logging_on (SIZE 'clusterd1-2'),
+            logging_off (SIZE 'clusterd2-2')
         );
         SET cluster = cluster1;
 
@@ -537,25 +481,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd1")
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 REPLICAS (
-                logging_on (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
-                )
-            );
-            """
-        )
+        c.sql("CREATE CLUSTER cluster1 REPLICAS (logging_on (SIZE 'clusterd1-2'));")
 
         # verify that we can query the introspection source
         c.testdrive(
@@ -642,12 +568,6 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
             port=6877,
             user="mz_system",
@@ -656,15 +576,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
-            CREATE CLUSTER cluster1 REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
-                    WORKERS 2
-                )
-            );
+            CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'clusterd_nopanic-2'));
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
@@ -714,26 +626,8 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd1")
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
-                )
-            );
-            """
-        )
+        c.sql("CREATE CLUSTER cluster1 REPLICAS ( r1 (SIZE 'clusterd1-2'));")
 
         c.testdrive(
             dedent(
@@ -794,12 +688,6 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
             port=6877,
             user="mz_system",
@@ -808,15 +696,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
-            CREATE CLUSTER cluster1 REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
-                )
-            );
+            CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'clusterd1-2'));
             -- Set data for test up
             SET cluster = cluster1;
             CREATE TABLE base (data2 uint2, data4 uint4, data8 uint8, diff bigint);
@@ -968,12 +848,6 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
             port=6877,
             user="mz_system",
@@ -982,15 +856,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
-            CREATE CLUSTER cluster1 REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
-                    WORKERS 2
-                )
-            );
+            CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'clusterd_nopanic-2'));
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
@@ -1062,12 +928,6 @@ def workflow_test_github_19610(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
             port=6877,
             user="mz_system",
@@ -1076,15 +936,7 @@ def workflow_test_github_19610(c: Composition) -> None:
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
-            CREATE CLUSTER cluster1 REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
-                    WORKERS 4
-                )
-            );
+            CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'clusterd_nopanic-4'));
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
@@ -1170,12 +1022,6 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
             port=6877,
             user="mz_system",
@@ -1184,15 +1030,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
-            CREATE CLUSTER cluster1 REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
-                    STORAGE ADDRESSES ['clusterd_nopanic:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
-                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
-                    WORKERS 4
-                )
-            );
+            CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'clusterd_nopanic-4'));
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
@@ -1483,29 +1321,11 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 REPLICAS (
-            replica1 (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 2
-            ),
-            replica2 (
-                STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
-                WORKERS 2
-            )
+            replica1 (SIZE 'clusterd1-2'),
+            replica2 (SIZE 'clusterd2-2')
         );
         CREATE TABLE t (a int);
         """
@@ -1601,12 +1421,6 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     # Helper function to get reconciliation metrics for clusterd.
     def fetch_reconciliation_metrics() -> tuple[int, int]:
         metrics = c.exec(
@@ -1630,13 +1444,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-1'));
         SET cluster = cluster1;
 
         -- index on table
@@ -1693,22 +1501,10 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-1'));
         SET cluster = cluster1;
 
         -- index on table
@@ -1778,20 +1574,8 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     c.up("materialized", "clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (r (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-1'));
 
         CREATE TABLE t1 (a int);
         CREATE TABLE t2 (a int);
@@ -1876,22 +1660,10 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     # Set up a dataflow on clusterd.
     c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-2'));
         SET cluster = cluster1;
         """
     )
@@ -1948,9 +1720,6 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
     c.testdrive(
         input=dedent(
             """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
-
             $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
             {
               "name": "clusterd1",
@@ -1983,12 +1752,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
               "enabled": true
             }
 
-            > CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                STORAGE ADDRESSES ['toxiproxy:2103'],
-                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                COMPUTE ADDRESSES ['toxiproxy:2102'],
-                WORKERS 2));
+            > CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'toxiproxy-2'));
 
             > SELECT mz_internal.mz_sleep(1);
             <null>
@@ -2131,22 +1895,10 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         ).stdout
         return Metrics(resp)
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     # Set up a cluster with a couple dataflows.
     c.sql(
         """
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'clusterd1-1'));
         SET cluster = cluster1;
 
         CREATE TABLE t (a int);

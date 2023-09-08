@@ -10,6 +10,7 @@
 # This mzcompose currently tests `UPSERT` sources with `DISK` configured.
 # TODO(guswynn): move ALL upsert-related tests into this directory.
 
+import json
 from pathlib import Path
 
 from materialize import ci_util
@@ -23,6 +24,23 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
 
+static_replicas = {
+    "clusterd1": {
+        "allocation": {
+            "workers": 4,
+            "scale": 1,
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": ["clusterd1:2100"],
+            "storage": ["clusterd1:2103"],
+            "compute": ["clusterd1:2102"],
+            "computectl": ["clusterd1:2101"],
+        },
+    }
+}
+
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
@@ -30,10 +48,10 @@ SERVICES = [
     Materialized(
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
+            f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
         ],
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
-            "enable_unmanaged_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
         },
         environment_extra=materialized_environment_extra,
@@ -105,6 +123,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         default_size=args.default_size,
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
+            f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
         ],
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
@@ -165,6 +184,7 @@ def workflow_rehydration(c: Composition) -> None:
             Materialized(
                 options=[
                     "--orchestrator-process-scratch-directory=/scratch",
+                    f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
                 ],
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
@@ -193,6 +213,7 @@ def workflow_rehydration(c: Composition) -> None:
             Materialized(
                 options=[
                     "--orchestrator-process-scratch-directory=/scratch",
+                    f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
                 ],
                 additional_system_parameter_defaults={
                     # Force backpressure to be enabled.
@@ -303,6 +324,9 @@ def workflow_incident_49(c: Composition) -> None:
         (
             "with DISK",
             Materialized(
+                options=[
+                    f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+                ],
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
@@ -313,6 +337,9 @@ def workflow_incident_49(c: Composition) -> None:
         (
             "without DISK",
             Materialized(
+                options=[
+                    f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+                ],
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "false",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
@@ -415,6 +442,7 @@ def workflow_autospill(c: Composition) -> None:
         Materialized(
             options=[
                 "--orchestrator-process-scratch-directory=/mzdata/source_data",
+                f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
             ],
             additional_system_parameter_defaults={
                 "upsert_source_disk_default": "true",
