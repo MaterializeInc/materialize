@@ -17,8 +17,8 @@ class TemporalTypes(Check):
         return Testdrive(
             dedent(
                 """
-            > CREATE TABLE temporal_types (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, timestamptz_col TIMESTAMPTZ, interval_col INTERVAL);
-            > INSERT INTO temporal_types VALUES ('2010-10-10', '10:10:10', '2010-10-10 10:10:10+00','2010-10-10 10:10:10+00', INTERVAL '0 day');
+            > CREATE TABLE temporal_types (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, timestamptz_col TIMESTAMPTZ, timestamp_prec_col TIMESTAMP(3), timestamptz_prec_col TIMESTAMPTZ(1), interval_col INTERVAL);
+            > INSERT INTO temporal_types VALUES ('2010-10-10', '10:10:10', '2010-10-10 10:10:10+00','2010-10-10 10:10:10+00', '2010-10-10 10:10:10.123456789+00','2010-10-10 10:10:10.123456789+00', INTERVAL '0 day');
         """
             )
         )
@@ -34,15 +34,19 @@ class TemporalTypes(Check):
                   time_col, '10:10:10'::time AS time_col2,
                   timestamp_col, '2010-10-10 10:10:10+01'::timestamp AS timestamp_col2,
                   timestamptz_col, '2010-10-10 10:10:10+01'::timestamptz AS timestamptz_col2,
+                  timestamp_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamp(3) AS timestamp_prec_col2,
+                  timestamptz_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamptz(1) AS timestamptz_prec_col2,
                   interval_col, INTERVAL '1 day' AS interval_col2
                   FROM temporal_types
                   WHERE date_col >= '2010-10-10'::DATE
                   AND time_col >= '10:10:10'::TIME
                   AND timestamp_col >= '2010-10-10 10:10:10+00'::TIMESTAMP
                   AND timestamptz_col >= '2010-10-10 10:10:10+00'::TIMESTAMPTZ
+                  AND timestamp_prec_col >= '2010-10-10 10:10:10+00'::TIMESTAMP
+                  AND timestamptz_prec_col >= '2010-10-10 10:10:10+00'::TIMESTAMPTZ
                   AND interval_col >= INTERVAL '0 day';
 
-                > INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11+01', '2011-11-11 11:11:11+01', INTERVAL '1 day');
+                > INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11+01', '2011-11-11 11:11:11+01', '2011-11-11 11:11:11.23456789+01', '2011-11-11 11:11:11.23456789+01', INTERVAL '1 day');
                 """,
                 """
                 > CREATE MATERIALIZED VIEW date_view2 AS
@@ -51,15 +55,19 @@ class TemporalTypes(Check):
                   time_col, '10:10:10'::time AS time_col2,
                   timestamp_col, '2010-10-10 10:10:10+01'::timestamp AS timestamp_col2,
                   timestamptz_col, '2010-10-10 10:10:10+01'::timestamptz AS timestamptz_col2,
+                  timestamp_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamp(3) AS timestamp_prec_col2,
+                  timestamptz_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamptz(1) AS timestamptz_prec_col2,
                   interval_col, INTERVAL '1 day' AS interval_col2
                   FROM temporal_types
                   WHERE date_col >= '2010-10-10'::DATE
                   AND time_col >= '10:10:10'::TIME
                   AND timestamp_col >= '2010-10-10 10:10:10+00'::TIMESTAMP
                   AND timestamptz_col >= '2010-10-10 10:10:10+00'::TIMESTAMPTZ
+                  AND timestamp_prec_col >= '2010-10-10 10:10:10+00'::TIMESTAMP
+                  AND timestamptz_prec_col >= '2010-10-10 10:10:10+00'::TIMESTAMPTZ
                   AND interval_col >= INTERVAL '0 day';
 
-                > INSERT INTO temporal_types VALUES ('2012-12-12', '12:12:12', '2012-12-12 12:12:12+02', '2012-12-12 12:12:12+02', INTERVAL '2 day');
+                > INSERT INTO temporal_types VALUES ('2012-12-12', '12:12:12', '2012-12-12 12:12:12+02', '2012-12-12 12:12:12+02', '2012-12-12 12:12:12.3456789+02', '2012-12-12 12:12:12.3456789+02', INTERVAL '2 day');
                 """,
             ]
         ]
@@ -69,14 +77,14 @@ class TemporalTypes(Check):
             dedent(
                 """
                 > SELECT * FROM date_view1;
-                2010-10-10 2010-10-10 10:10:10 10:10:10 "2010-10-10 10:10:10" "2010-10-10 10:10:10" "2010-10-10 10:10:10 UTC" "2010-10-10 09:10:10 UTC" 00:00:00 "1 day"
-                2011-11-11 2010-10-10 11:11:11 10:10:10 "2011-11-11 11:11:11" "2010-10-10 10:10:10" "2011-11-11 10:11:11 UTC" "2010-10-10 09:10:10 UTC" "1 day" "1 day"
-                2012-12-12 2010-10-10 12:12:12 10:10:10 "2012-12-12 12:12:12" "2010-10-10 10:10:10" "2012-12-12 10:12:12 UTC" "2010-10-10 09:10:10 UTC" "2 days" "1 day"
+                2010-10-10 2010-10-10 10:10:10 10:10:10 "2010-10-10 10:10:10" "2010-10-10 10:10:10" "2010-10-10 10:10:10 UTC" "2010-10-10 09:10:10 UTC" "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.100 UTC" "2010-10-10 09:10:10.100 UTC" 00:00:00 "1 day"
+                2011-11-11 2010-10-10 11:11:11 10:10:10 "2011-11-11 11:11:11" "2010-10-10 10:10:10" "2011-11-11 10:11:11 UTC" "2010-10-10 09:10:10 UTC" "2011-11-11 11:11:11.235" "2010-10-10 10:10:10.123" "2011-11-11 10:11:11.200 UTC" "2010-10-10 09:10:10.100 UTC" "1 day" "1 day"
+                2012-12-12 2010-10-10 12:12:12 10:10:10 "2012-12-12 12:12:12" "2010-10-10 10:10:10" "2012-12-12 10:12:12 UTC" "2010-10-10 09:10:10 UTC" "2012-12-12 12:12:12.346" "2010-10-10 10:10:10.123" "2012-12-12 10:12:12.300 UTC" "2010-10-10 09:10:10.100 UTC" "2 days" "1 day"
 
                 > SELECT * FROM date_view2;
-                2010-10-10 2010-10-10 10:10:10 10:10:10 "2010-10-10 10:10:10" "2010-10-10 10:10:10" "2010-10-10 10:10:10 UTC" "2010-10-10 09:10:10 UTC" 00:00:00 "1 day"
-                2011-11-11 2010-10-10 11:11:11 10:10:10 "2011-11-11 11:11:11" "2010-10-10 10:10:10" "2011-11-11 10:11:11 UTC" "2010-10-10 09:10:10 UTC" "1 day" "1 day"
-                2012-12-12 2010-10-10 12:12:12 10:10:10 "2012-12-12 12:12:12" "2010-10-10 10:10:10" "2012-12-12 10:12:12 UTC" "2010-10-10 09:10:10 UTC" "2 days" "1 day"
+                2010-10-10 2010-10-10 10:10:10 10:10:10 "2010-10-10 10:10:10" "2010-10-10 10:10:10" "2010-10-10 10:10:10 UTC" "2010-10-10 09:10:10 UTC" "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.100 UTC" "2010-10-10 09:10:10.100 UTC" 00:00:00 "1 day"
+                2011-11-11 2010-10-10 11:11:11 10:10:10 "2011-11-11 11:11:11" "2010-10-10 10:10:10" "2011-11-11 10:11:11 UTC" "2010-10-10 09:10:10 UTC" "2011-11-11 11:11:11.235" "2010-10-10 10:10:10.123" "2011-11-11 10:11:11.200 UTC" "2010-10-10 09:10:10.100 UTC" "1 day" "1 day"
+                2012-12-12 2010-10-10 12:12:12 10:10:10 "2012-12-12 12:12:12" "2010-10-10 10:10:10" "2012-12-12 10:12:12 UTC" "2010-10-10 09:10:10 UTC" "2012-12-12 12:12:12.346" "2010-10-10 10:10:10.123" "2012-12-12 10:12:12.300 UTC" "2010-10-10 09:10:10.100 UTC" "2 days" "1 day"
             """
             )
         )
