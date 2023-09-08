@@ -19,7 +19,7 @@
 #
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
-# Send a notification to the #eng-design-docs Slack channel when a new
+# Send a notification to the #epd-design-docs Slack channel when a new
 # design doc is added.
 #
 # A notification is sent when all of these conditions are true:
@@ -56,7 +56,7 @@ jobs:
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
-          channel: eng-design-docs
+          channel: epd-design-docs
           custom_payload: |
             {
               "blocks": [
