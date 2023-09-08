@@ -712,6 +712,10 @@ impl CatalogState {
         }
     }
 
+    fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
+        self.roles_by_id.get(id)
+    }
+
     pub fn get_role(&self, id: &RoleId) -> &Role {
         self.roles_by_id.get(id).expect("catalog out of sync")
     }
@@ -5473,6 +5477,10 @@ impl Catalog {
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
         self.state.get_database(id)
+    }
+
+    pub fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
+        self.state.try_get_role(id)
     }
 
     pub fn get_role(&self, id: &RoleId) -> &Role {

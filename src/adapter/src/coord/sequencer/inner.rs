@@ -337,6 +337,7 @@ impl Coordinator {
             let conn_id = ctx.session().conn_id().clone();
             let connection_context = self.connection_context.clone();
             let otel_ctx = OpenTelemetryContext::obtain();
+            let role_metadata = ctx.session().role_metadata().clone();
 
             let connection = plan
                 .connection
@@ -364,6 +365,7 @@ impl Coordinator {
                             dependency_ids: resolved_ids.0,
                             cluster_id: None,
                             replica_id: None,
+                            role_metadata,
                         },
                         otel_ctx,
                     },
@@ -2095,6 +2097,7 @@ impl Coordinator {
             dependency_ids: source_ids.clone(),
             cluster_id: Some(cluster.id()),
             replica_id: target_replica,
+            role_metadata: session.role_metadata().clone(),
         };
 
         Ok(PeekStageOptimize {
@@ -3255,6 +3258,7 @@ impl Coordinator {
                     dependency_ids: source_ids,
                     cluster_id: Some(cluster_id),
                     replica_id: None,
+                    role_metadata: ctx.session().role_metadata().clone(),
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
