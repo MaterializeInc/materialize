@@ -5014,9 +5014,6 @@ struct CachedStatisticsOracle {
     cache: BTreeMap<GlobalId, usize>,
 }
 
-const OPTIMIZER_MAX_STATS_WAIT: Duration = Duration::from_millis(250);
-const OPTIMIZER_ONESHOT_STATS_WAIT: Duration = Duration::from_millis(10);
-
 impl CachedStatisticsOracle {
     pub async fn new<T: Clone + std::fmt::Debug + timely::PartialOrder + Send + Sync>(
         ids: &BTreeSet<GlobalId>,
@@ -5070,9 +5067,11 @@ impl Coordinator {
 
         let timeout = if is_oneshot {
             // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
-            OPTIMIZER_ONESHOT_STATS_WAIT
+            self.catalog()
+                .system_config()
+                .optimizer_oneshot_stats_timeout()
         } else {
-            OPTIMIZER_MAX_STATS_WAIT
+            self.catalog().system_config().optimizer_stats_timeout()
         };
 
         let cached_stats = mz_ore::future::timeout(
@@ -5084,6 +5083,12 @@ impl Coordinator {
         match cached_stats {
             Ok(stats) => Ok(Box::new(stats)),
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                warn!(
+                    is_oneshot = is_oneshot,
+                    "optimizer statistics collection timed out after {}ms",
+                    timeout.as_millis()
+                );
+
                 Ok(Box::new(EmptyStatisticsOracle))
             }
             Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),

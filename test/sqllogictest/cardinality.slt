@@ -441,3 +441,81 @@ Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
 
 EOF
+
+# timeouts should work
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '1us';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SHOW optimizer_oneshot_stats_timeout;
+----
+1 us
+COMPLETE 1
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN cities ON t.y = cities.pop JOIN states ON t2.y = states.pop;
+----
+Explained Query:
+  Project (#0, #1, #0, #3..=#5, #1, #7, #3)
+    Join on=(#0 = #2 AND #1 = #6 AND #3 = #8) type=differential
+      implementation
+        %0:t[#0]KA » %1:t2[#0]KA » %2:cities[#2]K » %3:states[#1]K
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t t_x=[differential join]
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t2 tt_x=[differential join]
+      ArrangeBy keys=[[#2]]
+        Filter (#2) IS NOT NULL
+          ReadIndex on=cities cities_name=[*** full scan ***]
+      ArrangeBy keys=[[#1]]
+        Filter (#1) IS NOT NULL
+          ReadIndex on=states state_state=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_x (differential join)
+  - materialize.public.tt_x (differential join)
+  - materialize.public.cities_name (*** full scan ***)
+  - materialize.public.state_state (*** full scan ***)
+
+EOF
+
+# restore and make sure we're good
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '20ms';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SHOW optimizer_oneshot_stats_timeout;
+----
+20 ms
+COMPLETE 1
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN cities ON t.y = cities.pop JOIN states ON t2.y = states.pop;
+----
+Explained Query:
+  Project (#0, #1, #0, #3..=#5, #1, #7, #3)
+    Join on=(#0 = #2 AND #1 = #6 AND #3 = #8) type=differential
+      implementation
+        %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:cities[#2]K|0| » %3:states[#1]K|0|
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t t_x=[differential join]
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t2 tt_x=[differential join]
+      ArrangeBy keys=[[#2]]
+        Filter (#2) IS NOT NULL
+          ReadIndex on=cities cities_name=[*** full scan ***]
+      ArrangeBy keys=[[#1]]
+        Filter (#1) IS NOT NULL
+          ReadIndex on=states state_state=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_x (differential join)
+  - materialize.public.tt_x (differential join)
+  - materialize.public.cities_name (*** full scan ***)
+  - materialize.public.state_state (*** full scan ***)
+
+EOF
