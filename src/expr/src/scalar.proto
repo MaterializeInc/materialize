@@ -239,13 +239,13 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_interval_to_string = 108;
         google.protobuf.Empty cast_interval_to_time = 109;
         google.protobuf.Empty cast_timestamp_to_date = 110;
-        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_to_timestamp_tz = 311;
-        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_to_timestamp = 306;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_to_timestamp_tz = 311;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_to_timestamp = 306;
         google.protobuf.Empty cast_timestamp_to_string = 112;
         google.protobuf.Empty cast_timestamp_to_time = 113;
         google.protobuf.Empty cast_timestamp_tz_to_date = 114;
-        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_tz_to_timestamp = 312;
-        mz_repr.adt.timestamp.ProtoOptionalTimestampPrecision cast_timestamp_tz_to_timestamp_tz = 313;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_tz_to_timestamp = 312;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_tz_to_timestamp_tz = 313;
         google.protobuf.Empty cast_timestamp_tz_to_string = 116;
         google.protobuf.Empty cast_timestamp_tz_to_time = 117;
         google.protobuf.Empty cast_pg_legacy_char_to_string = 118;

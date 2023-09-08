@@ -18,7 +18,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
-use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision, MAX_PRECISION};
 use mz_repr::{strconv, ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -71,7 +71,10 @@ sqlfunc!(
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampToTimestampTz(pub Option<TimestampPrecision>);
+pub struct CastTimestampToTimestampTz {
+    pub from: Option<TimestampPrecision>,
+    pub to: Option<TimestampPrecision>,
+}
 
 impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
     type Input = CheckedTimestamp<NaiveDateTime>;
@@ -81,22 +84,27 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
         &self,
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        let mut out = CheckedTimestamp::try_from(DateTime::<Utc>::from_utc(a.into(), Utc))?;
-        out.round_to_precision(self.0);
-        Ok(out)
+        let out = CheckedTimestamp::try_from(DateTime::<Utc>::from_utc(a.into(), Utc))?;
+        let updated = out.round_to_precision(self.to)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+        ScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
-        false
+        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
+        to_p >= from_p
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampTzToTimestamp(self.0))
+        to_unary!(super::CastTimestampTzToTimestamp {
+            from: self.from,
+            to: self.to
+        })
     }
 
     fn is_monotone(&self) -> bool {
@@ -113,7 +121,10 @@ impl fmt::Display for CastTimestampToTimestampTz {
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampToTimestamp(pub Option<TimestampPrecision>);
+pub struct CastTimestampToTimestamp {
+    pub from: Option<TimestampPrecision>,
+    pub to: Option<TimestampPrecision>,
+}
 
 impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
     type Input = CheckedTimestamp<NaiveDateTime>;
@@ -121,19 +132,21 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
 
     fn call(
         &self,
-        mut a: CheckedTimestamp<NaiveDateTime>,
+        a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        a.round_to_precision(self.0);
-        Ok(a)
+        let updated = a.round_to_precision(self.to)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+        ScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
-        false
+        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
+        to_p >= from_p
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -154,7 +167,10 @@ impl fmt::Display for CastTimestampToTimestamp {
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampTzToTimestamp(pub Option<TimestampPrecision>);
+pub struct CastTimestampTzToTimestamp {
+    pub from: Option<TimestampPrecision>,
+    pub to: Option<TimestampPrecision>,
+}
 
 impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestamp {
     type Input = CheckedTimestamp<DateTime<Utc>>;
@@ -164,22 +180,27 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestamp {
         &self,
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        let mut out = CheckedTimestamp::try_from(a.naive_utc())?;
-        out.round_to_precision(self.0);
-        Ok(out)
+        let out = CheckedTimestamp::try_from(a.naive_utc())?;
+        let updated = out.round_to_precision(self.to)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+        ScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
-        false
+        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
+        to_p >= from_p
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastTimestampToTimestampTz(self.0))
+        to_unary!(super::CastTimestampToTimestampTz {
+            from: self.from,
+            to: self.to
+        })
     }
 
     fn is_monotone(&self) -> bool {
@@ -196,7 +217,10 @@ impl fmt::Display for CastTimestampTzToTimestamp {
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampTzToTimestampTz(pub Option<TimestampPrecision>);
+pub struct CastTimestampTzToTimestampTz {
+    pub from: Option<TimestampPrecision>,
+    pub to: Option<TimestampPrecision>,
+}
 
 impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
     type Input = CheckedTimestamp<DateTime<Utc>>;
@@ -204,19 +228,21 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
 
     fn call(
         &self,
-        mut a: CheckedTimestamp<DateTime<Utc>>,
+        a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        a.round_to_precision(self.0);
-        Ok(a)
+        let updated = a.round_to_precision(self.to)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+        ScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        //TODO (mouli) Refactor out separate types if precision is same, which will preserve uniqueness.
-        false
+        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
+        to_p >= from_p
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -230,7 +256,7 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
 
 impl fmt::Display for CastTimestampTzToTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_to_timestamp")
+        f.write_str("timestamp_with_time_zone_to_timestamp_with_time_zone")
     }
 }
 

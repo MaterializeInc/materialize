@@ -5227,20 +5227,32 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastIntervalToTime(_) => CastIntervalToTime(()),
             UnaryFunc::CastTimestampToDate(_) => CastTimestampToDate(()),
             UnaryFunc::CastTimestampToTimestamp(func) => {
-                CastTimestampToTimestamp(func.0.into_proto())
+                CastTimestampToTimestamp(mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                })
             }
-            UnaryFunc::CastTimestampToTimestampTz(func) => {
-                CastTimestampToTimestampTz(func.0.into_proto())
-            }
+            UnaryFunc::CastTimestampToTimestampTz(func) => CastTimestampToTimestampTz(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
             UnaryFunc::CastTimestampToString(_) => CastTimestampToString(()),
             UnaryFunc::CastTimestampToTime(_) => CastTimestampToTime(()),
             UnaryFunc::CastTimestampTzToDate(_) => CastTimestampTzToDate(()),
-            UnaryFunc::CastTimestampTzToTimestampTz(func) => {
-                CastTimestampTzToTimestampTz(func.0.into_proto())
-            }
-            UnaryFunc::CastTimestampTzToTimestamp(func) => {
-                CastTimestampTzToTimestamp(func.0.into_proto())
-            }
+            UnaryFunc::CastTimestampTzToTimestampTz(func) => CastTimestampTzToTimestampTz(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
+            UnaryFunc::CastTimestampTzToTimestamp(func) => CastTimestampTzToTimestamp(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
             UnaryFunc::CastTimestampTzToString(_) => CastTimestampTzToString(()),
             UnaryFunc::CastTimestampTzToTime(_) => CastTimestampTzToTime(()),
             UnaryFunc::CastPgLegacyCharToString(_) => CastPgLegacyCharToString(()),
@@ -5638,20 +5650,30 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastIntervalToString(()) => Ok(impls::CastIntervalToString.into()),
                 CastIntervalToTime(()) => Ok(impls::CastIntervalToTime.into()),
                 CastTimestampToDate(()) => Ok(impls::CastTimestampToDate.into()),
-                CastTimestampToTimestamp(precision) => {
-                    Ok(impls::CastTimestampToTimestamp(precision.into_rust()?).into())
+                CastTimestampToTimestamp(precisions) => Ok(impls::CastTimestampToTimestamp {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
                 }
-                CastTimestampToTimestampTz(precision) => {
-                    Ok(impls::CastTimestampToTimestampTz(precision.into_rust()?).into())
+                .into()),
+                CastTimestampToTimestampTz(precisions) => Ok(impls::CastTimestampToTimestampTz {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
                 }
+                .into()),
                 CastTimestampToString(()) => Ok(impls::CastTimestampToString.into()),
                 CastTimestampToTime(()) => Ok(impls::CastTimestampToTime.into()),
                 CastTimestampTzToDate(()) => Ok(impls::CastTimestampTzToDate.into()),
-                CastTimestampTzToTimestamp(precision) => {
-                    Ok(impls::CastTimestampTzToTimestamp(precision.into_rust()?).into())
+                CastTimestampTzToTimestamp(precisions) => Ok(impls::CastTimestampTzToTimestamp {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
                 }
-                CastTimestampTzToTimestampTz(precision) => {
-                    Ok(impls::CastTimestampTzToTimestampTz(precision.into_rust()?).into())
+                .into()),
+                CastTimestampTzToTimestampTz(precisions) => {
+                    Ok(impls::CastTimestampTzToTimestampTz {
+                        from: precisions.from.into_rust()?,
+                        to: precisions.to.into_rust()?,
+                    }
+                    .into())
                 }
                 CastTimestampTzToString(()) => Ok(impls::CastTimestampTzToString.into()),
                 CastTimestampTzToTime(()) => Ok(impls::CastTimestampTzToTime.into()),

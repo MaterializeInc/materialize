@@ -366,26 +366,30 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
 
         // TIMESTAMP
         (Timestamp, Date) => Assignment: CastTimestampToDate(func::CastTimestampToDate),
-        (Timestamp, TimestampTz) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-            let p = to_type.unwrap_timestamp_precision();
-            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestampTz(func::CastTimestampToTimestampTz(p))))
+        (Timestamp, TimestampTz) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestampTz(func::CastTimestampToTimestampTz{from, to})))
         }),
-        (Timestamp, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-            let p = to_type.unwrap_timestamp_precision();
-            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestamp(func::CastTimestampToTimestamp(p))))
+        (Timestamp, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestamp(func::CastTimestampToTimestamp{from, to})))
         }),
         (Timestamp, Time) => Assignment: CastTimestampToTime(func::CastTimestampToTime),
         (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
 
         // TIMESTAMPTZ
         (TimestampTz, Date) => Assignment: CastTimestampTzToDate(func::CastTimestampTzToDate),
-        (TimestampTz, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-            let p = to_type.unwrap_timestamp_precision();
-            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp(p))))
+        (TimestampTz, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp{from, to})))
         }),
-        (TimestampTz, TimestampTz) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-            let p = to_type.unwrap_timestamp_precision();
-            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestampTz(func::CastTimestampTzToTimestampTz(p))))
+        (TimestampTz, TimestampTz) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestampTz(func::CastTimestampTzToTimestampTz{from, to})))
         }),
         (TimestampTz, Time) => Assignment: CastTimestampTzToTime(func::CastTimestampTzToTime),
         (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),

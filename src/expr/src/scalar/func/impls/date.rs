@@ -44,10 +44,10 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestamp {
     type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
     fn call(&self, a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        let mut out =
+        let out =
             CheckedTimestamp::from_timestamplike(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
-        out.round_to_precision(self.0);
-        Ok(out)
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -83,12 +83,12 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
     type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
     fn call(&self, a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        let mut out = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
+        let out = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
             NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
             Utc,
         ))?;
-        out.round_to_precision(self.0);
-        Ok(out)
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {

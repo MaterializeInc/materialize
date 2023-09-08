@@ -215,9 +215,9 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
     type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
     fn call(&self, a: &'a str) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        let mut out = strconv::parse_timestamp(a)?;
-        out.round_to_precision(self.0);
-        Ok(out)
+        let out = strconv::parse_timestamp(a)?;
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -262,9 +262,9 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
     type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
     fn call(&self, a: &'a str) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        let mut out = strconv::parse_timestamptz(a)?;
-        out.round_to_precision(self.0);
-        Ok(out)
+        let out = strconv::parse_timestamptz(a)?;
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {

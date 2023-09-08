@@ -21,7 +21,6 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::ops::Sub;
-use std::time::Duration as StdDuration;
 
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
@@ -798,44 +797,53 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
     }
 
     /// Rounds the timestamp to the specified number of digits of precision.
-    pub fn round_to_precision(&mut self, precision: Option<TimestampPrecision>) {
-        if let Some(precision) = precision {
-            // maximum precision is micros
-            let power = 6_u32
-                .checked_sub(precision.into_u8().into())
-                .expect("precision fits in micros");
-            let round_to = Duration::from_std(StdDuration::from_micros(10_u64.pow(power)))
-                .expect("duration fits in chrono duration");
-            let original = self.date_time();
+    pub fn round_to_precision(
+        &self,
+        precision: Option<TimestampPrecision>,
+    ) -> Result<CheckedTimestamp<T>, TimestampError> {
+        let precision = precision.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        // maximum precision is micros
+        let power = MAX_PRECISION
+            .checked_sub(precision)
+            .expect("precision fits in micros");
+        let round_to_micros = 10_i64.pow(power.into());
 
-            // this is copied from [`chrono::round::duration_round`]
-            // but using microseconds instead of nanoseconds precision
-            let new_dt = round_to.num_microseconds().map(|span| {
-                let stamp = original.timestamp_micros();
-
-                if span == 0 {
-                    return original;
-                }
-                let delta_down = stamp % span;
-                if delta_down == 0 {
-                    original
-                } else {
-                    let (delta_up, delta_down) = if delta_down < 0 {
-                        (delta_down.abs(), span - delta_down.abs())
-                    } else {
-                        (span - delta_down, delta_down)
-                    };
-                    if delta_up <= delta_down {
-                        original + Duration::microseconds(delta_up)
-                    } else {
-                        original - Duration::microseconds(delta_down)
-                    }
-                }
-            });
-
-            let dt = new_dt.expect("rounding is valid in micros");
-            self.t = T::from_date_time(dt)
+        let mut original = self.date_time();
+        let nanoseconds = original.timestamp_subsec_nanos();
+        // truncating to microseconds does not round it up
+        // i.e. 123456789 will be truncated to 123456
+        original = original.truncate_microseconds();
+        // depending upon the 7th digit here, we'll be
+        // adding 1 millisecond
+        // so eventually 123456789 will be rounded to 123457
+        let seventh_digit = (nanoseconds % 1_000) / 100;
+        assert!(seventh_digit < 10);
+        if seventh_digit >= 5 {
+            original = original + Duration::microseconds(1);
         }
+        // this is copied from [`chrono::round::duration_round`]
+        // but using microseconds instead of nanoseconds precision
+        let stamp = original.timestamp_micros();
+        let dt = {
+            let delta_down = stamp % round_to_micros;
+            if delta_down == 0 {
+                original
+            } else {
+                let (delta_up, delta_down) = if delta_down < 0 {
+                    (delta_down.abs(), round_to_micros - delta_down.abs())
+                } else {
+                    (round_to_micros - delta_down, delta_down)
+                };
+                if delta_up <= delta_down {
+                    original + Duration::microseconds(delta_up)
+                } else {
+                    original - Duration::microseconds(delta_down)
+                }
+            }
+        };
+
+        let t = T::from_date_time(dt);
+        Self::from_timestamplike(t)
     }
 }
 
@@ -993,12 +1001,14 @@ mod test {
     }
 
     fn assert_round_to_precision(
-        mut dt: CheckedTimestamp<NaiveDateTime>,
+        dt: CheckedTimestamp<NaiveDateTime>,
         precision: u8,
         expected: i64,
     ) {
-        dt.round_to_precision(Some(TimestampPrecision(precision)));
-        assert_eq!(expected, dt.timestamp_micros());
+        let updated = dt
+            .round_to_precision(Some(TimestampPrecision(precision)))
+            .unwrap();
+        assert_eq!(expected, updated.timestamp_micros());
     }
 
     #[mz_ore::test]
@@ -1016,7 +1026,7 @@ mod test {
         assert_round_to_precision(date, 3, 123000);
         assert_round_to_precision(date, 4, 123500);
         assert_round_to_precision(date, 5, 123460);
-        assert_round_to_precision(date, 6, 123456);
+        assert_round_to_precision(date, 6, 123457);
 
         let low =
             CheckedTimestamp::try_from(LOW_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
@@ -1027,7 +1037,7 @@ mod test {
         assert_round_to_precision(low, 3, -210863606399877000);
         assert_round_to_precision(low, 4, -210863606399876500);
         assert_round_to_precision(low, 5, -210863606399876540);
-        assert_round_to_precision(low, 6, -210863606399876544);
+        assert_round_to_precision(low, 6, -210863606399876543);
 
         let high =
             CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
@@ -1038,24 +1048,42 @@ mod test {
         assert_round_to_precision(high, 3, 8210298326400123000);
         assert_round_to_precision(high, 4, 8210298326400123500);
         assert_round_to_precision(high, 5, 8210298326400123460);
-        assert_round_to_precision(high, 6, 8210298326400123456);
+        assert_round_to_precision(high, 6, 8210298326400123457);
     }
 
     #[mz_ore::test]
     fn test_precision_edge_cases() {
         let result = mz_ore::panic::catch_unwind(|| {
-            let mut date =
+            let date =
                 CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
                     .unwrap();
-            date.round_to_precision(Some(TimestampPrecision(7)));
+            let _ = date.round_to_precision(Some(TimestampPrecision(7)));
         });
         assert!(result.is_err());
 
-        let mut date =
+        let date =
             CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
                 .unwrap();
-        date.round_to_precision(None);
+        let date = date.round_to_precision(None).unwrap();
         assert_eq!(123456, date.timestamp_micros());
+    }
+
+    #[mz_ore::test]
+    fn test_equality_with_same_precision() {
+        let date1 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456).unwrap())
+                .unwrap();
+        let date1 = date1
+            .round_to_precision(Some(TimestampPrecision(0)))
+            .unwrap();
+
+        let date2 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap())
+                .unwrap();
+        let date2 = date2
+            .round_to_precision(Some(TimestampPrecision(0)))
+            .unwrap();
+        assert_eq!(date1, date2);
     }
 
     proptest! {
