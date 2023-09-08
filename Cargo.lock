@@ -4455,10 +4455,11 @@ name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
  "differential-dataflow",
+ "futures",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "serde_json",
+ "prost",
  "timely",
  "tokio",
  "tracing",

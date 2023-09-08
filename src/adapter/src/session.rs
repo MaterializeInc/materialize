@@ -699,8 +699,9 @@ impl<T: TimestampManipulation> Session<T> {
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
         self.role_metadata = Some(RoleMetadata {
-            current_role: role_id,
+            authenticated_role: role_id,
             session_role: role_id,
+            current_role: role_id,
         });
     }
 
@@ -714,18 +715,6 @@ impl<T: TimestampManipulation> Session<T> {
             .expect("role_metadata invariant violated")
     }
 
-    /// Returns the session's current role ID.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn current_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .current_role
-    }
-
     /// Returns the session's session role ID.
     ///
     /// # Panics
@@ -736,6 +725,18 @@ impl<T: TimestampManipulation> Session<T> {
             .as_ref()
             .expect("role_metadata invariant violated")
             .session_role
+    }
+
+    /// Returns the session's current role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn current_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .current_role
     }
 }
 
