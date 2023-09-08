@@ -301,6 +301,7 @@ mod support {
                 MirRelationExpr::Get {
                     id: Id::Local(id),
                     typ,
+                    access_strategy: _,
                 } => {
                     if let Some(new_type) = types.get(id) {
                         // Assert that the column length has not changed.

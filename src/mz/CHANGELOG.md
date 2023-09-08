@@ -2,6 +2,14 @@
 
 All notable changes to the `mz` CLI will be documented in this file.
 
+
+## [0.2.1] - 2023-09-07
+
+This version only implements changes in the release process.
+
+### Added
+ - A new file in the binaries endpoint storing the latest `mz` version.
+
 ## [0.2.0] - 2023-09-04
 
 This version implements fixes from internal feedback and pending features.

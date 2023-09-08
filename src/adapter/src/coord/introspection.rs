@@ -23,6 +23,7 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
 use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, SubscribeFrom};
+use mz_sql::rbac;
 use smallvec::SmallVec;
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
@@ -30,7 +31,7 @@ use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
-use crate::{rbac, AdapterError};
+use crate::AdapterError;
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.

@@ -108,7 +108,15 @@ filtered out.
 
 ## Webhook URL
 
-After creating a webhook source, send **POST** requests to `https://<HOST>/api/webhook/<database>/<schema>/<src_name>`.
+The URL which can be used to **POST** events to your webhook source is stored in the
+[`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources) system table.
+
+In general these URLs have the following format:
+
+```
+https://<HOST>/api/webhook/<database>/<schema>/<src_name>
+```
+
 Where `<HOST>` is the URL for your Materialize instance, which can be found on the [Materialize Web
 Console](https://console.materialize.com/). Then `<database>` and `<schema>` are the database and
 schema where you created your source, and `<src_name>` is the name you provided for your source at

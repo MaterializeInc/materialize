@@ -81,7 +81,7 @@ impl ColumnKnowledge {
                 MirRelationExpr::ArrangeBy { input, .. } => {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
-                MirRelationExpr::Get { id, typ } => {
+                MirRelationExpr::Get { id, typ, .. } => {
                     Ok(knowledge.get(id).cloned().unwrap_or_else(|| {
                         typ.column_types.iter().map(DatumKnowledge::from).collect()
                     }))

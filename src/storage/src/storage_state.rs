@@ -110,7 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
@@ -711,23 +711,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             sink_description,
                         ));
                     }
-
-                    // Continue with other commands.
-                    return;
                 }
 
-                // Suspensions might come in for source exports; they are suspended and
-                // restarted alongside their primary sources.
-                if self
+                if !self
                     .storage_state
                     .ingestions
                     .values()
                     .any(|v| v.source_exports.contains_key(&id))
                 {
-                    return;
+                    // Our current approach to dropping a source results in a race between shard
+                    // finalization (which happens in the controller) and dataflow shutdown (which
+                    // happens in clusterd). If a source is created and dropped fast enough -or the
+                    // two commands get sufficiently delayed- then it's possible to receive a
+                    // SuspendAndRestart command for an unknown source. We cannot assert that this
+                    // never happens but we log an error here to track how often this happens.
+                    error!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
                 }
-
-                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,

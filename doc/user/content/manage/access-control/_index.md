@@ -1,6 +1,6 @@
 ---
-title: "Role-based access control"
-description: "Manage roles, privileges, and other access control options in Materialize"
+title: "Access control"
+description: ""
 disable_list: true
 menu:
   main:
@@ -9,6 +9,10 @@ menu:
     identifier: 'access-control'
     weight: 15
 ---
+
+## Organization
+
+## Role-based access control (RBAC)
 
 This page introduces role-based access management (RBAC) in Materialize. RBAC
 allows you to apply granular privileges to your Materialize objects and clusters. Organizations

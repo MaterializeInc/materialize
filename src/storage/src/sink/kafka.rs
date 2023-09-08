@@ -224,16 +224,17 @@ impl KafkaSinkSendRetryManager {
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
+    inner: MzClientContext,
 }
 
 impl ClientContext for SinkProducerContext {
     // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
     // implementation.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        MzClientContext.log(level, fac, log_message)
+        self.inner.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        MzClientContext.error(error, reason)
+        self.inner.error(error, reason)
     }
 }
 impl ProducerContext for SinkProducerContext {
@@ -425,6 +426,7 @@ impl KafkaSinkState {
         let producer_context = SinkProducerContext {
             metrics: Arc::clone(&metrics),
             retry_manager: Arc::clone(&retry_manager),
+            inner: MzClientContext::default(),
         };
 
         let healthchecker = healthchecker.map(Mutex::new);
@@ -492,7 +494,7 @@ impl KafkaSinkState {
                 .connection
                 .create_with_context(
                     connection_context,
-                    MzClientContext,
+                    MzClientContext::default(),
                     &btreemap! {
                         "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
                         "isolation.level" => "read_committed".into(),

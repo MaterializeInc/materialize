@@ -255,7 +255,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// Expressions that for each row prepare the arguments to `func`.
         exprs: Vec<MirScalarExpr>,
         /// Linear operator to apply to each record produced by `func`.
-        mfp: MapFilterProject,
+        mfp_after: MapFilterProject,
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
@@ -469,7 +469,7 @@ impl Arbitrary for Plan {
                         input: input.into(),
                         func,
                         exprs,
-                        mfp,
+                        mfp_after: mfp,
                         input_key,
                     })
                     .boxed(),
@@ -649,14 +649,14 @@ impl RustType<ProtoPlan> for Plan {
                     input,
                     func,
                     exprs,
-                    mfp,
+                    mfp_after,
                     input_key,
                 } => FlatMap(
                     ProtoPlanFlatMap {
                         input: Some(input.into_proto()),
                         func: Some(func.into_proto()),
                         exprs: exprs.into_proto(),
-                        mfp: Some(mfp.into_proto()),
+                        mfp_after: Some(mfp_after.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
                     }
                     .into(),
@@ -808,7 +808,9 @@ impl RustType<ProtoPlan> for Plan {
                 input: proto.input.into_rust_if_some("ProtoPlanFlatMap::input")?,
                 func: proto.func.into_rust_if_some("ProtoPlanFlatMap::func")?,
                 exprs: proto.exprs.into_rust()?,
-                mfp: proto.mfp.into_rust_if_some("ProtoPlanFlatMap::mfp")?,
+                mfp_after: proto
+                    .mfp_after
+                    .into_rust_if_some("ProtoPlanFlatMap::mfp_after")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
             Join(proto) => Plan::Join {
@@ -1083,7 +1085,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 // The plan, not arranged in any way.
                 (plan, AvailableCollections::new_raw())
             }
-            MirRelationExpr::Get { id, typ: _ } => {
+            MirRelationExpr::Get { id, typ: _, .. } => {
                 // This stage can absorb arbitrary MFP operators.
                 let mut mfp = mfp.take();
                 // If `mfp` is the identity, we can surface all imported arrangements.
@@ -1290,7 +1292,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         input: Box::new(input),
                         func: func.clone(),
                         exprs: exprs.clone(),
-                        mfp,
+                        mfp_after: mfp,
                         input_key,
                     },
                     AvailableCollections::new_raw(),
@@ -1319,7 +1321,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let (plan, missing) = match implementation {
-                    IndexedFilter(_id, key, _val) => {
+                    IndexedFilter(_coll_id, _idx_id, key, _val) => {
                         // Start with the constant input. (This used to be important before #14059
                         // was fixed.)
                         let start: usize = 1;
@@ -2114,7 +2116,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input_key,
                     func,
                     exprs,
-                    mfp,
+                    mfp_after: mfp,
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2123,7 +2125,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_key: input_key.clone(),
                         func: func.clone(),
                         exprs: exprs.clone(),
-                        mfp: mfp.clone(),
+                        mfp_after: mfp.clone(),
                     })
                     .collect(),
                 Plan::Join { inputs, plan } => {
@@ -2271,7 +2273,7 @@ impl<T> CollectionPlan for Plan<T> {
                 input,
                 func: _,
                 exprs: _,
-                mfp: _,
+                mfp_after: _,
                 input_key: _,
             }
             | Plan::ArrangeBy {
