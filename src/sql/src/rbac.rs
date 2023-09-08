@@ -18,6 +18,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::QualifiedReplica;
+use tracing::debug;
 
 use crate::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
@@ -199,6 +200,8 @@ pub fn check_plan(
         resolved_ids,
         role_metadata.current_role,
     );
+
+    debug!("rbac requirements {rbac_requirements:?} for plan {plan:?}");
 
     if rbac_requirements.item_usage {
         check_item_usage(catalog, role_metadata, session_vars, resolved_ids)?;
