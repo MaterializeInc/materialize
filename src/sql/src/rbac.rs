@@ -71,24 +71,6 @@ macro_rules! rbac_preamble {
     };
 }
 
-/// RBAC requirements for executing a given plan.
-struct RbacRequirements {
-    /// The role memberships required.
-    role_membership: BTreeSet<RoleId>,
-    /// The object ownerships required.
-    ownership: Vec<ObjectId>,
-    /// The privileges required. The tuples are of the form:
-    /// (What object the privilege is on, What privilege is required, Who must possess the privilege).
-    privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
-    /// true if the plan requires USAGE privileges on all applicable items, false otherwise.
-    ///
-    /// Most plans will be true but some plans, like SHOW CREATE, can reference an item without
-    /// requiring any privileges on that item.
-    item_usage: bool,
-    /// Some action if superuser is required to perform that action, None otherwise.
-    superuser_action: Option<String>,
-}
-
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -138,6 +120,37 @@ impl UnauthorizedError {
             UnauthorizedError::Ownership { .. }
             | UnauthorizedError::RoleMembership { .. }
             | UnauthorizedError::Privilege { .. } => None,
+        }
+    }
+}
+
+/// RBAC requirements for executing a given plan.
+#[derive(Debug)]
+struct RbacRequirements {
+    /// The role memberships required.
+    role_membership: BTreeSet<RoleId>,
+    /// The object ownerships required.
+    ownership: Vec<ObjectId>,
+    /// The privileges required. The tuples are of the form:
+    /// (What object the privilege is on, What privilege is required, Who must possess the privilege).
+    privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
+    /// true if the plan requires USAGE privileges on all applicable items, false otherwise.
+    ///
+    /// Most plans will be true but some plans, like SHOW CREATE, can reference an item without
+    /// requiring any privileges on that item.
+    item_usage: bool,
+    /// Some action if superuser is required to perform that action, None otherwise.
+    superuser_action: Option<String>,
+}
+
+impl Default for RbacRequirements {
+    fn default() -> Self {
+        RbacRequirements {
+            role_membership: BTreeSet::new(),
+            ownership: Vec::new(),
+            privileges: Vec::new(),
+            item_usage: true,
+            superuser_action: None,
         }
     }
 }
@@ -273,25 +286,19 @@ fn generate_rbac_requirements(
             connection: _,
             validate: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateDatabase(plan::CreateDatabasePlan {
             name: _,
             if_not_exists: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_DB, role_id)],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateSchema(plan::CreateSchemaPlan {
             database_spec,
@@ -309,43 +316,31 @@ fn generate_rbac_requirements(
                 }
             };
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::CreateRole(plan::CreateRolePlan {
             name: _,
             attributes: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateCluster(plan::CreateClusterPlan {
             name: _,
             variant: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateClusterReplica(plan::CreateClusterReplicaPlan {
             cluster_id,
             name: _,
             config: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Cluster(*cluster_id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateSource(plan::CreateSourcePlan {
             name,
@@ -354,20 +349,15 @@ fn generate_rbac_requirements(
             timeline: _,
             cluster_config,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: generate_required_source_privileges(
                 name,
                 &source.data_source,
                 cluster_config,
                 role_id,
             ),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateSources(plans) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: plans
                 .iter()
                 .flat_map(
@@ -393,23 +383,19 @@ fn generate_rbac_requirements(
                     },
                 )
                 .collect(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateSecret(plan::CreateSecretPlan {
             name,
             secret: _,
             if_not_exists: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateSink(plan::CreateSinkPlan {
             name,
@@ -435,11 +421,8 @@ fn generate_rbac_requirements(
                 None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::CreateTable(plan::CreateTablePlan {
@@ -447,15 +430,12 @@ fn generate_rbac_requirements(
             table: _,
             if_not_exists: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateView(plan::CreateViewPlan {
             name,
@@ -465,7 +445,6 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: replace
                 .map(|id| vec![ObjectId::Item(id)])
                 .unwrap_or_default(),
@@ -474,8 +453,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
             name,
@@ -485,7 +463,6 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: replace
                 .map(|id| vec![ObjectId::Item(id)])
                 .unwrap_or_default(),
@@ -501,8 +478,7 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
@@ -510,7 +486,6 @@ fn generate_rbac_requirements(
             options: _,
             if_not_exists: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(index.on)],
             privileges: vec![
                 (
@@ -524,19 +499,15 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::Comment(plan::CommentPlan {
             object_id,
@@ -553,27 +524,11 @@ fn generate_rbac_requirements(
                 _ => (vec![ObjectId::from(*object_id)], Vec::new()),
             };
             RbacRequirements {
-                role_membership: BTreeSet::new(),
                 ownership,
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
-        Plan::DiscardTemp => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::DiscardAll => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
         Plan::DropObjects(plan::DropObjectsPlan {
             referenced_ids,
             drop_ids: _,
@@ -611,12 +566,10 @@ fn generate_rbac_requirements(
                     .collect()
             };
             RbacRequirements {
-                role_membership: BTreeSet::new(),
                 // Do not need ownership of descendant objects.
                 ownership: referenced_ids.clone(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::DropOwned(plan::DropOwnedPlan {
@@ -626,35 +579,16 @@ fn generate_rbac_requirements(
             default_privilege_revokes: _,
         }) => RbacRequirements {
             role_membership: role_ids.into_iter().cloned().collect(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::EmptyQuery => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::ShowAllVariables => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::ShowCreate(plan::ShowCreatePlan { id, row: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(
                 SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
                 AclMode::USAGE,
                 role_id,
             )],
             item_usage: false,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::ShowColumns(plan::ShowColumnsPlan {
             id,
@@ -680,80 +614,10 @@ fn generate_rbac_requirements(
                 privileges.push(privilege);
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
-        Plan::ShowVariable(plan::ShowVariablePlan { name: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::InspectShard(plan::InspectShardPlan { id: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::SetVariable(plan::SetVariablePlan {
-            name: _,
-            value: _,
-            local: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::ResetVariable(plan::ResetVariablePlan { name: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::SetTransaction(plan::SetTransactionPlan { local: _, modes: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::StartTransaction(plan::StartTransactionPlan {
-            access: _,
-            isolation_level: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::CommitTransaction(plan::CommitTransactionPlan {
-            transaction_type: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::AbortTransaction(plan::AbortTransactionPlan {
-            transaction_type: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
         Plan::Select(plan::SelectPlan {
             source,
             when: _,
@@ -768,11 +632,8 @@ fn generate_rbac_requirements(
                 privileges.push(privilege);
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::Subscribe(plan::SubscribePlan {
@@ -794,11 +655,8 @@ fn generate_rbac_requirements(
                 ));
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::CopyFrom(plan::CopyFromPlan {
@@ -806,8 +664,6 @@ fn generate_rbac_requirements(
             columns: _,
             params: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![
                 (
                     SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
@@ -816,8 +672,7 @@ fn generate_rbac_requirements(
                 ),
                 (SystemObjectId::Object(id.into()), AclMode::INSERT, role_id),
             ],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::ExplainPlan(plan::ExplainPlanPlan {
             stage: _,
@@ -825,8 +680,6 @@ fn generate_rbac_requirements(
             config: _,
             explainee,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: match explainee {
                 Explainee::MaterializedView(id) | Explainee::Index(id) => {
                     let item = catalog.get_item(id);
@@ -841,17 +694,14 @@ fn generate_rbac_requirements(
                 Explainee::MaterializedView(_) | Explainee::Index(_) => false,
                 Explainee::Query { .. } => true,
             },
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
             raw_plan: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::Insert(plan::InsertPlan {
             id,
@@ -902,11 +752,8 @@ fn generate_rbac_requirements(
                 }
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::AlterCluster(plan::AlterClusterPlan {
@@ -914,61 +761,37 @@ fn generate_rbac_requirements(
             name: _,
             options: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Cluster(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::AlterNoop(plan::AlterNoopPlan { object_type: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterIndexSetOptions(plan::AlterIndexSetOptionsPlan { id, options: _ }) => {
             RbacRequirements {
-                role_membership: BTreeSet::new(),
                 ownership: vec![ObjectId::Item(*id)],
-                privileges: Vec::new(),
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::AlterIndexResetOptions(plan::AlterIndexResetOptionsPlan { id, options: _ }) => {
             RbacRequirements {
-                role_membership: BTreeSet::new(),
                 ownership: vec![ObjectId::Item(*id)],
-                privileges: Vec::new(),
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::AlterSetCluster(plan::AlterSetClusterPlan { id, set_cluster }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
             privileges: vec![(
                 SystemObjectId::Object(set_cluster.into()),
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterSink(plan::AlterSinkPlan { id, size: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::PurifiedAlterSource {
             // Keep in sync with  AlterSourcePlan elsewhere; right now this does
@@ -976,7 +799,6 @@ fn generate_rbac_requirements(
             alter_source: plan::AlterSourcePlan { id, action: _ },
             subsources,
         } => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
             privileges: subsources
                 .iter()
@@ -1003,19 +825,15 @@ fn generate_rbac_requirements(
                     },
                 )
                 .collect(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan {
             id,
             name: _,
             to_name: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Cluster(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterClusterReplicaRename(plan::AlterClusterReplicaRenamePlan {
             cluster_id,
@@ -1023,11 +841,8 @@ fn generate_rbac_requirements(
             name: _,
             to_name: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::ClusterReplica((*cluster_id, *replica_id))],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterItemRename(plan::AlterItemRenamePlan {
             id,
@@ -1035,50 +850,20 @@ fn generate_rbac_requirements(
             to_name: _,
             object_type: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::AlterSystemSet(plan::AlterSystemSetPlan { name: _, value: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::AlterSystemReset(plan::AlterSystemResetPlan { name: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::AlterSystemResetAll(plan::AlterSystemResetAllPlan {}) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterRole(plan::AlterRolePlan {
             id: _,
             name: _,
             attributes: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::AlterOwner(plan::AlterOwnerPlan {
             id,
@@ -1117,40 +902,9 @@ fn generate_rbac_requirements(
                 role_membership: BTreeSet::from([*new_owner]),
                 ownership: vec![id.clone()],
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
-        Plan::Declare(plan::DeclarePlan {
-            name: _,
-            stmt: _,
-            sql: _,
-            params: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::Fetch(plan::FetchPlan {
-            name: _,
-            count: _,
-            timeout: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::Close(plan::ClosePlan { name: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
         Plan::ReadThenWrite(plan::ReadThenWritePlan {
             id,
             selection,
@@ -1205,52 +959,13 @@ fn generate_rbac_requirements(
                 privileges.push(privilege);
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges,
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
-        Plan::Prepare(plan::PreparePlan {
-            name: _,
-            stmt: _,
-            desc: _,
-            sql: _,
-        }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::Execute(plan::ExecutePlan { name: _, params: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::Deallocate(plan::DeallocatePlan { name: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
-        Plan::Raise(plan::RaisePlan { severity: _ }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
-        },
         Plan::RotateKeys(plan::RotateKeysPlan { id }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
             ownership: vec![ObjectId::Item(*id)],
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::GrantRole(plan::GrantRolePlan {
             role_ids: _,
@@ -1262,11 +977,8 @@ fn generate_rbac_requirements(
             member_ids: _,
             grantor_id: _,
         }) => RbacRequirements {
-            role_membership: BTreeSet::new(),
-            ownership: Vec::new(),
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::GrantPrivileges(plan::GrantPrivilegesPlan {
             update_privileges,
@@ -1311,14 +1023,12 @@ fn generate_rbac_requirements(
                 }
             }
             RbacRequirements {
-                role_membership: BTreeSet::new(),
                 ownership: update_privileges
                     .iter()
                     .filter_map(|update_privilege| update_privilege.target_id.object_id())
                     .cloned()
                     .collect(),
                 privileges,
-                item_usage: true,
                 // To grant/revoke a privilege on some object, generally the grantor/revoker must be the
                 // owner of that object (or have a grant option on that object which isn't implemented in
                 // Materialize yet). There is no owner of the entire system, so it's only reasonable to
@@ -1331,6 +1041,7 @@ fn generate_rbac_requirements(
                 } else {
                     None
                 },
+                ..Default::default()
             }
         }
         Plan::AlterDefaultPrivileges(plan::AlterDefaultPrivilegesPlan {
@@ -1342,7 +1053,6 @@ fn generate_rbac_requirements(
                 .iter()
                 .map(|privilege_object| privilege_object.role_id)
                 .collect(),
-            ownership: Vec::new(),
             privileges: privilege_objects
                 .into_iter()
                 .filter_map(|privilege_object| {
@@ -1359,7 +1069,6 @@ fn generate_rbac_requirements(
                     }
                 })
                 .collect(),
-            item_usage: true,
             // Altering the default privileges for the PUBLIC role (aka ALL ROLES) will affect all roles
             // that currently exist and roles that will exist in the future. It's impossible for an exising
             // role to be a member of a role that doesn't exist yet, so no current role could possibly have
@@ -1373,6 +1082,7 @@ fn generate_rbac_requirements(
             } else {
                 None
             },
+            ..Default::default()
         },
         Plan::ReassignOwned(plan::ReassignOwnedPlan {
             old_roles,
@@ -1384,10 +1094,7 @@ fn generate_rbac_requirements(
                 .cloned()
                 .chain(iter::once(*new_role))
                 .collect(),
-            ownership: Vec::new(),
-            privileges: Vec::new(),
-            item_usage: true,
-            superuser_action: None,
+            ..Default::default()
         },
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
@@ -1400,25 +1107,67 @@ fn generate_rbac_requirements(
             };
             RbacRequirements {
                 role_membership,
-                ownership: Vec::new(),
-                privileges: Vec::new(),
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
         Plan::ValidateConnection(plan::ValidateConnectionPlan { id, connection: _ }) => {
             let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             RbacRequirements {
-                role_membership: BTreeSet::new(),
-                ownership: Vec::new(),
                 privileges: vec![
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
                     (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
                 ],
-                item_usage: true,
-                superuser_action: None,
+                ..Default::default()
             }
         }
+        Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowVariable(plan::ShowVariablePlan { name: _ })
+        | Plan::InspectShard(plan::InspectShardPlan { id: _ })
+        | Plan::SetVariable(plan::SetVariablePlan {
+            name: _,
+            value: _,
+            local: _,
+        })
+        | Plan::ResetVariable(plan::ResetVariablePlan { name: _ })
+        | Plan::SetTransaction(plan::SetTransactionPlan { local: _, modes: _ })
+        | Plan::StartTransaction(plan::StartTransactionPlan {
+            access: _,
+            isolation_level: _,
+        })
+        | Plan::CommitTransaction(plan::CommitTransactionPlan {
+            transaction_type: _,
+        })
+        | Plan::AbortTransaction(plan::AbortTransactionPlan {
+            transaction_type: _,
+        })
+        | Plan::AlterNoop(plan::AlterNoopPlan { object_type: _ })
+        | Plan::AlterSystemSet(plan::AlterSystemSetPlan { name: _, value: _ })
+        | Plan::AlterSystemReset(plan::AlterSystemResetPlan { name: _ })
+        | Plan::AlterSystemResetAll(plan::AlterSystemResetAllPlan {})
+        | Plan::Declare(plan::DeclarePlan {
+            name: _,
+            stmt: _,
+            sql: _,
+            params: _,
+        })
+        | Plan::Fetch(plan::FetchPlan {
+            name: _,
+            count: _,
+            timeout: _,
+        })
+        | Plan::Close(plan::ClosePlan { name: _ })
+        | Plan::Prepare(plan::PreparePlan {
+            name: _,
+            stmt: _,
+            desc: _,
+            sql: _,
+        })
+        | Plan::Execute(plan::ExecutePlan { name: _, params: _ })
+        | Plan::Deallocate(plan::DeallocatePlan { name: _ })
+        | Plan::Raise(plan::RaisePlan { severity: _ }) => Default::default(),
     }
 }
 
