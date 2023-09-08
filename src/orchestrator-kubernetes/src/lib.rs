@@ -1021,6 +1021,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         node_selector.insert("materialize.cloud/disk".to_string(), disk.to_string());
 
+        if disk {
+            node_selector.insert(
+                "karpenter.k8s.aws/instance-family".to_string(),
+                "r6id".to_string(),
+            );
+        }
+
         let container_name = image
             .splitn(2, '/')
             .skip(1)
