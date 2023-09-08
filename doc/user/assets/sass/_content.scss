@@ -937,6 +937,116 @@ p+p {
     }
 }
 
+div.json_widget {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    position: relative;
+
+    .input_container {
+        display: inline-flex;
+        flex-direction: row;
+
+        margin: 16px;
+
+        .input_container-text {
+            display: inline-flex;
+            flex-direction: column;
+            flex-grow: 3;
+
+            input {
+                width: 100%;
+
+                border: 1px solid #E0DEE3;
+                border-radius: 8px;
+                margin: 8px 0;
+                padding: 8px;
+
+                background-color: #F7F7F8;
+                box-shadow: none;
+                font-size: 16px;
+            }
+
+            input::placeholder {
+                color: #BCB9C0;
+            }
+        }
+
+        .input_container-radio {
+            display: inline-flex;
+            flex-direction: column;
+            flex-grow: 1;
+            justify-content: center;
+
+            margin: 0 16px 12px;
+            padding: 16px;
+
+            border: 1px solid #E0DEE3;
+            border-radius: 8px;
+
+            legend {
+                padding: 0 4px;
+            }
+        }
+    }
+
+    .json {
+        display: flex;
+        position: relative;
+        width: 100%;
+
+        textarea {
+            height: 400px;
+            width: 100%;
+            resize: none;
+
+            border: 1px solid #E0DEE3;
+            border-radius: 8px;
+            margin: 16px;
+            padding: 8px;
+        }
+
+        textarea::placeholder {
+            opacity: 0.1;
+            font-size: 4vw;
+            text-align: center;
+            line-height: 350px;
+        }
+
+        .error {
+            position: absolute;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+
+            opacity: 80%;
+            width: calc(100% - 64px);
+
+            p {
+                background-color: rgba(229, 6, 68, 0.4);
+                border-radius: 8px;
+                color: #803737;
+                font-weight: 500;
+                padding: 8px;
+            }
+        }
+
+        .error-visible {
+            opacity: 1;
+            transition: opacity 100ms ease-in;
+        }
+
+        .error-hidden {
+            opacity: 0;
+            transition: opacity 100ms ease-in;
+        }
+    }
+
+    .sql_output {
+        margin: 16px;
+    }
+}
 
 .notify_button {
     font-size: 1rem;
