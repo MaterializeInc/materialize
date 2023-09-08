@@ -666,7 +666,7 @@ impl Coordinator {
             if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
                 read_txn.txn.timestamp_context()
             {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
+                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
                 if timestamp <= read_ts {
                     ready_txns.push(read_txn);
