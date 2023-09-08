@@ -6,8 +6,8 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER CLUSTER` changes the configuration of a cluster. (To rename a
-cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).)
+`ALTER CLUSTER` changes the configuration of a cluster. To rename a
+cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).
 
 ## Syntax
 
