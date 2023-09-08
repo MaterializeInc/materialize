@@ -234,7 +234,11 @@ async fn build_kafka(
     // Create Kafka topic.
     let client: AdminClient<_> = builder
         .connection
-        .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+        .create_with_context(
+            &connection_context,
+            MzClientContext::default(),
+            &BTreeMap::new(),
+        )
         .await
         .context("creating admin client failed")?;
     ensure_kafka_topic(

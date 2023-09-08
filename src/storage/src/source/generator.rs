@@ -134,7 +134,13 @@ impl SourceRender for LoadGeneratorSourceConnection {
                                 headers: None,
                             }),
                         );
-                        data_output.give(&cap, (message, offset, diff)).await;
+
+                        // Some generators always reproduce their TVC from the beginning which can
+                        // generate a significant amount of data that will overwhelm the dataflow.
+                        // Since those are not required downstream we eagerly ignore them here.
+                        if resume_offset <= offset {
+                            data_output.give(&cap, (message, offset, diff)).await;
+                        }
                     }
                     Event::Progress(Some(offset)) => {
                         cap.downgrade(&offset);

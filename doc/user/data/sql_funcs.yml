@@ -348,6 +348,22 @@
       `needle`, in order. If `flags` is set to the string `i` matches
       case-insensitively.
 
+  - signature: 'regexp_replace(source: str, pattern: str, replacement: str [, flags: str]]) -> str'
+    description: >-
+      Replaces the first occurrence of `pattern` with `replacement` in `source`.
+      No match will return `source` unchanged.
+      If `flags` contains the string `g` all occurrences are replaced.
+      If `flags` contains the string `i` matches case-insensitively.
+      `$N` or `$name` in `replacement` can be used to match capture groups.
+      `${N}` must be used to disambiguate capture group indexes from names if other characters follow `N`.
+      A `$$` in `replacement` will write a literal `$`.
+      See the [rust regex docs](https://docs.rs/regex/latest/regex/struct.Regex.html#method.replace) for more details about replacement.
+
+  - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
+    description: >-
+      Splits `text` by the regular expression `pattern` into an array.
+      If `flags` is set to the string `i` matches case-insensitively.
+
   - signature: 'repeat(s: str, n: int) -> str'
     description: Replicate the string `n` times.
 
@@ -618,6 +634,10 @@
     description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
+  - signature: 'regexp_split_to_table(text: str, pattern: str [, flags: str]]) -> Col<string>'
+    description: >-
+      Splits `text` by the regular expression `pattern`.
+      If `flags` is set to the string `i` matches case-insensitively.
   - signature: 'unnest(a: anyarray)'
     description: Expands the array `a` into a set of rows.
   - signature: 'unnest(l: anylist)'
@@ -897,3 +917,5 @@
         Reports whether the role with the specified role name or OID has the privilege on
         the type with the specified type name or OID. If the role is omitted then
         the `current_role` is assumed.
+    - signature: 'mz_is_superuser() -> bool'
+      description: Reports whether the `current_role` is a superuser.

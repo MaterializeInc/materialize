@@ -59,6 +59,7 @@ pub(crate) mod v32_to_v33;
 pub(crate) mod v33_to_v34;
 pub(crate) mod v34_to_v35;
 pub(crate) mod v35_to_v36;
+pub(crate) mod v36_to_v37;
 
 macro_rules! objects {
     ( $( $x:ident ),* ) => {

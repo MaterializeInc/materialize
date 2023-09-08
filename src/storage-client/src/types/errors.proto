@@ -43,7 +43,7 @@ message ProtoSourceError {
 }
 
 message ProtoUpsertValueError {
-    ProtoDataflowError inner = 1;
+    ProtoDecodeError inner = 1;
     mz_repr.row.ProtoRow for_key = 2;
 }
 

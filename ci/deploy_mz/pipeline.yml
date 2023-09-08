@@ -8,6 +8,14 @@
 # by the Apache License, Version 2.0.
 
 steps:
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.version
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy-mz/version
+    retry:
+      manual:
+        permit_on_passed: true
+
   - id: linux-x86_64
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.linux
     timeout_in_minutes: 30

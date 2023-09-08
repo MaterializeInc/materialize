@@ -292,6 +292,10 @@ ENV RUST_BACKTRACE=1
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
+# remove Ubuntu user causing UID collisions
+# https://bugs.launchpad.net/cloud-images/+bug/2005129
+RUN userdel -r ubuntu
+
 # Ensure that all python output is unbuffered, otherwise it is not
 # logged properly in Buildkite
 ENV PYTHONUNBUFFERED=1

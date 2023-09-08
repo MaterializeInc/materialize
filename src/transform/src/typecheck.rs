@@ -515,7 +515,7 @@ impl Typecheck {
 
                 Ok(typ.column_types.clone())
             }
-            Get { typ, id } => {
+            Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO(mgree) pass QueryContext through to check these types
@@ -716,7 +716,7 @@ impl Typecheck {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_global_id, key, consts) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, key, consts) => {
                         let typ: Vec<ColumnType> = key
                             .iter()
                             .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))
@@ -940,6 +940,7 @@ impl Typecheck {
                 Get {
                     id: Id::Local(id),
                     typ,
+                    ..
                 } => {
                     if !ids.contains(id) {
                         return Ok(());

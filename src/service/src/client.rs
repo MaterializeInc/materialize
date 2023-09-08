@@ -18,6 +18,7 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use tokio_stream::StreamMap;
+use tracing::trace;
 
 /// A generic client to a server that receives commands and asynchronously
 /// produces responses.
@@ -123,9 +124,11 @@ where
     R: fmt::Debug + Send,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+        trace!(command = ?cmd, "splitting command");
         let cmd_parts = self.state.split_command(cmd);
-        for (shard, cmd_part) in self.parts.iter_mut().zip(cmd_parts) {
+        for (index, (shard, cmd_part)) in self.parts.iter_mut().zip(cmd_parts).enumerate() {
             if let Some(cmd) = cmd_part {
+                trace!(shard = ?index, command = ?cmd, "sending command");
                 shard.send(cmd).await?;
             }
         }
@@ -145,7 +148,9 @@ where
                     return Err(e);
                 }
                 Ok(response) => {
+                    trace!(shard = ?index, response = ?response, "received response");
                     if let Some(response) = self.state.absorb_response(index, response) {
+                        trace!(response = ?response, "returning response");
                         return response.map(Some);
                     }
                 }

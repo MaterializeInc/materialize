@@ -558,7 +558,15 @@ pub enum SourceSinkClusterConfig {
         /// The size of the replica to create in the linked cluster.
         size: String,
     },
-    /// The user did not specify a cluster behavior, so use the default.
+    /// The user did not specify a cluster behavior, so the actual behavior depends on
+    /// the context. For sources the behavior depends on the data source:
+    ///
+    ///   - Ingestion: Use the default behavior.
+    ///   - Source: Use the same cluster as the data source source.
+    ///   - Progress: Use the same cluster as the non-progress source.
+    ///   - Webhook: Does not allow undefined configs.
+    ///
+    /// For sinks, always use the default behavior.
     ///
     /// NOTE(benesch): we plan to remove this variant in the future by having
     /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
@@ -568,8 +576,7 @@ pub enum SourceSinkClusterConfig {
 }
 
 impl SourceSinkClusterConfig {
-    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
-    /// one doesn't exist, then a new cluster will be created.
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
     pub fn cluster_id(&self) -> Option<&ClusterId> {
         match self {
             SourceSinkClusterConfig::Existing { id } => Some(id),

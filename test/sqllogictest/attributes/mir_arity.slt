@@ -76,10 +76,10 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 3 }
                 Get l0 // { arity: 3 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
-              Get materialize.public.u // { arity: 2 }
+              ReadIndex on=u u_d_idx=[differential join] // { arity: 2 }
     cte l0 =
       FlatMap generate_series(#0, #1, 1) // { arity: 3 }
-        Get materialize.public.t // { arity: 2 }
+        ReadIndex on=t t_a_idx=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -96,7 +96,7 @@ SELECT sum(e * f), max(f) FROM v GROUP BY mod(e, 5)
 Explained Query:
   Project (#1, #2) // { arity: 2 }
     Reduce group_by=[(#0 % 5)] aggregates=[sum((#0 * #1)), max(#1)] // { arity: 3 }
-      Get materialize.public.v // { arity: 2 }
+      ReadStorage materialize.public.v // { arity: 2 }
 
 EOF
 
@@ -119,7 +119,7 @@ Explained Query:
         Project (#2) // { arity: 1 }
           Filter (#0) IS NOT NULL // { arity: 3 }
             Map ((#0 + 1)) // { arity: 3 }
-              Get materialize.public.u // { arity: 2 }
+              ReadIndex on=u u_d_idx=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.u_d_idx (*** full scan ***)
@@ -137,7 +137,7 @@ Explained Query:
     Project (#0, #1) // { arity: 2 }
       Join on=(#1 = #2) type=differential // { arity: 3 }
         ArrangeBy keys=[[#1]] // { arity: 2 }
-          Get materialize.public.u // { arity: 2 }
+          ReadIndex on=u u_d_idx=[differential join] // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Union // { arity: 1 }
             Project (#0) // { arity: 1 }
@@ -156,10 +156,10 @@ Explained Query:
             Distinct group_by=[#0] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 Filter (#1) IS NOT NULL // { arity: 2 }
-                  Get materialize.public.u // { arity: 2 }
+                  ReadIndex on=u u_d_idx=[*** full scan ***] // { arity: 2 }
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 2 }
-              Get materialize.public.v // { arity: 2 }
+              ReadStorage materialize.public.v // { arity: 2 }
 
 Source materialize.public.v
   filter=((#0) IS NOT NULL)

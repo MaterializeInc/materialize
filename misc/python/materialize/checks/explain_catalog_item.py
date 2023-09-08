@@ -55,7 +55,7 @@ class ExplainCatalogItem(Check):
                 ? EXPLAIN MATERIALIZED VIEW explain_mv1;
                 materialize.public.explain_mv1:
                   Project (#0, #1)
-                    ReadExistingIndex materialize.public.explain_item_t1 lookup_value=(7)
+                    ReadIndex on=materialize.public.explain_item_t1 explain_item_t1_y=[lookup value=(7)]
 
                 Used Indexes:
                   - materialize.public.explain_item_t1_y (lookup)
@@ -64,7 +64,7 @@ class ExplainCatalogItem(Check):
                 ? EXPLAIN MATERIALIZED VIEW explain_mv2;
                 materialize.public.explain_mv2:
                   Filter (#1 = 7)
-                    Get materialize.public.explain_item_t2
+                    ReadStorage materialize.public.explain_item_t2
 
                 Source materialize.public.explain_item_t2
                   filter=((#1 = 7))
@@ -77,7 +77,7 @@ class ExplainCatalogItem(Check):
                 ? EXPLAIN MATERIALIZED VIEW explain_mv2_new;
                 materialize.public.explain_mv2_new:
                   Project (#0, #1)
-                    ReadExistingIndex materialize.public.explain_item_t2 lookup_value=(7)
+                    ReadIndex on=materialize.public.explain_item_t2 explain_item_t2_y=[lookup value=(7)]
 
                 Used Indexes:
                   - materialize.public.explain_item_t2_y (lookup)

@@ -27,9 +27,9 @@ Explained Query:
     Union // { arity: 1 }
       Project (#2) // { arity: 1 }
         Map (row(#0, #1)) // { arity: 3 }
-          Get materialize.public.t1 // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
       Project (#2) // { arity: 1 }
         Map (row(#0, #1)) // { arity: 3 }
-          Get materialize.public.t2 // { arity: 2 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF

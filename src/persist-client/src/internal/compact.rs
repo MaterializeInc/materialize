@@ -34,14 +34,15 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
-use crate::cfg::MiB;
-use crate::fetch::{fetch_batch_part, Cursor, EncodedPart};
+use crate::cfg::{MiB, PersistFeatureFlag};
+use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::iter::Consolidator;
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
 /// A request for compaction.
@@ -75,6 +76,7 @@ pub struct CompactConfig {
     pub(crate) compaction_yield_after_n_updates: usize,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
+    pub(crate) streaming_compact: bool,
 }
 
 impl CompactConfig {
@@ -85,6 +87,9 @@ impl CompactConfig {
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
+            streaming_compact: value
+                .dynamic
+                .enabled(PersistFeatureFlag::STREAMING_COMPACTION),
         }
     }
 }
@@ -634,6 +639,93 @@ where
         ordered_runs
     }
 
+    async fn compact_runs_streaming<'a>(
+        // note: 'a cannot be elided due to https://github.com/rust-lang/rust/issues/63033
+        cfg: &'a CompactConfig,
+        shard_id: &'a ShardId,
+        desc: &'a Description<T>,
+        runs: Vec<(&'a Description<T>, &'a [HollowBatchPart])>,
+        blob: Arc<dyn Blob + Send + Sync>,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        real_schemas: Schemas<K, V>,
+    ) -> Result<HollowBatch<T>, anyhow::Error> {
+        // TODO: Figure out a more principled way to allocate our memory budget.
+        // Currently, we give any excess budget to write parallelism. If we had
+        // to pick between 100% towards writes vs 100% towards reads, then reads
+        // is almost certainly better, but the ideal is probably somewhere in
+        // between the two.
+        //
+        // For now, invent some some extra budget out of thin air for prefetch.
+        let prefetch_budget_bytes = 2 * cfg.batch.blob_target_size;
+
+        let timings = Timings::default();
+
+        // Old style compaction operates on the encoded bytes and doesn't need
+        // the real schema, so we synthesize one. We use the real schema for
+        // stats though (see below).
+        let fake_compaction_schema = Schemas {
+            key: Arc::new(VecU8Schema),
+            val: Arc::new(VecU8Schema),
+        };
+
+        let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
+            cfg.batch.clone(),
+            Arc::clone(&metrics),
+            Arc::clone(&shard_metrics),
+            fake_compaction_schema,
+            metrics.compaction.batch.clone(),
+            desc.lower().clone(),
+            Arc::clone(&blob),
+            isolated_runtime,
+            shard_id.clone(),
+            cfg.version.clone(),
+            desc.since().clone(),
+            Some(desc.upper().clone()),
+            true,
+        );
+
+        let mut consolidator = Consolidator::new(
+            FetchBatchFilter::Compaction {
+                since: desc.since().clone(),
+            },
+            prefetch_budget_bytes,
+        );
+
+        for (desc, parts) in runs {
+            consolidator.enqueue_run(
+                *shard_id,
+                &blob,
+                &metrics,
+                |m| &m.compaction,
+                &shard_metrics,
+                desc,
+                parts,
+            );
+        }
+
+        let remaining_budget = consolidator.start_prefetches();
+        if remaining_budget.is_none() {
+            metrics.compaction.not_all_prefetched.inc();
+        }
+
+        while let Some(updates) = consolidator.next().await {
+            for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+                batch
+                    .add(&real_schemas, &k.to_vec(), &v.to_vec(), &t, &d)
+                    .await?;
+            }
+            tokio::task::yield_now().await;
+        }
+        let batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let hollow_batch = batch.into_hollow_batch();
+
+        timings.record(&metrics);
+
+        Ok(hollow_batch)
+    }
+
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output
     ///
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
@@ -649,6 +741,20 @@ where
         isolated_runtime: Arc<IsolatedRuntime>,
         real_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
+        if cfg.streaming_compact {
+            return Self::compact_runs_streaming(
+                cfg,
+                shard_id,
+                desc,
+                runs,
+                blob,
+                metrics,
+                shard_metrics,
+                isolated_runtime,
+                real_schemas,
+            )
+            .await;
+        }
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
         // to pick between 100% towards writes vs 100% towards reads, then reads
