@@ -549,7 +549,7 @@ pub struct ConnMeta {
     /// The role that initiated the database context. Fixed for the duration of the connection.
     /// WARNING: This role reference is not updated when the role is dropped.
     /// Consumers should not assume that this role exist.
-    pub authenticated_role: RoleId,
+    authenticated_role: RoleId,
 }
 
 impl ConnMeta {
