@@ -21,7 +21,7 @@ EXPLAIN SELECT * FROM (SELECT counter FROM counter limit 1);
 ----
 Explained Query:
   TopK limit=1 monotonic
-    Get materialize.public.counter
+    ReadStorage materialize.public.counter
 
 EOF
 
@@ -31,7 +31,7 @@ EXPLAIN SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 
 ----
 Explained Query:
   Reduce group_by=[(#0 % 3)] aggregates=[max(#0)] monotonic
-    Get materialize.public.counter
+    ReadStorage materialize.public.counter
 
 EOF
 
@@ -51,9 +51,9 @@ Explained Query:
     Filter (#1 < #0)
       CrossJoin type=differential
         ArrangeBy keys=[[]]
-          Get materialize.public.v1
+          ReadStorage materialize.public.v1
         ArrangeBy keys=[[]]
-          Get materialize.public.v2
+          ReadStorage materialize.public.v2
 
 EOF
 

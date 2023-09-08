@@ -95,6 +95,7 @@ pub mod dyn_struct;
 pub mod parquet;
 pub mod part;
 pub mod stats;
+pub mod timestamp;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
@@ -136,7 +137,7 @@ pub trait Codec: Sized + 'static {
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
 /// or diff.
-pub trait Codec64: Sized + 'static {
+pub trait Codec64: Sized + Clone + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the timestamp and diff when a stream is first

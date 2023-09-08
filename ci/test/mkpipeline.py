@@ -103,6 +103,7 @@ so it is executed.""",
             # Coverage runs are slower
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 2
+
             if step.get("coverage") == "skip":
                 step["skip"] = True
             if step.get("id") == "build-x86_64":

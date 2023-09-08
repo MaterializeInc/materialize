@@ -18,7 +18,7 @@ from typing import Any
 
 import requests
 
-from materialize import ci_util, spawn
+from materialize import ci_util, spawn, ui
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -204,6 +204,14 @@ def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
             for line_nr, line in enumerate(f):
                 match = ERROR_RE.search(line)
                 if match:
+                    # environmentd segfaults during normal shutdown in coverage builds, see #20016
+                    # Ignoring this in regular ways would still be quite spammy.
+                    if (
+                        "environmentd" in line
+                        and "segfault at" in line
+                        and ui.env_is_truthy("CI_COVERAGE_ENABLED")
+                    ):
+                        continue
                     error_logs.append(ErrorLog(line, log_file, line_nr + 1))
     # TODO: Only report multiple errors once?
     return error_logs

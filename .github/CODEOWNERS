@@ -13,7 +13,7 @@
 /.devcontainer                      @mjibson
 /.github                            @benesch
 /bin
-/ci                                 @MaterializeInc/qa
+/ci                                 @MaterializeInc/testing
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
@@ -91,11 +91,11 @@
 /src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
-/src/test-macro                     @MaterializeInc/qa
-/src/testdrive                      @MaterializeInc/qa
+/src/test-macro                     @MaterializeInc/testing
+/src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/compute
 /src/transform                      @MaterializeInc/compute
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
-/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/qa
+/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/testing

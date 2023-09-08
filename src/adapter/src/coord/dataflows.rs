@@ -39,6 +39,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use mz_sql::rbac;
 use mz_transform::dataflow::DataflowMetainfo;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -53,7 +54,7 @@ use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
-use crate::{rbac, AdapterError};
+use crate::AdapterError;
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
 /// to exist after this has been made.
@@ -325,19 +326,14 @@ impl<'a> DataflowBuilder<'a> {
             }
 
             // A valid index is any index on `id` that is known to index oracle.
-            //
-            // TODO: indexes should be imported after the optimization process,
-            // and only those actually used by the optimized plan
-            //
-            // NOTE(benesch): is the above TODO still true? The dataflow layer
-            // has gotten increasingly smart about index selection. Maybe it's
-            // now fine to present all indexes?
+            // Here, we import all indexes that belong to all imported collections. Later,
+            // `prune_and_annotate_dataflow_index_imports` runs at the end of the MIR
+            // pipeline, and removes unneeded index imports based on the optimized plan.
             let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
                 // Deduplicate indexes by keys, in case we have redundant indexes.
                 let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
                 valid_indexes.sort_by_key(|(_, idx)| &idx.keys);
-                valid_indexes.dedup_by_key(|(_, idx)| &idx.keys);
                 for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,
@@ -803,7 +799,7 @@ fn eval_unmaterializable_func(
             state.get_role(session.session_role_id()).name(),
         )),
         UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
-            rbac::is_rbac_enabled_for_session(state.system_config(), session),
+            rbac::is_rbac_enabled_for_session(state.system_config(), session.vars()),
         )),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))

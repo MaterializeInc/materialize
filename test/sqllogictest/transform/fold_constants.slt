@@ -139,7 +139,7 @@ Explained Query:
       Distinct group_by=[#0] // { arity: 1 }
         Union // { arity: 1 }
           Project (#1) // { arity: 1 }
-            Get materialize.public.edges // { arity: 2 }
+            ReadStorage materialize.public.edges // { arity: 2 }
           Get l0 // { arity: 1 }
 
 EOF

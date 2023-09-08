@@ -118,7 +118,7 @@
         LIMIT 1)
   FROM lineitem l1
   GROUP BY l1.l_suppkey
-  OPTIONS (EXPECTED GROUP SIZE = 4095);
+  OPTIONS (AGGREGATE INPUT GROUP SIZE = 4095);
 
 > DROP MATERIALIZED VIEW IF EXISTS lineitem_by_orderkey;
 
@@ -127,7 +127,7 @@
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2
         WHERE l2.l_orderkey = l1.l_orderkey
-        OPTIONS (EXPECTED GROUP SIZE = 15)
+        OPTIONS (LIMIT INPUT GROUP SIZE = 15)
         ORDER BY l2.l_extendedprice DESC
         LIMIT 1)
   FROM lineitem l1

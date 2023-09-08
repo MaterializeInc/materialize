@@ -183,10 +183,22 @@ message DurableExportMetadata {
 }
 
 message CommentKey {
-    // TODO(parkmycar): Support comments on more kinds of objects.
     oneof object {
         GlobalId table = 1;
         GlobalId view = 2;
+        GlobalId materialized_view = 4;
+        GlobalId source = 5;
+        GlobalId sink = 6;
+        GlobalId index = 7;
+        GlobalId func = 8;
+        GlobalId connection = 9;
+        GlobalId type = 10;
+        GlobalId secret = 11;
+        RoleId role = 12;
+        DatabaseId database = 13;
+        ResolvedSchema schema = 14;
+        ClusterId cluster = 15;
+        ClusterReplicaId cluster_replica = 16;
     }
     oneof sub_component {
         uint64 column_pos = 3;
@@ -271,6 +283,13 @@ message DatabaseId {
     }
 }
 
+message ResolvedDatabaseSpecifier {
+    oneof spec {
+        Empty ambient = 1;
+        DatabaseId id = 2;
+    }
+}
+
 message SchemaId {
     oneof value {
         uint64 system = 1;
@@ -278,11 +297,28 @@ message SchemaId {
     }
 }
 
+message SchemaSpecifier {
+    oneof spec {
+        Empty temporary = 1;
+        SchemaId id = 2;
+    }
+}
+
+message ResolvedSchema {
+    ResolvedDatabaseSpecifier database = 1;
+    SchemaSpecifier schema = 2;
+}
+
 message ReplicaId {
     oneof value {
         uint64 system = 1;
         uint64 user = 2;
     }
+}
+
+message ClusterReplicaId {
+    ClusterId cluster_id = 1;
+    ReplicaId replica_id = 2;
 }
 
 message ReplicaLogging {

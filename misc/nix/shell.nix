@@ -26,7 +26,7 @@ stdenv.mkDerivation rec {
       postgresql
       pkg-config
       lld_14
-      python39
+      python311
       scoped-rust-analyzer
       shellcheck
   ];

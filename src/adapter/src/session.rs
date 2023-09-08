@@ -26,7 +26,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::user::{
-    ExternalUserMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+    ExternalUserMetadata, RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
 };
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
@@ -50,15 +50,6 @@ use crate::severity::Severity;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
-
-/// Metadata about a Session's role.
-#[derive(Debug, Clone)]
-pub struct RoleMetadata {
-    /// The role of the current execution context.
-    pub current_role: RoleId,
-    /// The role that initiated the database context. Fixed for the duration of the connection.
-    pub session_role: RoleId,
-}
 
 /// A session holds per-connection state.
 #[derive(Derivative)]
@@ -711,6 +702,16 @@ impl<T: TimestampManipulation> Session<T> {
             current_role: role_id,
             session_role: role_id,
         });
+    }
+
+    /// Returns the session's role metadata.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn role_metadata(&self) -> &RoleMetadata {
+        self.role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
     }
 
     /// Returns the session's current role ID.

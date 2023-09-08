@@ -100,7 +100,7 @@ background compaction of historical data.
 Materialize provides various tools that allow you to analyze arrangements,
 although they are post-hoc tools best used for debugging, rather than planning
 tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/troubleshooting/)
-and [`EXPLAIN`](/sql/explain/) for more details.
+and [`EXPLAIN PLAN`](/sql/explain-plan/) for more details.
 
 ## Reducing memory usage
 

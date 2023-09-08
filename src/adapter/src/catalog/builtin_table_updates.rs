@@ -27,9 +27,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItemType, CatalogSchema, CatalogType, TypeCategory,
-};
+use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -50,7 +48,7 @@ use crate::catalog::builtin::{
     MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
+    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use crate::catalog::builtin::{
     MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
@@ -376,6 +374,9 @@ impl CatalogState {
                         }
                         _ => vec![],
                     },
+                    DataSourceDesc::Webhook { .. } => {
+                        vec![self.pack_webhook_source_update(id, diff)]
+                    }
                     _ => vec![],
                 });
 
@@ -1541,13 +1542,27 @@ impl CatalogState {
         comment: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let (object_id_str, object_type_str) = match object_id {
-            CommentObjectId::Table(global_id) => {
-                (global_id.to_string(), CatalogItemType::Table.to_string())
-            }
-            CommentObjectId::View(global_id) => {
-                (global_id.to_string(), CatalogItemType::View.to_string())
-            }
+        // Use the audit log representation so it's easier to join against.
+        let object_type = mz_sql::catalog::ObjectType::from(object_id);
+        let audit_type = super::object_type_to_audit_object_type(object_type);
+        let object_type_str = audit_type.to_string();
+
+        let object_id_str = match object_id {
+            CommentObjectId::Table(global_id)
+            | CommentObjectId::View(global_id)
+            | CommentObjectId::MaterializedView(global_id)
+            | CommentObjectId::Source(global_id)
+            | CommentObjectId::Sink(global_id)
+            | CommentObjectId::Index(global_id)
+            | CommentObjectId::Func(global_id)
+            | CommentObjectId::Connection(global_id)
+            | CommentObjectId::Secret(global_id)
+            | CommentObjectId::Type(global_id) => global_id.to_string(),
+            CommentObjectId::Role(role_id) => role_id.to_string(),
+            CommentObjectId::Database(database_id) => database_id.to_string(),
+            CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),
+            CommentObjectId::Cluster(cluster_id) => cluster_id.to_string(),
+            CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
         };
         let column_pos_datum = match column_pos {
             Some(pos) => Datum::UInt64(CastFrom::cast_from(pos)),
@@ -1561,6 +1576,29 @@ impl CatalogState {
                 Datum::String(&object_type_str),
                 column_pos_datum,
                 Datum::String(comment),
+            ]),
+            diff,
+        }
+    }
+
+    pub fn pack_webhook_source_update(
+        &self,
+        source_id: GlobalId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let url = self
+            .try_get_webhook_url(&source_id)
+            .expect("webhook source should exist");
+        let url = url.to_string();
+        let name = &self.get_entry(&source_id).name().item;
+        let id_str = source_id.to_string();
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_WEBHOOKS_SOURCES),
+            row: Row::pack_slice(&[
+                Datum::String(&id_str),
+                Datum::String(name),
+                Datum::String(&url),
             ]),
             diff,
         }

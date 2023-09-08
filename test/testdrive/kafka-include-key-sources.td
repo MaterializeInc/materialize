@@ -314,14 +314,14 @@ key    id1  id2  measurement
 ? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
 Explained Query:
   Project (#0)
-    Get materialize.public.bareformatconfluent
+    ReadStorage materialize.public.bareformatconfluent
 
 > CREATE DEFAULT INDEX ON bareformatconfluent;
 
 ? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
 Explained Query (fast path):
   Project (#0)
-    ReadExistingIndex materialize.public.bareformatconfluent_primary_idx
+    ReadIndex on=materialize.public.bareformatconfluent bareformatconfluent_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.bareformatconfluent_primary_idx (*** full scan ***)
@@ -341,7 +341,7 @@ Used Indexes:
 Explained Query:
   Distinct group_by=[#0] monotonic
     Project (#0)
-      Get materialize.public.envelope_none_with_key
+      ReadStorage materialize.public.envelope_none_with_key
 
 > CREATE DEFAULT INDEX ON envelope_none_with_key;
 
@@ -349,7 +349,7 @@ Explained Query:
 Explained Query:
   Distinct group_by=[#0] monotonic
     Project (#0)
-      Get materialize.public.envelope_none_with_key
+      ReadIndex on=envelope_none_with_key envelope_none_with_key_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.envelope_none_with_key_primary_idx (*** full scan ***)
