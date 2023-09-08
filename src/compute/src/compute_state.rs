@@ -34,7 +34,7 @@ use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tracing::{error, info, span, Level};
+use tracing::{debug, error, span, Level};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -191,7 +191,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
-        info!("Applying configuration update: {params:?}");
+        debug!("Applying configuration update: {params:?}");
 
         let ComputeParameters {
             max_result_size,

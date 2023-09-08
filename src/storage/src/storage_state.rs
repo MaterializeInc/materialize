@@ -1171,7 +1171,7 @@ impl StorageState {
             StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
             StorageCommand::UpdateConfiguration(params) => {
-                tracing::info!("Applying configuration update: {params:?}");
+                tracing::debug!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
                 params.tracing.apply(self.tracing_handle.as_ref());
 
