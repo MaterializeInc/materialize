@@ -1506,3 +1506,19 @@ query T
 SELECT age('1970-01-01T00:00:00.123456'::timestamptz(3), '1970-01-01T00:00:00.123456'::timestamptz(0));
 ----
 00:00:00.123
+
+query T
+SELECT timestamptz(0) '95143-12-31 23:59:59.123456789+06';
+----
+95143-12-31 17:59:59+00
+
+query B
+SELECT timestamptz(0) '95143-12-31 23:59:59+06' = timestamptz(0) '95143-12-31 23:59:59.123456789+06';
+----
+true
+
+query error precision must not be negative
+SELECT timestamptz(-1) '95143-12-31 23:59:59.123456789+06';
+
+query error is out of range for type integer
+SELECT timestamptz(10000000000000000000) '95143-12-31 23:59:59.123456789+06';
