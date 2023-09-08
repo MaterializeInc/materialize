@@ -254,14 +254,13 @@ impl Coordinator {
                     secret_key,
                     notice_tx,
                     drop_sinks: Vec::new(),
-                    // TODO: Switch to authenticated role once implemented.
-                    authenticated_role: role_id,
                     connected_at: self.now(),
                     user,
                     application_name,
                     role_metadata: RoleMetadata {
-                        current_role: role_id,
+                        authenticated_role: role_id,
                         session_role: role_id,
+                        current_role: role_id,
                     },
                     uuid,
                     conn_id: conn_id.clone(),

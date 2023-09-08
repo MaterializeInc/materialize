@@ -1287,7 +1287,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
                 Datum::UInt32(conn.conn_id().unhandled()),
-                Datum::String(&conn.session_role_id().to_string()),
+                Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
             diff,

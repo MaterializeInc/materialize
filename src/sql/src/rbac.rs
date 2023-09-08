@@ -250,6 +250,7 @@ fn requires_item_usage_privileges(plan: &Plan) -> bool {
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
+    // Map from connection IDs to authenticated roles. The roles may have been dropped concurrently.
     active_conns: &BTreeMap<u32, RoleId>,
     role_metadata: &RoleMetadata,
     session_vars: &SessionVars,
@@ -279,7 +280,13 @@ pub fn check_plan(
     if !unheld_membership.is_empty() {
         let role_names = unheld_membership
             .into_iter()
-            .map(|role_id| catalog.get_role(role_id).name().to_string())
+            .map(|role_id| {
+                // Some role references may no longer exist due to concurrent drops.
+                catalog
+                    .try_get_role(role_id)
+                    .map(|role| role.name().to_string())
+                    .unwrap_or(role_id.to_string())
+            })
             .collect();
         return Err(UnauthorizedError::RoleMembership { role_names });
     }
