@@ -38,9 +38,7 @@ individual fields mapped to columns.
             <p id="error_text"></p>
         </div>
     </div>
-    <pre class="sql_output">
-        <code id="output" class="sql_output-code"></code>
-    </pre>
+    <pre class="sql_output"><code id="output" class="sql_output-code"></code></pre>
 </div>
 
 <script>
@@ -178,6 +176,10 @@ function errorSet(e) {
     error_span.attr('class', 'error error-visible');
 }
 
+function sqlSet(sql) {
+    sql_output.text(sql.trim());
+}
+
 function sqlClear() {
     sql_output.text("");
 }
@@ -196,7 +198,7 @@ function render() {
     try {
         const items = handleJson(source_name, json_sample, column_name);
         const sql = formSql(items, view_name, source_name, object_type);
-        sql_output.text(sql);
+        sqlSet(sql);
 
         errorClear();
     } catch (e) {
