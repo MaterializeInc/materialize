@@ -143,6 +143,56 @@ struct RbacRequirements {
     superuser_action: Option<String>,
 }
 
+impl RbacRequirements {
+    fn validate(
+        self,
+        catalog: &impl SessionCatalog,
+        role_metadata: &RoleMetadata,
+        session_vars: &SessionVars,
+        resolved_ids: &ResolvedIds,
+    ) -> Result<(), UnauthorizedError> {
+        // Obtain all roles that the current session is a member of.
+        let role_membership = catalog.collect_role_membership(&role_metadata.current_role);
+
+        if self.item_usage {
+            check_item_usage(catalog, role_metadata, session_vars, resolved_ids)?;
+        }
+
+        // Validate that the current session has the required role membership to execute the provided
+        // plan.
+        let unheld_membership: Vec<_> = self.role_membership.difference(&role_membership).collect();
+        if !unheld_membership.is_empty() {
+            let role_names = unheld_membership
+                .into_iter()
+                .map(|role_id| catalog.get_role(role_id).name().to_string())
+                .collect();
+            return Err(UnauthorizedError::RoleMembership { role_names });
+        }
+
+        // Validate that the current session has the required object ownership to execute the provided
+        // plan.
+        let unheld_ownership = self
+            .ownership
+            .into_iter()
+            .filter(|ownership| !check_owner_roles(ownership, &role_membership, catalog))
+            .collect();
+        ownership_err(unheld_ownership, catalog)?;
+
+        check_object_privileges(
+            catalog,
+            self.privileges,
+            role_membership,
+            role_metadata.current_role,
+        )?;
+
+        if let Some(action) = self.superuser_action {
+            return Err(UnauthorizedError::Superuser { action });
+        }
+
+        Ok(())
+    }
+}
+
 impl Default for RbacRequirements {
     fn default() -> Self {
         RbacRequirements {
@@ -202,9 +252,6 @@ pub fn check_plan(
 ) -> Result<(), UnauthorizedError> {
     rbac_preamble!(catalog, role_metadata, session_vars);
 
-    // Obtain all roles that the current session is a member of.
-    let role_membership = catalog.collect_role_membership(&role_metadata.current_role);
-
     let rbac_requirements = generate_rbac_requirements(
         catalog,
         plan,
@@ -213,48 +260,8 @@ pub fn check_plan(
         resolved_ids,
         role_metadata.current_role,
     );
-
     debug!("rbac requirements {rbac_requirements:?} for plan {plan:?}");
-
-    if rbac_requirements.item_usage {
-        check_item_usage(catalog, role_metadata, session_vars, resolved_ids)?;
-    }
-
-    // Validate that the current session has the required role membership to execute the provided
-    // plan.
-    let unheld_membership: Vec<_> = rbac_requirements
-        .role_membership
-        .difference(&role_membership)
-        .collect();
-    if !unheld_membership.is_empty() {
-        let role_names = unheld_membership
-            .into_iter()
-            .map(|role_id| catalog.get_role(role_id).name().to_string())
-            .collect();
-        return Err(UnauthorizedError::RoleMembership { role_names });
-    }
-
-    // Validate that the current session has the required object ownership to execute the provided
-    // plan.
-    let unheld_ownership = rbac_requirements
-        .ownership
-        .into_iter()
-        .filter(|ownership| !check_owner_roles(ownership, &role_membership, catalog))
-        .collect();
-    ownership_err(unheld_ownership, catalog)?;
-
-    check_object_privileges(
-        catalog,
-        rbac_requirements.privileges,
-        role_membership,
-        role_metadata.current_role,
-    )?;
-
-    if let Some(action) = rbac_requirements.superuser_action {
-        return Err(UnauthorizedError::Superuser { action });
-    }
-
-    Ok(())
+    rbac_requirements.validate(catalog, role_metadata, session_vars, resolved_ids)
 }
 
 /// Returns true if RBAC is turned on for a session, false otherwise.
