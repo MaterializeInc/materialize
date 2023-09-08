@@ -23,7 +23,7 @@ with the following parameters:
 Field                  | Value
 ---------------------- | ----------------
 Database type          | **PostgreSQL database**
-Server                 | Materialize host name followed by `:6875`
+Server                 | Your Materialize host name followed by `:6875`<br> For example: `id.us-east-1.aws.materialize.cloud:6875`
 Database               | **materialize**
 Data Connectivity mode | **DirectQuery**
 Database username      | Materialize user.
