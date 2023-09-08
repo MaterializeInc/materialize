@@ -14,31 +14,33 @@ individual fields mapped to columns.
 
 
 <div class="json_widget">
+    <div class="json">
+        <textarea title="JSON Sample" id="json_sample" placeholder="JSON Sample">
+            { "payload": "materialize", "event": { "kind": 1, "success": true }, "ts": "2023-02-01T17:00:00.000Z" }
+        </textarea>
+        <div id="error_span" class="error">
+            <p id="error_text"></p>
+        </div>
+    </div>
     <span class="input_container">
         <span class="input_container-text">
-            <input id="view_name" placeholder="View Name">
-            <input id="source_name" placeholder="Relation Name">
-            <input id="column_name" placeholder="JSON Column Name">
+            <input title="View Name" id="view_name" placeholder="View Name" value="my_view">
+            <input title="Relation Name" id="source_name" placeholder="Relation Name" value="my_source">
+            <input title="JSON Column Name" id="column_name" placeholder="JSON Column Name" value="json_column">
         </span>
-    <fieldset class="input_container-radio">
+    <fieldset title="Kind of SQL Object" class="input_container-radio">
         <legend>Kind of SQL Object</legend>
         <span>
             <input type="radio" id="view" name="type_view" value="view"/>
             <label for="view">View</label>
         </span>
         <span>
-            <input type="radio" id="materialized-view" name="type_view" value="materialized-view"/>
+            <input type="radio" id="materialized-view" name="type_view" value="materialized-view" checked/>
             <label for="materialized-view">Materialized View</label>
         </span>
     </fieldset>
     </span>
-    <div class="json">
-        <textarea id="json_sample" placeholder="JSON Sample"></textarea>
-        <div id="error_span" class="error">
-            <p id="error_text"></p>
-        </div>
-    </div>
-    <pre class="sql_output"><code id="output" class="sql_output-code"></code></pre>
+    <pre title="Generated SQL" class="sql_output chroma"><code id="output" class="sql_output-code language-sql" data-lang="sql"></code></pre>
 </div>
 
 <script>
@@ -71,26 +73,26 @@ function debounce(callback, wait) {
 
 /* JSON Parsing and SQL conversion */
 
-const error_span = $("#error_span");
-const error_text = $("#error_text");
+const errorSpan = $("#error_span");
+const errorText = $("#error_text");
 
-const json_input = $("#json_sample");
-const sql_output = $("#output");
+const jsonInput = $("#json_sample");
+const sqlOutput = $("#output");
 
 /// Flattens a JSON objects into a list of fields, and their chain of parents.
-function handleJson(source, sample, column_name) {
-    if (!column_name) {
-        column_name = "body"
+function handleJson(source, sample, columnName) {
+    if (!columnName) {
+        columnName = "body"
     }
 
     let selectItems = [];
-    const json_object = JSON.parse(sample);
+    const jsonObject = JSON.parse(sample);
 
     // Format the JSON for the user.
-    const pretty_json = JSON.stringify(json_object, null, 2);
-    json_input.val(pretty_json);
+    const prettyJson = JSON.stringify(jsonObject, null, 2);
+    jsonInput.val(prettyJson);
 
-    expandObject(json_object, [column_name], selectItems);
+    expandObject(jsonObject, [columnName], selectItems);
 
     return selectItems;
 }
@@ -127,18 +129,18 @@ function expandObject(object, parents, columns) {
 }
 
 /// Given a list of fields/select items, forms a SQL query.
-function formSql(selectItems, view_name, source_name, object_type) {
-    const FIELD_SEPERATOR = "\n    ";
+function formSql(selectItems, viewName, sourceName, objectType) {
+    const FIELD_SEPARATOR = "\n    ";
 
-    if (!view_name) {
-        view_name = "my_view";
+    if (!viewName) {
+        viewName = "my_view";
     }
-    if (!source_name) {
-        source_name = "my_source";
+    if (!sourceName) {
+        sourceName = "my_source";
     }
 
     let type = "VIEW";
-    if (object_type === "materialized-view") {
+    if (objectType === "materialized-view") {
         type = "MATERIALIZED VIEW";
     }
 
@@ -156,53 +158,53 @@ function formSql(selectItems, view_name, source_name, object_type) {
 
         return `${item} AS ${formattedName}`;
     })
-    .join(`,${FIELD_SEPERATOR}`);
+    .join(`,${FIELD_SEPARATOR}`);
 
     if (selectItems.length > 1) {
-        selects = `${FIELD_SEPERATOR}${selects}`;
+        selects = `${FIELD_SEPARATOR}${selects}`;
     }
 
-    const sql = `CREATE ${type} ${view_name} AS SELECT ${selects}\nFROM ${source_name};`
+    const sql = `CREATE ${type} ${viewName} AS SELECT ${selects}\nFROM ${sourceName};`
 
     return sql;
 }
 
 function errorClear() {
-    error_span.attr('class', 'error error-hidden');
+    errorSpan.attr('class', 'error error-hidden');
 }
 
 function errorSet(e) {
-    error_text.text(e.message);
-    error_span.attr('class', 'error error-visible');
+    errorText.text(e.message);
+    errorSpan.attr('class', 'error error-visible');
 }
 
 function sqlSet(sql) {
-    sql_output.text(sql.trim());
+    sqlOutput.text(sql.trim());
 }
 
 function sqlClear() {
-    sql_output.text("");
+    sqlOutput.text("");
 }
 
 function render() {
     errorClear();
     sqlClear();
 
-    const view_name = $("#view_name").val();
-    const source_name = $("#source_name").val();
-    const column_name = $("#column_name").val();
-    const object_type = $("input[name='type_view']:checked").val();
+    const viewName = $("#view_name").val();
+    const sourceName = $("#source_name").val();
+    const columnName = $("#column_name").val();
+    const objectType = $("input[name='type_view']:checked").val();
 
-    const json_sample = json_input.val();
+    const jsonSample = jsonInput.val();
 
     try {
-        const items = handleJson(source_name, json_sample, column_name);
-        const sql = formSql(items, view_name, source_name, object_type);
+        const items = handleJson(sourceName, jsonSample, columnName);
+        const sql = formSql(items, viewName, sourceName, objectType);
         sqlSet(sql);
 
         errorClear();
     } catch (e) {
-        if (json_sample) {
+        if (jsonSample) {
             console.log(e);
             errorSet(e);
         } else {
