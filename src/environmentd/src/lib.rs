@@ -92,6 +92,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
 use mz_adapter::catalog::storage::{stash, BootstrapArgs};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
@@ -404,6 +405,18 @@ impl Listeners {
                             .bootstrap_builtin_cluster_replica_size
                             .clone(),
                         bootstrap_role: config.bootstrap_role.clone(),
+                        builtin_clusters: BUILTIN_CLUSTERS
+                            .into_iter()
+                            .map(|cluster| (*cluster).into())
+                            .collect(),
+                        builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                            .into_iter()
+                            .map(|replica| (*replica).into())
+                            .collect(),
+                        builtin_roles: BUILTIN_ROLES
+                            .into_iter()
+                            .map(|role| (*role).into())
+                            .collect(),
                     },
                     None,
                 )
@@ -457,6 +470,18 @@ impl Listeners {
                 default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
                 builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
                 bootstrap_role: config.bootstrap_role,
+                builtin_clusters: BUILTIN_CLUSTERS
+                    .into_iter()
+                    .map(|cluster| (*cluster).into())
+                    .collect(),
+                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                    .into_iter()
+                    .map(|replica| (*replica).into())
+                    .collect(),
+                builtin_roles: BUILTIN_ROLES
+                    .into_iter()
+                    .map(|role| (*role).into())
+                    .collect(),
             },
             config.deploy_generation,
         )

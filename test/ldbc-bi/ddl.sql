@@ -50,6 +50,7 @@ CREATE TABLE Tag (
 
 CREATE INDEX Tag_id ON Tag (id);
 CREATE INDEX Tag_name ON Tag (name);
+CREATE INDEX Tag_TypeTagClassId ON Tag (TypeTagClassId);
 
 CREATE TABLE TagClass (
     id bigint,
@@ -118,7 +119,7 @@ CREATE TABLE Person (
 );
 
 CREATE INDEX Person_id ON Person (id);
-
+CREATE INDEX Person_LocationCityId ON Person (LocationCityId);
 
 -- edges
 
@@ -140,6 +141,9 @@ CREATE TABLE Forum_hasMember_Person (
     PersonId bigint NOT NULL
 );
 
+CREATE INDEX Forum_hasMember_Person_ForumId ON Forum_hasMember_Person (ForumId);
+CREATE INDEX Forum_hasMember_Person_PersonId ON Forum_hasMember_Person (PersonId);
+
 CREATE TABLE Forum_hasTag_Tag (
     creationDate timestamp with time zone NOT NULL,
     ForumId bigint NOT NULL,
@@ -151,6 +155,8 @@ CREATE TABLE Person_hasInterest_Tag (
     PersonId bigint NOT NULL,
     TagId bigint NOT NULL
 );
+
+CREATE INDEX Person_hasInterest_Tag_TagId ON Person_hasInterest_Tag (TagId);
 
 CREATE TABLE Person_likes_Comment (
     creationDate timestamp with time zone NOT NULL,
@@ -171,6 +177,9 @@ CREATE TABLE Person_studyAt_University (
     classYear int NOT NULL
 );
 
+CREATE INDEX Person_studyAt_University_PersonId ON Person_studyAt_University (PersonId);
+CREATE INDEX Person_studyAt_University_UniversityId ON Person_studyAt_University (UniversityId);
+
 CREATE TABLE Person_workAt_Company (
     creationDate timestamp with time zone NOT NULL,
     PersonId bigint NOT NULL,
@@ -178,10 +187,14 @@ CREATE TABLE Person_workAt_Company (
     workFrom int NOT NULL
 );
 
+CREATE INDEX Person_workAt_Company_PersonId ON Person_workAt_Company (PersonId);
+CREATE INDEX Person_workAt_Company_CompanyId ON Person_workAt_Company (CompanyId);
+
 CREATE TABLE Person_knows_Person (
     creationDate timestamp with time zone NOT NULL,
     Person1id bigint NOT NULL,
     Person2id bigint NOT NULL
 );
 
+CREATE INDEX Person_knows_Person_Person1id ON Person_knows_Person (Person1id);
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id);

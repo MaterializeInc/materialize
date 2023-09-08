@@ -106,7 +106,7 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
-use mz_sql::session::user::User;
+use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
@@ -121,7 +121,7 @@ use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, info_span, span, warn, Instrument, Level, Span};
+use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -141,7 +141,7 @@ use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, RoleMetadata, Session};
+use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
@@ -1040,7 +1040,7 @@ impl Coordinator {
         let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
         policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
-        info!("coordinator init: creating compute replicas");
+        debug!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
@@ -1062,7 +1062,7 @@ impl Coordinator {
         }
         self.controller.create_replicas(replicas_to_start).await?;
 
-        info!("coordinator init: migrating builtin objects");
+        debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
@@ -1297,10 +1297,10 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
-        info!("coordinator init: installing existing objects in catalog");
+        debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
         for entry in &entries {
-            info!(
+            debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
                 entry.id()
@@ -1561,12 +1561,12 @@ impl Coordinator {
             self.initialize_read_policies(&policies, Some(ts)).await;
         }
 
-        info!("coordinator init: announcing completion of initialization to controller");
+        debug!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
-        info!("coordinator init: announcing primary and foreign key relationships");
+        debug!("coordinator init: announcing primary and foreign key relationships");
         let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog().resolve_builtin_log(log).to_string();
@@ -1624,7 +1624,7 @@ impl Coordinator {
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
 
         // Advance all tables to the current timestamp
-        info!("coordinator init: advancing all tables to current timestamp");
+        debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: _,
             advance_to,
@@ -1643,13 +1643,13 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to append");
 
         // Add builtin table updates the clear the contents of all system tables
-        info!("coordinator init: resetting system tables");
+        debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
-            info!(
+            debug!(
                 "coordinator init: resetting system table {} ({})",
                 self.catalog().resolve_full_name(system_table.name(), None),
                 system_table.id()
@@ -1660,7 +1660,7 @@ impl Coordinator {
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap_or_terminate("cannot fail to fetch snapshot");
-            info!("coordinator init: table size {}", current_contents.len());
+            debug!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
@@ -1671,7 +1671,7 @@ impl Coordinator {
             builtin_table_updates.extend(retractions);
         }
 
-        info!("coordinator init: sending builtin table updates");
+        debug!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Signal to the storage controller that it is now free to reconcile its

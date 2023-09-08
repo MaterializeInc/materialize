@@ -425,7 +425,7 @@ pub struct RoleAttributes {
 
 impl RoleAttributes {
     /// Creates a new [`RoleAttributes`] with default attributes.
-    pub fn new() -> RoleAttributes {
+    pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
             _private: (),
@@ -433,7 +433,7 @@ impl RoleAttributes {
     }
 
     /// Adds all attributes.
-    pub fn with_all(mut self) -> RoleAttributes {
+    pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self
     }

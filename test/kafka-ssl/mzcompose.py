@@ -96,9 +96,12 @@ SERVICES = [
             "--ccsr-username=materialize "
             '--var=materialized-kafka-key="$$(</share/secrets/materialized-kafka.key)" '
             '--var=materialized-kafka-crt="$$(</share/secrets/materialized-kafka.crt)" '
+            '--var=materialized-kafka1-key="$$(</share/secrets/materialized-kafka1.key)" '
+            '--var=materialized-kafka1-crt="$$(</share/secrets/materialized-kafka1.crt)" '
             '--var=materialized-schema-registry-key="$$(</share/secrets/materialized-schema-registry.key)" '
             '--var=materialized-schema-registry-crt="$$(</share/secrets/materialized-schema-registry.crt)" '
             '--var=ca-crt="$$(</share/secrets/ca.crt)" '
+            '--var=ca-alt-crt="$$(</share/secrets/ca-selective.crt)" '
             '"$$@"',
         ],
         volumes_extra=["secrets:/share/secrets"],

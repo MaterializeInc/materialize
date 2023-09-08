@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime};
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::{FutureExt, Stream};
 use mz_ore::now::EpochMillis;
@@ -42,7 +43,7 @@ use crate::fetch::{
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
-use crate::internal::state::{HollowBatch, Since};
+use crate::internal::state::{HollowBatch, HollowBatchPart, Since};
 use crate::internal::watch::StateWatch;
 use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
@@ -732,23 +733,35 @@ where
         Ok(Subscribe::new(snapshot_parts, listen))
     }
 
-    fn lease_batch_parts(
+    fn lease_batch_part(
         &mut self,
-        batch: HollowBatch<T>,
+        desc: Description<T>,
+        part: HollowBatchPart,
         metadata: SerdeLeasedBatchPartMetadata,
-    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.parts.into_iter().map(move |part| LeasedBatchPart {
+    ) -> LeasedBatchPart<T> {
+        LeasedBatchPart {
             metrics: Arc::clone(&self.metrics),
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
-            metadata: metadata.clone(),
-            desc: batch.desc.clone(),
+            metadata,
+            desc,
             key: part.key,
             stats: part.stats,
             encoded_size_bytes: part.encoded_size_bytes,
             leased_seqno: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
-        })
+        }
+    }
+
+    fn lease_batch_parts(
+        &mut self,
+        batch: HollowBatch<T>,
+        metadata: SerdeLeasedBatchPartMetadata,
+    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
+        batch
+            .parts
+            .into_iter()
+            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, metadata.clone()))
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -1097,29 +1110,38 @@ where
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
+            Arc::clone(&self.metrics),
             FetchBatchFilter::Snapshot {
                 as_of: as_of.clone(),
             },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
         );
 
+        let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
+            as_of: as_of.iter().map(T::encode).collect(),
+        };
+
         for batch in batches {
             for run in batch.runs() {
-                consolidator.enqueue_run(
-                    self.machine.shard_id(),
+                let leased_parts: Vec<_> = run
+                    .into_iter()
+                    .map(|part| {
+                        self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
+                    })
+                    .collect();
+                consolidator.enqueue_leased_run(
                     &self.blob,
-                    &self.metrics,
                     |m| &m.snapshot,
                     &self.machine.applier.shard_metrics,
-                    &batch.desc,
-                    run,
+                    &self.lease_returner,
+                    leased_parts.into_iter(),
                 );
             }
         }
 
         let mut contents = Vec::new();
 
-        while let Some(iter) = consolidator.next().await {
+        while let Some(iter) = consolidator.next().await.expect("fetching a leased part") {
             contents.extend(iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)))
         }
 

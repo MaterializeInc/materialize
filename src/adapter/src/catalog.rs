@@ -74,11 +74,11 @@ use mz_sql::plan::{
     SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc, WebhookHeaders,
     WebhookValidation,
 };
-use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
-use mz_sql::{plan, DEFAULT_SCHEMA};
+use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
 };
@@ -107,16 +107,17 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
+    BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::{timeline, ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, AdapterNotice, ExecuteResponse};
+use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
@@ -3542,6 +3543,21 @@ impl Catalog {
         ),
         AdapterError,
     > {
+        for builtin_role in BUILTIN_ROLES {
+            assert!(
+                is_reserved_name(builtin_role.name),
+                "builtin role {builtin_role:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+        for builtin_cluster in BUILTIN_CLUSTERS {
+            assert!(
+                is_reserved_name(builtin_cluster.name),
+                "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -5050,6 +5066,18 @@ impl Catalog {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
+                builtin_clusters: BUILTIN_CLUSTERS
+                    .into_iter()
+                    .map(|cluster| (*cluster).into())
+                    .collect(),
+                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                    .into_iter()
+                    .map(|replica| (*replica).into())
+                    .collect(),
+                builtin_roles: BUILTIN_ROLES
+                    .into_iter()
+                    .map(|role| (*role).into())
+                    .collect(),
             },
             None,
         )
@@ -6384,7 +6412,10 @@ impl Catalog {
                         id,
                         &name,
                         linked_object_id,
-                        &introspection_sources,
+                        introspection_sources
+                            .iter()
+                            .map(|(builtin_log, gid)| ((*builtin_log).into(), gid))
+                            .collect(),
                         owner_id,
                         privileges.clone(),
                         config.clone(),
@@ -9276,12 +9307,12 @@ mod tests {
         ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::StatementContext;
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::VarInput;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
     use mz_stash::DebugStashFactory;
 
-    use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
     };

@@ -17,6 +17,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLogging};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
@@ -33,18 +34,16 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
     SchemaId, SchemaSpecifier,
 };
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
-use crate::catalog::builtin::{
-    BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
-use crate::catalog::{is_reserved_name, ClusterConfig, ClusterVariant};
+use crate::catalog::{ClusterConfig, ClusterVariant};
 
 pub mod objects;
 pub mod stash;
@@ -58,9 +57,6 @@ pub use stash::{
     TIMESTAMP_COLLECTION,
 };
 
-pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
-pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
-
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
@@ -71,7 +67,10 @@ const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
+fn add_new_builtin_clusters_migration(
+    txn: &mut Transaction<'_>,
+    bootstrap_args: &BootstrapArgs,
+) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -79,20 +78,15 @@ fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), E
         .map(|value| value.name)
         .collect();
 
-    for builtin_cluster in &*BUILTIN_CLUSTERS {
-        assert!(
-            is_reserved_name(builtin_cluster.name),
-            "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
-            BUILTIN_PREFIXES.join(", ")
-        );
+    for builtin_cluster in &bootstrap_args.builtin_clusters {
         if !cluster_names.contains(builtin_cluster.name) {
             let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
             let id = ClusterId::System(id);
             txn.insert_system_cluster(
                 id,
                 builtin_cluster.name,
-                &vec![],
-                builtin_cluster.privileges.clone(),
+                vec![],
+                builtin_cluster.privileges.to_vec(),
                 ClusterConfig {
                     // TODO: Should builtin clusters be managed or unmanaged?
                     variant: ClusterVariant::Unmanaged,
@@ -125,7 +119,7 @@ fn add_new_builtin_cluster_replicas_migration(
                 acc
             });
 
-    for builtin_replica in &*BUILTIN_CLUSTER_REPLICAS {
+    for builtin_replica in &bootstrap_args.builtin_cluster_replicas {
         let cluster_id = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
@@ -173,6 +167,9 @@ pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
+    pub builtin_clusters: Vec<BuiltinCluster>,
+    pub builtin_cluster_replicas: Vec<BuiltinClusterReplica>,
+    pub builtin_roles: Vec<BuiltinRole>,
 }
 
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
@@ -289,7 +286,7 @@ impl Connection {
                 }
             };
 
-            match add_new_builtin_clusters_migration(&mut txn) {
+            match add_new_builtin_clusters_migration(&mut txn, bootstrap_args) {
                 Ok(()) => {}
                 Err(e) => {
                     return Err((conn.stash, e));
@@ -1117,7 +1114,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -1138,7 +1135,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
     ) -> Result<(), Error> {
@@ -1158,7 +1155,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -1984,6 +1981,13 @@ pub struct Role {
     pub membership: RoleMembership,
 }
 
+#[derive(Clone, Debug)]
+pub struct BuiltinRole {
+    pub id: RoleId,
+    pub name: &'static str,
+    pub attributes: RoleAttributes,
+}
+
 #[derive(Debug, Clone)]
 pub struct Cluster {
     pub id: ClusterId,
@@ -1992,6 +1996,12 @@ pub struct Cluster {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub config: ClusterConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinCluster {
+    pub name: &'static str,
+    pub privileges: &'static [MzAclItem],
 }
 
 #[derive(Debug, Clone)]
@@ -2006,7 +2016,6 @@ pub struct ClusterReplica {
 // The on-disk replica configuration does not match the in-memory replica configuration, so we need
 // separate structs. As of writing this comment, it is mainly due to the fact that we don't persist
 // the replica allocation.
-
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ReplicaConfig {
     pub location: ReplicaLocation,
@@ -2089,6 +2098,12 @@ pub struct ComputeReplicaLogging {
     pub interval: Option<Duration>,
 }
 
+#[derive(Clone, Debug)]
+pub struct BuiltinClusterReplica {
+    pub name: &'static str,
+    pub cluster_name: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
@@ -2112,6 +2127,13 @@ pub struct SystemObjectMapping {
     pub object_name: String,
     pub id: GlobalId,
     pub fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinLog {
+    pub variant: LogVariant,
+    pub name: &'static str,
+    pub schema: &'static str,
 }
 
 // Structs used internally to represent on disk-state.
