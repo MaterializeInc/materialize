@@ -684,10 +684,6 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
-            self.catalog_mut()
-                .confirm_leadership()
-                .await
-                .unwrap_or_terminate("unable to confirm leadership");
             let now = Instant::now();
             for ready_txn in ready_txns {
                 self.metrics
