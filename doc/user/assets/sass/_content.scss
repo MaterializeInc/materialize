@@ -1017,6 +1017,8 @@ div.json_widget {
         .error {
             position: absolute;
             bottom: 32px;
+
+            // Hack to center the error dialog.
             left: 50%;
             transform: translateX(-50%);
 

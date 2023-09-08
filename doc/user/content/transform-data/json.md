@@ -14,42 +14,33 @@ individual fields mapped to columns.
 
 
 <div class="json_widget">
-
-<span class="input_container">
-
-<span class="input_container-text">
-<input id="view_name" placeholder="View Name">
-<input id="source_name" placeholder="Relation Name">
-<input id="column_name" placeholder="JSON Column Name">
-</span>
-
-<fieldset class="input_container-radio">
-<legend>Kind of SQL Object</legend>
-<span>
-<input type="radio" id="view" name="type_view" value="view"/>
-<label for="view">View</label>
-</span>
-<span>
-<input type="radio" id="materialized-view" name="type_view" value="materialized-view"/>
-<label for="materialized-view">Materialized View</label>
-</span>
-</fieldset>
-
-</span>
-
-<div class="json">
-
-<textarea id="json_sample" placeholder="JSON Sample"></textarea>
-<div id="error_span" class="error">
-<p id="error_text"></p>
-</div>
-
-</div>
-
-<pre class="sql_output">
-<code id="output" class="sql_output-code"></code>
-</pre>
-
+    <span class="input_container">
+        <span class="input_container-text">
+            <input id="view_name" placeholder="View Name">
+            <input id="source_name" placeholder="Relation Name">
+            <input id="column_name" placeholder="JSON Column Name">
+        </span>
+    <fieldset class="input_container-radio">
+        <legend>Kind of SQL Object</legend>
+        <span>
+            <input type="radio" id="view" name="type_view" value="view"/>
+            <label for="view">View</label>
+        </span>
+        <span>
+            <input type="radio" id="materialized-view" name="type_view" value="materialized-view"/>
+            <label for="materialized-view">Materialized View</label>
+        </span>
+    </fieldset>
+    </span>
+    <div class="json">
+        <textarea id="json_sample" placeholder="JSON Sample"></textarea>
+        <div id="error_span" class="error">
+            <p id="error_text"></p>
+        </div>
+    </div>
+    <pre class="sql_output">
+        <code id="output" class="sql_output-code"></code>
+    </pre>
 </div>
 
 <script>
