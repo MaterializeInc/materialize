@@ -568,8 +568,8 @@ query T multiline
 EXPLAIN WITH(arity, types) SELECT COALESCE(field, '') FROM (SELECT data->>'field' AS field FROM json_table);
 ----
 Explained Query:
-  Project (#1) // { arity: 1, types: "(text?)" }
-    Map (coalesce((#0 ->> "field"), "")) // { arity: 2, types: "(jsonb?, text?)" }
+  Project (#1) // { arity: 1, types: "(text)" }
+    Map (coalesce((#0 ->> "field"), "")) // { arity: 2, types: "(jsonb?, text)" }
       ReadStorage materialize.public.json_table // { arity: 1, types: "(jsonb?)" }
 
 EOF
