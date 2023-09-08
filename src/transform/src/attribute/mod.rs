@@ -16,7 +16,7 @@ use mz_expr::visit::{Visit, Visitor};
 use mz_expr::{LocalId, MirRelationExpr};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{bracketed, separated};
-use mz_repr::explain::{AnnotatedPlan, Attributes, ExplainConfig};
+use mz_repr::explain::{AnnotatedPlan, Attributes};
 
 mod arity;
 pub mod cardinality;
@@ -34,7 +34,7 @@ pub use subtree_size::SubtreeSize;
 pub use unique_keys::UniqueKeys;
 
 /// A common interface to be implemented by all derived attributes.
-pub trait Attribute: 'static + Default + Send + Sync {
+pub trait Attribute {
     /// The domain of the attribute values.
     type Value: Clone + Eq + PartialEq;
 
@@ -52,7 +52,7 @@ pub trait Attribute: 'static + Default + Send + Sync {
     fn handle_env_tasks(&mut self) {}
 
     /// The attribute ids of all other attributes that this attribute depends on.
-    fn add_dependencies(builder: &mut RequiredAttributes)
+    fn add_dependencies(builder: &mut DerivedAttributesBuilder)
     where
         Self: Sized;
 
@@ -215,23 +215,24 @@ impl EnvTask {
     }
 }
 
+/// A builder for `DerivedAttributes` instances.
 #[allow(missing_debug_implementations)]
 #[derive(Default)]
 /// Builds an [DerivedAttributes]
-pub struct RequiredAttributes {
+pub struct DerivedAttributesBuilder {
     attributes: Box<AttributeStore>,
 }
 
-impl RequiredAttributes {
+impl DerivedAttributesBuilder {
     /// Add an attribute that [DerivedAttributes] should derive
-    pub fn require<A>(&mut self)
+    pub fn require<A>(&mut self, attribute: A)
     where
         A: Attribute,
         AttributeStore: AttributeContainer<A>,
     {
         if !self.attributes.attribute_is_enabled() {
             A::add_dependencies(self);
-            self.attributes.push_attribute(A::default());
+            self.attributes.push_attribute(attribute);
         }
     }
 
@@ -247,8 +248,8 @@ impl RequiredAttributes {
 #[allow(missing_debug_implementations)]
 /// Derives an attribute and any attribute it depends on.
 ///
-/// Can be constructed either manually from an [RequiredAttributes] or directly
-/// from an [ExplainConfig].
+/// Can be constructed either manually from a [DerivedAttributesBuilder] or
+/// directly from an [ExplainContext].
 pub struct DerivedAttributes {
     /// Holds the attributes derived for all subexpressions so far.
     store: Box<AttributeStore>,
@@ -258,26 +259,26 @@ pub struct DerivedAttributes {
     buffer: Box<AttributeStore>,
 }
 
-impl From<&ExplainConfig> for DerivedAttributes {
-    fn from(config: &ExplainConfig) -> DerivedAttributes {
-        let mut builder = RequiredAttributes::default();
-        if config.subtree_size {
-            builder.require::<SubtreeSize>();
+impl<'c> From<&ExplainContext<'c>> for DerivedAttributes {
+    fn from(context: &ExplainContext<'c>) -> DerivedAttributes {
+        let mut builder = DerivedAttributesBuilder::default();
+        if context.config.subtree_size {
+            builder.require(SubtreeSize::default());
         }
-        if config.non_negative {
-            builder.require::<NonNegative>();
+        if context.config.non_negative {
+            builder.require(NonNegative::default());
         }
-        if config.types {
-            builder.require::<RelationType>();
+        if context.config.types {
+            builder.require(RelationType::default());
         }
-        if config.arity {
-            builder.require::<Arity>();
+        if context.config.arity {
+            builder.require(Arity::default());
         }
-        if config.keys {
-            builder.require::<UniqueKeys>();
+        if context.config.keys {
+            builder.require(UniqueKeys::default());
         }
-        if config.cardinality {
-            builder.require::<Cardinality>();
+        if context.config.cardinality {
+            builder.require(Cardinality::default());
         }
         builder.finish()
     }
@@ -285,9 +286,9 @@ impl From<&ExplainConfig> for DerivedAttributes {
 
 impl DerivedAttributes {
     /// Get a reference to the attributes derived so far.
-    pub fn get_results<A>(&self) -> &Vec<A::Value>
+    pub fn get_results<'a, A>(&'a self) -> &Vec<A::Value>
     where
-        A: Attribute,
+        A: Attribute + 'a,
         AttributeStore: AttributeContainer<A>,
     {
         self.store.get_attribute().unwrap().get_results()
@@ -297,9 +298,9 @@ impl DerivedAttributes {
     ///
     /// Calling this and modifying the result risks messing up subsequent
     /// derivations.
-    pub fn get_results_mut<A>(&mut self) -> &mut Vec<A::Value>
+    pub fn get_results_mut<'a, A>(&'a mut self) -> &mut Vec<A::Value>
     where
-        A: Attribute,
+        A: Attribute + 'a,
         AttributeStore: AttributeContainer<A>,
     {
         self.store.get_mut_attribute().unwrap().get_results_mut()
@@ -474,7 +475,7 @@ pub fn annotate_plan<'a>(
         // get the annotation keys
         let subtree_refs = plan.post_order_vec();
         // get the annotation values
-        let mut attributes = DerivedAttributes::from(config);
+        let mut attributes = DerivedAttributes::from(context);
         plan.visit(&mut attributes)?;
 
         if config.subtree_size {
