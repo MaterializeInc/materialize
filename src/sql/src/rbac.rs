@@ -58,6 +58,14 @@ macro_rules! rbac_preamble {
                 $role_metadata.session_role.clone(),
             ));
         };
+        if $catalog
+            .try_get_role(&$role_metadata.authenticated_role)
+            .is_none()
+        {
+            return Err(UnauthorizedError::ConcurrentRoleDrop(
+                $role_metadata.authenticated_role.clone(),
+            ));
+        };
 
         // Skip RBAC checks if RBAC is disabled.
         if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars) {
@@ -164,7 +172,13 @@ impl RbacRequirements {
         if !unheld_membership.is_empty() {
             let role_names = unheld_membership
                 .into_iter()
-                .map(|role_id| catalog.get_role(role_id).name().to_string())
+                .map(|role_id| {
+                    // Some role references may no longer exist due to concurrent drops.
+                    catalog
+                        .try_get_role(role_id)
+                        .map(|role| role.name().to_string())
+                        .unwrap_or(role_id.to_string())
+                })
                 .collect();
             return Err(UnauthorizedError::RoleMembership { role_names });
         }
@@ -243,6 +257,7 @@ pub fn check_item_usage(
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
+    // Map from connection IDs to authenticated roles. The roles may have been dropped concurrently.
     active_conns: &BTreeMap<u32, RoleId>,
     role_metadata: &RoleMetadata,
     session_vars: &SessionVars,

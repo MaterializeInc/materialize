@@ -102,7 +102,9 @@ impl Coordinator {
             &self
                 .active_conns()
                 .into_iter()
-                .map(|(conn_id, conn_meta)| (conn_id.unhandled(), conn_meta.authenticated_role))
+                .map(|(conn_id, conn_meta)| {
+                    (conn_id.unhandled(), *conn_meta.authenticated_role_id())
+                })
                 .collect(),
             ctx.session().role_metadata(),
             ctx.session().vars(),

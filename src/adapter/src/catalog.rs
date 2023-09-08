@@ -6999,7 +6999,7 @@ impl Catalog {
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
                             executed_by: session
-                                .map(|session| session.current_role_id())
+                                .map(|session| session.authenticated_role_id())
                                 .unwrap_or(&MZ_SYSTEM_ROLE_ID)
                                 .to_string(),
                         }),
@@ -7031,7 +7031,7 @@ impl Catalog {
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
                             executed_by: session
-                                .map(|session| session.current_role_id())
+                                .map(|session| session.authenticated_role_id())
                                 .unwrap_or(&MZ_SYSTEM_ROLE_ID)
                                 .to_string(),
                         }),
