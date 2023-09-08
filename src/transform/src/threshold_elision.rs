@@ -45,7 +45,7 @@ impl crate::Transform for ThresholdElision {
 }
 
 struct ThresholdElisionAction {
-    deriver: DerivedAttributes,
+    deriver: DerivedAttributes<'static>,
 }
 
 impl Default for ThresholdElisionAction {

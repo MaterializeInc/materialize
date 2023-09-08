@@ -20,6 +20,7 @@ use mz_repr::explain::{AnnotatedPlan, Attributes};
 
 mod arity;
 pub mod cardinality;
+mod column_names;
 mod non_negative;
 mod relation_type;
 mod subtree_size;
@@ -28,6 +29,7 @@ mod unique_keys;
 // Attributes should have shortened paths when exported.
 pub use arity::Arity;
 pub use cardinality::Cardinality;
+pub use column_names::ColumnNames;
 pub use non_negative::NonNegative;
 pub use relation_type::RelationType;
 pub use subtree_size::SubtreeSize;
@@ -78,6 +80,13 @@ pub struct Env<A: Attribute> {
 }
 
 impl<A: Attribute> Env<A> {
+    pub(crate) fn empty() -> Self {
+        Self {
+            env: Default::default(),
+            env_tasks: Default::default(),
+        }
+    }
+
     pub(crate) fn get(&self, id: &LocalId) -> Option<&A::Value> {
         self.env.get(id)
     }
@@ -219,16 +228,16 @@ impl EnvTask {
 #[allow(missing_debug_implementations)]
 #[derive(Default)]
 /// Builds an [DerivedAttributes]
-pub struct DerivedAttributesBuilder {
-    attributes: Box<AttributeStore>,
+pub struct DerivedAttributesBuilder<'c> {
+    attributes: Box<AttributeStore<'c>>,
 }
 
-impl DerivedAttributesBuilder {
+impl<'c> DerivedAttributesBuilder<'c> {
     /// Add an attribute that [DerivedAttributes] should derive
     pub fn require<A>(&mut self, attribute: A)
     where
         A: Attribute,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         if !self.attributes.attribute_is_enabled() {
             A::add_dependencies(self);
@@ -237,7 +246,7 @@ impl DerivedAttributesBuilder {
     }
 
     /// Consume `self`, producing an [DerivedAttributes]
-    pub fn finish(self) -> DerivedAttributes {
+    pub fn finish(self) -> DerivedAttributes<'c> {
         DerivedAttributes {
             store: self.attributes,
             buffer: Box::new(AttributeStore::default()),
@@ -250,17 +259,17 @@ impl DerivedAttributesBuilder {
 ///
 /// Can be constructed either manually from a [DerivedAttributesBuilder] or
 /// directly from an [ExplainContext].
-pub struct DerivedAttributes {
+pub struct DerivedAttributes<'c> {
     /// Holds the attributes derived for all subexpressions so far.
-    store: Box<AttributeStore>,
+    store: Box<AttributeStore<'c>>,
     /// A buffer to be used for the next subexpresion. For every subexpressions
     /// we swap the `store` and `buffer` state and then process items from
     /// `buffer` one by one, moving them back to `store`.
-    buffer: Box<AttributeStore>,
+    buffer: Box<AttributeStore<'c>>,
 }
 
-impl<'c> From<&ExplainContext<'c>> for DerivedAttributes {
-    fn from(context: &ExplainContext<'c>) -> DerivedAttributes {
+impl<'c> From<&ExplainContext<'c>> for DerivedAttributes<'c> {
+    fn from(context: &ExplainContext<'c>) -> DerivedAttributes<'c> {
         let mut builder = DerivedAttributesBuilder::default();
         if context.config.subtree_size {
             builder.require(SubtreeSize::default());
@@ -280,16 +289,19 @@ impl<'c> From<&ExplainContext<'c>> for DerivedAttributes {
         if context.config.cardinality {
             builder.require(Cardinality::default());
         }
+        if context.config.column_names {
+            builder.require(ColumnNames::new(context.humanizer));
+        }
         builder.finish()
     }
 }
 
-impl DerivedAttributes {
+impl<'c> DerivedAttributes<'c> {
     /// Get a reference to the attributes derived so far.
     pub fn get_results<'a, A>(&'a self) -> &Vec<A::Value>
     where
         A: Attribute + 'a,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         self.store.get_attribute().unwrap().get_results()
     }
@@ -301,7 +313,7 @@ impl DerivedAttributes {
     pub fn get_results_mut<'a, A>(&'a mut self) -> &mut Vec<A::Value>
     where
         A: Attribute + 'a,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         self.store.get_mut_attribute().unwrap().get_results_mut()
     }
@@ -312,7 +324,7 @@ impl DerivedAttributes {
     pub fn remove_results<A>(&mut self) -> Vec<A::Value>
     where
         A: Attribute,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         self.store.take_attribute().unwrap().take()
     }
@@ -328,10 +340,11 @@ impl DerivedAttributes {
         self.trim_attr::<Arity>();
         self.trim_attr::<UniqueKeys>();
         self.trim_attr::<Cardinality>();
+        self.trim_attr::<ColumnNames>();
     }
 }
 
-impl Visitor<MirRelationExpr> for DerivedAttributes {
+impl<'c> Visitor<MirRelationExpr> for DerivedAttributes<'c> {
     /// Does derivation work required upon entering a subexpression.
     fn pre_visit(&mut self, expr: &MirRelationExpr) {
         // The `pre_visit` methods must be called in dependency order!
@@ -341,6 +354,7 @@ impl Visitor<MirRelationExpr> for DerivedAttributes {
         self.pre_visit::<Arity>(expr);
         self.pre_visit::<UniqueKeys>(expr);
         self.pre_visit::<Cardinality>(expr);
+        self.pre_visit::<ColumnNames>(expr);
     }
 
     /// Does derivation work required upon exiting a subexpression.
@@ -353,14 +367,15 @@ impl Visitor<MirRelationExpr> for DerivedAttributes {
         self.post_visit::<Arity>(expr);
         self.post_visit::<UniqueKeys>(expr);
         self.post_visit::<Cardinality>(expr);
+        self.post_visit::<ColumnNames>(expr);
     }
 }
 
-impl DerivedAttributes {
+impl<'c> DerivedAttributes<'c> {
     fn pre_visit<A>(&mut self, expr: &MirRelationExpr)
     where
         A: Attribute,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         if let Some(attr) = self.store.get_mut_attribute() {
             attr.schedule_env_tasks(expr)
@@ -370,7 +385,7 @@ impl DerivedAttributes {
     fn post_visit<A>(&mut self, expr: &MirRelationExpr)
     where
         A: Attribute,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         if let Some(mut attr) = self.buffer.take_attribute() {
             attr.derive(expr, self);
@@ -382,7 +397,7 @@ impl DerivedAttributes {
     fn trim_attr<A>(&mut self)
     where
         A: Attribute,
-        AttributeStore: AttributeContainer<A>,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
         if let Some(a) = self.store.get_mut_attribute() {
             a.get_results_mut().pop();
@@ -418,19 +433,20 @@ pub trait AttributeContainer<A: Attribute> {
 /// and so forth).
 #[allow(missing_debug_implementations)]
 #[derive(Default)]
-pub struct AttributeStore {
+pub struct AttributeStore<'c> {
     subtree_size: Option<SubtreeSize>,
     non_negative: Option<NonNegative>,
     arity: Option<Arity>,
     relation_type: Option<RelationType>,
     unique_keys: Option<UniqueKeys>,
     cardinality: Option<Cardinality>,
+    column_names: Option<ColumnNames<'c>>,
 }
 
 macro_rules! attribute_store_container_for {
     ($field:expr) => {
         paste::paste! {
-            impl AttributeContainer<[<$field:camel>]> for AttributeStore {
+            impl<'c> AttributeContainer<[<$field:camel>]> for AttributeStore<'c> {
                 fn push_attribute(&mut self, value: [<$field:camel>]) {
                     self.$field = Some(value);
                 }
@@ -461,6 +477,28 @@ attribute_store_container_for!(arity);
 attribute_store_container_for!(relation_type);
 attribute_store_container_for!(unique_keys);
 attribute_store_container_for!(cardinality);
+
+impl<'a> AttributeContainer<ColumnNames<'a>> for AttributeStore<'a> {
+    fn push_attribute(&mut self, value: ColumnNames<'a>) {
+        self.column_names = Some(value);
+    }
+
+    fn take_attribute(&mut self) -> Option<ColumnNames<'a>> {
+        std::mem::take(&mut self.column_names)
+    }
+
+    fn attribute_is_enabled(&self) -> bool {
+        self.column_names.is_some()
+    }
+
+    fn get_attribute(&self) -> Option<&ColumnNames<'a>> {
+        self.column_names.as_ref()
+    }
+
+    fn get_mut_attribute(&mut self) -> Option<&mut ColumnNames<'a>> {
+        self.column_names.as_mut()
+    }
+}
 
 /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
 /// with [`Attributes`] derived from the given context configuration.
@@ -552,6 +590,21 @@ pub fn annotate_plan<'a>(
                         .to_string();
                 let attrs = annotations.entry(expr).or_default();
                 attrs.cardinality = Some(attr);
+            }
+        }
+
+        if config.column_names {
+            for (expr, column_names) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<ColumnNames>().into_iter(),
+            ) {
+                let column_names = column_names
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| if c.is_empty() { format!("#{i}") } else { c })
+                    .collect();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.column_names = Some(column_names);
             }
         }
     }
