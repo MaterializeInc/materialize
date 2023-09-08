@@ -107,7 +107,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
-use mz_sql::session::user::User;
+use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
@@ -489,6 +489,17 @@ impl PlanValidity {
         {
             return Err(AdapterError::Unauthorized(
                 UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.session_role.clone()),
+            ));
+        }
+
+        if catalog
+            .try_get_role(&self.role_metadata.authenticated_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(
+                    self.role_metadata.authenticated_role.clone(),
+                ),
             ));
         }
         self.transient_revision = catalog.transient_revision();
