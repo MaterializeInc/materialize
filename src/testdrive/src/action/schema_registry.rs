@@ -86,12 +86,23 @@ pub async fn run_verify(
         "Verifying contents of latest schema for subject {} in the schema registry...",
         subject.quoted(),
     );
-    let actual_schema = state
-        .ccsr_client
-        .get_schema_by_subject(&subject)
+
+    // Finding the published schema is retryable because it's published
+    // asynchronously and only after the source/sink is created.
+    let actual_schema = mz_ore::retry::Retry::default()
+        .max_duration(state.default_timeout)
+        .retry_async(|_| async {
+            match state.ccsr_client.get_schema_by_subject(&subject).await {
+                Ok(s) => mz_ore::retry::RetryResult::Ok(s.raw),
+                Err(e @ mz_ccsr::GetBySubjectError::SubjectNotFound) => {
+                    mz_ore::retry::RetryResult::RetryableErr(e)
+                }
+                Err(e) => mz_ore::retry::RetryResult::FatalErr(e),
+            }
+        })
         .await
-        .context("fetching schema")?
-        .raw;
+        .context("fetching schema")?;
+
     let actual_schema = avro::parse_schema(&actual_schema).context("parsing actual avro schema")?;
     if expected_schema != actual_schema {
         bail!(
