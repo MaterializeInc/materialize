@@ -2209,6 +2209,10 @@ pub struct Table {
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    /// Whether to retract the entire contents of the table
+    /// during startup. Currently used for most system tables,
+    /// because their source of truth lives in the stash.
+    pub delete_all_on_bootstrap: bool,
 }
 
 impl Table {
@@ -3011,6 +3015,18 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is a table.
     pub fn is_table(&self) -> bool {
         matches!(self.item(), CatalogItem::Table(_))
+    }
+
+    /// Reports whether this catalog entry is a table
+    /// that should be cleared during startup.
+    pub fn is_delete_all_on_bootstrap_table(&self) -> bool {
+        matches!(
+            self.item(),
+            CatalogItem::Table(Table {
+                delete_all_on_bootstrap: true,
+                ..
+            })
+        )
     }
 
     /// Reports whether this catalog entry is a source. Note that this includes
@@ -3855,6 +3871,7 @@ impl Catalog {
                                     .is_retained_metrics_object
                                     .then(|| catalog.state.system_config().metrics_retention()),
                                 is_retained_metrics_object: table.is_retained_metrics_object,
+                                delete_all_on_bootstrap: table.delete_all_on_bootstrap,
                             }),
                             MZ_SYSTEM_ROLE_ID,
                             PrivilegeMap::from_mz_acl_items(vec![
@@ -7938,6 +7955,7 @@ impl Catalog {
                 resolved_ids,
                 custom_logical_compaction_window,
                 is_retained_metrics_object,
+                delete_all_on_bootstrap: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
