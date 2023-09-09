@@ -25,7 +25,7 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{ColumnType, Diff, GlobalId, RelationType, Row};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -167,6 +167,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
     Constant {
         /// Explicit update triples for the collection.
         rows: Result<Vec<(Row, T, Diff)>, EvalError>,
+        /// The type for each column, in order.
+        column_types: Vec<ColumnType>,
     },
     /// A reference to a bound collection.
     ///
@@ -187,6 +189,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         keys: AvailableCollections,
         /// The actions to take when introducing the collection.
         plan: GetPlan,
+        /// The type for each column, in order.
+        column_types: Vec<ColumnType>,
     },
     /// Binds `value` to `id`, and then results in `body` with that binding.
     ///
@@ -419,154 +423,158 @@ impl Arbitrary for Plan {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let row_diff = prop::collection::vec(
-            (
-                Row::arbitrary_with((1..5).into()),
-                mz_repr::Timestamp::arbitrary(),
-                Diff::arbitrary(),
-            ),
-            0..2,
-        );
-        let constant = prop::result::maybe_ok(row_diff, EvalError::arbitrary())
-            .prop_map(|rows| Plan::Constant { rows });
-
-        let get = (any::<Id>(), any::<AvailableCollections>(), any::<GetPlan>())
-            .prop_map(|(id, keys, plan)| Plan::<mz_repr::Timestamp>::Get { id, keys, plan });
-
-        let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
-
-        leaf.prop_recursive(2, 4, 5, |inner| {
-            prop::strategy::Union::new(vec![
-                //Plan::Let
-                (any::<LocalId>(), inner.clone(), inner.clone())
-                    .prop_map(|(id, value, body)| Plan::Let {
-                        id,
-                        value: value.into(),
-                        body: body.into(),
-                    })
-                    .boxed(),
-                //Plan::Mfp
-                (
-                    inner.clone(),
-                    any::<MapFilterProject>(),
-                    any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>(),
-                )
-                    .prop_map(|(input, mfp, input_key_val)| Plan::Mfp {
-                        input: input.into(),
-                        mfp,
-                        input_key_val,
-                    })
-                    .boxed(),
-                //Plan::FlatMap
-                (
-                    inner.clone(),
-                    any::<TableFunc>(),
-                    any::<Vec<MirScalarExpr>>(),
-                    any::<MapFilterProject>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                )
-                    .prop_map(|(input, func, exprs, mfp, input_key)| Plan::FlatMap {
-                        input: input.into(),
-                        func,
-                        exprs,
-                        mfp_after: mfp,
-                        input_key,
-                    })
-                    .boxed(),
-                //Plan::Join
-                (
-                    prop::collection::vec(inner.clone(), 0..2),
-                    any::<JoinPlan>(),
-                )
-                    .prop_map(|(inputs, plan)| Plan::Join { inputs, plan })
-                    .boxed(),
-                //Plan::Reduce
-                (
-                    inner.clone(),
-                    any::<KeyValPlan>(),
-                    any::<ReducePlan>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                )
-                    .prop_map(|(input, key_val_plan, plan, input_key)| Plan::Reduce {
-                        input: input.into(),
-                        key_val_plan,
-                        plan,
-                        input_key,
-                    })
-                    .boxed(),
-                //Plan::TopK
-                (inner.clone(), any::<TopKPlan>())
-                    .prop_map(|(input, top_k_plan)| Plan::TopK {
-                        input: input.into(),
-                        top_k_plan,
-                    })
-                    .boxed(),
-                //Plan::Negate
-                inner
-                    .clone()
-                    .prop_map(|x| Plan::Negate { input: x.into() })
-                    .boxed(),
-                //Plan::Threshold
-                (inner.clone(), any::<ThresholdPlan>())
-                    .prop_map(|(input, threshold_plan)| Plan::Threshold {
-                        input: input.into(),
-                        threshold_plan,
-                    })
-                    .boxed(),
-                // Plan::Union
-                (prop::collection::vec(inner.clone(), 0..2), any::<bool>())
-                    .prop_map(|(x, b)| Plan::Union {
-                        inputs: x,
-                        consolidate_output: b,
-                    })
-                    .boxed(),
-                //Plan::ArrangeBy
-                (
-                    inner,
-                    any::<AvailableCollections>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<MapFilterProject>(),
-                )
-                    .prop_map(|(input, forms, input_key, input_mfp)| Plan::ArrangeBy {
-                        input: input.into(),
-                        forms,
-                        input_key,
-                        input_mfp,
-                    })
-                    .boxed(),
-            ])
-        })
-        .boxed()
+        todo!()
     }
+    //     let row_diff = prop::collection::vec(
+    //         (
+    //             Row::arbitrary_with((1..5).into()),
+    //             mz_repr::Timestamp::arbitrary(),
+    //             Diff::arbitrary(),
+    //         ),
+    //         0..2,
+    //     );
+    //     let constant = prop::result::maybe_ok(row_diff, EvalError::arbitrary())
+    //         .prop_map(|rows| Plan::Constant { rows });
+
+    //     let get = (any::<Id>(), any::<AvailableCollections>(), any::<GetPlan>())
+    //         .prop_map(|(id, keys, plan)| Plan::<mz_repr::Timestamp>::Get { id, keys, plan });
+
+    //     let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
+
+    //     leaf.prop_recursive(2, 4, 5, |inner| {
+    //         prop::strategy::Union::new(vec![
+    //             //Plan::Let
+    //             (any::<LocalId>(), inner.clone(), inner.clone())
+    //                 .prop_map(|(id, value, body)| Plan::Let {
+    //                     id,
+    //                     value: value.into(),
+    //                     body: body.into(),
+    //                 })
+    //                 .boxed(),
+    //             //Plan::Mfp
+    //             (
+    //                 inner.clone(),
+    //                 any::<MapFilterProject>(),
+    //                 any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>(),
+    //             )
+    //                 .prop_map(|(input, mfp, input_key_val)| Plan::Mfp {
+    //                     input: input.into(),
+    //                     mfp,
+    //                     input_key_val,
+    //                 })
+    //                 .boxed(),
+    //             //Plan::FlatMap
+    //             (
+    //                 inner.clone(),
+    //                 any::<TableFunc>(),
+    //                 any::<Vec<MirScalarExpr>>(),
+    //                 any::<MapFilterProject>(),
+    //                 any::<Option<Vec<MirScalarExpr>>>(),
+    //             )
+    //                 .prop_map(|(input, func, exprs, mfp, input_key)| Plan::FlatMap {
+    //                     input: input.into(),
+    //                     func,
+    //                     exprs,
+    //                     mfp_after: mfp,
+    //                     input_key,
+    //                 })
+    //                 .boxed(),
+    //             //Plan::Join
+    //             (
+    //                 prop::collection::vec(inner.clone(), 0..2),
+    //                 any::<JoinPlan>(),
+    //             )
+    //                 .prop_map(|(inputs, plan)| Plan::Join { inputs, plan })
+    //                 .boxed(),
+    //             //Plan::Reduce
+    //             (
+    //                 inner.clone(),
+    //                 any::<KeyValPlan>(),
+    //                 any::<ReducePlan>(),
+    //                 any::<Option<Vec<MirScalarExpr>>>(),
+    //             )
+    //                 .prop_map(|(input, key_val_plan, plan, input_key)| Plan::Reduce {
+    //                     input: input.into(),
+    //                     key_val_plan,
+    //                     plan,
+    //                     input_key,
+    //                 })
+    //                 .boxed(),
+    //             //Plan::TopK
+    //             (inner.clone(), any::<TopKPlan>())
+    //                 .prop_map(|(input, top_k_plan)| Plan::TopK {
+    //                     input: input.into(),
+    //                     top_k_plan,
+    //                 })
+    //                 .boxed(),
+    //             //Plan::Negate
+    //             inner
+    //                 .clone()
+    //                 .prop_map(|x| Plan::Negate { input: x.into() })
+    //                 .boxed(),
+    //             //Plan::Threshold
+    //             (inner.clone(), any::<ThresholdPlan>())
+    //                 .prop_map(|(input, threshold_plan)| Plan::Threshold {
+    //                     input: input.into(),
+    //                     threshold_plan,
+    //                 })
+    //                 .boxed(),
+    //             // Plan::Union
+    //             (prop::collection::vec(inner.clone(), 0..2), any::<bool>())
+    //                 .prop_map(|(x, b)| Plan::Union {
+    //                     inputs: x,
+    //                     consolidate_output: b,
+    //                 })
+    //                 .boxed(),
+    //             //Plan::ArrangeBy
+    //             (
+    //                 inner,
+    //                 any::<AvailableCollections>(),
+    //                 any::<Option<Vec<MirScalarExpr>>>(),
+    //                 any::<MapFilterProject>(),
+    //             )
+    //                 .prop_map(|(input, forms, input_key, input_mfp)| Plan::ArrangeBy {
+    //                     input: input.into(),
+    //                     forms,
+    //                     input_key,
+    //                     input_mfp,
+    //                 })
+    //                 .boxed(),
+    //         ])
+    //     })
+    //     .boxed()
+    // }
 }
 
-impl RustType<proto_plan::ProtoPlanConstant>
-    for Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>
-{
-    fn into_proto(&self) -> proto_plan::ProtoPlanConstant {
-        use proto_plan::proto_plan_constant::Result;
-        proto_plan::ProtoPlanConstant {
-            result: Some(match self {
-                Ok(rows) => Result::Rows(rows.into_proto()),
-                Err(err) => Result::Err(err.into_proto()),
-            }),
-        }
-    }
+// impl RustType<proto_plan::ProtoPlanConstant>
+//     for Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>
+// {
+//     fn into_proto(&self) -> proto_plan::ProtoPlanConstant {
+//         use proto_plan::proto_plan_constant::Result;
+//         proto_plan::ProtoPlanConstant {
+//             result: Some(match self {
+//                 Ok(rows) => Result::Rows(rows.into_proto()),
+//                 Err(err) => Result::Err(err.into_proto()),
+//             }),
+//             column_types: self.
+//         }
+//     }
 
-    fn from_proto(proto: proto_plan::ProtoPlanConstant) -> Result<Self, TryFromProtoError> {
-        use proto_plan::proto_plan_constant::Result;
-        match proto.result {
-            Some(Result::Rows(rows)) => Ok(Ok(rows.into_rust()?)),
-            Some(Result::Err(err)) => Ok(Err(err.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoPlanConstant::result",
-            )),
-        }
-    }
-}
+//     fn from_proto(proto: proto_plan::ProtoPlanConstant) -> Result<Self, TryFromProtoError> {
+//         use proto_plan::proto_plan_constant::Result;
+//         match proto.result {
+//             Some(Result::Rows(rows)) => Ok(Ok(rows.into_rust()?)),
+//             Some(Result::Err(err)) => Ok(Err(err.into_rust()?)),
+//             None => Err(TryFromProtoError::missing_field(
+//                 "ProtoPlanConstant::result",
+//             )),
+//         }
+//     }
+// }
 
 impl RustType<ProtoPlan> for Plan {
     fn into_proto(&self) -> ProtoPlan {
+        use proto_plan::proto_plan_constant::Result;
         use proto_plan::Kind::*;
         use proto_plan::*;
 
@@ -589,11 +597,23 @@ impl RustType<ProtoPlan> for Plan {
 
         ProtoPlan {
             kind: Some(match self {
-                Plan::Constant { rows } => Constant(rows.into_proto()),
-                Plan::Get { id, keys, plan } => Get(ProtoPlanGet {
+                Plan::Constant { rows, column_types } => Constant(ProtoPlanConstant {
+                    column_types: column_types.into_proto(),
+                    result: Some(match rows {
+                        Ok(rows) => Result::Rows(rows.into_proto()),
+                        Err(err) => Result::Err(err.into_proto()),
+                    }),
+                }),
+                Plan::Get {
+                    id,
+                    keys,
+                    plan,
+                    column_types,
+                } => Get(ProtoPlanGet {
                     id: Some(id.into_proto()),
                     keys: Some(keys.into_proto()),
                     plan: Some(plan.into_proto()),
+                    column_types: column_types.into_proto(),
                 }),
                 Plan::Let { id, value, body } => Let(ProtoPlanLet {
                     id: Some(id.into_proto()),
@@ -749,7 +769,10 @@ impl RustType<ProtoPlan> for Plan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoPlan::kind"))?;
 
         Ok(match kind {
-            Constant(ProtoPlanConstant { result }) => {
+            Constant(ProtoPlanConstant {
+                result,
+                column_types,
+            }) => {
                 let result = result
                     .ok_or_else(|| TryFromProtoError::missing_field("ProtoPlanConstant::result"))?;
 
@@ -758,12 +781,14 @@ impl RustType<ProtoPlan> for Plan {
                         proto_plan_constant::Result::Rows(rows) => Ok(rows.into_rust()?),
                         proto_plan_constant::Result::Err(eval_err) => Err(eval_err.into_rust()?),
                     },
+                    column_types: column_types.into_rust()?,
                 }
             }
             Get(proto) => Plan::Get {
                 id: proto.id.into_rust_if_some("ProtoPlanGet::id")?,
                 keys: proto.keys.into_rust_if_some("ProtoPlanGet::keys")?,
                 plan: proto.plan.into_rust_if_some("ProtoPlanGet::plan")?,
+                column_types: proto.column_types.into_rust()?,
             },
             Let(proto) => Plan::Let {
                 id: proto.id.into_rust_if_some("ProtoPlanLet::id")?,
@@ -1074,18 +1099,34 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 panic!("This operator should have been extracted");
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
-            MirRelationExpr::Constant { rows, typ: _ } => {
+            MirRelationExpr::Constant {
+                rows,
+                typ:
+                    RelationType {
+                        column_types,
+                        keys: _,
+                    },
+            } => {
                 let plan = Plan::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
                             .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
+                    column_types: column_types.clone(),
                 };
                 // The plan, not arranged in any way.
                 (plan, AvailableCollections::new_raw())
             }
-            MirRelationExpr::Get { id, typ: _, .. } => {
+            MirRelationExpr::Get {
+                id,
+                typ:
+                    RelationType {
+                        column_types,
+                        keys: _,
+                    },
+                ..
+            } => {
                 // This stage can absorb arbitrary MFP operators.
                 let mut mfp = mfp.take();
                 // If `mfp` is the identity, we can surface all imported arrangements.
@@ -1154,6 +1195,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         id: id.clone(),
                         keys: in_keys,
                         plan,
+                        column_types: column_types.clone(),
                     },
                     out_keys,
                 )
@@ -1416,6 +1458,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input_plan,
                             Plan::Constant {
                                 rows: Ok(Vec::new()),
+                                column_types: vec![],
                             },
                         );
                         *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
@@ -2035,7 +2078,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         } else {
             match self {
                 // For constants, balance the rows across the workers.
-                Plan::Constant { rows } => match rows {
+                Plan::Constant { rows, column_types } => match rows {
                     Ok(rows) => {
                         let mut rows_parts = vec![Vec::new(); parts];
                         for (index, row) in rows.into_iter().enumerate() {
@@ -2043,24 +2086,44 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         }
                         rows_parts
                             .into_iter()
-                            .map(|rows| Plan::Constant { rows: Ok(rows) })
+                            .map(|rows| Plan::Constant {
+                                rows: Ok(rows),
+                                column_types: column_types.clone(),
+                            })
                             .collect()
                     }
                     Err(err) => {
                         let mut result = vec![
                             Plan::Constant {
-                                rows: Ok(Vec::new())
+                                rows: Ok(Vec::new()),
+                                column_types: column_types.clone(),
                             };
                             parts
                         ];
-                        result[0] = Plan::Constant { rows: Err(err) };
+                        result[0] = Plan::Constant {
+                            rows: Err(err),
+                            column_types: column_types.clone(),
+                        };
                         result
                     }
                 },
 
                 // For all other variants, just replace inputs with appropriately sharded versions.
                 // This is surprisingly verbose, but that is all it is doing.
-                Plan::Get { id, keys, plan } => vec![Plan::Get { id, keys, plan }; parts],
+                Plan::Get {
+                    id,
+                    keys,
+                    plan,
+                    column_types,
+                } => vec![
+                    Plan::Get {
+                        id,
+                        keys,
+                        plan,
+                        column_types
+                    };
+                    parts
+                ],
                 Plan::Let { value, body, id } => {
                     let value_parts = value.partition_among(parts);
                     let body_parts = body.partition_among(parts);
@@ -2229,11 +2292,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
 impl<T> CollectionPlan for Plan<T> {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
-            Plan::Constant { rows: _ } => (),
+            Plan::Constant {
+                rows: _,
+                column_types: _,
+            } => (),
             Plan::Get {
                 id,
                 keys: _,
                 plan: _,
+                column_types: _,
             } => match id {
                 Id::Global(id) => {
                     out.insert(*id);

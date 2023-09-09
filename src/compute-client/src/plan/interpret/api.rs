@@ -232,11 +232,11 @@ where
         use Plan::*;
         rg.checked_recur(|_| {
             match expr {
-                Constant { rows } => {
+                Constant { rows, column_types: _ } => {
                     // Interpret the current node.
                     Ok(self.interpret.constant(&self.ctx, rows))
                 }
-                Get { id, keys, plan } => {
+                Get { id, keys, plan, column_types: _ } => {
                     // Interpret the current node.
                     Ok(self.interpret.get(&self.ctx, id, keys, plan))
                 }
@@ -480,7 +480,7 @@ where
         use Plan::*;
         rg.checked_recur(|_| {
             match expr {
-                Constant { rows } => {
+                Constant { rows, column_types: _ } => {
                     // Interpret the current node.
                     let result = self.interpret.constant(&self.ctx, rows);
                     // Mutate the current node using the given `action`.
@@ -488,7 +488,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Get { id, keys, plan } => {
+                Get { id, keys, plan, column_types: _ } => {
                     // Interpret the current node.
                     let result = self.interpret.get(&self.ctx, id, keys, plan);
                     // Mutate the current node using the given `action`.

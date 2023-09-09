@@ -102,6 +102,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::{Rc, Weak};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -111,6 +112,8 @@ use itertools::izip;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::{EvalError, Id};
+use mz_ore::assert::SOFT_ASSERTIONS;
+use mz_ore::{soft_assert, soft_assert_or_log};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
@@ -767,12 +770,16 @@ where
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G, Row> {
         match plan {
-            Plan::Constant { rows } => {
+            Plan::Constant { rows, column_types } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
                     Err(e) => (Vec::new(), vec![e]),
                 };
+
+                soft_assert!(rows
+                    .iter()
+                    .all(|(row, _ts, _diff)| row.is_of_types(&column_types)));
 
                 // We should advance times in constant collections to start from `as_of`.
                 let as_of_frontier = self.as_of_frontier.clone();
@@ -810,7 +817,12 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get { id, keys, plan } => {
+            Plan::Get {
+                id,
+                keys,
+                plan,
+                column_types,
+            } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
@@ -836,11 +848,22 @@ where
                             Some((key, row)),
                             self.until.clone(),
                         );
+                        if SOFT_ASSERTIONS.load(Ordering::Relaxed) {
+                            oks.inspect(move |(row, _ts, _diff)| {
+                                assert!(row.is_of_types(&column_types))
+                            });
+                        }
+
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_client::plan::GetPlan::Collection(mfp) => {
                         let (oks, errs) =
                             collection.as_collection_core(mfp, None, self.until.clone());
+                        if SOFT_ASSERTIONS.load(Ordering::Relaxed) {
+                            oks.inspect(move |(row, _ts, _diff)| {
+                                assert!(row.is_of_types(&column_types))
+                            });
+                        }
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
