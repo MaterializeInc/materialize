@@ -14,7 +14,9 @@ use std::{cmp, str};
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
 use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::error::KafkaError;
 use rdkafka::message::{Headers, Message};
+use rdkafka::types::RDKafkaErrorCode;
 use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
@@ -117,15 +119,14 @@ pub async fn run_verify_data(
         .subscribe(&[&topic])
         .context("subscribing to kafka topic")?;
 
-    let (stream_size, stream_timeout) = match partial_search {
+    let (mut stream_messages_remaining, stream_timeout) = match partial_search {
         Some(size) => (size, state.default_timeout),
         None => (expected_messages.len(), Duration::from_secs(15)),
     };
 
-    let message_stream = consumer
-        .stream()
-        .take(stream_size)
-        .timeout(cmp::max(state.default_timeout, stream_timeout));
+    let timeout = cmp::max(state.default_timeout, stream_timeout);
+
+    let message_stream = consumer.stream().timeout(timeout);
     pin!(message_stream);
 
     // Collect all messages that arrive without timing out. If we trip
@@ -134,10 +135,28 @@ pub async fn run_verify_data(
     // instead get an error message about the expected messages that
     // were missing.
     let mut actual_bytes = vec![];
-    loop {
+
+    let start = std::time::Instant::now();
+    let mut topic_created = false;
+
+    while stream_messages_remaining > 0 {
         match message_stream.next().await {
             Some(Ok(message)) => {
-                let message = message?;
+                let message = match message {
+                    // We create topics after creating sinks, so we permit
+                    // retries here while waiting for the topic to get created.
+                    Err(KafkaError::MessageConsumption(
+                        RDKafkaErrorCode::UnknownTopicOrPartition,
+                    )) if start.elapsed() < timeout && !topic_created => {
+                        println!("waiting for Kafka topic creation...");
+                        continue;
+                    }
+                    e => e?,
+                };
+
+                stream_messages_remaining -= 1;
+                topic_created = true;
+
                 consumer
                     .store_offset_from_message(&message)
                     .context("storing message offset")?;
