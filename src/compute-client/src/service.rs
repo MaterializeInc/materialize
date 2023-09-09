@@ -270,8 +270,8 @@ where
                 let old_upper = frontier.frontier().to_owned();
                 let shard_upper = &mut shard_frontiers[shard_id];
                 frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
                 shard_upper.join_assign(&new_shard_upper);
+                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), 1)));
 
                 let new_upper = frontier.frontier();
 

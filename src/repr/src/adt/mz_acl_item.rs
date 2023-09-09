@@ -565,6 +565,13 @@ impl PrivilegeMap {
         self.all_values().cloned()
     }
 
+    /// Consumes self and returns all contained [`MzAclItem`].
+    pub fn into_all_values(self) -> impl Iterator<Item = MzAclItem> {
+        self.0
+            .into_values()
+            .flat_map(|privileges| privileges.into_iter())
+    }
+
     /// Adds an [`MzAclItem`] to this map.
     pub fn grant(&mut self, privilege: MzAclItem) {
         let grantee_privileges = self.0.entry(privilege.grantee).or_default();

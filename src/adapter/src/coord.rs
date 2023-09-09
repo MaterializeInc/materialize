@@ -106,7 +106,7 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
-use mz_sql::session::user::User;
+use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
@@ -141,7 +141,7 @@ use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, RoleMetadata, Session};
+use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};

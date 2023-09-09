@@ -218,7 +218,7 @@ Explained Query:
     implementation
       %0:x[×] » %1[×]
     ArrangeBy keys=[[]] // { arity: 2 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 1 }
       Constant // { arity: 1 }
         - (1)
@@ -239,7 +239,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM x, generate_series(1, a)
 ----
 Explained Query:
   FlatMap generate_series(1, #0, 1) // { arity: 3 }
-    Get materialize.public.x // { arity: 2 }
+    ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -260,7 +260,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[#1]] // { arity: 2 }
         Filter (#1) IS NOT NULL // { arity: 2 }
-          Get materialize.public.x // { arity: 2 }
+          ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
@@ -284,7 +284,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[#1]] // { arity: 2 }
         Filter (#1) IS NOT NULL // { arity: 2 }
-          Get materialize.public.x // { arity: 2 }
+          ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
@@ -311,7 +311,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[#1]] // { arity: 2 }
         Filter (#1) IS NOT NULL // { arity: 2 }
-          Get materialize.public.x // { arity: 2 }
+          ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
@@ -1397,7 +1397,7 @@ EXPLAIN WITH(arity, join_impls) SELECT jsonb_object_keys(a) FROM y;
 Explained Query:
   Project (#1) // { arity: 1 }
     FlatMap jsonb_object_keys(#0) // { arity: 2 }
-      Get materialize.public.y // { arity: 1 }
+      ReadStorage materialize.public.y // { arity: 1 }
 
 EOF
 

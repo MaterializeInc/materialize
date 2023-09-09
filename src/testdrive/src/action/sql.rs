@@ -136,15 +136,24 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::GrantRole { .. }
         | Statement::RevokePrivileges { .. }
         | Statement::RevokeRole { .. } => {
-            let disk_state = state
-                .with_catalog_copy(|catalog| {
-                    catalog.state().dump().expect("state must be dumpable")
-                })
+            let catalog_state = state
+                .with_catalog_copy(|catalog| catalog.state().clone())
                 .await
-                .map_err(|e| anyhow!("failed to dump on-disk catalog state: {e}"))?;
+                .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?;
+
+            // Run internal consistency checks.
+            if let Some(state) = &catalog_state {
+                if let Err(inconsistencies) = state.check_consistency() {
+                    bail!("Internal catalog inconsistencies {inconsistencies:#?}");
+                }
+            }
+
+            // Check that our on-disk state matches the in-memory state.
+            let disk_state =
+                catalog_state.map(|state| state.dump().expect("state must be dumpable"));
             if let Some(disk_state) = disk_state {
                 let mem_state = reqwest::get(&format!(
-                    "http://{}/api/catalog",
+                    "http://{}/api/catalog/dump",
                     state.materialize_internal_http_addr,
                 ))
                 .await?

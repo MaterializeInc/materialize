@@ -16,18 +16,20 @@ use std::time::Duration;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVecExt,
-    HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry, UIntGaugeVec,
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec,
+    GaugeVecExt, HistogramVec, HistogramVecExt, IntCounterVec, MetricsRegistry, UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
+use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
-use prometheus::core::AtomicU64;
+use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
+type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
 pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
 
@@ -55,6 +57,9 @@ pub struct ComputeControllerMetrics {
     // peeks
     peeks_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
+
+    // dataflows
+    dataflow_initial_output_duration_seconds: GaugeVec,
 }
 
 impl ComputeControllerMetrics {
@@ -130,6 +135,11 @@ impl ComputeControllerMetrics {
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
+            )),
+            dataflow_initial_output_duration_seconds: metrics_registry.register(metric!(
+                name: "mz_dataflow_initial_output_duration_seconds",
+                help: "The time from dataflow creation up to when the first output was produced.",
+                var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
         }
     }
@@ -238,6 +248,9 @@ impl InstanceMetrics {
             .get_delete_on_drop_gauge(labels.clone());
 
         ReplicaMetrics {
+            instance_id: self.instance_id,
+            replica_id,
+            metrics: self.metrics.clone(),
             inner: Arc::new(ReplicaMetricsInner {
                 commands_total,
                 command_message_bytes_total,
@@ -280,6 +293,10 @@ impl InstanceMetrics {
 /// Per-replica metrics.
 #[derive(Debug, Clone)]
 pub struct ReplicaMetrics {
+    instance_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+    metrics: ComputeControllerMetrics,
+
     pub inner: Arc<ReplicaMetricsInner>,
 }
 
@@ -292,6 +309,35 @@ pub struct ReplicaMetricsInner {
 
     pub command_queue_size: UIntGauge,
     pub response_queue_size: UIntGauge,
+}
+
+impl ReplicaMetrics {
+    pub(crate) fn for_collection(
+        &self,
+        collection_id: GlobalId,
+    ) -> Option<ReplicaCollectionMetrics> {
+        // In an effort to reduce the cardinality of timeseries created, we collect metrics only
+        // for non-transient collections. This is roughly equivalent to "long-lived" collections,
+        // with the exception of subscribes which may or may not be long-lived. We might want to
+        // change this policy in the future to track subscribes as well.
+        if collection_id.is_transient() {
+            return None;
+        }
+
+        let labels = vec![
+            self.instance_id.to_string(),
+            self.replica_id.to_string(),
+            collection_id.to_string(),
+        ];
+        let initial_output_duration_seconds = self
+            .metrics
+            .dataflow_initial_output_duration_seconds
+            .get_delete_on_drop_gauge(labels);
+
+        Some(ReplicaCollectionMetrics {
+            initial_output_duration_seconds,
+        })
+    }
 }
 
 /// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
@@ -311,6 +357,12 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
             .for_proto_response(item)
             .inc_by(u64::cast_from(size));
     }
+}
+
+/// Per-replica-and-collection metrics.
+#[derive(Debug)]
+pub(crate) struct ReplicaCollectionMetrics {
+    pub initial_output_duration_seconds: Gauge,
 }
 
 /// Metrics keyed by `ComputeCommand` type.

@@ -41,7 +41,9 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use mz_stash::objects::proto;
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use mz_storage_client::types::instances::StorageInstanceId;
 use serde::{Deserialize, Serialize};
@@ -108,7 +110,7 @@ pub struct ComputeReplicaConfig {
 pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
 
 /// Logging configuration of a replica.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct ComputeReplicaLogging {
     /// Whether to enable logging for the logging dataflows.
     pub log_logging: bool,
@@ -122,6 +124,22 @@ impl ComputeReplicaLogging {
     /// Return whether logging is enabled.
     pub fn enabled(&self) -> bool {
         self.interval.is_some()
+    }
+}
+
+impl RustType<proto::ReplicaLogging> for ComputeReplicaLogging {
+    fn into_proto(&self) -> proto::ReplicaLogging {
+        proto::ReplicaLogging {
+            log_logging: self.log_logging,
+            interval: self.interval.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
+        Ok(ComputeReplicaLogging {
+            log_logging: proto.log_logging,
+            interval: proto.interval.into_rust()?,
+        })
     }
 }
 

@@ -191,6 +191,7 @@ impl SourceRender for KafkaSourceConnection {
                     GlueConsumerContext {
                         notificator: Arc::clone(&notificator),
                         stats_tx,
+                        inner: MzClientContext::default(),
                     },
                     &btreemap! {
                         // Default to disabling Kafka auto commit. This can be
@@ -922,6 +923,7 @@ impl PartitionConsumer {
 struct GlueConsumerContext {
     notificator: Arc<Notify>,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
+    inner: MzClientContext,
 }
 
 impl ClientContext for GlueConsumerContext {
@@ -940,10 +942,10 @@ impl ClientContext for GlueConsumerContext {
     // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
     // implementation.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        MzClientContext.log(level, fac, log_message)
+        self.inner.log(level, fac, log_message)
     }
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        MzClientContext.error(error, reason)
+        self.inner.error(error, reason)
     }
 }
 

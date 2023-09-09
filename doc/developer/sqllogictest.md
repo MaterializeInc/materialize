@@ -126,6 +126,19 @@ on which system commands like `ALTER SYSTEM` can be used.
 The output is one line per row, one "COMPLETE X" (where X is the
 number of affected rows) per statement, or an error message.
 
+When using the `multiline` keyword it is possible to have output consisting of
+multiple lines, up to the `EOF` keyword, which is still followed by `COMPLETE`:
+
+> simple multiline,conn=materialize,user=materialize
+> EXPLAIN MATERIALIZED VIEW mv;
+> ----
+> materialize.public.mv:
+>   Constant
+>     - (1)
+>
+> EOF
+> COMPLETE 1
+
 ### `copy` extension
 
 The `copy` directive executes a [`COPY FROM`](https://materialize.com/docs/sql/copy-from/)

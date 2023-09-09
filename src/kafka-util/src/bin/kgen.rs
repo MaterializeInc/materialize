@@ -87,6 +87,7 @@ use crossbeam::thread;
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::retry::Retry;
@@ -769,7 +770,7 @@ async fn main() -> anyhow::Result<()> {
             let producer: ThreadedProducer<mz_kafka_util::client::MzClientContext> =
                 mz_kafka_util::client::create_new_client_config_simple()
                     .set("bootstrap.servers", args.bootstrap_server.to_string())
-                    .create_with_context(mz_kafka_util::client::MzClientContext)
+                    .create_with_context(MzClientContext::default())
                     .unwrap();
             let mut key_buf = vec![];
             let mut value_buf = vec![];

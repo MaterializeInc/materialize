@@ -257,7 +257,11 @@ async fn purify_create_source(
                 .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
             let consumer = connection
-                .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+                .create_with_context(
+                    &connection_context,
+                    MzClientContext::default(),
+                    &BTreeMap::new(),
+                )
                 .await
                 .map_err(|e| {
                     anyhow!(

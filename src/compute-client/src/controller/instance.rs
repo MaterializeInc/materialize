@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::ClusterStartupEpoch;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -302,14 +302,16 @@ where
         };
 
         instance.send(ComputeCommand::CreateTimely {
-            config: Default::default(),
+            config: TimelyConfig {
+                variable_length_row_encoding,
+                ..Default::default()
+            },
             epoch: ClusterStartupEpoch::new(envd_epoch, 0),
         });
 
         let dummy_logging_config = Default::default();
         instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging_config: dummy_logging_config,
-            variable_length_row_encoding,
+            logging: dummy_logging_config,
         }));
 
         instance
@@ -1177,20 +1179,14 @@ where
             }
         };
 
-        // Forward the peek response, if we didn't already forward a response
-        // to this peek previously. If the peek is targeting a replica, only
-        // forward the response from that replica.
-        // TODO: we could collect the other responses to assert equivalence?
-        // Trades resources (memory) for reassurances; idk which is best.
+        // Forward the peek response, if we didn't already forward a response to this peek
+        // previously. If the peek is targeting a replica, only forward the response from that
+        // replica.
         //
-        // NOTE: we use the `otel_ctx` from the response, not the
-        // pending peek, because we currently want the parent
-        // to be whatever the compute worker did with this peek. We
-        // still `take` the pending peek's `otel_ctx` to mark it as
-        // served.
-        //
-        // Additionally, we just use the `otel_ctx` from the first worker to
-        // respond.
+        // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
+        // currently want the parent to be whatever the compute worker did with this peek. We still
+        // `take` the pending peek's `otel_ctx` to mark it as served.
+
         let replica_targeted = peek.target_replica.unwrap_or(replica_id) == replica_id;
         let controller_response = if replica_targeted && peek.otel_ctx.take().is_some() {
             let duration = peek.requested_at.elapsed();
@@ -1209,6 +1205,12 @@ where
         peek.unfinished.remove(&replica_id);
         if peek.is_finished() {
             self.remove_peeks(&[uuid].into());
+        }
+
+        // If we are serving a response to the peek, enqueue a `CancelPeek` command to allow other
+        // replicas to stop spending resources on computing this peek.
+        if controller_response.is_some() {
+            self.compute.send(ComputeCommand::CancelPeek { uuid });
         }
 
         controller_response

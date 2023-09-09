@@ -182,7 +182,7 @@ impl From<String> for proto::StringWrapper {
 /// You should not implement this yourself, instead use the `wire_compatible!` macro.
 pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
     /// Converts the type `T` into `Self` by serializing `T` and deserializing as `Self`.
-    fn convert(old: T) -> Self {
+    fn convert(old: &T) -> Self {
         let bytes = old.encode_to_vec();
         // Note: use Bytes to enable possible re-use of the underlying buffer.
         let bytes = Bytes::from(bytes);
@@ -191,9 +191,9 @@ pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
 }
 
 // SAFETY: A message type is trivially wire compatible with itself.
-unsafe impl<T: prost::Message + Default> WireCompatible<T> for T {
-    fn convert(old: Self) -> Self {
-        old
+unsafe impl<T: prost::Message + Default + Clone> WireCompatible<T> for T {
+    fn convert(old: &Self) -> Self {
+        old.clone()
     }
 }
 
@@ -233,7 +233,7 @@ macro_rules! wire_compatible {
 
                     // Maybe superfluous, but this is a method called in production.
                     let b_decoded = b_decoded.expect("asserted Ok");
-                    let b_converted: $b $(::$b_sub)* = $crate::objects::WireCompatible::convert(a);
+                    let b_converted: $b $(::$b_sub)* = $crate::objects::WireCompatible::convert(&a);
                     assert_eq!(b_decoded, b_converted);
 
                     let b_bytes = b_decoded.encode_to_vec();
@@ -250,7 +250,7 @@ macro_rules! wire_compatible {
 
                     // Maybe superfluous, but this is a method called in production.
                     let a_decoded = a_decoded.expect("asserted Ok");
-                    let a_converted: $a $(::$a_sub)* = $crate::objects::WireCompatible::convert(b);
+                    let a_converted: $a $(::$a_sub)* = $crate::objects::WireCompatible::convert(&b);
                     assert_eq!(a_decoded, a_converted);
 
                     let a_bytes = a_decoded.encode_to_vec();

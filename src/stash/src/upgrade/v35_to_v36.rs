@@ -11,15 +11,8 @@ use std::collections::BTreeMap;
 
 use crate::objects::{wire_compatible, WireCompatible};
 use crate::upgrade::MigrationAction;
+use crate::upgrade::{objects_v35 as v35, objects_v36 as v36};
 use crate::{StashError, Transaction, TypedCollection};
-
-pub mod v35 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v35.rs"));
-}
-
-pub mod v36 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v36.rs"));
-}
 
 wire_compatible!(v35::ServerConfigurationKey with v36::ServerConfigurationKey);
 wire_compatible!(v35::ServerConfigurationValue with v36::ServerConfigurationValue);
@@ -49,9 +42,8 @@ pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
                         found_user_flag = true;
                     }
 
-                    let new_key: v36::ServerConfigurationKey = WireCompatible::convert(key.clone());
-                    let new_value: v36::ServerConfigurationValue =
-                        WireCompatible::convert(value.clone());
+                    let new_key: v36::ServerConfigurationKey = WireCompatible::convert(key);
+                    let new_value: v36::ServerConfigurationValue = WireCompatible::convert(value);
                     updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
                 }
 

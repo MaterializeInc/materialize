@@ -253,9 +253,7 @@ pub trait IndexOracle: fmt::Debug {
     // you need only allocate when you actually look for an index. Can we do
     // better somehow? Making the entire optimizer generic over this iterator
     // type doesn't presently seem worthwhile.
-    fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_>;
-    /// Like `indexes_on`, but also returns the ids of indexes.
-    fn indexes_with_id_on(
+    fn indexes_on(
         &self,
         id: GlobalId,
     ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_>;
@@ -266,11 +264,7 @@ pub trait IndexOracle: fmt::Debug {
 pub struct EmptyIndexOracle;
 
 impl IndexOracle for EmptyIndexOracle {
-    fn indexes_on(&self, _: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
-        Box::new(iter::empty())
-    }
-
-    fn indexes_with_id_on(
+    fn indexes_on(
         &self,
         _id: GlobalId,
     ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_> {

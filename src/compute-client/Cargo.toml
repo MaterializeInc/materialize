@@ -28,6 +28,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-service = { path = "../service" }
+mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
 mz-tracing = { path = "../tracing" }

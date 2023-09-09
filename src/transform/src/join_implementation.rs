@@ -340,14 +340,14 @@ impl JoinImplementation {
 
                 // Collect available arrangements on this input.
                 match input {
-                    MirRelationExpr::Get { id, typ: _ } => {
+                    MirRelationExpr::Get { id, typ: _, .. } => {
                         available_arrangements[index]
                             .extend(indexes.get(*id).map(|key| key.to_vec()));
                     }
                     MirRelationExpr::ArrangeBy { input, keys } => {
                         // We may use any presented arrangement keys.
                         available_arrangements[index].extend(keys.clone());
-                        if let MirRelationExpr::Get { id, typ: _ } = &**input {
+                        if let MirRelationExpr::Get { id, typ: _, .. } = &**input {
                             available_arrangements[index]
                                 .extend(indexes.get(*id).map(|key| key.to_vec()));
                         }
@@ -480,7 +480,7 @@ mod index_map {
 
         pub fn get(&self, id: Id) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
             match id {
-                Id::Global(id) => self.global.indexes_on(id),
+                Id::Global(id) => Box::new(self.global.indexes_on(id).map(|(_idx_id, key)| key)),
                 Id::Local(id) => Box::new(
                     self.local
                         .get(&id)

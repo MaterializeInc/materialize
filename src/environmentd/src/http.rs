@@ -395,8 +395,12 @@ impl InternalHttpServer {
             )
             .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
             .route(
-                "/api/catalog",
-                routing::get(catalog::handle_internal_catalog),
+                "/api/catalog/dump",
+                routing::get(catalog::handle_catalog_dump),
+            )
+            .route(
+                "/api/catalog/check",
+                routing::get(catalog::handle_catalog_check),
             )
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
             .layer(Extension(adapter_client_rx.shared()))

@@ -14,6 +14,7 @@ use bytes::BufMut;
 use mz_expr::{EvalError, PartitionId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -25,7 +26,7 @@ include!(concat!(
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -71,7 +72,7 @@ impl Display for DecodeError {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeErrorKind {
     Text(String),
     Bytes(String),
@@ -108,7 +109,7 @@ impl Display for DecodeErrorKind {
 }
 
 /// Errors arising during envelope processing.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum EnvelopeError {
     /// An error arising while processing the Debezium envelope.
     Debezium(String),
@@ -125,7 +126,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         ProtoEnvelopeErrorV1 {
             kind: Some(match self {
                 EnvelopeError::Debezium(text) => Kind::Debezium(text.clone()),
-                EnvelopeError::Upsert(rust) => Kind::Upsert(Box::new(rust.into_proto())),
+                EnvelopeError::Upsert(rust) => Kind::Upsert(rust.into_proto()),
                 EnvelopeError::Flat(text) => Kind::Flat(text.clone()),
             }),
         }
@@ -136,7 +137,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         match proto.kind {
             Some(Kind::Debezium(text)) => Ok(Self::Debezium(text)),
             Some(Kind::Upsert(proto)) => {
-                let rust = RustType::from_proto(*proto)?;
+                let rust = RustType::from_proto(proto)?;
                 Ok(Self::Upsert(rust))
             }
             Some(Kind::Flat(text)) => Ok(Self::Flat(text)),
@@ -159,10 +160,10 @@ impl Display for EnvelopeError {
 
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct UpsertValueError {
-    /// The underlying error. Boxed because this is a recursive type.
-    pub inner: Box<DataflowError>,
+    /// The underlying error.
+    pub inner: DecodeError,
     /// The (good) key associated with the errored value.
     pub for_key: Row,
 }
@@ -204,7 +205,9 @@ impl Display for UpsertValueError {
 }
 
 /// A source contained a record with a NULL key, which we don't support.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
+)]
 pub struct UpsertNullKeyError {
     partition_id: Option<PartitionId>,
 }
@@ -248,7 +251,7 @@ impl Display for UpsertNullKeyError {
 }
 
 /// An error that can be retracted by a future message using upsert logic.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -270,7 +273,7 @@ impl RustType<ProtoUpsertError> for UpsertError {
         ProtoUpsertError {
             kind: Some(match self {
                 UpsertError::KeyDecode(err) => Kind::KeyDecode(err.into_proto()),
-                UpsertError::Value(err) => Kind::Value(Box::new(err.into_proto())),
+                UpsertError::Value(err) => Kind::Value(err.into_proto()),
                 UpsertError::NullKey(err) => Kind::NullKey(err.into_proto()),
             }),
         }
@@ -284,7 +287,7 @@ impl RustType<ProtoUpsertError> for UpsertError {
                 Ok(Self::KeyDecode(rust))
             }
             Some(Kind::Value(proto)) => {
-                let rust = RustType::from_proto(*proto)?;
+                let rust = RustType::from_proto(proto)?;
                 Ok(Self::Value(rust))
             }
             Some(Kind::NullKey(proto)) => {
@@ -308,7 +311,7 @@ impl Display for UpsertError {
 
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SourceError {
     pub source_id: GlobalId,
     pub error: SourceErrorDetails,
@@ -345,7 +348,7 @@ impl Display for SourceError {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceErrorDetails {
     Initialization(String),
     Other(String),
@@ -401,7 +404,7 @@ impl Display for SourceErrorDetails {
 /// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),
@@ -412,22 +415,478 @@ pub enum DataflowError {
 impl Error for DataflowError {}
 
 mod columnation {
-    use crate::types::errors::DataflowError;
-    use timely::container::columnation::{CloneRegion, Columnation};
+    use std::iter::once;
+
+    use mz_expr::EvalError;
+    use mz_repr::adt::range::InvalidRangeError;
+    use mz_repr::strconv::ParseError;
+    use mz_repr::Row;
+    use timely::container::columnation::{Columnation, Region, StableRegion};
+
+    use crate::types::errors::{
+        DataflowError, DecodeError, DecodeErrorKind, EnvelopeError, SourceError,
+        SourceErrorDetails, UpsertError, UpsertValueError,
+    };
 
     impl Columnation for DataflowError {
-        // Discussion of `Region` for `DataflowError`: Although `DataflowError` contains pointers,
-        // we treat it as a type that doesn't and can simply be cloned. The reason for this is
-        // threefold:
-        // 1. Cloning the type does not violate correctness. It comes with the disadvantage that its
-        //    `heap_size` will not be accurate.
-        // 2. It is hard to implement a region allocator for `DataflowError`, because it contains
-        //    many pointers across various enum types. Some are boxed, and it contains a box to
-        //    itself, meaning we have to pass the outer region inwards to avoid creating recursive
-        //    regions.
-        // 3. We accept the performance implication of not storing the errors in a region allocator,
-        //    which should be similar to storing errors in vectors on the heap.
-        type InnerRegion = CloneRegion<DataflowError>;
+        type InnerRegion = DataflowErrorRegion;
+    }
+
+    /// A region to store [`DataflowError`].
+    #[derive(Default)]
+    pub struct DataflowErrorRegion {
+        /// Stable location for [`DecodeError`] for inserting into a box.
+        decode_error_region: StableRegion<DecodeError>,
+        /// Stable location for [`EnvelopeError`] for inserting into a box.
+        envelope_error_region: StableRegion<EnvelopeError>,
+        /// Stable location for [`EvalError`] for inserting into a box.
+        eval_error_region: StableRegion<EvalError>,
+        /// Region for storing rows.
+        row_region: <Row as Columnation>::InnerRegion,
+        /// Stable location for [`SourceError`] for inserting into a box.
+        source_error_region: StableRegion<SourceError>,
+        /// Region for storing strings.
+        string_region: <String as Columnation>::InnerRegion,
+        /// Region for storing u8 vectors.
+        u8_region: <Vec<u8> as Columnation>::InnerRegion,
+    }
+
+    impl DataflowErrorRegion {
+        /// Copy a decode error into its region, return an owned object.
+        ///
+        /// This is unsafe because the returned value must not be dropped.
+        unsafe fn copy_decode_error(&mut self, decode_error: &DecodeError) -> DecodeError {
+            DecodeError {
+                kind: match &decode_error.kind {
+                    DecodeErrorKind::Text(string) => {
+                        DecodeErrorKind::Text(self.string_region.copy(string))
+                    }
+                    DecodeErrorKind::Bytes(string) => {
+                        DecodeErrorKind::Bytes(self.string_region.copy(string))
+                    }
+                },
+                raw: self.u8_region.copy(&decode_error.raw),
+            }
+        }
+    }
+
+    /// Compile-time assertion that a value is `Copy`.
+    fn assert_copy<T: Copy>(_: &T) {}
+
+    impl Region for DataflowErrorRegion {
+        type Item = DataflowError;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            // Unsafe Box::from_raw reasoning:
+            // Construct a box from a provided value. This is safe because a box is
+            // a pointer to a memory address, and the value is stored on the heap.
+            // Note that the box must not be dropped.
+
+            // SAFETY: When adding new enum variants, care must be taken that all types containing
+            // references are region-allocated, otherwise we'll leak memory.
+
+            // Types that are `Copy` should be asserted using `assert_copy`, or copied, to detect
+            // changes that introduce pointers.
+
+            let err = match item {
+                DataflowError::DecodeError(err) => {
+                    let err = self.copy_decode_error(&*err);
+                    let reference = self.decode_error_region.copy_iter(once(err));
+                    let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
+                    DataflowError::DecodeError(boxed)
+                }
+                DataflowError::EvalError(err) => {
+                    let err: &EvalError = &*err;
+                    let err = match err {
+                        e @ EvalError::CharacterNotValidForEncoding(x) => {
+                            assert_copy(x);
+                            e.clone()
+                        }
+                        e @ EvalError::CharacterTooLargeForEncoding(x) => {
+                            assert_copy(x);
+                            e.clone()
+                        }
+                        EvalError::DateBinOutOfRange(string) => {
+                            EvalError::DateBinOutOfRange(self.string_region.copy(string))
+                        }
+                        e @ EvalError::DivisionByZero
+                        | e @ EvalError::FloatOverflow
+                        | e @ EvalError::FloatUnderflow
+                        | e @ EvalError::NumericFieldOverflow
+                        | e @ EvalError::MzTimestampStepOverflow
+                        | e @ EvalError::TimestampCannotBeNan
+                        | e @ EvalError::TimestampOutOfRange
+                        | e @ EvalError::NegSqrt
+                        | e @ EvalError::NullCharacterNotPermitted
+                        | e @ EvalError::UnterminatedLikeEscapeSequence
+                        | e @ EvalError::MultipleRowsFromSubquery
+                        | e @ EvalError::LikePatternTooLong
+                        | e @ EvalError::LikeEscapeTooLong
+                        | e @ EvalError::MultidimensionalArrayRemovalNotSupported
+                        | e @ EvalError::MultiDimensionalArraySearch
+                        | e @ EvalError::ArrayFillWrongArraySubscripts
+                        | e @ EvalError::DateOutOfRange
+                        | e @ EvalError::CharOutOfRange
+                        | e @ EvalError::InvalidBase64Equals
+                        | e @ EvalError::InvalidBase64EndSequence
+                        | e @ EvalError::InvalidTimezoneInterval
+                        | e @ EvalError::InvalidTimezoneConversion
+                        | e @ EvalError::LengthTooLarge => e.clone(),
+                        EvalError::Unsupported { feature, issue_no } => EvalError::Unsupported {
+                            feature: self.string_region.copy(feature),
+                            issue_no: *issue_no,
+                        },
+                        EvalError::Float32OutOfRange(string) => {
+                            EvalError::Float32OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::Float64OutOfRange(string) => {
+                            EvalError::Float64OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::Int16OutOfRange(string) => {
+                            EvalError::Int16OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::Int32OutOfRange(string) => {
+                            EvalError::Int32OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::Int64OutOfRange(string) => {
+                            EvalError::Int64OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::UInt16OutOfRange(string) => {
+                            EvalError::UInt16OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::UInt32OutOfRange(string) => {
+                            EvalError::UInt32OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::UInt64OutOfRange(string) => {
+                            EvalError::UInt64OutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::MzTimestampOutOfRange(string) => {
+                            EvalError::MzTimestampOutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::OidOutOfRange(string) => {
+                            EvalError::OidOutOfRange(self.string_region.copy(string))
+                        }
+                        EvalError::IntervalOutOfRange(string) => {
+                            EvalError::IntervalOutOfRange(self.string_region.copy(string))
+                        }
+                        e @ EvalError::IndexOutOfRange {
+                            provided,
+                            valid_end,
+                        } => {
+                            assert_copy(provided);
+                            assert_copy(valid_end);
+                            e.clone()
+                        }
+                        e @ EvalError::InvalidBase64Symbol(c) => {
+                            assert_copy(c);
+                            e.clone()
+                        }
+                        EvalError::InvalidTimezone(x) => {
+                            EvalError::InvalidTimezone(self.string_region.copy(x))
+                        }
+                        e @ EvalError::InvalidLayer { max_layer, val } => {
+                            assert_copy(max_layer);
+                            assert_copy(val);
+                            e.clone()
+                        }
+                        EvalError::InvalidArray(err) => EvalError::InvalidArray(*err),
+                        EvalError::InvalidEncodingName(x) => {
+                            EvalError::InvalidEncodingName(self.string_region.copy(x))
+                        }
+                        EvalError::InvalidHashAlgorithm(x) => {
+                            EvalError::InvalidHashAlgorithm(self.string_region.copy(x))
+                        }
+                        EvalError::InvalidByteSequence {
+                            byte_sequence,
+                            encoding_name,
+                        } => EvalError::InvalidByteSequence {
+                            byte_sequence: self.string_region.copy(byte_sequence),
+                            encoding_name: self.string_region.copy(encoding_name),
+                        },
+                        EvalError::InvalidJsonbCast { from, to } => EvalError::InvalidJsonbCast {
+                            from: self.string_region.copy(from),
+                            to: self.string_region.copy(to),
+                        },
+                        EvalError::InvalidRegex(x) => {
+                            EvalError::InvalidRegex(self.string_region.copy(x))
+                        }
+                        e @ EvalError::InvalidRegexFlag(x) => {
+                            assert_copy(x);
+                            e.clone()
+                        }
+                        EvalError::InvalidParameterValue(x) => {
+                            EvalError::InvalidParameterValue(self.string_region.copy(x))
+                        }
+                        EvalError::InvalidDatePart(x) => {
+                            EvalError::InvalidDatePart(self.string_region.copy(x))
+                        }
+                        EvalError::UnknownUnits(x) => {
+                            EvalError::UnknownUnits(self.string_region.copy(x))
+                        }
+                        EvalError::UnsupportedUnits(x, y) => EvalError::UnsupportedUnits(
+                            self.string_region.copy(x),
+                            self.string_region.copy(y),
+                        ),
+                        EvalError::Parse(ParseError {
+                            kind,
+                            type_name,
+                            input,
+                            details,
+                        }) => EvalError::Parse(ParseError {
+                            kind: *kind,
+                            type_name: self.string_region.copy(type_name),
+                            input: self.string_region.copy(input),
+                            details: details
+                                .as_ref()
+                                .map(|details| self.string_region.copy(details)),
+                        }),
+                        e @ EvalError::ParseHex(x) => {
+                            assert_copy(x);
+                            e.clone()
+                        }
+                        EvalError::Internal(x) => EvalError::Internal(self.string_region.copy(x)),
+                        EvalError::InfinityOutOfDomain(x) => {
+                            EvalError::InfinityOutOfDomain(self.string_region.copy(x))
+                        }
+                        EvalError::NegativeOutOfDomain(x) => {
+                            EvalError::NegativeOutOfDomain(self.string_region.copy(x))
+                        }
+                        EvalError::ZeroOutOfDomain(x) => {
+                            EvalError::ZeroOutOfDomain(self.string_region.copy(x))
+                        }
+                        EvalError::OutOfDomain(x, y, z) => {
+                            assert_copy(x);
+                            assert_copy(y);
+                            EvalError::OutOfDomain(*x, *y, self.string_region.copy(z))
+                        }
+                        EvalError::ComplexOutOfRange(x) => {
+                            EvalError::ComplexOutOfRange(self.string_region.copy(x))
+                        }
+                        EvalError::Undefined(x) => EvalError::Undefined(self.string_region.copy(x)),
+                        EvalError::StringValueTooLong {
+                            target_type,
+                            length,
+                        } => EvalError::StringValueTooLong {
+                            target_type: self.string_region.copy(target_type),
+                            length: *length,
+                        },
+                        e @ EvalError::IncompatibleArrayDimensions { dims } => {
+                            assert_copy(dims);
+                            e.clone()
+                        }
+                        EvalError::TypeFromOid(x) => {
+                            EvalError::TypeFromOid(self.string_region.copy(x))
+                        }
+                        EvalError::InvalidRange(x) => {
+                            let err = match x {
+                                e @ InvalidRangeError::MisorderedRangeBounds
+                                | e @ InvalidRangeError::InvalidRangeBoundFlags
+                                | e @ InvalidRangeError::DiscontiguousUnion
+                                | e @ InvalidRangeError::DiscontiguousDifference
+                                | e @ InvalidRangeError::NullRangeBoundFlags => e.clone(),
+                                InvalidRangeError::CanonicalizationOverflow(string) => {
+                                    InvalidRangeError::CanonicalizationOverflow(
+                                        self.string_region.copy(string),
+                                    )
+                                }
+                            };
+                            EvalError::InvalidRange(err)
+                        }
+                        EvalError::InvalidRoleId(x) => {
+                            EvalError::InvalidRoleId(self.string_region.copy(x))
+                        }
+                        EvalError::InvalidPrivileges(x) => {
+                            EvalError::InvalidPrivileges(self.string_region.copy(x))
+                        }
+                        EvalError::LetRecLimitExceeded(x) => {
+                            EvalError::LetRecLimitExceeded(self.string_region.copy(x))
+                        }
+                        EvalError::MustNotBeNull(x) => {
+                            EvalError::MustNotBeNull(self.string_region.copy(x))
+                        }
+                        EvalError::InvalidIdentifier { ident, detail } => {
+                            EvalError::InvalidIdentifier {
+                                ident: self.string_region.copy(ident),
+                                detail: detail
+                                    .as_ref()
+                                    .map(|detail| self.string_region.copy(detail)),
+                            }
+                        }
+                        e @ EvalError::MaxArraySizeExceeded(x) => {
+                            assert_copy(x);
+                            e.clone()
+                        }
+                        EvalError::DateDiffOverflow { unit, a, b } => EvalError::DateDiffOverflow {
+                            unit: self.string_region.copy(unit),
+                            a: self.string_region.copy(a),
+                            b: self.string_region.copy(b),
+                        },
+                        EvalError::IfNullError(x) => {
+                            EvalError::IfNullError(self.string_region.copy(x))
+                        }
+                    };
+                    let reference = self.eval_error_region.copy_iter(once(err));
+                    let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
+                    DataflowError::EvalError(boxed)
+                }
+                DataflowError::SourceError(err) => {
+                    let err: &SourceError = &*err;
+                    let err = SourceError {
+                        source_id: err.source_id,
+                        error: match &err.error {
+                            SourceErrorDetails::Initialization(string) => {
+                                SourceErrorDetails::Initialization(self.string_region.copy(string))
+                            }
+                            SourceErrorDetails::Other(string) => {
+                                SourceErrorDetails::Other(self.string_region.copy(string))
+                            }
+                        },
+                    };
+                    let reference = self.source_error_region.copy_iter(once(err));
+                    let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
+                    DataflowError::SourceError(boxed)
+                }
+                DataflowError::EnvelopeError(err) => {
+                    let err: &EnvelopeError = &*err;
+                    let err = match err {
+                        EnvelopeError::Debezium(string) => {
+                            EnvelopeError::Debezium(self.string_region.copy(string))
+                        }
+                        EnvelopeError::Upsert(err) => {
+                            let err = match err {
+                                UpsertError::KeyDecode(err) => {
+                                    UpsertError::KeyDecode(self.copy_decode_error(err))
+                                }
+                                UpsertError::Value(err) => UpsertError::Value(UpsertValueError {
+                                    inner: self.copy_decode_error(&err.inner),
+                                    for_key: self.row_region.copy(&err.for_key),
+                                }),
+                                UpsertError::NullKey(err) => UpsertError::NullKey(*err),
+                            };
+                            EnvelopeError::Upsert(err)
+                        }
+                        EnvelopeError::Flat(string) => {
+                            EnvelopeError::Flat(self.string_region.copy(string))
+                        }
+                    };
+                    let reference = self.envelope_error_region.copy_iter(once(err));
+                    let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
+                    DataflowError::EnvelopeError(boxed)
+                }
+            };
+            // Debug-only check that we're returning an equal object.
+            debug_assert_eq!(item, &err);
+            err
+        }
+
+        fn clear(&mut self) {
+            // De-structure `self` to make sure we're clearing all regions.
+            let Self {
+                decode_error_region,
+                envelope_error_region,
+                eval_error_region,
+                row_region,
+                source_error_region,
+                string_region,
+                u8_region,
+            } = self;
+            decode_error_region.clear();
+            envelope_error_region.clear();
+            eval_error_region.clear();
+            row_region.clear();
+            source_error_region.clear();
+            string_region.clear();
+            u8_region.clear();
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            // Reserve space on all stable regions.
+            self.decode_error_region.reserve(
+                items
+                    .clone()
+                    .filter(|x| matches!(x, DataflowError::DecodeError(_)))
+                    .count(),
+            );
+            self.envelope_error_region.reserve(
+                items
+                    .clone()
+                    .filter(|x| matches!(x, DataflowError::EnvelopeError(_)))
+                    .count(),
+            );
+            self.eval_error_region.reserve(
+                items
+                    .clone()
+                    .filter(|x| matches!(x, DataflowError::EvalError(_)))
+                    .count(),
+            );
+            self.source_error_region.reserve(
+                items
+                    .filter(|x| matches!(x, DataflowError::SourceError(_)))
+                    .count(),
+            );
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            // Reserve space on all region allocators.
+            self.row_region
+                .reserve_regions(regions.clone().map(|r| &r.row_region));
+            self.string_region
+                .reserve_regions(regions.clone().map(|r| &r.string_region));
+            self.u8_region
+                .reserve_regions(regions.clone().map(|r| &r.u8_region));
+        }
+
+        fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            // De-structure `self` to make sure we're counting all regions.
+            let Self {
+                decode_error_region,
+                envelope_error_region,
+                eval_error_region,
+                row_region,
+                source_error_region,
+                string_region,
+                u8_region,
+            } = &self;
+            decode_error_region.heap_size(&mut callback);
+            envelope_error_region.heap_size(&mut callback);
+            eval_error_region.heap_size(&mut callback);
+            row_region.heap_size(&mut callback);
+            source_error_region.heap_size(&mut callback);
+            string_region.heap_size(&mut callback);
+            u8_region.heap_size(callback);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use proptest::prelude::*;
+        use timely::container::columnation::TimelyStack;
+
+        use super::*;
+
+        fn columnation_roundtrip<T: Columnation>(item: &T) -> TimelyStack<T> {
+            let mut container = TimelyStack::with_capacity(1);
+            container.copy(item);
+            container
+        }
+
+        proptest! {
+            #[mz_ore::test]
+            // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+            #[cfg_attr(miri, ignore)]
+            fn dataflow_error_roundtrip(expect in any::<DataflowError>()) {
+                let actual = columnation_roundtrip(&expect);
+                proptest::prop_assert_eq!(&expect, &actual[0])
+            }
+        }
     }
 }
 
@@ -439,7 +898,7 @@ impl RustType<ProtoDataflowError> for DataflowError {
                 DataflowError::DecodeError(err) => DecodeError(*err.into_proto()),
                 DataflowError::EvalError(err) => EvalError(*err.into_proto()),
                 DataflowError::SourceError(err) => SourceError(*err.into_proto()),
-                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(err.into_proto()),
+                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(*err.into_proto()),
             }),
         }
     }
@@ -451,7 +910,9 @@ impl RustType<ProtoDataflowError> for DataflowError {
                 DecodeError(err) => Ok(DataflowError::DecodeError(Box::new(err.into_rust()?))),
                 EvalError(err) => Ok(DataflowError::EvalError(Box::new(err.into_rust()?))),
                 SourceError(err) => Ok(DataflowError::SourceError(Box::new(err.into_rust()?))),
-                EnvelopeErrorV1(err) => Ok(DataflowError::EnvelopeError(err.into_rust()?)),
+                EnvelopeErrorV1(err) => {
+                    Ok(DataflowError::EnvelopeError(Box::new(err.into_rust()?)))
+                }
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
         }

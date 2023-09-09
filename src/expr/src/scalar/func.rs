@@ -11,6 +11,7 @@
 // source code is subject to the terms of the PostgreSQL license, a copy of
 // which can be found in the LICENSE file at the root of this repository.
 
+use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
@@ -1605,35 +1606,6 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn map_get_values<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let map = a.unwrap_map();
-    let values: Vec<Datum> = b
-        .unwrap_array()
-        .elements()
-        .iter()
-        .map(
-            |target_key| match map.iter().find(|(key, _v)| target_key.unwrap_str() == *key) {
-                Some((_k, v)) => v,
-                None => Datum::Null,
-            },
-        )
-        .collect();
-
-    Ok(temp_storage.try_make_datum(|packer| {
-        packer.push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: values.len(),
-            }],
-            values,
-        )
-    })?)
-}
-
 // TODO(jamii) nested loops are possibly not the fastest way to do this
 fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -2066,6 +2038,64 @@ fn parse_ident<'a>(
     })?)
 }
 
+fn regexp_split_to_array<'a>(
+    text: Datum<'a>,
+    regexp: Datum<'a>,
+    flags: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let text = text.unwrap_str();
+    let regexp = regexp.unwrap_str();
+    let flags = flags.unwrap_str();
+    let regexp = build_regex(regexp, flags)?;
+    regexp_split_to_array_re(text, &regexp, temp_storage)
+}
+
+fn regexp_split_to_array_re<'a>(
+    text: &str,
+    regexp: &Regex,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let found = mz_regexp::regexp_split_to_array(text, regexp);
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    packer.push_array(
+        &[ArrayDimension {
+            lower_bound: 1,
+            length: found.len(),
+        }],
+        found.into_iter().map(Datum::String),
+    )?;
+    Ok(temp_storage.push_unary_row(row))
+}
+
+fn regexp_replace<'a>(
+    source: Datum<'a>,
+    pattern: Datum<'a>,
+    replacement: Datum<'a>,
+    flags: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let source = source.unwrap_str();
+    let pattern = pattern.unwrap_str();
+    let replacement = replacement.unwrap_str();
+    let flags = flags.unwrap_str();
+    // 'g' means to replace all instead of the first. Use a Cow to avoid allocating in the fast
+    // path. We could switch build_regex to take an iter which would also achieve that.
+    let (n, flags) = if flags.contains('g') {
+        let flags = flags.replace('g', "");
+        (0, Cow::Owned(flags))
+    } else {
+        (1, Cow::Borrowed(flags))
+    };
+    let regexp = build_regex(pattern, &flags)?;
+    let replaced = match regexp.replacen(source, n, replacement) {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(s) => temp_storage.push_string(s),
+    };
+    Ok(Datum::String(replaced))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2204,7 +2234,6 @@ pub enum BinaryFunc {
     JsonbDeleteString,
     MapContainsKey,
     MapGetValue,
-    MapGetValues,
     MapContainsAllKeys,
     MapContainsAnyKeys,
     MapContainsMap,
@@ -2452,7 +2481,6 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(map_contains_key(a, b)),
             BinaryFunc::MapGetValue => Ok(map_get_value(a, b)),
-            BinaryFunc::MapGetValues => map_get_values(a, b, temp_storage),
             BinaryFunc::MapContainsAllKeys => Ok(map_contains_all_keys(a, b)),
             BinaryFunc::MapContainsAnyKeys => Ok(map_contains_any_keys(a, b)),
             BinaryFunc::MapContainsMap => Ok(map_contains_map(a, b)),
@@ -2640,11 +2668,6 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            MapGetValues => ScalarType::Array(Box::new(
-                input1_type.scalar_type.unwrap_map_value_type().clone(),
-            ))
-            .nullable(true),
-
             ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int32.nullable(true),
 
             ListLengthMax { .. } => ScalarType::Int32.nullable(true),
@@ -2690,7 +2713,7 @@ impl BinaryFunc {
 
             MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
 
-            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
         }
     }
 
@@ -2888,8 +2911,6 @@ impl BinaryFunc {
             | UuidGenerateV5
             | MzAclItemContainsPrivilege
             | ParseIdent => false,
-            // can produce nulls inside the resulting array for missing keys, but always produces an outer array
-            MapGetValues => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3016,7 +3037,6 @@ impl BinaryFunc {
             | JsonbDeleteString
             | MapContainsKey
             | MapGetValue
-            | MapGetValues
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
@@ -3266,7 +3286,6 @@ impl BinaryFunc {
             | BinaryFunc::JsonbDeleteString
             | BinaryFunc::MapContainsKey
             | BinaryFunc::MapGetValue
-            | BinaryFunc::MapGetValues
             | BinaryFunc::MapContainsAllKeys
             | BinaryFunc::MapContainsAnyKeys
             | BinaryFunc::MapContainsMap => (false, false),
@@ -3465,7 +3484,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
-            BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
+            BinaryFunc::MapGetValue => f.write_str("->"),
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundNumeric => f.write_str("round"),
@@ -3678,7 +3697,6 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::JsonbDeleteString).boxed(),
             Just(BinaryFunc::MapContainsKey).boxed(),
             Just(BinaryFunc::MapGetValue).boxed(),
-            Just(BinaryFunc::MapGetValues).boxed(),
             Just(BinaryFunc::MapContainsAllKeys).boxed(),
             Just(BinaryFunc::MapContainsAnyKeys).boxed(),
             Just(BinaryFunc::MapContainsMap).boxed(),
@@ -3872,7 +3890,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::JsonbDeleteString => JsonbDeleteString(()),
             BinaryFunc::MapContainsKey => MapContainsKey(()),
             BinaryFunc::MapGetValue => MapGetValue(()),
-            BinaryFunc::MapGetValues => MapGetValues(()),
             BinaryFunc::MapContainsAllKeys => MapContainsAllKeys(()),
             BinaryFunc::MapContainsAnyKeys => MapContainsAnyKeys(()),
             BinaryFunc::MapContainsMap => MapContainsMap(()),
@@ -4070,7 +4087,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 JsonbDeleteString(()) => Ok(BinaryFunc::JsonbDeleteString),
                 MapContainsKey(()) => Ok(BinaryFunc::MapContainsKey),
                 MapGetValue(()) => Ok(BinaryFunc::MapGetValue),
-                MapGetValues(()) => Ok(BinaryFunc::MapGetValues),
                 MapContainsAllKeys(()) => Ok(BinaryFunc::MapContainsAllKeys),
                 MapContainsAnyKeys(()) => Ok(BinaryFunc::MapContainsAnyKeys),
                 MapContainsMap(()) => Ok(BinaryFunc::MapContainsMap),
@@ -4586,7 +4602,8 @@ derive_unary!(
     AclItemGrantee,
     AclItemPrivileges,
     QuoteIdent,
-    TryParseMonotonicIso8601Timestamp
+    TryParseMonotonicIso8601Timestamp,
+    RegexpSplitToArray
 );
 
 impl UnaryFunc {
@@ -4914,6 +4931,9 @@ impl Arbitrary for UnaryFunc {
                 .boxed(),
             any_regex()
                 .prop_map(|regex| UnaryFunc::RegexpMatch(RegexpMatch(regex)))
+                .boxed(),
+            any_regex()
+                .prop_map(|regex| UnaryFunc::RegexpSplitToArray(RegexpSplitToArray(regex)))
                 .boxed(),
             ExtractInterval::arbitrary().prop_map_into().boxed(),
             ExtractTime::arbitrary().prop_map_into().boxed(),
@@ -5260,6 +5280,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::IsLikeMatch(pattern) => IsLikeMatch(pattern.0.into_proto()),
             UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch(regex.0.into_proto()),
             UnaryFunc::RegexpMatch(regex) => RegexpMatch(regex.0.into_proto()),
+            UnaryFunc::RegexpSplitToArray(regex) => RegexpSplitToArray(regex.0.into_proto()),
             UnaryFunc::ExtractInterval(func) => ExtractInterval(func.0.into_proto()),
             UnaryFunc::ExtractTime(func) => ExtractTime(func.0.into_proto()),
             UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp(func.0.into_proto()),
@@ -5677,6 +5698,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 IsLikeMatch(pattern) => Ok(impls::IsLikeMatch(pattern.into_rust()?).into()),
                 IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.into_rust()?).into()),
                 RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.into_rust()?).into()),
+                RegexpSplitToArray(regex) => {
+                    Ok(impls::RegexpSplitToArray(regex.into_rust()?).into())
+                }
                 ExtractInterval(units) => Ok(impls::ExtractInterval(units.into_rust()?).into()),
                 ExtractTime(units) => Ok(impls::ExtractTime(units.into_rust()?).into()),
                 ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.into_rust()?).into()),
@@ -7280,6 +7304,8 @@ pub enum VariadicFunc {
         elem_type: ScalarType,
     },
     TimezoneTime,
+    RegexpSplitToArray,
+    RegexpReplace,
 }
 
 impl VariadicFunc {
@@ -7372,6 +7398,22 @@ impl VariadicFunc {
                 )
                 .into()
             }),
+            VariadicFunc::RegexpSplitToArray => {
+                let flags = if ds.len() == 2 {
+                    Datum::String("")
+                } else {
+                    ds[2]
+                };
+                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
+            }
+            VariadicFunc::RegexpReplace => {
+                let flags = if ds.len() == 3 {
+                    Datum::String("")
+                } else {
+                    ds[3]
+                };
+                regexp_replace(ds[0], ds[1], ds[2], flags, temp_storage)
+            }
         }
     }
 
@@ -7415,7 +7457,9 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
             | VariadicFunc::ArrayFill { .. }
-            | VariadicFunc::TimezoneTime => false,
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::RegexpReplace => false,
         }
     }
 
@@ -7496,6 +7540,10 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
             TimezoneTime => ScalarType::Time.nullable(in_nullable),
+            RegexpSplitToArray => {
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+            }
+            RegexpReplace => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -7563,7 +7611,9 @@ impl VariadicFunc {
             | MakeMzAclItem
             | ArrayPosition
             | ArrayFill { .. }
-            | TimezoneTime => false,
+            | TimezoneTime
+            | RegexpSplitToArray
+            | RegexpReplace => false,
             Coalesce
             | Greatest
             | Least
@@ -7666,7 +7716,9 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestampTz
             | VariadicFunc::DateDiffDate
             | VariadicFunc::DateDiffTime
-            | VariadicFunc::TimezoneTime => false,
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::RegexpReplace => false,
         }
     }
 }
@@ -7721,6 +7773,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
             VariadicFunc::TimezoneTime => f.write_str("timezonet"),
+            VariadicFunc::RegexpSplitToArray => f.write_str("regexp_split_to_array"),
+            VariadicFunc::RegexpReplace => f.write_str("regexp_replace"),
         }
     }
 }
@@ -7837,6 +7891,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::ArrayPosition => ArrayPosition(()),
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
             VariadicFunc::TimezoneTime => TimezoneTime(()),
+            VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
+            VariadicFunc::RegexpReplace => RegexpReplace(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7898,6 +7954,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.into_rust()?,
                 }),
                 TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
+                RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
+                RegexpReplace(()) => Ok(VariadicFunc::RegexpReplace),
             }
         } else {
             Err(TryFromProtoError::missing_field(

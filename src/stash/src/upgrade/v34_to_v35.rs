@@ -7,11 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::upgrade::objects_v35;
 use crate::{StashError, Transaction, TypedCollection};
-
-pub mod objects_v35 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v35.rs"));
-}
 
 /// Migration to initialize the comments collection (e.g. `COMMENT ON`).
 pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {

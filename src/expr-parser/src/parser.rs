@@ -70,7 +70,7 @@ pub fn try_parse_def(catalog: &TestCatalog, s: &str) -> Result<Def, String> {
 mod relation {
     use std::collections::BTreeMap;
 
-    use mz_expr::{Id, JoinImplementation, LocalId, MirRelationExpr};
+    use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
     use mz_repr::{Diff, RelationType, Row, ScalarType};
 
     use super::*;
@@ -173,10 +173,12 @@ mod relation {
             Some((id, typ)) => Ok(MirRelationExpr::Get {
                 id: Id::Global(*id),
                 typ: typ.clone(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
                 typ: RelationType::empty(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             }),
         }
     }
@@ -214,6 +216,7 @@ mod relation {
                     let get_cte = MirRelationExpr::Get {
                         id: Id::Local(id),
                         typ: typ.clone(),
+                        access_strategy: AccessStrategy::UnknownOrLocal,
                     };
                     // Do not use the `union` smart constructor here!
                     MirRelationExpr::Union {
@@ -607,7 +610,7 @@ mod relation {
                     let MirRelationExpr::Union { base, mut inputs } = value.take_dangerous() else {
                         unreachable!("ensured by construction");
                     };
-                    let MirRelationExpr::Get { id: _, typ } = *base else {
+                    let MirRelationExpr::Get { id: _, typ, .. } = *base else {
                         unreachable!("ensured by construction");
                     };
                     if let Some(prior_typ) = ctx.env.insert(id.clone(), typ) {
@@ -629,6 +632,7 @@ mod relation {
             MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ,
+                ..
             } => {
                 let env_typ = match ctx.env.get(&*id) {
                     Some(env_typ) => env_typ,

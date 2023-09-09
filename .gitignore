@@ -21,7 +21,6 @@ __pycache__
 venv
 node_modules
 coverage
-**/*.swp
 test/feature-benchmark/tmp/*.td
 test/zippy/tmp/*.td
 test/**/tmp_*.toml

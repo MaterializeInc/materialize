@@ -89,7 +89,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use mz_adapter::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
@@ -100,6 +99,7 @@ use mz_sql::names::{
     self, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
 };
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::DEFAULT_SCHEMA;
 use tokio::sync::Mutex;
 

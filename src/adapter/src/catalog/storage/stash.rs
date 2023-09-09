@@ -15,10 +15,12 @@ use mz_ore::now::EpochMillis;
 use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{RoleAttributes, SystemObjectType};
+use mz_sql::catalog::{RoleAttributes, RoleMembership, SystemObjectType};
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
+use mz_sql::rbac;
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
 use mz_storage_client::types::sources::Timeline;
@@ -26,13 +28,11 @@ use mz_storage_client::types::sources::Timeline;
 use crate::catalog::builtin::{MZ_SUPPORT_ROLE, MZ_SYSTEM_ROLE};
 use crate::catalog::object_type_to_audit_object_type;
 use crate::catalog::storage::{
-    BootstrapArgs, DefaultPrivilegesKey, DefaultPrivilegesValue, RoleMembership,
-    SystemPrivilegesKey, SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY,
-    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
-    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    BootstrapArgs, DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey,
+    SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
-use crate::rbac;
 
 /// The key used within the "config" collection where we store the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";

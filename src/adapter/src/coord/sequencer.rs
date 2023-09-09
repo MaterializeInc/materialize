@@ -24,6 +24,7 @@ use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
     FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
 };
+use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
@@ -37,7 +38,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{rbac, ExecuteContext, ExecuteResponseKind};
+use crate::{ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -97,14 +98,19 @@ impl Coordinator {
             .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
-            self,
             &session_catalog,
-            ctx.session(),
+            &self
+                .active_conns()
+                .into_iter()
+                .map(|(conn_id, conn_meta)| (conn_id.unhandled(), conn_meta.authenticated_role))
+                .collect(),
+            ctx.session().role_metadata(),
+            ctx.session().vars(),
             &plan,
             target_cluster_id,
             &resolved_ids,
         ) {
-            return ctx.retire(Err(e));
+            return ctx.retire(Err(e.into()));
         }
 
         match plan {
@@ -647,7 +653,7 @@ impl Coordinator {
     }
 
     fn maybe_send_rbac_notice(&self, session: &Session) {
-        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
+        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session.vars()) {
             if !self.catalog.system_config().enable_ld_rbac_checks() {
                 session.add_notice(AdapterNotice::RbacSystemDisabled);
             } else {

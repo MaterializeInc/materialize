@@ -18,7 +18,8 @@ use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{
-    BrokerRewrite, BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
+    BrokerRewrite, BrokerRewritingClientContext, MzClientContext, MzKafkaError,
+    DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -502,8 +503,9 @@ impl KafkaConnection {
         _id: GlobalId,
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
+        let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
-            .create_with_context(connection_context, MzClientContext, &BTreeMap::new())
+            .create_with_context(connection_context, context, &BTreeMap::new())
             .await?;
 
         // librdkafka doesn't expose an API for determining whether a connection to
@@ -516,15 +518,32 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
-        //
-        // TODO(benesch): pull out more error details from the librdkafka logs and
-        // include them in the error message.
-        mz_ore::task::spawn_blocking(
+        let result = mz_ore::task::spawn_blocking(
             || "kafka_get_metadata",
             move || consumer.fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT),
         )
-        .await??;
-        Ok(())
+        .await?;
+        match result {
+            Ok(_) => Ok(()),
+            // The error returned by `fetch_metadata` does not provide any details which makes for
+            // a crappy user facing error message. For this reason we attempt to grab a better
+            // error message from the client context, which should contain any error logs emitted
+            // by librdkafka, and fallback to the generic error if there is nothing there.
+            Err(err) => {
+                // Multiple errors might have been logged during this validation but some are more
+                // relevant than others. Specifically, we prefer non-internal errors over internal
+                // errors since those give much more useful information to the users.
+                let main_err = error_rx.try_iter().reduce(|cur, new| match cur {
+                    MzKafkaError::Internal(_) => new,
+                    _ => cur,
+                });
+
+                match main_err {
+                    Some(err) => Err(err.into()),
+                    None => Err(err.into()),
+                }
+            }
+        }
     }
 }
 
