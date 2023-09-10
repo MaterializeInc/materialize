@@ -16,13 +16,13 @@ use std::sync::Arc;
 use bytesize::ByteSize;
 use differential_dataflow::trace::TraceReader;
 use mz_compute_client::logging::LoggingConfig;
-use mz_compute_client::plan::Plan;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};

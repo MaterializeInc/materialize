@@ -21,6 +21,7 @@ mz-build-info = { path = "../build-info" }
 mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }

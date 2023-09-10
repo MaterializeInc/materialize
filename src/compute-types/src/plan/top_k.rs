@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::bucketing_of_expected_group_size;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.top_k.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.top_k.rs"));
 
 /// A plan encapsulating different variants to compute a TopK operation.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

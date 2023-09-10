@@ -14,6 +14,7 @@ futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
 mz-controller-types = { path = "../controller-types" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist-client = { path = "../persist-client" }

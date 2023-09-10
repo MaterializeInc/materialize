@@ -13,7 +13,7 @@ syntax = "proto3";
 
 import "expr/src/scalar.proto";
 
-package mz_compute_client.plan.threshold;
+package mz_compute_types.plan.threshold;
 
 message ProtoThresholdPlan {
     reserved 2; // retractions

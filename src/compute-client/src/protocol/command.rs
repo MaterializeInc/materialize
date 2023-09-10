@@ -10,6 +10,7 @@
 //! Compute protocol commands.
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
@@ -28,7 +29,6 @@ use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
-use crate::types::dataflows::DataflowDescription;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -133,7 +133,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    CreateDataflow(DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<mz_compute_types::plan::Plan<T>, CollectionMetadata, T>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica’s dataflow.
@@ -296,9 +296,15 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-            any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>()
-                .prop_map(ComputeCommand::CreateDataflow)
-                .boxed(),
+            any::<
+                DataflowDescription<
+                    mz_compute_types::plan::Plan,
+                    CollectionMetadata,
+                    mz_repr::Timestamp,
+                >,
+            >()
+            .prop_map(ComputeCommand::CreateDataflow)
+            .boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
                 .boxed(),

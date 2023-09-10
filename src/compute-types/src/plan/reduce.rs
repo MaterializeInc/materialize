@@ -72,10 +72,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_client.plan.reduce.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.reduce.rs"));
 
 /// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -838,7 +835,7 @@ impl KeyValPlan {
 /// # Examples
 ///
 /// ```
-/// use mz_compute_client::plan::reduce::convert_indexes_to_skips;
+/// use mz_compute_types::plan::reduce::convert_indexes_to_skips;
 /// assert_eq!(convert_indexes_to_skips(vec![3, 6, 10, 15]), [3, 2, 3, 4])
 /// ```
 pub fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {

@@ -3407,7 +3407,9 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-compute-client",
+ "mz-compute-types",
  "mz-controller",
  "mz-controller-types",
  "mz-expr",
@@ -3744,6 +3746,7 @@ dependencies = [
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
+ "mz-compute-types",
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
@@ -3774,13 +3777,12 @@ dependencies = [
  "async-trait",
  "bytesize",
  "chrono",
- "columnation",
  "differential-dataflow",
  "futures",
  "http",
- "itertools",
  "mz-build-info",
  "mz-cluster-client",
+ "mz-compute-types",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -3816,6 +3818,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-compute-types"
+version = "0.0.0"
+dependencies = [
+ "columnation",
+ "differential-dataflow",
+ "itertools",
+ "mz-expr",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "mz-storage-client",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "timely",
+ "tonic-build",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-controller"
 version = "0.0.0"
 dependencies = [
@@ -3826,6 +3852,7 @@ dependencies = [
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-client",
+ "mz-compute-types",
  "mz-controller-types",
  "mz-orchestrator",
  "mz-ore",
@@ -3853,7 +3880,7 @@ name = "mz-controller-types"
 version = "0.0.0"
 dependencies = [
  "mz-cluster-client",
- "mz-compute-client",
+ "mz-compute-types",
  "workspace-hack",
 ]
 
@@ -4896,7 +4923,6 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
- "mz-compute-client",
  "mz-controller-types",
  "mz-expr",
  "mz-expr-test-util",
@@ -5392,7 +5418,7 @@ dependencies = [
  "datadriven",
  "differential-dataflow",
  "itertools",
- "mz-compute-client",
+ "mz-compute-types",
  "mz-expr",
  "mz-expr-parser",
  "mz-expr-test-util",

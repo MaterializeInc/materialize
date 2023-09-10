@@ -13,7 +13,7 @@ use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
 use mz_repr::explain::ExprHumanizer;

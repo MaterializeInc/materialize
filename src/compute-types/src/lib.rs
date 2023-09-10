@@ -75,14 +75,17 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-// This appears to be defective at the moment, with false positives
-// for each variant of the `Command` enum, each of which are documented.
-// #![warn(missing_docs)]
+//! Shared types for the `mz-compute*` crates
 
-//! The public API for the compute layer.
+pub mod dataflows;
+pub mod explain;
+pub mod plan;
+pub mod sinks;
+pub mod sources;
 
-pub mod controller;
-pub mod logging;
-pub mod metrics;
-pub mod protocol;
-pub mod service;
+/// The default logging interval for `ComputeReplicaLogging`, in number
+/// of microseconds.
+pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
+
+/// Identifier of a compute instance.
+pub type ComputeInstanceId = mz_storage_client::types::instances::StorageInstanceId;

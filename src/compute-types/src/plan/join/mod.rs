@@ -42,7 +42,7 @@ pub mod linear_join;
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.join.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.join.rs"));
 
 /// A complete enumeration of possible join plans to render.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

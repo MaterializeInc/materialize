@@ -19,7 +19,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Collection;
-use mz_compute_client::plan::reduce::{
+use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
@@ -87,7 +87,7 @@ where
                     let demand_map_len = demand_map.len();
                     key_plan.permute(demand_map.clone(), demand_map_len);
                     val_plan.permute(demand_map, demand_map_len);
-                    let skips = mz_compute_client::plan::reduce::convert_indexes_to_skips(demand);
+                    let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
                     move |row_parts, time, diff| {
                         let temp_storage = RowArena::new();
 

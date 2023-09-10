@@ -34,7 +34,7 @@ use crate::plan::{any_arranged_thin, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_compute_client.plan.threshold.rs"
+    "/mz_compute_types.plan.threshold.rs"
 ));
 
 /// A plan describing how to compute a threshold operation.

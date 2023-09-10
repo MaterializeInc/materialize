@@ -20,10 +20,8 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
-};
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,

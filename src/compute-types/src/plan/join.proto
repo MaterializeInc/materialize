@@ -14,7 +14,7 @@ syntax = "proto3";
 import "expr/src/linear.proto";
 import "expr/src/scalar.proto";
 
-package mz_compute_client.plan.join;
+package mz_compute_types.plan.join;
 
 message ProtoJoinPlan {
     oneof kind {

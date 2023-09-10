@@ -28,7 +28,7 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
     ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaLocation,
@@ -1818,7 +1818,7 @@ impl ConnectionResolver for CatalogState {
 #[derive(Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
-    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
+    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
     dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo>,
 }
 
@@ -1838,7 +1838,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_client::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
         self.plans.physical_plan_by_id.insert(id, plan);
     }
@@ -1857,7 +1857,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_client::plan::Plan>> {
+    ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
         self.plans.physical_plan_by_id.get(id)
     }
 

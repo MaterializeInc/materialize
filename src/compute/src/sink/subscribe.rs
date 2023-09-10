@@ -16,7 +16,7 @@ use std::rc::Rc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::Collection;
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
-use mz_compute_client::types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
+use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;

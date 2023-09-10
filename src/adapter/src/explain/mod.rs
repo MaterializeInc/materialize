@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::explain::ExplainContext;
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,

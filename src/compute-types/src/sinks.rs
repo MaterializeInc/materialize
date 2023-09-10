@@ -17,10 +17,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_client.types.sinks.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

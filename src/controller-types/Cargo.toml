@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 mz-cluster-client = { path = "../cluster-client" }
-mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

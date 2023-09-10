@@ -16,8 +16,8 @@
 //! and conssequently are not available for the default [`Explain`]
 //! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
-use mz_compute_client::explain::export_ids_for;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::explain::export_ids_for;
 use mz_expr::explain::{
     enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource,
 };

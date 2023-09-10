@@ -16,6 +16,7 @@ members = [
     "src/cluster-client",
     "src/compute",
     "src/compute-client",
+    "src/compute-types",
     "src/controller",
     "src/controller-types",
     "src/environmentd",

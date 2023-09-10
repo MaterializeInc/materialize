@@ -18,8 +18,8 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 use mz_repr::GlobalId;
 
+use crate::dataflows::DataflowDescription;
 use crate::plan::Plan;
-use crate::types::dataflows::DataflowDescription;
 
 impl<'a> Explain<'a> for DataflowDescription<Plan> {
     type Context = ExplainContext<'a>;

@@ -32,12 +32,12 @@ use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
-use crate::types::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 
 pub mod interpret;
 pub mod join;
@@ -46,7 +46,7 @@ pub mod threshold;
 pub mod top_k;
 pub mod transform;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.rs"));
 
 /// The forms in which an operator's output is available;
 /// it can be considered the plan-time equivalent of

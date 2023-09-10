@@ -16,7 +16,7 @@ use std::{cmp, fmt, thread};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};

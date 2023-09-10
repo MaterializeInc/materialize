@@ -15,10 +15,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_client.types.sources.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sources.rs"));
 
 /// A description of an instantiation of a source.
 ///

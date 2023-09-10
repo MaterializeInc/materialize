@@ -18,6 +18,9 @@ use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -38,9 +41,6 @@ use crate::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
-use crate::types::dataflows::DataflowDescription;
-use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
-use crate::types::sources::SourceInstanceDesc;
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -565,7 +565,7 @@ where
     /// Create the described dataflows and initializes state for their output.
     pub fn create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
+        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.

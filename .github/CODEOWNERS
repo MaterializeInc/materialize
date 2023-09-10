@@ -33,6 +33,7 @@
 /src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute
+/src/compute-types                  @MaterializeInc/compute
 /src/controller                     @MaterializeInc/compute @MaterializeInc/storage
 /src/controller-types               @MaterializeInc/compute @MaterializeInc/storage
 /src/environmentd                   @MaterializeInc/adapter

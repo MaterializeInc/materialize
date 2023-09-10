@@ -21,17 +21,14 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use crate::plan::Plan;
-use crate::types::dataflows::proto_dataflow_description::{
+use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use crate::types::sources::{SourceInstanceArguments, SourceInstanceDesc};
+use crate::plan::Plan;
+use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_compute_client.types.dataflows.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -649,7 +646,7 @@ mod tests {
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
 
-    use crate::types::dataflows::DataflowDescription;
+    use crate::dataflows::DataflowDescription;
 
     use super::*;
 
