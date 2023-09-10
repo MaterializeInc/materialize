@@ -13,8 +13,8 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
 ----
 Source defined as t0
 
