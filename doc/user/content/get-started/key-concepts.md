@@ -23,13 +23,54 @@ Materialize offers the following components through its SQL API:
 
 Component                | Use
 -------------------------|-----
+**[Clusters]**           | Clusters provide isolated environment with dedicated compute resources to run your workloads.
 **[Sources]**            | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
 **[Views]**              | Views represent queries of sources and other views that you want to save for repeated execution.
 **[Indexes]**            | Indexes represent query results stored in memory.
 **[Materialized views]** | Materialized views represent query results stored durably.
 **[Sinks]**              | Sinks represent output streams or files that Materialize sends data to.
-**[Clusters]**           | Clusters describe logical compute resources that can be used by sources, sinks, indexes, and materialized views.
-**[Cluster replicas]**   | Cluster replicas allocate physical compute resources for a cluster.
+
+## Clusters
+
+A _cluster_ is an isolated environment with dedicated compute resources (i.e. CPU
+and memory) to run your workloads — similar to a virtual warehouse in
+Snowflake. You can configure the size, replication factor, and other properties
+of a cluster depending on the characteristics of the workload you plan to run
+in it.
+
+The following operations require compute resources in Materialize, and so need
+to be associated with a cluster:
+
+- Executing ad-hoc [SELECT](/sql/select/) statements.
+- Maintaining [indexes](#indexes) and [materialized views](#materialized-views).
+- Maintaining [sources](#sources), [sinks](#sinks), and [subscriptions](/sql/subscribe/).
+
+You can gracefully resize clusters at any time (even while running) as your
+workloads evolve, to accommodate the need for more or less compute resources.
+
+### Cluster replicas
+
+{{< info >}}
+As a user, you do not directly interact with cluster replicas; their properties
+are inherited from the properties you configure for the cluster.  Materialize
+automatically manages them.
+{{</ info >}}
+
+The size and replication factor of a cluster determines the size and number
+of _cluster replicas_ that are spawned under the hood to provision the
+requested compute resources, respectively.
+
+If a cluster has multiple replicas (i.e., replication factor > 1), all replicas
+receive a copy of the data used in all dataflows running in the cluster, and
+perform identical computations. This design allows Materialize to
+provide **active replication**: in the case of failure, the cluster continues
+making progress as long as at least one replica is still reachable.
+
+[//]: # "TODO(morsapaes) Link to the sizing guide, once it's up (#18851)."
+
+Because all dataflows running in a cluster contend for the same resources on
+each replica, it's important to choose a workload distribution and cluster
+sizing strategy that fits the specific computational needs of your use case.
 
 ## Sources
 
@@ -161,38 +202,6 @@ memory. In more complex cases, arrangements let Materialize perform
 sophisticated operations like joins more efficiently.
 
 For a deeper dive into how indexes work, see [Arrangements](/overview/arrangements/).
-
-## Clusters
-
-A cluster is a set of compute resources in Materialize, providing CPU, memory, and temporary storage.
-Materialize uses a cluster for performing the following operations: 
-
-- Execute SQL [SELECT](/sql/select/) statements that require compute resources.
-- Maintaining [indexes](#indexes) and [materialized views](#materialized-views). 
-- Running [sources](#sources), [sinks](#sinks), and [subscribes](/sql/subscribe/). 
-
-When running any of the above operations, you must specify which cluster you want to use.
-Not explicitly naming a cluster uses your session's default cluster.
-
-A cluster is defined by its size, replication factor, and other properties.
-Clusters can be created and dropped at any time.
-They can also be resized at any time, even while running, to accommodate the need for more or less compute resources. 
-
-See the [`CREATE CLUSTER`](/sql/create-cluster/) documentation for more details.
-
-## Cluster Replicas 
-
-Cluster replicas are the physical counterpart to clusters.
-Each cluster replica inherits the cluster's size and configurations.
-Materialize ensures the replica set matches the declared size and replication factor.
-The replicas of a cluster are visible in the system catalog but cannot be directly modified by users.
-
-The number of cluster replicas spawned is based on the cluster's defined replication factor.
-Each replica receives a copy of all data from sources its dataflows use and uses the data to perform identical computations.
-This design provides Materialize with active replication, and so long as one replica is still reachable, the cluster continues making progress.
-
-This also means that a cluster's dataflows contend for the same resources on each replica. 
-For instance, instead of placing many complex materialized views on the same cluster, you choose another distribution or resize the cluster to provide you with more powerful machines.
 
 ## Related pages
 
