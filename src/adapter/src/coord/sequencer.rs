@@ -13,7 +13,7 @@
 //! Logic for executing a planned SQL query.
 
 use inner::return_if_err;
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;

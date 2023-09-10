@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::iter;
 
 use itertools::max;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;

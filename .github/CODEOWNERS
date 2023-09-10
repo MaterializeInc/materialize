@@ -34,6 +34,7 @@
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute
 /src/controller                     @MaterializeInc/compute @MaterializeInc/storage
+/src/controller-types               @MaterializeInc/compute @MaterializeInc/storage
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute

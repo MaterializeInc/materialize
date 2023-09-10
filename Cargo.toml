@@ -17,6 +17,7 @@ members = [
     "src/compute",
     "src/compute-client",
     "src/controller",
+    "src/controller-types",
     "src/environmentd",
     "src/expr",
     "src/expr-parser",

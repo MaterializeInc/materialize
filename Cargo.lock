@@ -3409,6 +3409,7 @@ dependencies = [
  "mz-cloud-resources",
  "mz-compute-client",
  "mz-controller",
+ "mz-controller-types",
  "mz-expr",
  "mz-kafka-util",
  "mz-orchestrator",
@@ -3825,6 +3826,7 @@ dependencies = [
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-client",
+ "mz-controller-types",
  "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",
@@ -3843,6 +3845,15 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-controller-types"
+version = "0.0.0"
+dependencies = [
+ "mz-cluster-client",
+ "mz-compute-client",
  "workspace-hack",
 ]
 
@@ -4886,7 +4897,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-compute-client",
- "mz-controller",
+ "mz-controller-types",
  "mz-expr",
  "mz-expr-test-util",
  "mz-interchange",

@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;

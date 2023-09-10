@@ -22,7 +22,7 @@ mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-compute-client = { path = "../compute-client" }
-mz-controller = { path = "../controller" }
+mz-controller-types = { path = "../controller-types" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }

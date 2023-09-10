@@ -12,10 +12,8 @@
 use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
-use mz_controller::clusters::{
-    ClusterId, ReplicaAllocation, ReplicaConfig, ReplicaLogging,
-    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
-};
+use mz_controller::clusters::{ReplicaAllocation, ReplicaConfig, ReplicaLogging};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;

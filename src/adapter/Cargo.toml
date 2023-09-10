@@ -27,6 +27,7 @@ mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-compute-client = { path = "../compute-client" }
 mz-controller = { path = "../controller" }
+mz-controller-types = { path = "../controller-types" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator = { path = "../orchestrator" }
