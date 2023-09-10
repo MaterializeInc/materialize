@@ -52,14 +52,12 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::SourceError;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
-    MzOffset, SourceConnection, SourceExport, SourceTimestamp,
-};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::SourceError;
+use mz_storage_types::sources::encoding::SourceDataEncoding;
+use mz_storage_types::sources::{MzOffset, SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,

@@ -9,7 +9,7 @@
 
 //! Internal consistency checks that validate invariants of [`CatalogState`].
 
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::DefaultPrivilegeObject;

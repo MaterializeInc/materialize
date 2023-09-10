@@ -16,7 +16,7 @@ use mz_ore::now::NowFn;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 
 pub async fn write_to_persist(

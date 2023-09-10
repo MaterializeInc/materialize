@@ -14,7 +14,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::anyhow;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;

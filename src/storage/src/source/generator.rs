@@ -15,8 +15,8 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::{
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::{
     Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;

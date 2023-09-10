@@ -1271,7 +1271,7 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
-/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_source_status_history_entries`].
 const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_source_status_history_entries"),
     value: &5,
@@ -1279,7 +1279,7 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     internal: true
 };
 
-/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
 const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_sink_status_history_entries"),
     value: &5,

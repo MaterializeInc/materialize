@@ -17,10 +17,11 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
-use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
+use mz_cluster_client::ReplicaId;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_client::types::dataflows::{DataflowDescription, IndexImport};
-use mz_controller::clusters::ClusterId;
+use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
+use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
@@ -68,7 +69,7 @@ pub enum PeekResponseUnary {
 
 #[derive(Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
-    desc: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
+    desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: BTreeMap<usize, usize>,

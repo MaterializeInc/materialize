@@ -20,11 +20,9 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
-};
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
@@ -67,10 +65,11 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ReadPolicy, StorageError,
+    CollectionDescription, DataSource, DataSourceOther, ReadPolicy,
 };
-use mz_storage_client::types::connections::inline::IntoInlineConnection;
-use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::StorageSinkConnectionBuilder;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
@@ -312,7 +311,7 @@ impl Coordinator {
         };
 
         match plan.connection.connection {
-            mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
+            mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
                 let key_set = match SshKeyPairSet::new() {
                     Ok(key) => key,
                     Err(err) => return ctx.retire(Err(err.into())),
@@ -412,9 +411,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => {
                 match plan.connection.connection {
-                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                        ref privatelink,
-                    ) => {
+                    mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),

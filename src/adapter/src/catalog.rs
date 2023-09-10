@@ -28,12 +28,13 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
-    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
-    ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+    ClusterEvent, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
+    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaLocation,
+    ReplicaLogging, UnmanagedReplicaLocation,
 };
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -85,13 +86,11 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::types::connections::inline::{
+use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection, ReferencedConnection,
 };
-use mz_storage_client::types::sinks::{
-    SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
-};
-use mz_storage_client::types::sources::{
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
+use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
 use mz_transform::dataflow::DataflowMetainfo;
@@ -1795,8 +1794,8 @@ impl ConnectionResolver for CatalogState {
     fn resolve_connection(
         &self,
         id: GlobalId,
-    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
-        use mz_storage_client::types::connections::Connection::*;
+    ) -> mz_storage_types::connections::Connection<InlinedConnection> {
+        use mz_storage_types::connections::Connection::*;
         match self
             .get_entry(&id)
             .connection()
@@ -1817,7 +1816,7 @@ impl ConnectionResolver for CatalogState {
 #[derive(Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
-    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
+    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
     dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo>,
 }
 
@@ -1837,7 +1836,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_client::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
         self.plans.physical_plan_by_id.insert(id, plan);
     }
@@ -1856,7 +1855,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_client::plan::Plan>> {
+    ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
         self.plans.physical_plan_by_id.get(id)
     }
 
@@ -1974,7 +1973,7 @@ impl ConnectionResolver for ConnCatalog<'_> {
     fn resolve_connection(
         &self,
         id: GlobalId,
-    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
+    ) -> mz_storage_types::connections::Connection<InlinedConnection> {
         self.state().resolve_connection(id)
     }
 }
@@ -2403,8 +2402,8 @@ impl Source {
                     Some("debezium")
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                    mz_storage_client::types::sources::UpsertStyle::Default(_) => Some("upsert"),
-                    mz_storage_client::types::sources::UpsertStyle::Debezium { .. } => {
+                    mz_storage_types::sources::UpsertStyle::Default(_) => Some("upsert"),
+                    mz_storage_types::sources::UpsertStyle::Debezium { .. } => {
                         // NOTE(aljoscha): Should we somehow mark that this is
                         // using upsert internally? See note above about
                         // DEBEZIUM.
@@ -2566,7 +2565,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     pub resolved_ids: ResolvedIds,
 }
 
@@ -2995,7 +2994,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage_types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
     pub fn source_desc(
         &self,
@@ -4174,7 +4173,7 @@ impl Catalog {
         // Load public keys for SSH connections from the secrets store to the catalog
         for (id, entry) in catalog.state.entry_by_id.iter_mut() {
             if let CatalogItem::Connection(ref mut connection) = entry.item {
-                if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
+                if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
                     connection.connection
                 {
                     let secret = config.secrets_reader.read(*id).await?;
@@ -7690,7 +7689,7 @@ impl Catalog {
                     ));
 
                     let mut connection = entry.connection()?.clone();
-                    if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
+                    if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
                         ssh.public_keys = Some(new_public_key_pair)
@@ -9204,10 +9203,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn connection(
         &self,
-    ) -> Result<
-        &mz_storage_client::types::connections::Connection<ReferencedConnection>,
-        SqlCatalogError,
-    > {
+    ) -> Result<&mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
+    {
         Ok(&self.connection()?.connection)
     }
 
@@ -9294,7 +9291,7 @@ mod tests {
     use std::iter;
 
     use itertools::Itertools;
-    use mz_controller::clusters::{ClusterId, ReplicaId};
+    use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};

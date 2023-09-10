@@ -18,7 +18,8 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::logging::LogVariant;
-use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLogging};
+use mz_controller::clusters::ReplicaLogging;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
@@ -38,7 +39,7 @@ use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
 use crate::catalog::error::{Error, ErrorKind};

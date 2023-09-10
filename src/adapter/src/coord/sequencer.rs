@@ -13,7 +13,7 @@
 //! Logic for executing a planned SQL query.
 
 use inner::return_if_err;
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
@@ -26,7 +26,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
-use mz_storage_client::types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 

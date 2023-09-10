@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_compute_client::types::dataflows::{DataflowDesc, IndexImport};
+use mz_compute_types::dataflows::{DataflowDesc, IndexImport};
 use mz_expr::visit::Visit;
 use mz_expr::{
     AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,

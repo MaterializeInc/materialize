@@ -3031,7 +3031,7 @@ pub enum ExplainStage {
     DecorrelatedPlan,
     /// The mz_expr::MirRelationExpr after optimization
     OptimizedPlan,
-    /// The mz_compute_client::plan::Plan
+    /// The mz_compute_types::plan::Plan
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,

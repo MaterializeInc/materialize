@@ -81,11 +81,10 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
-};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::ComputeInstanceId;
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -110,12 +109,13 @@ use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther,
 };
-use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::StorageSinkConnection;
+use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
@@ -1528,7 +1528,7 @@ impl Coordinator {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
+                    if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(

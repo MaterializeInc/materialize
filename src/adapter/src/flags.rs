@@ -16,7 +16,7 @@ use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
-use mz_storage_client::types::parameters::{
+use mz_storage_types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;

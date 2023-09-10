@@ -14,7 +14,7 @@ use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_repr::{Diff, Timestamp};
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::logging::{Logger, TimelyEvent};

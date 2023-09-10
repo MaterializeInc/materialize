@@ -19,14 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_compute_client::controller::error::InstanceMissing;
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_compute_client::plan::Plan;
-use mz_compute_client::types::dataflows::{
-    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
-};
-use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection,
-};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::plan::Plan;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -209,7 +205,7 @@ impl Coordinator {
         &self,
         dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
-    ) -> DataflowDescription<mz_compute_client::plan::Plan> {
+    ) -> DataflowDescription<mz_compute_types::plan::Plan> {
         // This function must succeed because catalog_transact has generally been run
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and environmentd will be in an unsafe
@@ -242,7 +238,7 @@ impl Coordinator {
         &self,
         mut dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
-    ) -> Result<DataflowDescription<mz_compute_client::plan::Plan>, AdapterError> {
+    ) -> Result<DataflowDescription<mz_compute_types::plan::Plan>, AdapterError> {
         let id_bundle = dataflow_import_id_bundle(&dataflow, compute_instance);
         let since = self.least_valid_read(&id_bundle);
 
@@ -268,7 +264,7 @@ impl Coordinator {
                 .unwrap_or_terminate("Normalize failed; unrecoverable error");
         }
 
-        mz_compute_client::plan::Plan::finalize_dataflow(
+        mz_compute_types::plan::Plan::finalize_dataflow(
             dataflow,
             self.catalog()
                 .system_config()
@@ -924,9 +920,9 @@ impl Coordinator {
         let compute_instance = ComputeInstanceId::User(1);
 
         let dataflow = || DataflowDesc::new("".into());
-        let _: DataflowDescription<mz_compute_client::plan::Plan> =
+        let _: DataflowDescription<mz_compute_types::plan::Plan> =
             self.must_ship_dataflow(dataflow(), compute_instance).await;
-        let _: DataflowDescription<mz_compute_client::plan::Plan> =
+        let _: DataflowDescription<mz_compute_types::plan::Plan> =
             self.must_finalize_dataflow(dataflow(), compute_instance);
     }
 }

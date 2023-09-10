@@ -25,7 +25,7 @@ use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use smallvec::SmallVec;
 use tokio::sync::oneshot;
@@ -205,7 +205,7 @@ pub enum AdapterError {
     /// The transaction can only execute a single statement.
     SingleStatementTransaction,
     /// An error occurred in the storage layer
-    Storage(mz_storage_client::controller::StorageError),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer

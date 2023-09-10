@@ -101,7 +101,7 @@ use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;

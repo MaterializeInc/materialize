@@ -80,8 +80,8 @@
 use std::collections::BTreeMap;
 
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::SourceEnvelope;
+use mz_storage_types::sources::encoding::SourceDataEncoding;
+use mz_storage_types::sources::SourceEnvelope;
 
 mod setup;
 

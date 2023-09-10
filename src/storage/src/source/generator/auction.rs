@@ -12,7 +12,7 @@ use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::{Generator, MzOffset};
 use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -68,7 +68,7 @@ const AUCTIONS_OUTPUT: usize = 4;
 const BIDS_OUTPUT: usize = 5;
 
 // Note that this generator never issues retractions; if you change this,
-// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
 impl Generator for Auction {
     fn by_seed(

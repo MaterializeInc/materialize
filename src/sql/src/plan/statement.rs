@@ -19,8 +19,8 @@ use mz_sql_parser::ast::{
     ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{

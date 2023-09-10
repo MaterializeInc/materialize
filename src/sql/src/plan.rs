@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -48,9 +48,9 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
-use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -597,7 +597,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -1203,7 +1203,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]

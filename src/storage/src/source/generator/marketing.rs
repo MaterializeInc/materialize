@@ -14,7 +14,7 @@ use std::{
 
 use mz_ore::now::to_datetime;
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::{Generator, MzOffset};
 use rand::{distributions::Standard, rngs::SmallRng, Rng, SeedableRng};
 use timely::dataflow::operators::to_stream::Event;
 
@@ -31,7 +31,7 @@ const EXPERIMENT: &str = "experiment";
 pub struct Marketing {}
 
 // Note that this generator issues retractions; if you change this,
-// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
 impl Generator for Marketing {
     fn by_seed(
