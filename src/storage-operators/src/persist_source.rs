@@ -904,7 +904,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::source::persist_source::PersistSourceDataStats;
+    use crate::persist_source::PersistSourceDataStats;
     use mz_storage_types::sources::SourceData;
 
     fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {

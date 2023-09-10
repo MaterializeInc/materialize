@@ -23,7 +23,7 @@ use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::source::persist_source;
+use mz_storage_operators::persist_source;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,

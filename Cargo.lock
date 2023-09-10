@@ -3754,7 +3754,7 @@ dependencies = [
  "mz-pid-file",
  "mz-repr",
  "mz-service",
- "mz-storage-client",
+ "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
  "once_cell",
@@ -5184,6 +5184,7 @@ dependencies = [
  "mz-service",
  "mz-sql-parser",
  "mz-storage-client",
+ "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
  "num_cpus",
@@ -5220,7 +5221,6 @@ name = "mz-storage-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
  "bytes",
  "chrono",
@@ -5232,7 +5232,6 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cluster-client",
- "mz-expr",
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-client",
@@ -5260,6 +5259,28 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-storage-operators"
+version = "0.0.0"
+dependencies = [
+ "async-stream",
+ "differential-dataflow",
+ "futures",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-storage-types",
+ "mz-timely-util",
+ "prometheus",
+ "proptest",
+ "timely",
+ "tokio",
  "tracing",
  "workspace-hack",
 ]

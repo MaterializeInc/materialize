@@ -29,7 +29,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
-mz-storage-client = { path = "../storage-client" }
+mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = "1.16.0"

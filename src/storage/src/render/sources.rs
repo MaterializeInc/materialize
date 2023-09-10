@@ -20,8 +20,8 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
 use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::source::persist_source;
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,

@@ -93,7 +93,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
+    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
         &mut desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),

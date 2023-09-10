@@ -75,11 +75,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Materialize's storage layer.
+//! Shared Storage dataflow operators
 
-pub mod client;
-pub mod controller;
-pub mod healthcheck;
 pub mod metrics;
-pub mod sink;
-pub mod util;
+pub mod persist_source;

@@ -24,7 +24,7 @@ use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_rocksdb::RocksDBInstanceMetrics;
-use mz_storage_client::metrics::BackpressureMetrics;
+use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
