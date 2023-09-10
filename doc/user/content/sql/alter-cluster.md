@@ -36,8 +36,13 @@ ALTER CLUSTER c1 SET (SIZE 'xsmall');
 
 ## Converting unmanaged to managed clusters
 
-Unmanaged clusters are a legacy artifact of Materialize that 
-forced users to manually create and drop cluster replicas.
+{{< warning >}}
+[Unmanaged clusters](/sql/create-cluster-replica) are a deprecated feature of
+Materialize that required manual management of cluster replicas.
+
+We recommend converting any unmanaged clusters to managed clusters
+by following the instructions below.
+{{< /warning >}}
 
 Alter the `managed` status of a cluster to managed:
 
