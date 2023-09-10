@@ -12,9 +12,10 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
+use std::iter::repeat;
 use std::mem::{size_of, transmute};
-use std::str;
 use std::sync::atomic::{self, AtomicBool};
+use std::{iter, str};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
@@ -42,7 +43,7 @@ use crate::adt::range::{
 };
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::{arb_datum, DatumKind};
-use crate::{Datum, Timestamp};
+use crate::{ColumnType, Datum, Timestamp};
 
 pub(crate) mod encoding;
 
@@ -1555,6 +1556,22 @@ impl Row {
         };
         let inline_size = std::mem::size_of::<Self>();
         inline_size.saturating_add(heap_size)
+    }
+
+    pub fn is_of_types(&self, types: &[ColumnType]) -> bool {
+        for (datum, r#type) in self
+            .iter()
+            .map(Some)
+            .chain(repeat(None))
+            .zip(types.iter().map(Some).chain(repeat(None)))
+        {
+            match (datum, r#type) {
+                (None, None) => return true,
+                (Some(x), Some(y)) if x.is_instance_of(y) => continue,
+                _ => return false,
+            }
+        }
+        unreachable!()
     }
 }
 

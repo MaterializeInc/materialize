@@ -19,6 +19,7 @@ import "expr/src/id.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 import "expr/src/scalar.proto";
+import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "google/protobuf/empty.proto";
 
@@ -64,12 +65,14 @@ message ProtoPlan {
             ProtoRowDiffVec rows = 1;
             mz_expr.scalar.ProtoEvalError err = 2;
         }
+        repeated mz_repr.relation_and_scalar.ProtoColumnType column_types = 3;
    }
 
    message ProtoPlanGet {
         mz_expr.id.ProtoId id = 1;
         ProtoAvailableCollections keys = 2;
         ProtoGetPlan plan = 3;
+        repeated mz_repr.relation_and_scalar.ProtoColumnType column_types = 4;
    }
 
    message ProtoPlanLet {
