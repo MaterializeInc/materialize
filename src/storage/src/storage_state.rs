@@ -98,10 +98,10 @@ use mz_storage_client::client::{
     RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
     StorageResponse,
 };
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::{IngestionDescription, SourceData};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;

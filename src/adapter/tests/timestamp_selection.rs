@@ -99,7 +99,7 @@ use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 

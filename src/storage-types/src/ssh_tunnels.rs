@@ -31,7 +31,7 @@ use scopeguard::ScopeGuard;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::types::connections::SshTunnel;
+use crate::connections::SshTunnel;
 
 /// Thread-safe manager of SSH tunnel connections.
 #[derive(Debug, Clone, Default)]

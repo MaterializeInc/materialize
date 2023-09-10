@@ -24,7 +24,7 @@ use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 
 use crate::catalog::object_type_to_audit_object_type;
 use crate::catalog::storage::{

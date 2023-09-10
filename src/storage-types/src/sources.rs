@@ -47,23 +47,20 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
-use crate::controller::{CollectionMetadata, StorageError};
-use crate::types::connections::inline::{
+use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::types::errors::{DataflowError, ProtoDataflowError};
-use crate::types::instances::StorageInstanceId;
-use crate::types::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
-use crate::types::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
-use crate::types::sources::proto_load_generator_source_connection::Generator as ProtoGenerator;
+use crate::controller::{CollectionMetadata, StorageError};
+use crate::errors::{DataflowError, ProtoDataflowError};
+use crate::instances::StorageInstanceId;
+use crate::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
+use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
+use crate::sources::proto_load_generator_source_connection::Generator as ProtoGenerator;
 
 pub mod encoding;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_client.types.sources.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -2923,7 +2920,7 @@ mod tests {
     use mz_repr::is_no_stats_type;
     use proptest::prelude::*;
 
-    use crate::types::errors::EnvelopeError;
+    use crate::errors::EnvelopeError;
 
     use super::*;
 

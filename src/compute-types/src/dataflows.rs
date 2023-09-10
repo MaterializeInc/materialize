@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationType};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;

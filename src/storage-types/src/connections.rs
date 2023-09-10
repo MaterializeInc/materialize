@@ -40,16 +40,13 @@ use tokio::net;
 use tokio_postgres::config::SslMode;
 use url::Url;
 
+use crate::connections::aws::AwsConfig;
 use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
-use crate::types::connections::aws::AwsConfig;
 
 pub mod aws;
 pub mod inline;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_client.types.connections.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum StringOrSecret {

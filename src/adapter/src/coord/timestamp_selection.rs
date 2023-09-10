@@ -20,7 +20,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};

@@ -35,9 +35,9 @@ use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sinks::{
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::{
     KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
     StorageSinkDesc,
 };

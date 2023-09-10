@@ -26,6 +26,10 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -35,11 +39,7 @@ use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
-use crate::controller::CollectionMetadata;
 use crate::metrics::RehydratingStorageClientMetrics;
-use crate::types::parameters::StorageParameters;
-use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
-use crate::types::sources::IngestionDescription;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
 

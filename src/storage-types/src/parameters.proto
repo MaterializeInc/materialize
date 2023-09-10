@@ -15,7 +15,7 @@ import "persist-client/src/cfg.proto";
 import "rocksdb-types/src/config.proto";
 import "service/src/params.proto";
 
-package mz_storage_client.types.parameters;
+package mz_storage_types.parameters;
 
 message ProtoStorageParameters {
     reserved 2;

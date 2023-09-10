@@ -18,10 +18,7 @@ use mz_stash::objects::proto;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_client.types.instances.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.instances.rs"));
 
 /// Identifier of a storage instance.
 #[derive(

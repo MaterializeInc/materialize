@@ -18,7 +18,7 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoCompaction;
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};

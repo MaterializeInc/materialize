@@ -21,18 +21,15 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
+use crate::connections::{CsrConnection, KafkaConnection};
 use crate::controller::CollectionMetadata;
-use crate::types::connections::{CsrConnection, KafkaConnection};
 
-use crate::types::connections::inline::{
+use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_client.types.sinks.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

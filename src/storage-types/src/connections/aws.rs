@@ -17,11 +17,11 @@ use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::types::connections::{ConnectionContext, StringOrSecret};
+use crate::connections::{ConnectionContext, StringOrSecret};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_storage_client.types.connections.aws.rs"
+    "/mz_storage_types.connections.aws.rs"
 ));
 
 /// AWS configuration overrides for a source or sink.

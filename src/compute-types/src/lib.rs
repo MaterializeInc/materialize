@@ -88,4 +88,4 @@ pub mod sources;
 pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
 
 /// Identifier of a compute instance.
-pub type ComputeInstanceId = mz_storage_client::types::instances::StorageInstanceId;
+pub type ComputeInstanceId = mz_storage_types::instances::StorageInstanceId;

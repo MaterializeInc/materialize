@@ -13,7 +13,7 @@ syntax = "proto3";
 
 import "repr/src/relation_and_scalar.proto";
 
-package mz_storage_client.controller;
+package mz_storage_types.controller;
 
 message ProtoCollectionMetadata {
     string blob_uri = 1;

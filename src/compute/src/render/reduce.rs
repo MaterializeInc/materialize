@@ -26,7 +26,7 @@ use mz_compute_types::plan::reduce::{
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;

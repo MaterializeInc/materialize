@@ -18,16 +18,16 @@ use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::types::connections::CsrConnection;
+use crate::connections::CsrConnection;
 
-use crate::types::connections::inline::{
+use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_storage_client.types.sources.encoding.rs"
+    "/mz_storage_types.sources.encoding.rs"
 ));
 
 pub enum SourceDataEncodingInner<C: ConnectionAccess = InlinedConnection> {

@@ -39,7 +39,7 @@ use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
 use crate::catalog::error::{Error, ErrorKind};

@@ -33,12 +33,11 @@ use mz_sql::session::vars::{
     MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::{
-    CreateExportToken, ExportDescription, ReadPolicy, StorageError,
-};
-use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
-use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
-use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
+use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
 use timely::progress::Antichain;
 use tracing::{event, warn, Level};
@@ -183,14 +182,12 @@ impl Coordinator {
                         CatalogItem::Connection(catalog::Connection { connection, .. }) => {
                             match connection {
                                 // SSH connections have an associated secret that should be dropped
-                                mz_storage_client::types::connections::Connection::Ssh(_) => {
+                                mz_storage_types::connections::Connection::Ssh(_) => {
                                     secrets_to_drop.push(*id);
                                 }
                                 // AWS PrivateLink connections have an associated
                                 // VpcEndpoint K8S resource that should be dropped
-                                mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                    _,
-                                ) => {
+                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                                     vpc_endpoints_to_drop.push(*id);
                                 }
                                 _ => (),
@@ -795,7 +792,7 @@ impl Coordinator {
         };
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
-        let storage_sink_desc = mz_storage_client::types::sinks::StorageSinkDesc {
+        let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
                 .desc(&self.catalog().resolve_full_name(
@@ -952,7 +949,7 @@ impl Coordinator {
                         .or_insert(0) += 1;
                     match item {
                         CatalogItem::Connection(connection) => {
-                            use mz_storage_client::types::connections::Connection;
+                            use mz_storage_types::connections::Connection;
                             match connection.connection {
                                 Connection::Kafka(_) => new_kafka_connections += 1,
                                 Connection::Postgres(_) => new_postgres_connections += 1,
@@ -1021,33 +1018,31 @@ impl Coordinator {
                             ))
                             .or_insert(0) -= 1;
                         match entry.item() {
-                                CatalogItem::Connection(connection) => match connection.connection {
-                                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                        _,
-                                    ) => {
-                                        new_aws_privatelink_connections -= 1;
-                                    }
-                                    _ => (),
-                                },
-                                CatalogItem::Table(_) => {
-                                    new_tables -= 1;
+                            CatalogItem::Connection(connection) => match connection.connection {
+                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+                                    new_aws_privatelink_connections -= 1;
                                 }
-                                CatalogItem::Source(source) => {
-                                    new_sources -= source.user_controllable_persist_shard_count()
-                                }
-                                CatalogItem::Sink(_) => new_sinks -= 1,
-                                CatalogItem::MaterializedView(_) => {
-                                    new_materialized_views -= 1;
-                                }
-                                CatalogItem::Secret(_) => {
-                                    new_secrets -= 1;
-                                }
-                                CatalogItem::Log(_)
-                                | CatalogItem::View(_)
-                                | CatalogItem::Index(_)
-                                | CatalogItem::Type(_)
-                                | CatalogItem::Func(_) => {}
+                                _ => (),
+                            },
+                            CatalogItem::Table(_) => {
+                                new_tables -= 1;
                             }
+                            CatalogItem::Source(source) => {
+                                new_sources -= source.user_controllable_persist_shard_count()
+                            }
+                            CatalogItem::Sink(_) => new_sinks -= 1,
+                            CatalogItem::MaterializedView(_) => {
+                                new_materialized_views -= 1;
+                            }
+                            CatalogItem::Secret(_) => {
+                                new_secrets -= 1;
+                            }
+                            CatalogItem::Log(_)
+                            | CatalogItem::View(_)
+                            | CatalogItem::Index(_)
+                            | CatalogItem::Type(_)
+                            | CatalogItem::Func(_) => {}
+                        }
                     }
                 },
                 Op::AlterRole { .. }
@@ -1083,7 +1078,7 @@ impl Coordinator {
                 .connection()
                 .expect("`user_connections()` only returns connection objects");
 
-            use mz_storage_client::types::connections::Connection;
+            use mz_storage_types::connections::Connection;
             match connection.connection {
                 Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
                 Connection::Postgres(_) => current_postgres_connections += 1,

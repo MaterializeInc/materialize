@@ -18,7 +18,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, RawClusterName, Statement};
-use mz_storage_client::types::sources::IngestionDescription;
+use mz_storage_types::sources::IngestionDescription;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{

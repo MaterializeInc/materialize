@@ -36,6 +36,9 @@ use mz_repr::{
     ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
     RelationType, Row, RowArena, ScalarType, Timestamp,
 };
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::communication::Push;
@@ -59,10 +62,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::error;
 use tracing::trace;
 
-use crate::controller::CollectionMetadata;
 use crate::metrics::BackpressureMetrics;
-use crate::types::errors::DataflowError;
-use crate::types::sources::SourceData;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -905,7 +905,7 @@ mod tests {
 
     use super::*;
     use crate::source::persist_source::PersistSourceDataStats;
-    use crate::types::sources::SourceData;
+    use mz_storage_types::sources::SourceData;
 
     fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
         // Skip types that we don't keep stats for (yet).

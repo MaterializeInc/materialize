@@ -18,10 +18,10 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
+use mz_storage_types::instances::StorageInstanceId;
 use prometheus::core::AtomicU64;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
-use crate::types::instances::StorageInstanceId;
 
 /// Storage controller metrics
 #[derive(Debug, Clone)]

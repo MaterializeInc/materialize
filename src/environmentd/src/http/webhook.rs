@@ -17,7 +17,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
 use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 
 use anyhow::Context;
 use axum::extract::{Path, State};
@@ -283,7 +283,7 @@ mod tests {
     use mz_adapter::AdapterError;
     use mz_repr::{ColumnType, GlobalId, ScalarType};
     use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
-    use mz_storage_client::controller::StorageError;
+    use mz_storage_types::controller::StorageError;
     use proptest::prelude::*;
 
     use super::{filter_headers, pack_row, WebhookError};

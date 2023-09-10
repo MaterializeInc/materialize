@@ -77,7 +77,7 @@ pub struct Config<'a> {
     ///
     /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
-    pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    pub connection_context: Option<mz_storage_types::connections::ConnectionContext>,
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }

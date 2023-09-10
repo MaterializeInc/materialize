@@ -75,12 +75,55 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Materialize's storage layer.
+use std::env;
 
-pub mod client;
-pub mod controller;
-pub mod healthcheck;
-pub mod metrics;
-pub mod sink;
-pub mod source;
-pub mod util;
+fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
+
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
+
+    tonic_build::configure()
+        // Enabling `emit_rerun_if_changed` will rerun the build script when
+        // anything in the include directory (..) changes. This causes quite a
+        // bit of spurious recompilation, so we disable it. The default behavior
+        // is to re-run if any file in the crate changes; that's still a bit too
+        // broad, but it's better.
+        .emit_rerun_if_changed(false)
+        .extern_path(".mz_ccsr.config", "::mz_ccsr")
+        .extern_path(".mz_expr.id", "::mz_expr")
+        .extern_path(".mz_expr.linear", "::mz_expr")
+        .extern_path(".mz_expr.relation", "::mz_expr")
+        .extern_path(".mz_expr.scalar", "::mz_expr")
+        .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
+        .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
+        .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
+        .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
+        .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
+        .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_orchestrator", "::mz_orchestrator")
+        .extern_path(".mz_persist_client", "::mz_persist_client")
+        .extern_path(".mz_proto", "::mz_proto")
+        .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
+        .extern_path(".mz_repr.row", "::mz_repr")
+        .extern_path(".mz_repr.url", "::mz_repr::url")
+        .extern_path(".mz_rocksdb_types", "::mz_rocksdb_types")
+        .extern_path(".mz_cluster_client", "::mz_cluster_client")
+        .extern_path(".mz_tracing", "::mz_tracing")
+        .extern_path(".mz_service", "::mz_service")
+        .compile_with_config(
+            config,
+            &[
+                "storage-types/src/controller.proto",
+                "storage-types/src/errors.proto",
+                "storage-types/src/connections/aws.proto",
+                "storage-types/src/instances.proto",
+                "storage-types/src/parameters.proto",
+                "storage-types/src/sinks.proto",
+                "storage-types/src/sources.proto",
+                "storage-types/src/sources/encoding.proto",
+            ],
+            &[".."],
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+}

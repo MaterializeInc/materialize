@@ -22,7 +22,7 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Map, OkErr};

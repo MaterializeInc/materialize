@@ -34,7 +34,7 @@ pub use mz_sql::session::vars::{
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};

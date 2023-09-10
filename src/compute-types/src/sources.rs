@@ -11,7 +11,7 @@
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::RelationType;
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 

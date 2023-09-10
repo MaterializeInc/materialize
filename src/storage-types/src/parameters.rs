@@ -16,10 +16,7 @@ use mz_service::params::GrpcClientParameters;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_client.types.parameters.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 
 /// Storage instance configuration parameters.
 ///

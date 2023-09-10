@@ -75,12 +75,14 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Materialize's storage layer.
+//! Shared types for the `mz-storage*` crates
 
-pub mod client;
+mod ssh_tunnels;
+
+pub mod connections;
 pub mod controller;
-pub mod healthcheck;
-pub mod metrics;
-pub mod sink;
-pub mod source;
-pub mod util;
+pub mod errors;
+pub mod instances;
+pub mod parameters;
+pub mod sinks;
+pub mod sources;

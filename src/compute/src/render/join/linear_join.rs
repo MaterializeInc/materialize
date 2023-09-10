@@ -18,7 +18,7 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;

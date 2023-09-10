@@ -20,7 +20,7 @@ import "repr/src/row.proto";
 import "cluster-client/src/client.proto";
 import "service/src/params.proto";
 import "storage-client/src/client.proto";
-import "storage-client/src/types/parameters.proto";
+import "storage-types/src/parameters.proto";
 import "tracing/src/params.proto";
 
 import "google/protobuf/empty.proto";

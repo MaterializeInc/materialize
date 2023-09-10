@@ -72,7 +72,7 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser;
 use mz_stash::StashFactory;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;

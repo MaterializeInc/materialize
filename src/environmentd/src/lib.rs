@@ -109,7 +109,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;

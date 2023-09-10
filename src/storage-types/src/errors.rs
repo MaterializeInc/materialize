@@ -19,10 +19,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_client.types.errors.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
@@ -423,7 +420,7 @@ mod columnation {
     use mz_repr::Row;
     use timely::container::columnation::{Columnation, Region, StableRegion};
 
-    use crate::types::errors::{
+    use crate::errors::{
         DataflowError, DecodeError, DecodeErrorKind, EnvelopeError, SourceError,
         SourceErrorDetails, UpsertError, UpsertValueError,
     };
@@ -964,7 +961,7 @@ impl From<EnvelopeError> for DataflowError {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::errors::DecodeErrorKind;
+    use crate::errors::DecodeErrorKind;
 
     use super::DecodeError;
 

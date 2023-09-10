@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package mz_storage_client.types.instances;
+package mz_storage_types.instances;
 
 message ProtoStorageInstanceId {
     oneof kind {

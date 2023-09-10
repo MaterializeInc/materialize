@@ -31,6 +31,7 @@ use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
+use mz_storage_types::parameters::StorageParameters;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
@@ -44,7 +45,6 @@ use crate::client::{
     StorageResponse,
 };
 use crate::metrics::RehydratingStorageClientMetrics;
-use crate::types::parameters::StorageParameters;
 
 /// A storage client that replays the command stream on failure.
 ///

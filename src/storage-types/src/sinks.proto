@@ -14,10 +14,10 @@ import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
-import "storage-client/src/controller.proto";
-import "storage-client/src/types/connections.proto";
+import "storage-types/src/controller.proto";
+import "storage-types/src/connections.proto";
 
-package mz_storage_client.types.sinks;
+package mz_storage_types.sinks;
 
 message ProtoStorageSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
@@ -25,7 +25,7 @@ message ProtoStorageSinkDesc {
     ProtoStorageSinkConnection connection = 3;
     optional ProtoSinkEnvelope envelope = 4;
     ProtoSinkAsOf as_of = 5;
-    optional mz_storage_client.controller.ProtoCollectionMetadata from_storage_metadata = 6;
+    optional mz_storage_types.controller.ProtoCollectionMetadata from_storage_metadata = 6;
     optional string status_id = 7;
 }
 
@@ -66,7 +66,7 @@ message ProtoKafkaSinkConnection {
     reserved 3, 9, 10;
 
     mz_repr.global_id.ProtoGlobalId connection_id = 13;
-    mz_storage_client.types.connections.ProtoKafkaConnection connection = 1;
+    mz_storage_types.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
@@ -83,10 +83,10 @@ message ProtoPublishedSchemaInfo {
 
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
-    mz_storage_client.controller.ProtoCollectionMetadata storage_metadata = 2;
+    mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
 }
 
 message ProtoDurableExportMetadata {
     // This message is persisted to disk. Changes must be backwards compatible.
-    mz_storage_client.types.sinks.ProtoSinkAsOf initial_as_of = 1;
+    mz_storage_types.sinks.ProtoSinkAsOf initial_as_of = 1;
 }

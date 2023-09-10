@@ -28,7 +28,7 @@ use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;

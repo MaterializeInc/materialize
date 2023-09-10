@@ -26,7 +26,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
-use mz_storage_client::types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
