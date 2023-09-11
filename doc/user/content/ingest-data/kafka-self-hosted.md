@@ -67,7 +67,7 @@ BROKERS (
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the psql shell connected to Materialize, find the static egress IP addresses for the Materialize region you are running in:
+1. In the `psql` shell connected to Materialize, find the static egress IP addresses for the Materialize region you are running in:
 
     ```sql
     SELECT * FROM mz_egress_ips;
