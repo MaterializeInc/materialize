@@ -45,4 +45,4 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
-- [AWS Kafka integration guide](/integrations/aws-kafka)
+- Integration guides: [Self-hosted PostgreSQL](/ingest-data/postgres-self-hosted), [Amazon RDS for PostgreSQL](/ingest-data/postgres-amazon-rds), [Self-hosted Kafka](/ingest-data/kafka-self-hosted), [Amazon MSK](/ingest-data/amazon-msk)
