@@ -301,6 +301,15 @@ impl ShouldHalt for crate::catalog::Error {
     }
 }
 
+impl ShouldHalt for crate::catalog::storage::Error {
+    fn should_halt(&self) -> bool {
+        match &self {
+            Self::Stash(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
 impl ShouldHalt for StashError {
     fn should_halt(&self) -> bool {
         self.is_unrecoverable()

@@ -8,11 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Formatter;
 use std::hash::Hash;
 use std::iter::once;
-use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, pin};
 
 use futures::StreamExt;
 use itertools::Itertools;
@@ -23,7 +24,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -42,9 +43,7 @@ use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection
 use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
-use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
-use crate::catalog::{ClusterConfig, ClusterVariant};
 
 pub mod objects;
 pub mod stash;
@@ -163,6 +162,41 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 
+#[derive(Debug)]
+pub enum Error {
+    Catalog(SqlCatalogError),
+    Stash(StashError),
+}
+
+impl std::error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Catalog(e) => write!(f, "{e}"),
+            Error::Stash(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<SqlCatalogError> for Error {
+    fn from(e: SqlCatalogError) -> Self {
+        Self::Catalog(e)
+    }
+}
+
+impl From<StashError> for Error {
+    fn from(e: StashError) -> Self {
+        Self::Stash(e)
+    }
+}
+
+impl From<TryFromProtoError> for Error {
+    fn from(e: TryFromProtoError) -> Error {
+        Error::Stash(mz_stash::StashError::from(e))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
@@ -206,8 +240,7 @@ impl Connection {
                 }
                 Err((given_stash, err)) => {
                     stash = given_stash;
-                    let should_retry =
-                        matches!(&err, Error{ kind: ErrorKind::Stash(se)} if se.should_retry());
+                    let should_retry = matches!(&err, Error::Stash(se) if se.should_retry());
                     if !should_retry || retry.next().await.is_none() {
                         return Err(err);
                     }
@@ -779,7 +812,7 @@ impl Connection {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
                     Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }.into_proto()),
-                    None => Err(Error::new(ErrorKind::IdExhaustion)),
+                    None => Err(Error::from(SqlCatalogError::IdExhaustion)),
                 }
             })
             .await??;
@@ -1054,9 +1087,7 @@ impl<'a> Transaction<'a> {
         ) {
             // TODO(parkertimmerman): Support creating databases in the System namespace.
             Ok(_) => Ok(DatabaseId::User(id)),
-            Err(_) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
-                database_name.to_owned(),
-            ))),
+            Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
     }
 
@@ -1082,9 +1113,7 @@ impl<'a> Transaction<'a> {
         ) {
             // TODO(parkertimmerman): Support creating schemas in the System namespace.
             Ok(_) => Ok(SchemaId::User(id)),
-            Err(_) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
-                schema_name.to_owned(),
-            ))),
+            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name.to_owned()).into()),
         }
     }
 
@@ -1105,7 +1134,7 @@ impl<'a> Transaction<'a> {
             },
         ) {
             Ok(_) => Ok(id),
-            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(name))),
+            Err(_) => Err(SqlCatalogError::RoleAlreadyExists(name).into()),
         }
     }
 
@@ -1171,9 +1200,7 @@ impl<'a> Transaction<'a> {
                 config,
             },
         ) {
-            return Err(Error::new(ErrorKind::ClusterAlreadyExists(
-                cluster_name.to_owned(),
-            )));
+            return Err(SqlCatalogError::ClusterAlreadyExists(cluster_name.to_owned()).into());
         };
 
         for (builtin, index_id) in introspection_source_indexes {
@@ -1285,10 +1312,11 @@ impl<'a> Transaction<'a> {
                 .clusters
                 .get(&ClusterKey { id: cluster_id })
                 .expect("cluster exists");
-            return Err(Error::new(ErrorKind::DuplicateReplica(
+            return Err(SqlCatalogError::DuplicateReplica(
                 replica_name.to_string(),
                 cluster.name.to_string(),
-            )));
+            )
+            .into());
         };
         Ok(())
     }
@@ -1313,9 +1341,9 @@ impl<'a> Transaction<'a> {
                     Some(ClusterIntrospectionSourceIndexValue { index_id }),
                 )?;
                 if prev.is_none() {
-                    return Err(Error {
-                        kind: ErrorKind::FailedBuiltinSchemaMigration(format!("{id}")),
-                    });
+                    return Err(
+                        SqlCatalogError::FailedBuiltinSchemaMigration(format!("{id}")).into(),
+                    );
                 }
             }
         }
@@ -1342,10 +1370,7 @@ impl<'a> Transaction<'a> {
             },
         ) {
             Ok(_) => Ok(()),
-            Err(_) => Err(Error::new(ErrorKind::ItemAlreadyExists(
-                id,
-                item_name.to_owned(),
-            ))),
+            Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
         }
     }
 
@@ -1356,9 +1381,7 @@ impl<'a> Transaction<'a> {
             .get(&IdAllocKey { name: key.clone() })
             .unwrap_or_else(|| panic!("{key} id allocator missing"))
             .next_id;
-        let next_id = id
-            .checked_add(1)
-            .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
+        let next_id = id.checked_add(1).ok_or(SqlCatalogError::IdExhaustion)?;
         let prev = self
             .id_allocator
             .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
@@ -1588,9 +1611,7 @@ impl<'a> Transaction<'a> {
 
         if usize::try_from(n).expect("update diff should fit into usize") != mappings.len() {
             let id_str = mappings.keys().map(|id| id.to_string()).join(",");
-            return Err(Error {
-                kind: ErrorKind::FailedBuiltinSchemaMigration(id_str),
-            });
+            return Err(SqlCatalogError::FailedBuiltinSchemaMigration(id_str).into());
         }
 
         Ok(())
@@ -1997,6 +2018,27 @@ pub struct Cluster {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub config: ClusterConfig,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterConfig {
+    pub variant: ClusterVariant,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterVariantManaged {
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub logging: ReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
+    pub replication_factor: u32,
+    pub disk: bool,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ClusterVariant {
+    Managed(ClusterVariantManaged),
+    Unmanaged,
 }
 
 #[derive(Clone, Debug)]

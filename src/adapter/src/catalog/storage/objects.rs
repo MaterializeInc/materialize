@@ -12,10 +12,10 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
 use crate::catalog::storage::{
-    CommentValue, DefaultPrivilegesKey, DefaultPrivilegesValue, ReplicaConfig, ReplicaLocation,
-    SystemPrivilegesKey, SystemPrivilegesValue,
+    ClusterConfig, ClusterVariant, ClusterVariantManaged, CommentValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, ReplicaConfig, ReplicaLocation, SystemPrivilegesKey,
+    SystemPrivilegesValue,
 };
-use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 
 use super::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
