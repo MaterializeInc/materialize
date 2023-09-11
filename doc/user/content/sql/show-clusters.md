@@ -23,7 +23,7 @@ pre-installed.
 
 A cluster named `default` with a single `xsmall` [replica](/get-started/key-concepts/#cluster-replicas)
 named `r1` will be pre-installed in every environment. You can modify or drop
-this cluster or its replicas at any time.
+this cluster at any time.
 
 {{< note >}}
 The default value for the `cluster` session parameter is `default`.
