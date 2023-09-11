@@ -17,7 +17,7 @@ This guide goes through the required steps to connect Materialize to a self-host
 
 Before you begin, you must have:
 
-- Kafka cluster running.
+- A Kafka cluster running.
 - A client machine that can interact with your cluster.
 
 ## Configure network security
