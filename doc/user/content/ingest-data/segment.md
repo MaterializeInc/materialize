@@ -110,21 +110,24 @@ A webhook destination in Segment requires a [data mapping](https://segment.com/b
 
 ## Step 5. Parse Incoming Data
 
-Create a materialized view to parse the incoming data from Segment:
+Create a materialized view to parse the incoming events from Segment:
 
 ```sql
-CREATE VIEW json_parsed AS
+CREATE VIEW segment_source_parsed AS
 WITH parse AS (
     SELECT
-        (body -> '_metadata' ->> 'nodeVersion')::text AS nodeVersion,
-        (body ->> 'channel')::text AS channel,
-        (body ->> 'event')::text AS event,
-        (body ->> 'userId')::text AS userId
-    FROM my_webhook_source
+        body->>'email' AS email,
+        body->>'event' AS event,
+        body->>'messageId' AS message_id,
+        body->>'properties' AS properties,
+        body->>'timestamp' AS ts,
+        body->>'type' AS event_type,
+        body->>'userId' AS user_id
+    FROM my_segment_source
 );
 ```
 
-This `json_parsed` view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `nodeVersion`, `channel`, `event`, and `userId`.
+This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `email`, `event`, `type`, and `userId`.
 
 Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
 `DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#duplicated-and-partial-events).
