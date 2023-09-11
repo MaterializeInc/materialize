@@ -115,6 +115,7 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
         [
             "buildkite-agent",
             "annotate",
+            "--debug",
             f"--style={style}",
             f"--context={os.environ['BUILDKITE_JOB_ID']}-{style}",
         ],
