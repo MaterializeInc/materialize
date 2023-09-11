@@ -19,6 +19,7 @@ aliases:
 Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show sinks from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_cluster&lowbar;name_ | The cluster to show sinks from. If omitted, sinks from all clusters are shown.
 
 ### Output format
 
