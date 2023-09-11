@@ -24,7 +24,7 @@ Before you begin, you must have:
 
 There are various ways to configure your Kafka network to allow Materialize to connect:
 
-- Use AWS PrivateLink: If your Kafka cluster is running on AWS, you can use AWS PrivateLink to connect Materialize to the cluster.
+- **Use AWS PrivateLink**: If your Kafka cluster is running on AWS, you can use AWS PrivateLink to connect Materialize to the cluster.
 
 - **Use an SSH tunnel**: If your Kafka cluster is running in a private network, you can use an SSH tunnel to connect Materialize to the cluster.
 
