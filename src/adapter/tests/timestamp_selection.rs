@@ -91,7 +91,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
-use futures::executor::block_on;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
@@ -266,11 +265,6 @@ fn parse_query_when(s: &str) -> QueryWhen {
 /// Transaction isolation can also be set. The `determine` directive runs determine_timestamp and
 /// returns the chosen timestamp. Append `full` as an argument to it to see the entire
 /// TimestampDetermination.
-// TODO(aljoscha): We allow `futures::block_on` for testing because
-// `determine_timestamp_for()` is now async. We will remove async here again
-// once we have sufficiently evolved the TimestampOracle API and are done with
-// adding the new Durable TimestampOracle based on Postgres/CRDB.
-#[allow(clippy::disallowed_methods)]
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_timestamp_selection() {
@@ -343,18 +337,19 @@ fn test_timestamp_selection() {
                         _ => None,
                     };
 
-                    let ts = block_on(f.determine_timestamp_for(
-                        &catalog,
-                        &session,
-                        &det.id_bundle.into(),
-                        &parse_query_when(&det.when),
-                        det.instance.parse().unwrap(),
-                        &TimelineContext::TimestampDependent,
-                        oracle_read_ts,
-                        None, /* real_time_recency_ts */
-                        &IsolationLevel::from(isolation),
-                    ))
-                    .unwrap();
+                    let ts = f
+                        .determine_timestamp_for(
+                            &catalog,
+                            &session,
+                            &det.id_bundle.into(),
+                            &when,
+                            det.instance.parse().unwrap(),
+                            &timeline_ctx,
+                            oracle_read_ts,
+                            None, /* real_time_recency_ts */
+                            &isolation_level,
+                        )
+                        .unwrap();
 
                     if tc.args.contains_key("full") {
                         format!("{}\n", serde_json::to_string_pretty(&ts).unwrap())

@@ -2335,18 +2335,15 @@ impl Coordinator {
         stage.validity.dependency_ids.extend(id_bundle.iter());
 
         let stats = {
-            match self
-                .determine_timestamp(
-                    ctx.session(),
-                    &id_bundle,
-                    &stage.when,
-                    stage.cluster_id,
-                    &stage.timeline_context,
-                    stage.oracle_read_ts.clone(),
-                    None,
-                )
-                .await
-            {
+            match self.determine_timestamp(
+                ctx.session(),
+                &id_bundle,
+                &stage.when,
+                stage.cluster_id,
+                &stage.timeline_context,
+                stage.oracle_read_ts.clone(),
+                None,
+            ) {
                 Err(_) => Box::new(EmptyStatisticsOracle),
                 Ok(query_as_of) => self
                     .statistics_oracle(
@@ -2675,17 +2672,15 @@ impl Coordinator {
                         // If not in a transaction, use the source.
                         source_bundle
                     };
-                    let determination = self
-                        .determine_timestamp(
-                            session,
-                            determine_bundle,
-                            when,
-                            cluster_id,
-                            &timeline_context,
-                            oracle_read_ts,
-                            real_time_recency_ts,
-                        )
-                        .await?;
+                    let determination = self.determine_timestamp(
+                        session,
+                        determine_bundle,
+                        when,
+                        cluster_id,
+                        &timeline_context,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                    )?;
                     // We only need read holds if the read depends on a timestamp. We don't set the
                     // read holds here because it makes the code a bit more clear to handle the two
                     // cases for "is this the first statement in a transaction?" in an if/else block
@@ -2938,8 +2933,7 @@ impl Coordinator {
                 &timeline_ctx,
                 oracle_read_ts,
                 None,
-            )
-            .await?
+            )?
             .timestamp_context
             .timestamp_or_default();
 
