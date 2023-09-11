@@ -379,6 +379,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 match part {
                     ConsolidationPart::Queued { data } => {
                         self.metrics.compaction.parts_waited.inc();
+                        self.metrics.consolidation.parts_fetched.inc();
                         let maybe_unconsolidated = data.maybe_unconsolidated();
                         *part = ConsolidationPart::from_encoded(
                             data.take().fetch().await?,
@@ -390,6 +391,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         handle,
                         maybe_unconsolidated,
                     } => {
+                        self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(
                             handle.await??,
                             &self.filter,
@@ -475,6 +477,24 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         }
 
         Some(prefetch_budget_bytes)
+    }
+}
+
+impl<T, D> Drop for Consolidator<T, D> {
+    fn drop(&mut self) {
+        for run in &self.runs {
+            for (part, _) in run {
+                match part {
+                    ConsolidationPart::Queued { .. } => {
+                        self.metrics.consolidation.parts_skipped.inc();
+                    }
+                    ConsolidationPart::Prefetched { .. } => {
+                        self.metrics.consolidation.parts_wasted.inc();
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 

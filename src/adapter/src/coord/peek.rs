@@ -499,6 +499,7 @@ impl crate::coord::Coordinator {
                 .snapshot_cursor(id, timestamp)
                 .await?;
 
+            let metrics = self.metrics.clone();
             let handle: JoinHandle<Result<PeekResponseUnary, String>> =
                 mz_ore::task::spawn(|| "persist::peek", async move {
                     let mut limit_remaining = finishing.limit.unwrap_or(usize::MAX);
@@ -541,6 +542,9 @@ impl crate::coord::Coordinator {
 
                     let res = finishing.finish(accum, max_result_size)?;
                     let total_duration = start.elapsed();
+                    metrics
+                        .persist_peek_seconds
+                        .observe(total_duration.as_secs_f64());
                     info!(
                         collection =? id,
                         fetch_duration =? last_fetch,
