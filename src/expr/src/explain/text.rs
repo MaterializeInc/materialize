@@ -912,26 +912,33 @@ where
 }
 
 impl MirScalarExpr {
-    pub fn format(&self, f: &mut fmt::Formatter<'_>, cols: &Option<Vec<String>>) -> fmt::Result {
+    pub fn format(&self, f: &mut fmt::Formatter<'_>, cols: Option<&Vec<String>>) -> fmt::Result {
         fmt::Display::fmt(&HumanizedExpr::new(self, cols), f)
     }
 }
 
 impl fmt::Display for MirScalarExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.format(f, &None)
+        self.format(f, None)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct HumanizedExpr<'a, T> {
     expr: &'a T,
-    cols: &'a Option<Vec<String>>,
+    cols: Option<&'a Vec<String>>,
 }
 
 impl<'a, T> HumanizedExpr<'a, T> {
-    pub fn new(expr: &'a T, cols: &'a Option<Vec<String>>) -> Self {
+    pub fn new(expr: &'a T, cols: Option<&'a Vec<String>>) -> Self {
         Self { expr, cols }
+    }
+
+    pub fn seq<'i>(
+        exprs: &'i [T],
+        cols: Option<&'i Vec<String>>,
+    ) -> impl Iterator<Item = HumanizedExpr<'i, T>> + Clone {
+        exprs.iter().map(move |expr| HumanizedExpr::new(expr, cols))
     }
 
     fn child<U>(&self, expr: &'a U) -> HumanizedExpr<'a, U> {
