@@ -528,7 +528,6 @@ impl StorageUsageClient {
     ///
     /// Can be safely called within retry_external to ensure it succeeds
     #[cfg(test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn size(
         &self,
         prefix: BlobKeyPrefix<'_>,
