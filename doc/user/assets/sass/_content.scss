@@ -968,6 +968,13 @@ div.json_widget {
                 font-size: 16px;
             }
 
+            .light & input {
+                background-color: #F7F7F8;
+            }
+            .dark & input {
+                background-color: #000000;
+            }
+
             input::placeholder {
                 color: #BCB9C0;
             }
@@ -1030,9 +1037,16 @@ div.json_widget {
             p {
                 background-color: rgba(229, 6, 68, 0.4);
                 border-radius: 8px;
-                color: #803737;
                 font-weight: 500;
                 padding: 8px;
+            }
+
+            .light & p {
+                color: #803737;
+            }
+
+            .dark & p {
+                color: #fe1d5e;
             }
         }
 
