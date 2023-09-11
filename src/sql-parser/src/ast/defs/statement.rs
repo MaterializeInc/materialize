@@ -2334,12 +2334,8 @@ pub enum ShowObjectType<T: AstInfo> {
     },
     Table,
     View,
-    Source {
-        in_cluster: Option<T::ClusterName>,
-    },
-    Sink {
-        in_cluster: Option<T::ClusterName>,
-    },
+    Source,
+    Sink,
     Type,
     Role,
     Cluster,
@@ -2377,8 +2373,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         f.write_str(match &self.object_type {
             ShowObjectType::Table => "TABLES",
             ShowObjectType::View => "VIEWS",
-            ShowObjectType::Source { .. } => "SOURCES",
-            ShowObjectType::Sink { .. } => "SINKS",
+            ShowObjectType::Source => "SOURCES",
+            ShowObjectType::Sink => "SINKS",
             ShowObjectType::Type => "TYPES",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
@@ -2413,9 +2409,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         // append IN CLUSTER clause
         match &self.object_type {
             ShowObjectType::MaterializedView { in_cluster }
-            | ShowObjectType::Index { in_cluster, .. }
-            | ShowObjectType::Sink { in_cluster }
-            | ShowObjectType::Source { in_cluster } => {
+            | ShowObjectType::Index { in_cluster, .. } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);

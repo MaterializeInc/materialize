@@ -460,8 +460,8 @@ d2
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-name  type  size  cluster
--------------------------
+name  type  size
+----------------
 
 > SHOW TABLES FROM mz_catalog
 name
@@ -513,38 +513,38 @@ $ skip-if
 SELECT ${arg.replicas} > 1;
 
 > SHOW SOURCES FROM mz_internal
-name                                           type   size  cluster
-------------------------------------------------------------------
-mz_active_peeks_per_worker                   log   <null>   <null>
-mz_arrangement_batches_raw                   log   <null>   <null>
-mz_arrangement_records_raw                   log   <null>   <null>
-mz_arrangement_sharing_raw                   log   <null>   <null>
-mz_arrangement_heap_size_raw                 log   <null>   <null>
-mz_arrangement_heap_capacity_raw             log   <null>   <null>
-mz_arrangement_heap_allocations_raw          log   <null>   <null>
-mz_compute_delays_histogram_raw              log   <null>   <null>
-mz_compute_exports_per_worker                log   <null>   <null>
-mz_compute_frontiers_per_worker              log   <null>   <null>
-mz_compute_import_frontiers_per_worker       log   <null>   <null>
-mz_compute_operator_durations_histogram_raw  log   <null>   <null>
-mz_dataflow_addresses_per_worker             log   <null>   <null>
-mz_dataflow_channels_per_worker              log   <null>   <null>
-mz_dataflow_operator_reachability_raw        log   <null>   <null>
-mz_dataflow_operators_per_worker             log   <null>   <null>
-mz_dataflow_shutdown_durations_histogram_raw log   <null>   <null>
-mz_frontiers                                 source <null>  <null>
-mz_message_counts_received_raw               log   <null>   <null>
-mz_message_counts_sent_raw                   log   <null>   <null>
-mz_message_batch_counts_received_raw         log   <null>   <null>
-mz_message_batch_counts_sent_raw             log   <null>   <null>
-mz_peek_durations_histogram_raw              log   <null>   <null>
-mz_scheduling_elapsed_raw                    log   <null>   <null>
-mz_scheduling_parks_histogram_raw            log   <null>   <null>
-mz_sink_statistics                           source <null>  <null>
-mz_sink_status_history                       source <null>  <null>
-mz_source_statistics                         source <null>  <null>
-mz_source_status_history                     source <null>  <null>
-mz_storage_shards                            source <null>  <null>
+name                                           type   size
+------------------------------------------------------------
+mz_active_peeks_per_worker                   log   <null>
+mz_arrangement_batches_raw                   log   <null>
+mz_arrangement_records_raw                   log   <null>
+mz_arrangement_sharing_raw                   log   <null>
+mz_arrangement_heap_size_raw                 log   <null>
+mz_arrangement_heap_capacity_raw             log   <null>
+mz_arrangement_heap_allocations_raw          log   <null>
+mz_compute_delays_histogram_raw              log   <null>
+mz_compute_exports_per_worker                log   <null>
+mz_compute_frontiers_per_worker              log   <null>
+mz_compute_import_frontiers_per_worker       log   <null>
+mz_compute_operator_durations_histogram_raw  log   <null>
+mz_dataflow_addresses_per_worker             log   <null>
+mz_dataflow_channels_per_worker              log   <null>
+mz_dataflow_operator_reachability_raw        log   <null>
+mz_dataflow_operators_per_worker             log   <null>
+mz_dataflow_shutdown_durations_histogram_raw log   <null>
+mz_frontiers                                 source <null>
+mz_message_counts_received_raw               log   <null>
+mz_message_counts_sent_raw                   log   <null>
+mz_message_batch_counts_received_raw         log   <null>
+mz_message_batch_counts_sent_raw             log   <null>
+mz_peek_durations_histogram_raw              log   <null>
+mz_scheduling_elapsed_raw                    log   <null>
+mz_scheduling_parks_histogram_raw            log   <null>
+mz_sink_statistics                           source <null>
+mz_sink_status_history                       source <null>
+mz_source_statistics                         source <null>
+mz_source_status_history                     source <null>
+mz_storage_shards                            source <null>
 
 > SHOW TABLES FROM mz_internal
 name
@@ -635,8 +635,6 @@ mz_show_materialized_views
 mz_show_my_object_privileges
 mz_show_my_role_members
 mz_show_my_schema_privileges
-mz_show_sinks
-mz_show_sources
 mz_show_my_system_privileges
 mz_show_object_privileges
 mz_show_role_members

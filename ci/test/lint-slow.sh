@@ -15,10 +15,11 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-ci_try bin/xcompile cargo test --locked --doc
 ci_try cargo clippy --all-targets -- -D warnings
 
 ci_try bin/doc
 ci_try bin/doc --document-private-items
+
+ci_try bin/xcompile cargo test --locked --doc
 
 ci_status_report
