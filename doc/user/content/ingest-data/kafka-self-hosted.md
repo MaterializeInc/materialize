@@ -8,7 +8,7 @@ aliases:
 menu:
   main:
     parent: "kafka"
-    name: "Self-hosted Kafka"
+    name: "Self-hosted"
 ---
 
 This guide goes through the required steps to connect Materialize to a self-hosted Kafka cluster.
