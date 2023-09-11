@@ -27,8 +27,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 The bastion host needs a **public key** to connect to the Materialize tunnel you
 created in the previous step.
 
-1. Materialize stores public keys for SSH tunnels. Use a `SELECT` statement to
-   return two public keys:
+1. Materialize stores public keys for SSH tunnels in the system catalog. Query [`mz_ssh_tunnel_connections`](/sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections) to retrieve the public keys:
 
     ```sql
     SELECT * FROM mz_ssh_tunnel_connections;
