@@ -22,7 +22,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-## Configure the SSH bastion server
+## Configure the SSH bastion host
 
 The bastion host needs a **public key** to connect to the Materialize tunnel you
 created in the previous step.
