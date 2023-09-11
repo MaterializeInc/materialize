@@ -1040,11 +1040,12 @@ impl<'a> Transaction<'a> {
 
     pub fn remove_timestamp(&mut self, timeline: Timeline) {
         let timeline_str = timeline.to_string();
-        let prev = self
+        let _prev = self
             .timestamps
             .set(TimestampKey { id: timeline_str }, None)
             .expect("cannot have uniqueness violation");
-        assert!(prev.is_some());
+        // WIP: Remove timestamp-oracle state from Postgres, or wherever we
+        // store the oracle. assert!(prev.is_some());
     }
 
     /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
