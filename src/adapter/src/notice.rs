@@ -12,7 +12,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
-use mz_ore::str::StrExt;
+use mz_ore::str::{separated, StrExt};
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
@@ -117,6 +117,7 @@ pub enum AdapterNotice {
     WebhookSourceCreated {
         url: url::Url,
     },
+    DroppedInUseIndex(DroppedInUseIndex),
 }
 
 impl AdapterNotice {
@@ -154,6 +155,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
+            AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
             _ => None
         }
     }
@@ -196,6 +198,7 @@ impl AdapterNotice {
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
         }
     }
@@ -342,8 +345,20 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::WebhookSourceCreated { url } => {
                 write!(f, "URL to POST data is '{url}'")
             }
+            AdapterNotice::DroppedInUseIndex(DroppedInUseIndex {
+                index_name,
+                dependant_objects,
+            }) => {
+                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index will be dropped from the catalog, but it will continue to be maintained and take up resources!", separated(", ", dependant_objects))
+            }
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct DroppedInUseIndex {
+    pub index_name: String,
+    pub dependant_objects: Vec<String>,
 }
 
 impl From<PlanNotice> for AdapterNotice {
