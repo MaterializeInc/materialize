@@ -45,7 +45,10 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
         use Plan::*;
 
         match &self {
-            Constant { rows, column_types: _ } => match rows {
+            Constant {
+                rows,
+                column_types: _,
+            } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
                         writeln!(f, "{}Constant", ctx.indent)?;
@@ -64,7 +67,12 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
                 }
             },
-            Get { id, keys, plan, column_types: _ } => {
+            Get {
+                id,
+                keys,
+                plan,
+                column_types: _,
+            } => {
                 ctx.indent.set(); // mark the current indent level
 
                 // Resolve the id as a string.

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
+use mz_repr::{ColumnType, Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -565,6 +565,17 @@ impl MapFilterProject {
     /// using the standard machinery.
     pub fn into_plan(self) -> Result<plan::MfpPlan, String> {
         plan::MfpPlan::create_from(self)
+    }
+
+    pub fn types(&self, mut types: Vec<ColumnType>) -> Vec<ColumnType> {
+        for expr in &self.expressions {
+            let r#type = expr.typ(&types);
+            types.push(r#type);
+        }
+        self.projection
+            .iter()
+            .map(|&col| types[col].clone())
+            .collect()
     }
 }
 

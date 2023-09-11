@@ -1129,6 +1129,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             } => {
                 // This stage can absorb arbitrary MFP operators.
                 let mut mfp = mfp.take();
+                let output_types = mfp.types(column_types.clone());
                 // If `mfp` is the identity, we can surface all imported arrangements.
                 // Otherwise, we apply `mfp` and promise no arrangements.
                 let mut in_keys = arrangements
@@ -1195,7 +1196,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         id: id.clone(),
                         keys: in_keys,
                         plan,
-                        column_types: column_types.clone(),
+                        column_types: output_types,
                     },
                     out_keys,
                 )

@@ -113,7 +113,7 @@ use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::{EvalError, Id};
 use mz_ore::assert::SOFT_ASSERTIONS;
-use mz_ore::{soft_assert, soft_assert_or_log};
+use mz_ore::soft_assert;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;

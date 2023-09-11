@@ -14,8 +14,8 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::iter::repeat;
 use std::mem::{size_of, transmute};
+use std::str;
 use std::sync::atomic::{self, AtomicBool};
-use std::{iter, str};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
