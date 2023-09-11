@@ -17,7 +17,7 @@ This guide goes through the required steps to connect Materialize to an Amazon M
 
 Before you begin, you must have:
 
-- MSK cluster running on AWS.
+- An Amazon MSK cluster running on AWS.
 - A client machine that can interact with your cluster.
 
 ## Creating a connection
