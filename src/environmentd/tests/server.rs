@@ -1823,7 +1823,7 @@ fn test_max_connections_on_all_interfaces() {
             assert_eq!(status, StatusCode::OK);
             let result: HttpResponse<HttpRows> = res.json().unwrap();
             assert_eq!(result.results.len(), 1);
-            assert_eq!(result.results[0].rows, vec![vec![1]]);
+            assert_eq!(result.results[0].rows, vec![vec!["1"]]);
             Ok(())
         }).unwrap();
 
@@ -1847,7 +1847,7 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
+                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string())
             );
             tracing::info!("data: {:?}", ws.read().unwrap());
         }
@@ -2415,7 +2415,7 @@ fn test_github_20262() {
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
         r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Row","payload":[1]}"#,
+        r#"{"type":"Row","payload":["1"]}"#,
         r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
     ]);
