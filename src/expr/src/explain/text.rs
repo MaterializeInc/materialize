@@ -16,8 +16,8 @@ use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
-    CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, PlanRenderingContext,
-    RenderingContext,
+    CompactScalarSeq, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
+    PlanRenderingContext, RenderingContext,
 };
 use mz_repr::{GlobalId, Row};
 
@@ -790,9 +790,9 @@ impl MirRelationExpr {
     ) -> fmt::Result {
         if ctx.config.requires_attributes() {
             if let Some(attrs) = ctx.annotations.get(self) {
-                writeln!(f, " {}", attrs)
+                writeln!(f, " {}", HumanizedAttributes::new(attrs, ctx))
             } else {
-                writeln!(f, " # error: no attrs for subtree in map")
+                writeln!(f, " // error: no attrs for subtree in map")
             }
         } else {
             writeln!(f)
