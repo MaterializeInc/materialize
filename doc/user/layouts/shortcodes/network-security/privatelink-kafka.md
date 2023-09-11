@@ -1,4 +1,4 @@
-This section covers how to create `AWS PRIVATELINK` connections
+This section covers how to create AWS PrivateLink connections
 and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 1. #### Create target groups
