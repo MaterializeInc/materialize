@@ -52,9 +52,9 @@ contains:table "postgres"."public"."t" referred to by multiple subsources: "x", 
   FOR SCHEMAS (other);
 
 > SHOW sources
- mz_source          postgres  ${arg.default-storage-size}
- mz_source_progress progress  <null>
- t                  subsource <null>
+ mz_source          postgres  ${arg.default-storage-size} materialize_public_mz_source
+ mz_source_progress progress  <null> <null>
+ t                  subsource <null> <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;
