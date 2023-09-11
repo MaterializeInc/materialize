@@ -682,7 +682,7 @@ mod tests {
         // Check that output consolidated via this logic matches output consolidated via timely's!
         type Part = Vec<((Vec<u8>, Vec<u8>), u64, i64)>;
 
-        fn check(parts: Vec<(Part, usize)>) {
+        fn check(metrics: &Arc<Metrics>, parts: Vec<(Part, usize)>) {
             let original = {
                 let mut rows = parts
                     .iter()
@@ -692,13 +692,9 @@ mod tests {
                 rows
             };
             let streaming = {
-                let metrics = Arc::new(Metrics::new(
-                    &PersistConfig::new_for_tests(),
-                    &MetricsRegistry::new(),
-                ));
                 // Toy compaction loop!
                 let mut consolidator = Consolidator {
-                    metrics,
+                    metrics: Arc::clone(metrics),
                     // Generated runs of data that are sorted, but not necessarily consolidated.
                     // This is because timestamp-advancement may cause us to have duplicate KVTs,
                     // including those that span runs.
@@ -740,6 +736,11 @@ mod tests {
             assert_eq!(original, streaming);
         }
 
+        let metrics = Arc::new(Metrics::new(
+            &PersistConfig::new_for_tests(),
+            &MetricsRegistry::new(),
+        ));
+
         // Restricting the ranges to help make sure we have frequent collisions
         let key_gen = (0..4usize).prop_map(|i| i.to_string().into_bytes()).boxed();
         let part_gen = vec(
@@ -748,7 +749,7 @@ mod tests {
         );
         let run_gen = vec((part_gen, 0..10usize), 0..5);
         proptest!(|(state in run_gen)| {
-            check(state)
+            check(&metrics, state)
         });
     }
 
