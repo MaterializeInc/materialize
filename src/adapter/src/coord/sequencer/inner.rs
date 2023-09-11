@@ -28,12 +28,12 @@ use mz_expr::{
     RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
+use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, UsedIndexes};
+use mz_repr::explain::{ExplainFormat, ExprHumanizer, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -105,7 +105,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::notice::AdapterNotice;
+use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -128,6 +128,7 @@ struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
+    dropped_in_use_indexes: Vec<DroppedInUseIndex>,
 }
 
 // A bundle of values returned from create_source_inner
@@ -1232,6 +1233,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
+            dropped_in_use_indexes,
         } = self.sequence_drop_common(session, drop_ids)?;
 
         self.catalog_transact(Some(session), ops).await?;
@@ -1247,6 +1249,9 @@ impl Coordinator {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
                 name: session.vars().cluster().to_string(),
             });
+        }
+        for dropped_in_use_index in dropped_in_use_indexes {
+            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
         }
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
@@ -1465,6 +1470,7 @@ impl Coordinator {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
+            dropped_in_use_indexes,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
@@ -1484,6 +1490,9 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
+        for dropped_in_use_index in dropped_in_use_indexes {
+            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+        }
         Ok(ExecuteResponse::DroppedOwned)
     }
 
@@ -1494,6 +1503,7 @@ impl Coordinator {
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
+        let mut dropped_in_use_indexes = Vec::new();
         let mut dropped_roles = BTreeMap::new();
         let mut dropped_databases = BTreeSet::new();
         let mut dropped_schemas = BTreeSet::new();
@@ -1505,6 +1515,7 @@ impl Coordinator {
         // database or schema.
         let mut default_privilege_revokes = BTreeSet::new();
 
+        let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1538,6 +1549,42 @@ impl Coordinator {
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
                         role_revokes.insert((*group_id, *id, *grantor_id));
+                    }
+                }
+                ObjectId::Item(id) => {
+                    if let Some(index) = self.catalog().get_entry(id).index() {
+                        let humanizer = self.catalog().for_session(session);
+                        let dependants = self
+                            .controller
+                            .compute
+                            .collection_reverse_dependencies(index.cluster_id, *id)
+                            .ok()
+                            .into_iter()
+                            .flatten()
+                            .filter(|dependant_id| {
+                                // Transient Ids belong to Peeks. We are not interested for now in
+                                // peeks depending on a dropped index.
+                                // TODO: show a different notice in this case. Something like
+                                // "There is an in-progress ad hoc SELECT that uses the dropped
+                                // index. The resources used by the index will be freed when all
+                                // such SELECTs complete."
+                                !matches!(dependant_id, GlobalId::Transient(..)) &&
+                                // If the dependent object is also being dropped, then there is no
+                                // problem, so we don't want a notice.
+                                !ids_set.contains(&ObjectId::Item(**dependant_id))
+                            })
+                            .map(|dependant_id| {
+                                humanizer
+                                    .humanize_id(*dependant_id)
+                                    .unwrap_or(id.to_string())
+                            })
+                            .collect_vec();
+                        if !dependants.is_empty() {
+                            dropped_in_use_indexes.push(DroppedInUseIndex {
+                                index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
+                                dependant_objects: dependants,
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -1602,6 +1649,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
+            dropped_in_use_indexes,
         })
     }
 
@@ -4206,11 +4254,17 @@ impl Coordinator {
                     mut ops,
                     dropped_active_db,
                     dropped_active_cluster,
+                    dropped_in_use_indexes,
                 } = self.sequence_drop_common(session, drops)?;
 
                 assert!(
                     !dropped_active_db && !dropped_active_cluster,
                     "dropping subsources does not drop DBs or clusters"
+                );
+
+                soft_assert!(
+                    dropped_in_use_indexes.is_empty(),
+                    "Dropping subsources might drop indexes, but then all objects dependent on the index should also be dropped."
                 );
 
                 // Redefine source.
