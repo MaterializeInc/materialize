@@ -3,7 +3,7 @@ secure SSH bastion host. In this guide, you will create an SSH tunnel
 connection, configure your Materialize authentication settings, and create a
 source connection.
 
-## Prerequisites
+## Before you begin
 
 Before you begin, make sure you have access to a bastion host. You will need:
 
