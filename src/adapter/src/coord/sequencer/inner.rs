@@ -285,8 +285,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedSource)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(id, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: if_not_exists_ids[&id].item.clone(),
@@ -427,8 +426,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedConnection)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
             Err(err) => Err(err),
         }
@@ -475,8 +473,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
                 Ok(ExecuteResponse::CreatedDatabase)
@@ -501,8 +498,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::SchemaAlreadyExists {
                     name: plan.schema_name,
@@ -606,8 +602,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -652,8 +647,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -758,8 +752,7 @@ impl Coordinator {
         match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -869,8 +862,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: plan.name.item,
@@ -1082,8 +1074,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1171,8 +1162,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedIndex)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1931,7 +1921,11 @@ impl Coordinator {
                     for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
                         let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                            AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                            AdapterError::Catalog(catalog::Error {
+                                kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                    id.to_string(),
+                                )),
+                            })
                         })?;
                     }
 
@@ -3465,9 +3459,11 @@ impl Coordinator {
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                            plan.id.to_string(),
-                        ))));
+                        ctx.retire(Err(AdapterError::Catalog(catalog::Error {
+                            kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                plan.id.to_string(),
+                            )),
+                        })));
                         return;
                     }
                 };
@@ -3534,9 +3530,9 @@ impl Coordinator {
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                ))));
+                ctx.retire(Err(AdapterError::Catalog(catalog::Error {
+                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
+                })));
                 return;
             }
         };

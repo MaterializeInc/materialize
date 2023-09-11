@@ -1060,16 +1060,28 @@ impl Error for InvalidCloudProviderError {}
 pub enum CatalogError {
     /// Unknown database.
     UnknownDatabase(String),
+    /// Database already exists.
+    DatabaseAlreadyExists(String),
     /// Unknown schema.
     UnknownSchema(String),
+    /// Schema already exists.
+    SchemaAlreadyExists(String),
     /// Unknown role.
     UnknownRole(String),
+    /// Role already exists.
+    RoleAlreadyExists(String),
     /// Unknown cluster.
     UnknownCluster(String),
+    /// Cluster already exists.
+    ClusterAlreadyExists(String),
     /// Unknown cluster replica.
     UnknownClusterReplica(String),
+    /// Duplicate Replica. #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
+    DuplicateReplica(String, String),
     /// Unknown item.
     UnknownItem(String),
+    /// Item already exists.
+    ItemAlreadyExists(GlobalId, String),
     /// Unknown function.
     UnknownFunction {
         /// The identifier of the function we couldn't find
@@ -1095,21 +1107,31 @@ pub enum CatalogError {
         /// The invalid item's type.
         typ: CatalogItemType,
     },
+    /// Ran out of unique IDs.
+    IdExhaustion,
+    /// Builtin migrations failed.
+    FailedBuiltinSchemaMigration(String),
 }
 
 impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::DatabaseAlreadyExists(name) => write!(f, "database '{name}' already exists"),
             Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
+            Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
+            Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
+            Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
+            Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::ItemAlreadyExists(_gid, name) => write!(f, "catalog item '{name}' already exists"),
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1128,6 +1150,8 @@ impl fmt::Display for CatalogError {
                 },
                 typ,
             ),
+            Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
         }
     }
 }

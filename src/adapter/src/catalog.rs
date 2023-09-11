@@ -41,6 +41,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::option::FallibleMapExt;
+use mz_ore::result::ResultExt as _;
 use mz_ore::soft_assert;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -2098,7 +2099,7 @@ impl From<Cluster> for storage::Cluster {
             linked_object_id: cluster.linked_object_id,
             owner_id: cluster.owner_id,
             privileges: cluster.privileges.into_all_values().collect(),
-            config: cluster.config,
+            config: cluster.config.into(),
         }
     }
 }
@@ -4002,7 +4003,7 @@ impl Catalog {
                 )
                 .await?;
 
-            if let ClusterVariant::Managed(managed) = &config.variant {
+            if let storage::ClusterVariant::Managed(managed) = &config.variant {
                 cluster_azs.insert(id, managed.availability_zones.clone());
             }
 
@@ -4013,7 +4014,7 @@ impl Catalog {
                 all_indexes,
                 owner_id,
                 PrivilegeMap::from_mz_acl_items(privileges),
-                config,
+                config.into(),
             );
         }
 
@@ -4908,9 +4909,9 @@ impl Catalog {
 
             let catalog_item = match c.deserialize_item(item.id, d_c) {
                 Ok(item) => item,
-                Err(AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(name)))
-                    if LOGGING_ERROR.is_match(&name.to_string()) =>
-                {
+                Err(AdapterError::Catalog(Error {
+                    kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
+                })) if LOGGING_ERROR.is_match(&name.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
                         depender_name: name,
                     }));
@@ -5003,7 +5004,9 @@ impl Catalog {
                     "failed to deserialize item {} ({}): {}",
                     id,
                     name,
-                    AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(missing_dep))
+                    AdapterError::Catalog(Error {
+                        kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(missing_dep))
+                    })
                 ),
             }));
         }
@@ -5236,7 +5239,7 @@ impl Catalog {
     }
 
     pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
-        self.storage().await.allocate_user_id().await
+        self.storage().await.allocate_user_id().await.err_into()
     }
 
     #[cfg(test)]
@@ -5246,14 +5249,23 @@ impl Catalog {
             .allocate_system_ids(1)
             .await
             .map(|ids| ids.into_element())
+            .err_into()
     }
 
     pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
-        self.storage().await.allocate_user_cluster_id().await
+        self.storage()
+            .await
+            .allocate_user_cluster_id()
+            .await
+            .err_into()
     }
 
     pub async fn allocate_user_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage().await.allocate_user_replica_id().await
+        self.storage()
+            .await
+            .allocate_user_replica_id()
+            .await
+            .err_into()
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -5264,17 +5276,29 @@ impl Catalog {
     pub async fn get_all_persisted_timestamps(
         &self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        self.storage().await.get_all_persisted_timestamps().await
+        self.storage()
+            .await
+            .get_all_persisted_timestamps()
+            .await
+            .err_into()
     }
 
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
-        self.storage().await.get_next_system_replica_id().await
+        self.storage()
+            .await
+            .get_next_system_replica_id()
+            .await
+            .err_into()
     }
 
     /// Get the next user replica id without allocating it.
     pub async fn get_next_user_replica_id(&self) -> Result<u64, Error> {
-        self.storage().await.get_next_user_replica_id().await
+        self.storage()
+            .await
+            .get_next_user_replica_id()
+            .await
+            .err_into()
     }
 
     /// Persist new global timestamp for a timeline to disk.
@@ -5287,6 +5311,7 @@ impl Catalog {
             .await
             .persist_timestamp(timeline, timestamp)
             .await
+            .err_into()
     }
 
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
@@ -5607,10 +5632,9 @@ impl Catalog {
                         && !temporary_drops.contains(&(conn_id, name.item.clone()))
                         || creating.contains(&(conn_id, &name.item))
                     {
-                        return Err(Error::new(ErrorKind::ItemAlreadyExists(
-                            *id,
-                            name.item.clone(),
-                        )));
+                        return Err(
+                            SqlCatalogError::ItemAlreadyExists(*id, name.item.clone()).into()
+                        );
                     } else {
                         creating.insert((conn_id, &name.item));
                         temporary_ids.push(id.clone());
@@ -6417,7 +6441,7 @@ impl Catalog {
                             .collect(),
                         owner_id,
                         privileges.clone(),
-                        config.clone(),
+                        config.clone().into(),
                     )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -8492,6 +8516,22 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
 }
 
+impl From<ClusterConfig> for storage::ClusterConfig {
+    fn from(config: ClusterConfig) -> Self {
+        Self {
+            variant: config.variant.into(),
+        }
+    }
+}
+
+impl From<storage::ClusterConfig> for ClusterConfig {
+    fn from(config: storage::ClusterConfig) -> Self {
+        Self {
+            variant: config.variant.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterVariantManaged {
     pub size: String,
@@ -8502,10 +8542,54 @@ pub struct ClusterVariantManaged {
     pub disk: bool,
 }
 
+impl From<ClusterVariantManaged> for storage::ClusterVariantManaged {
+    fn from(managed: ClusterVariantManaged) -> Self {
+        Self {
+            size: managed.size,
+            availability_zones: managed.availability_zones,
+            logging: managed.logging,
+            idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
+            replication_factor: managed.replication_factor,
+            disk: managed.disk,
+        }
+    }
+}
+
+impl From<storage::ClusterVariantManaged> for ClusterVariantManaged {
+    fn from(managed: storage::ClusterVariantManaged) -> Self {
+        Self {
+            size: managed.size,
+            availability_zones: managed.availability_zones,
+            logging: managed.logging,
+            idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
+            replication_factor: managed.replication_factor,
+            disk: managed.disk,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub enum ClusterVariant {
     Managed(ClusterVariantManaged),
     Unmanaged,
+}
+
+impl From<ClusterVariant> for storage::ClusterVariant {
+    fn from(variant: ClusterVariant) -> Self {
+        match variant {
+            ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
+            ClusterVariant::Unmanaged => Self::Unmanaged,
+        }
+    }
+}
+
+impl From<storage::ClusterVariant> for ClusterVariant {
+    fn from(variant: storage::ClusterVariant) -> Self {
+        match variant {
+            storage::ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
+            storage::ClusterVariant::Unmanaged => Self::Unmanaged,
+        }
+    }
 }
 
 impl ConnCatalog<'_> {
