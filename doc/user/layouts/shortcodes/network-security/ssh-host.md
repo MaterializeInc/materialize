@@ -12,7 +12,7 @@ Before you begin, make sure you have access to a bastion host. You will need:
 
 ## Create an SSH tunnel connection
 
-In Materialize, use a `CREATE CONNECTION` statement to create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion server:
+In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion host:
 
 ```sql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
