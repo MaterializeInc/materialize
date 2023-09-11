@@ -100,7 +100,7 @@ statements:
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES
+  FORMAT JSON
   WITH (SIZE = '3xsmall');
 ```
 
