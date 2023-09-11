@@ -15,6 +15,7 @@ menu:
 Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show sources from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_cluster&lowbar;name_ | The cluster to show sources from. If omitted, sources from all clusters are shown.
 
 ## Details
 
