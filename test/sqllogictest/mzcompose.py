@@ -11,8 +11,8 @@ import os
 
 from materialize import MZ_ROOT, ci_util
 from materialize.mzcompose import Composition
-from materialize.mzcompose.cockroach import Cockroach
-from materialize.mzcompose.sql_logic_test import SqlLogicTest
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
 SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
 

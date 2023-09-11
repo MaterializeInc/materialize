@@ -11,11 +11,11 @@ import os
 
 from materialize import MZ_ROOT, spawn, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.cockroach import Cockroach
-from materialize.mzcompose.kafka import Kafka
-from materialize.mzcompose.postgres import Postgres
-from materialize.mzcompose.schema_registry import SchemaRegistry
-from materialize.mzcompose.zookeeper import Zookeeper
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

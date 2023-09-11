@@ -12,11 +12,11 @@ from string import ascii_lowercase
 from textwrap import dedent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.clusterd import Clusterd
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.postgres import Postgres
-from materialize.mzcompose.redpanda import Redpanda
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 # Those defaults have been carefully chosen to avoid known OOMs
 # such as #15093 and #15044 while hopefully catching any further

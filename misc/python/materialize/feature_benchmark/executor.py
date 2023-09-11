@@ -13,7 +13,7 @@ from textwrap import dedent
 from typing import Any
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.services.materialized import Materialized
 
 
 class Executor:

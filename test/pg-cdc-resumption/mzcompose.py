@@ -10,10 +10,10 @@
 import time
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.postgres import Postgres
-from materialize.mzcompose.testdrive import Testdrive
-from materialize.mzcompose.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Materialized(),

@@ -16,7 +16,7 @@ from threading import Thread
 from typing import Any
 
 from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.materialized import Materialized
+from materialize.mzcompose.services.materialized import Materialized
 
 if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
     TOTAL_MEMORY = 12

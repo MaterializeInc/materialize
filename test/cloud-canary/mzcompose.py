@@ -16,10 +16,10 @@ import urllib.parse
 import pg8000
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser, _wait_for_pg
-from materialize.mzcompose.cockroach import Cockroach
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.mz import Mz
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"

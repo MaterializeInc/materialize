@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Materialized(),

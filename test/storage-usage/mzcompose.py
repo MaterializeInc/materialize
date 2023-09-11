@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.postgres import Postgres
-from materialize.mzcompose.redpanda import Redpanda
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 COLLECTION_INTERVAL_SECS = 5
 

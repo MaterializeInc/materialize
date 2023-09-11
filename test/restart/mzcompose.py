@@ -11,12 +11,12 @@ from textwrap import dedent
 import pg8000.exceptions
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.cockroach import Cockroach
-from materialize.mzcompose.kafka import Kafka
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.schema_registry import SchemaRegistry
-from materialize.mzcompose.testdrive import Testdrive
-from materialize.mzcompose.zookeeper import Zookeeper
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 

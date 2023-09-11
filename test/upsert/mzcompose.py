@@ -14,12 +14,12 @@ from pathlib import Path
 
 from materialize import ci_util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.clusterd import Clusterd
-from materialize.mzcompose.kafka import Kafka
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.schema_registry import SchemaRegistry
-from materialize.mzcompose.testdrive import Testdrive
-from materialize.mzcompose.zookeeper import Zookeeper
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
 

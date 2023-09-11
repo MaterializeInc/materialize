@@ -12,11 +12,11 @@ import time
 from pg8000.dbapi import InterfaceError
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.kafka import Kafka
-from materialize.mzcompose.kgen import Kgen
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.testdrive import Testdrive
-from materialize.mzcompose.zookeeper import Zookeeper
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.kgen import Kgen
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 prerequisites = ["zookeeper", "kafka"]
 

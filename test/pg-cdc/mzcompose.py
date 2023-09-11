@@ -8,10 +8,10 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.postgres import Postgres
-from materialize.mzcompose.test_certs import TestCerts
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),

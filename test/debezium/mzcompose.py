@@ -8,15 +8,15 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.debezium import Debezium
-from materialize.mzcompose.kafka import Kafka
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.mysql import MySql
-from materialize.mzcompose.postgres import Postgres
-from materialize.mzcompose.schema_registry import SchemaRegistry
-from materialize.mzcompose.sql_server import SqlServer
-from materialize.mzcompose.testdrive import Testdrive
-from materialize.mzcompose.zookeeper import Zookeeper
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
 

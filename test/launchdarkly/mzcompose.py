@@ -27,8 +27,8 @@ from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: 
 from launchdarkly_api.model.variation import Variation  # type: ignore
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, Composition
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 # Access keys required for interacting with LaunchDarkly.

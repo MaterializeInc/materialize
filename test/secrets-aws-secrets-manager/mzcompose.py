@@ -18,9 +18,9 @@ from materialize.mzcompose import (
     DEFAULT_ORG_ID,
     Composition,
 )
-from materialize.mzcompose.localstack import Localstack
-from materialize.mzcompose.materialized import Materialized
-from materialize.mzcompose.testdrive import Testdrive
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME
