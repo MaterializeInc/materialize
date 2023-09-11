@@ -49,7 +49,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
     Note the **service name** that is generated for the endpoint service.
 
-1. #### Create an AWS PrivateLink Connection
+1. #### Create an AWS PrivateLink connection
      In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the endpoint service that you created in the previous step.
 
      ```sql
