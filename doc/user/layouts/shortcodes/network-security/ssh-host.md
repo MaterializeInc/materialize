@@ -104,7 +104,7 @@ created in the previous step.
     sudo systemctl restart sshd
     ```
 
-5. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your SSH bastion to allow SSH traffic for those IP addresses only.
+5. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your bastion host to allow SSH traffic for those IP addresses only.
 
     ```sql
     SELECT * FROM mz_catalog.mz_egress_ips;
