@@ -30,7 +30,7 @@ There are various ways to configure your Kafka network to allow Materialize to c
 
 - Allow Materialize IPs: If your Kafka cluster is publicly accessible, you can configure your firewall to allow connections from a set of static Materialize IP addresses.
 
-Follow the instructions in the section that best matches your use case.
+Select the option that works best for you.
 
 {{< tabs tabID="1" >}}
 
