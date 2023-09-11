@@ -335,12 +335,12 @@ a  b
 1  2
 
 > SHOW SOURCES
-name     type    size    cluster
---------------------------------
-data              kafka     ${arg.default-storage-size}   materialize_public_data
-data_progress     progress  <null>                        <null>
-mat_data          kafka     ${arg.default-storage-size}   materialize_public_mat_data
-mat_data_progress progress  <null>                        <null>
+name     type    size
+---------------------
+data              kafka     ${arg.default-storage-size}
+data_progress     progress  <null>
+mat_data          kafka     ${arg.default-storage-size}
+mat_data_progress progress  <null>
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

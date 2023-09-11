@@ -303,10 +303,10 @@ pub fn show_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     match object_type {
         ShowObjectType::Table => show_tables(scx, from, filter),
-        ShowObjectType::Source { in_cluster } => show_sources(scx, from, in_cluster, filter),
+        ShowObjectType::Source => show_sources(scx, from, filter),
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
-        ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
+        ShowObjectType::Sink => show_sinks(scx, from, filter),
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
@@ -372,29 +372,15 @@ fn show_tables<'a>(
 fn show_sources<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
-    in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-    let mut where_clause = format!("schema_id = '{schema_spec}'");
-
-    if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
-            .expect("write on string cannot fail");
-    }
-
     let query = format!(
-        "SELECT name, type, size, cluster
-        FROM mz_internal.mz_show_sources
-        WHERE {where_clause}"
+        "SELECT name, type, size
+        FROM mz_catalog.mz_sources
+        WHERE schema_id = '{schema_spec}'"
     );
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "type", "size", "cluster"]),
-    )
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size"]))
 }
 
 fn show_subsources<'a>(
@@ -482,7 +468,6 @@ fn show_materialized_views<'a>(
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
-    in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
@@ -490,26 +475,12 @@ fn show_sinks<'a>(
     } else {
         scx.resolve_active_schema()?.to_string()
     };
-
-    let mut where_clause = format!("schema_id = '{schema_spec}'");
-
-    if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
-            .expect("write on string cannot fail");
-    }
-
     let query = format!(
-        "SELECT name, type, size, cluster
-        FROM mz_internal.mz_show_sinks
-        WHERE {where_clause}"
+        "SELECT sinks.name, sinks.type, sinks.size
+         FROM mz_catalog.mz_sinks AS sinks
+         WHERE schema_id = '{schema_spec}'",
     );
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "type", "size", "cluster"]),
-    )
+    ShowSelect::new(scx, query, filter, None, Some(&["name", "type", "size"]))
 }
 
 fn show_types<'a>(
