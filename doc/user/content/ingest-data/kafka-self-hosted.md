@@ -1,5 +1,5 @@
 ---
-title: "Self-hosted Kafka"
+title: "Ingest data from Self-hosted Kafka"
 description: "How to connect a self-hosted Kafka cluster as a source to Materialize."
 aliases:
   - /integrations/aws-kafka/
