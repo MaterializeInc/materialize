@@ -819,6 +819,7 @@ ReduceMinsMaxes
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'debug'
+ALTER CLUSTER default SET (MANAGED = false);
 CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;

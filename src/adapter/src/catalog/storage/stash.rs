@@ -22,6 +22,7 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_stash::objects::proto::cluster_config::ManagedCluster;
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
 use mz_storage_types::sources::Timeline;
@@ -848,10 +849,19 @@ pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, Stas
 }
 
 /// Defines the default config for a Cluster.
-fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
-    // TODO: Use managed clusters by default.
+fn default_cluster_config(args: &BootstrapArgs) -> proto::ClusterConfig {
     proto::ClusterConfig {
-        variant: Some(proto::cluster_config::Variant::Unmanaged(proto::Empty {})),
+        variant: Some(proto::cluster_config::Variant::Managed(ManagedCluster {
+            size: args.default_cluster_replica_size.to_string(),
+            replication_factor: 1,
+            availability_zones: vec![],
+            logging: Some(proto::ReplicaLogging {
+                log_logging: false,
+                interval: Some(proto::Duration::from_secs(1)),
+            }),
+            idle_arrangement_merge_effort: None,
+            disk: false,
+        })),
     }
 }
 

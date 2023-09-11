@@ -164,7 +164,7 @@ class UseClusterdCompute(MzcomposeAction):
 
         c.sql(
             f"""
-
+            ALTER CLUSTER default SET (MANAGED = false);
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
                 {storage_addresses},
@@ -244,8 +244,9 @@ class DropCreateDefaultReplica(MzcomposeAction):
 
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
+            ALTER CLUSTER default SET (MANAGED = false);
+            DROP CLUSTER REPLICA default.r1;
+            CREATE CLUSTER REPLICA default.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",
