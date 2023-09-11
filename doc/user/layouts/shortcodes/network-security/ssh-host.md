@@ -69,7 +69,7 @@ created in the previous step.
 
     If the command hangs, double-check your security group and firewall settings. If the connection is successful, you can proceed to the next step.
 
-4. Verify the tunnel connection from your source to your SSH bastion host
+4. Verify the SSH tunnel connection from your source to your bastion host:
 
     ```bash
     # Command for Linux
