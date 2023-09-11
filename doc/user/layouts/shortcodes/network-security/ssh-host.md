@@ -76,7 +76,7 @@ created in the previous step.
     ssh -L 9092:kafka-broker:9092 <SSH_BASTION_USER>@<SSH_BASTION_HOST>
     ```
 
-    Verify that you can connect to the Kafka broker or PostgreSQL instance via the tunnel:
+    Verify that you can connect to the Kafka broker or PostgreSQL instance via the SSH tunnel:
 
     ```bash
     telnet localhost 9092
