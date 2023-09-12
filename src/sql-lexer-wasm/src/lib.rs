@@ -81,81 +81,61 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::path::PathBuf;
-use std::{env, fs};
+// Many things here only compile in the wasm32 target. We don't need to annotate it that way because
+// this should only ever be built by wasm-build which specifies that.
 
-use anyhow::{bail, Context, Result};
-use mz_ore::codegen::CodegenBuf;
-use uncased::UncasedStr;
+use lol_alloc::{FreeListAllocator, LockedAllocator};
+use mz_sql_lexer::lexer::{self, PosToken};
+use wasm_bindgen::prelude::*;
 
-const KEYWORDS_LIST: &str = "src/keywords.txt";
+#[wasm_bindgen(typescript_custom_section)]
+const KEYWORDS_TS_DEF: &str = r#"export function getKeywords(): string[];"#;
 
-fn main() -> Result<()> {
-    println!("cargo:rerun-if-changed={KEYWORDS_LIST}");
+#[global_allocator]
+static ALLOCATOR: LockedAllocator<FreeListAllocator> =
+    LockedAllocator::new(FreeListAllocator::new());
 
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
+#[wasm_bindgen(typescript_custom_section)]
+const LEX_TS_DEF: &str = r#"export function lex(query: string): PosToken[];"#;
 
-    // Generate keywords list and lookup table.
-    {
-        let file = fs::read_to_string(KEYWORDS_LIST)?;
+#[wasm_bindgen(js_name = PosToken, getter_with_clone, inspectable)]
+#[derive(Debug)]
+pub struct JsToken {
+    pub kind: String,
+    pub offset: usize,
+}
 
-        let keywords: Vec<_> = file
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-            .collect();
-
-        // Enforce that the keywords file is kept sorted. This is purely
-        // cosmetic, but it cuts down on diff noise and merge conflicts.
-        if let Some([a, b]) = keywords.windows(2).find(|w| w[0] > w[1]) {
-            bail!("keywords list is not sorted: {:?} precedes {:?}", a, b);
-        }
-
-        let mut buf = CodegenBuf::new();
-
-        buf.writeln("#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]");
-        buf.write_block("pub enum Keyword", |buf| {
-            for kw in &keywords {
-                buf.writeln(format!("{},", kw));
-            }
-        });
-
-        buf.write_block("impl Keyword", |buf| {
-            buf.write_block("pub fn as_str(&self) -> &'static str", |buf| {
-                buf.write_block("match self", |buf| {
-                    for kw in &keywords {
-                        buf.writeln(format!("Keyword::{} => {:?},", kw, kw.to_uppercase()));
-                    }
-                });
-            });
-        });
-
-        for kw in &keywords {
-            buf.writeln(format!(
-                "pub const {}: Keyword = Keyword::{};",
-                kw.to_uppercase(),
-                kw
-            ));
-        }
-
-        let mut phf = phf_codegen::Map::new();
-        for kw in &keywords {
-            phf.entry(UncasedStr::new(kw), &format!("Keyword::{}", kw));
-        }
-        buf.writeln(format!(
-            "pub static KEYWORDS: phf::Map<&'static UncasedStr, Keyword> = {};",
-            phf.build()
-        ));
-
-        let contents = buf.into_string();
-        let path = out_dir.join("keywords.rs");
-        let needs_write = if let Ok(on_disk) = fs::read(&path) {
-            on_disk != contents.as_bytes()
-        } else {
-            true
-        };
-        if needs_write {
-            fs::write(path, contents)?;
+impl From<PosToken> for JsToken {
+    fn from(value: PosToken) -> Self {
+        JsToken {
+            kind: value.kind.to_string(),
+            offset: value.offset,
         }
     }
-    Ok(())
+}
+
+/// Lexes a SQL query.
+///
+/// Returns a list of tokens alongside their corresponding byte offset in the
+/// input string. Returns an error if the SQL query is lexically invalid.
+///
+/// See the module documentation for more information about the lexical
+/// structure of SQL.
+#[wasm_bindgen(skip_typescript)]
+pub fn lex(query: &str) -> Result<Vec<JsValue>, JsError> {
+    let lexed = lexer::lex(query).map_err(|e| JsError::new(&e.message))?;
+    Ok(lexed
+        .into_iter()
+        .map(|token| JsValue::from(JsToken::from(token)))
+        .collect())
+}
+
+#[wasm_bindgen(js_name = getKeywords, skip_typescript)]
+// #[wasm_bindgen] cannot be applied directly to KEYWORDS, only to functions, structs, enums,
+// impls, or extern blocks. Wrap this in a function.
+pub fn get_keywords() -> Vec<JsValue> {
+    mz_sql_lexer::keywords::KEYWORDS
+        .keys()
+        .map(|k| JsValue::from(k.to_string()))
+        .collect()
 }

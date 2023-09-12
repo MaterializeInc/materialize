@@ -150,6 +150,11 @@ class Workspace:
         for path in workspace_config["members"]:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate
+        self.exclude: dict[str, Crate] = {}
+        for path in workspace_config["exclude"]:
+            crate = Crate(root, root / path)
+            self.exclude[crate.name] = crate
+        self.all_crates = self.crates | self.exclude
 
         self.rust_version: str | None = None
         try:

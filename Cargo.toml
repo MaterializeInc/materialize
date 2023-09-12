@@ -85,6 +85,12 @@ members = [
     "test/test-util",
     "src/regexp",
 ]
+
+exclude = [
+    # Exclude the wasm crate to avoid needless cache invalidations.
+    "src/sql-lexer-wasm",
+]
+
 # Use Cargo's new feature resolver, which can handle target-specific features.
 # Explicit opt-in is required even with the 2021 edition because we use a
 # virtual workspace.
