@@ -297,4 +297,4 @@ DROP TABLE fraud_accounts;
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started with your own data, [reach out to our team](https://materialize.com/contact/) to upgrade your playground to a trial account.
+To get started with your own data, [reach out to our team](https://materialize.com/trial/) to upgrade your playground to a trial account.
