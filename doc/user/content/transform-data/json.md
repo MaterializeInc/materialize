@@ -225,5 +225,3 @@ $("input[name='type_view']").change(render);
 $("#json_sample").keyup(debounce(render, 600));
 
 </script>
-
-
