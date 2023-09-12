@@ -9,11 +9,13 @@
 
 //! Internal consistency checks that validate invariants of [`CatalogState`].
 
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::DefaultPrivilegeObject;
-use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
+use mz_sql::names::{
+    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+};
 use serde::Serialize;
 
 use super::CatalogState;
@@ -189,7 +191,16 @@ impl CatalogState {
         let mut comment_inconsistencies = Vec::new();
         for (comment_object_id, col_pos, _comment) in self.comments.iter() {
             match comment_object_id {
-                CommentObjectId::Table(global_id) | CommentObjectId::View(global_id) => {
+                CommentObjectId::Table(global_id)
+                | CommentObjectId::View(global_id)
+                | CommentObjectId::MaterializedView(global_id)
+                | CommentObjectId::Source(global_id)
+                | CommentObjectId::Sink(global_id)
+                | CommentObjectId::Index(global_id)
+                | CommentObjectId::Func(global_id)
+                | CommentObjectId::Connection(global_id)
+                | CommentObjectId::Type(global_id)
+                | CommentObjectId::Secret(global_id) => {
                     let entry = self.entry_by_id.get(&global_id);
                     match entry {
                         None => comment_inconsistencies
@@ -205,6 +216,61 @@ impl CatalogState {
                                 ));
                             }
                         }
+                    }
+                }
+                CommentObjectId::Role(role_id) => {
+                    if self.roles_by_id.get(&role_id).is_none() {
+                        comment_inconsistencies
+                            .push(CommentInconsistency::Dangling(comment_object_id));
+                    }
+                }
+                CommentObjectId::Database(database_id) => {
+                    if self.database_by_id.get(&database_id).is_none() {
+                        comment_inconsistencies
+                            .push(CommentInconsistency::Dangling(comment_object_id));
+                    }
+                }
+                CommentObjectId::Schema((database, schema)) => {
+                    match (database, schema) {
+                        (
+                            ResolvedDatabaseSpecifier::Id(database_id),
+                            SchemaSpecifier::Id(schema_id),
+                        ) => {
+                            let schema = self
+                                .database_by_id
+                                .get(&database_id)
+                                .and_then(|database| database.schemas_by_id.get(&schema_id));
+                            if schema.is_none() {
+                                comment_inconsistencies
+                                    .push(CommentInconsistency::Dangling(comment_object_id));
+                            }
+                        }
+                        (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(schema_id)) => {
+                            if self.ambient_schemas_by_id.get(&schema_id).is_none() {
+                                comment_inconsistencies
+                                    .push(CommentInconsistency::Dangling(comment_object_id));
+                            }
+                        }
+                        // Temporary schemas are in the ambient database.
+                        (ResolvedDatabaseSpecifier::Id(_id), SchemaSpecifier::Temporary) => (),
+                        // TODO: figure out how to check for consistency in this case.
+                        (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => (),
+                    }
+                }
+                CommentObjectId::Cluster(cluster_id) => {
+                    if self.clusters_by_id.get(&cluster_id).is_none() {
+                        comment_inconsistencies
+                            .push(CommentInconsistency::Dangling(comment_object_id));
+                    }
+                }
+                CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                    let replica = self
+                        .clusters_by_id
+                        .get(&cluster_id)
+                        .and_then(|cluster| cluster.replicas_by_id.get(&replica_id));
+                    if replica.is_none() {
+                        comment_inconsistencies
+                            .push(CommentInconsistency::Dangling(comment_object_id));
                     }
                 }
             }

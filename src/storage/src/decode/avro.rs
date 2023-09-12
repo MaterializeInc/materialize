@@ -10,7 +10,7 @@
 use mz_interchange::avro::Decoder;
 use mz_ore::error::ErrorExt;
 use mz_repr::Row;
-use mz_storage_client::types::errors::DecodeErrorKind;
+use mz_storage_types::errors::DecodeErrorKind;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {

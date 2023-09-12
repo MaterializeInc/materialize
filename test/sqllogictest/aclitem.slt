@@ -178,6 +178,16 @@ SELECT mz_internal.mz_acl_item_contains_privilege(NULL, NULL)
 ----
 NULL
 
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE'), 'CREATE');
+----
+false
+
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE'), 'USAGE');
+----
+true
+
 # Test aclitem type and functions
 
 statement ok

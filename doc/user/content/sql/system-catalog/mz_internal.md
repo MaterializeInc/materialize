@@ -37,7 +37,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
-| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 
 ### `mz_cluster_replica_sizes`
 
@@ -57,7 +57,7 @@ any kind of capacity planning.
 | `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
 | `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
 ### `mz_cluster_links`
@@ -108,7 +108,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
-| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 
 ### `mz_cluster_replica_heartbeats`
 
@@ -137,6 +137,18 @@ each replica, including the times at which it was created and dropped
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
+
+### `mz_comments`
+
+The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+
+<!-- RELATION_SPEC mz_internal.mz_comments -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
+| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
+| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ### `mz_compute_dependencies`
 
@@ -690,6 +702,16 @@ operations in the system.
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
+### `mz_webhook_sources`
+
+The `mz_webhook_sources` table contains a row for each webhook source in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
+| `name`         | [`text`]    | The name of the webhook source.                                                              |
+| `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
 ## Replica Introspection Relations
 
@@ -1055,29 +1077,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
 
-### `mz_comments`
-
-The `mz_comments` table stores optional comments (descriptions) for objects in the database.
-
-<!-- RELATION_SPEC mz_internal.mz_comments -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
-| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
-| `comment`      | [`text`]    | The comment itself.                                                                          |
-
-### `mz_webhook_sources`
-
-The `mz_webhook_sources` table contains a row for each webhook source in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
-| `name`         | [`text`]    | The name of the webhook source.                                                              |
-| `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
-
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
@@ -1109,6 +1108,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sinks -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->

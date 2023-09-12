@@ -1,38 +1,32 @@
 ---
 title: "CREATE CLUSTER REPLICA"
-description: "`CREATE CLUSTER REPLICA` provisions physical resources to perform computations."
+description: "`CREATE CLUSTER REPLICA` provisions a new replica of a cluster."
 pagerank: 50
 menu:
   main:
     parent: commands
 ---
 
-`CREATE CLUSTER REPLICA` provisions physical resources to perform computations.
+{{< warning >}}
+`CREATE CLUSTER REPLICA` is deprecated.
+
+We recommend migrating to a [managed
+cluster](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead
+of manually creating and dropping replicas.
+{{< /warning >}}
+
+`CREATE CLUSTER REPLICA` provisions a new replica of a [cluster](/get-started/key-concepts#clusters).
 
 ## Conceptual framework
 
-Where [clusters](/get-started/key-concepts#clusters) represent the logical set of
-dataflows you want to maintain, cluster replicas are their physical
-counterparts. Cluster replicas are where Materialize actually creates and
-maintains dataflows.
+A cluster consists of zero or more replicas. Each replica of a cluster is a pool
+of compute resources that performs exactly the same computations on exactly the
+same data.
 
-Each cluster replica is essentially a clone, constructing the same dataflows.
-Each cluster replica receives a copy of all data that comes in from sources its
-dataflows use, and uses the data to perform identical computations. This design
-provides Materialize with active replication, and so long as one replica is
-still reachable, the cluster continues making progress.
-
-This also means that all of a cluster's dataflows contend for the same resources
-on each replica. This might mean, for instance, that instead of placing many
-complex materialized views on the same cluster, you choose some other
-distribution, or you replace all replicas in a cluster with more powerful
-machines.
-
-{{< warning >}}
-Clusters containing sources and sinks can have at most one replica.
-
-We plan to remove this restriction in a future version of Materialize.
-{{< /warning >}}
+Using multiple replicas of a cluster facilitates **fault tolerance**. Clusters
+with multiple replicas can tolerate failures of the underlying hardware or
+network. As long as one replica remains reachable, the cluster as a whole
+remains available.
 
 ## Syntax
 
@@ -40,101 +34,74 @@ We plan to remove this restriction in a future version of Materialize.
 
 Field | Use
 ------|-----
-_cluster_name_ | The cluster whose resources you want to create an additional computation of.
+_cluster_name_ | The cluster you want to attach a replica to.
 _replica_name_ | A name for this replica.
 
 ### Options
 
 {{% replica-options %}}
 
-{{< note >}}
-If you do not specify an availability zone, Materialize will assign the replica
-to an arbitrary availability zone. For details on how replicas are assigned
-between availability zones, see [Availability zone assignment](/sql/create-cluster/#availability-zone-assignment).
-{{< /note >}}
-
 ## Details
 
-### Sizes
+### Size
 
-Valid `size` options are:
+The `SIZE` option for replicas is identical to the [`SIZE` option for
+clusters](/sql/create-cluster/#size) option, except that the size applies only
+to the new replica.
 
-- `3xsmall`
-- `2xsmall`
-- `xsmall`
-- `small`
-- `medium`
-- `large`
-- `xlarge`
-- `2xlarge`
-- `3xlarge`
-- `4xlarge`
-- `5xlarge`
-- `6xlarge`
-
-The [`mz_internal.mz_cluster_replica_sizes`](/sql/system-catalog/mz_internal/#mz_cluster_replica_sizes) table lists the CPU, memory, and disk allocation for each replica size.
-
-{{< warning >}}
-The values in the `mz_internal.mz_cluster_replica_sizes` may change at any time.
-You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
-
-### Disk-attached replicas
+### Disk
 
 {{< private-preview />}}
 
 {{< warning >}}
 **Pricing for this feature is likely to change.**
 
-Disk-attached replicas currently consume credits at the same rate as
-non-disk-attached replicas. In the future, disk-attached replicas will likely
-consume credits at a faster rate.
+Replicas with disks currently consume credits at the same rate as
+replicas without disks. In the future, replicas with disks will likely
+consume credits at a faster rate than replicas without disks.
 {{< /warning >}}
 
-The `DISK` option attaches a disk to the replica.
+The `DISK` option for replicas works identically to the [`DISK` option for
+clusters](/sql/create-cluster/#disk), except that the disk is attached only to
+the new replica.
 
-Attaching a disk allows you to trade off performance for cost. A replica of a
-given size has access to several times more disk than memory, allowing the
-processing of larger data sets at that replica size. Operations on a disk,
-however, are much slower than operations in memory, and so a workload that
-spills to disk will perform more slowly than a workload that does not. Note that
-exact storage medium for the attached disk is not specified, and its performance
-characteristics are subject to change.
+### Credit usage
 
-Consider attaching a disk to replicas that contain sources that use the
-[upsert envelope](/sql/create-source/#upsert-envelope) or the
-[Debezium envelope](/sql/create-source/#debezium-envelope). When you place
-these sources on a replica with an attached disk, they will automatically spill
-state to disk. These sources will therefore use less memory but may ingest
-data more slowly. See [Sizing a source](/sql/create-source/#sizing-a-source) for details.
+The replica will consume credits at a rate determined by its size:
 
+Size    | Credits per hour
+--------|-----------------
+3xsmall | 0.25
+2xsmall | 0.5
+xsmall  | 1
+small   | 2
+medium  | 4
+large   | 8
+xlarge  | 16
+2xlarge | 32
+3xlarge | 64
+4xlarge | 128
+5xlarge | 256
+6xlarge | 512
 
-### Deployment options
-
-Materialize is an active-replication-based system, which means you expect each
-cluster replica to have the same working set.
-
-With this in mind, when building your Materialize deployment, you can change its
-performance characteristics by...
-
-Action | Outcome
----------|---------
-Increase all replicas' sizes | Ability to maintain more dataflows or more complex dataflows
-Add replicas to a cluster | Greater tolerance to replica failure
+Credit usage is measured at a one second granularity. Credit usage begins when a
+`CREATE CLUSTER REPLICA` provisions the replica and ends when a [`DROP CLUSTER
+REPLICA`] statement deprovisions the replica.
 
 ### Homogeneous vs. heterogeneous hardware provisioning
 
-Because Materialize uses active replication, all replicas will be asked to do
-the same work, irrespective of their resources.
+Because Materialize uses active replication, all replicas will be instructed to
+do the same work, irrespective of their resource allocation.
 
-For the most stable performance, we recommend provisioning the same class of
-hardware for all replicas.
+For the most stable performance, we recommend using the same size and disk
+configuration for all replicas.
 
-However, it is possible to provision multiple type of hardware in the same
-cluster. In these cases, the slower machines will likely be continually burdened
-with a backlog of work. If all of the faster machines become unreachable, the
-system might experience delays in replying to requests while the slower machines
-catch up to the last known time that the faster machines had computed.
+However, it is possible to use different replica configurations in the same
+cluster. In these cases, the replicas with less resources will likely be
+continually burdened with a backlog of work. If all of the faster replicas
+become unreachable, the system might experience delays in replying to requests
+while the slower replicas catch up to the last known time that the faster
+machines had computed.
 
 ## Example
 
@@ -149,3 +116,4 @@ The privileges required to execute this statement are:
 - Ownership of `cluster_name`.
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
+[`DROP CLUSTER REPLICA`]: /sql/drop-cluster-replica

@@ -149,9 +149,9 @@ class DropCreateDefaultReplica(Action):
     def execute(self, c: Composition) -> None:
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
-        """
+            ALTER CLUSTER default SET (REPLICATION FACTOR 0);
+            ALTER CLUSTER default SET (SIZE '1', REPLICATION FACTOR 1);
+            """
         )
 ```
 

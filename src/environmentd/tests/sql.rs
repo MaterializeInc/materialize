@@ -98,9 +98,10 @@ use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -3402,4 +3403,57 @@ fn test_params() {
         "test"
     );
     client.batch_execute("COMMIT").unwrap();
+}
+
+// Test pg_cancel_backed after the authenticated role is dropped.
+#[mz_ore::test]
+fn test_pg_cancel_dropped_role() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+    let dropped_role = "r1";
+
+    let mut query_client = server.connect(postgres::NoTls).unwrap();
+
+    // Create role.
+    query_client
+        .execute(&format!("CREATE ROLE {dropped_role}"), &[])
+        .unwrap();
+
+    // Start session using role.
+    let _dropped_client = server
+        .pg_config()
+        .user(dropped_role)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    // Get the connection ID of the new session.
+    let connection_id = query_client
+        .query_one(
+            &format!(
+                "SELECT s.id
+         FROM mz_internal.mz_sessions s
+         JOIN mz_roles r ON s.role_id = r.id
+         WHERE r.name = '{dropped_role}'"
+            ),
+            &[],
+        )
+        .unwrap()
+        .get::<_, UInt4>(0)
+        .0;
+
+    // Drop role.
+    query_client
+        .execute(&format!("DROP ROLE {dropped_role}"), &[])
+        .unwrap();
+
+    // Test that pg_cancel_backend doesn't panic. It's expected to fail with a privilege error. To
+    // execute pg_cancel_backend you must be a member of the authenticated role of the connection.
+    // Since the authenticated role doesn't exist, no one can be a member, and no one will have the
+    // required privileges.
+    let err = query_client
+        .query_one(&format!("SELECT pg_cancel_backend({connection_id})"), &[])
+        .unwrap_err();
+
+    assert_eq!(err.code().unwrap(), &SqlState::INSUFFICIENT_PRIVILEGE);
 }

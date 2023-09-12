@@ -9,14 +9,14 @@
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::{Generator, MzOffset};
 use timely::dataflow::operators::to_stream::Event;
 
 pub struct Counter {
     /// How many values will be emitted before old ones are retracted,
     /// or `None` for an append-only collection.  (If this retraction
     /// behavior is changed,
-    /// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+    /// `mz_storage_types::sources::LoadGenerator::is_monotonic`
     /// must be updated.
     pub max_cardinality: Option<u64>,
 }

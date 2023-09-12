@@ -22,7 +22,7 @@ contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport 
 
 ! CREATE CONNECTION fawlty_kafka_conn
   TO KAFKA (BROKER 'non-existent-broker:9092');
-contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
+contains:Failed to resolve hostname
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

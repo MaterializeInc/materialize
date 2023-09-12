@@ -26,17 +26,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
     c.up("cockroach", "materialized")
-    run(
-        "localhost",
-        c.default_port("materialized"),
-        c.port("materialized", 6877),
-        args.seed,
-        args.runtime,
-        Complexity(args.complexity),
-        Scenario(args.scenario),
-        args.threads,
-        c,
-    )
+    try:
+        run(
+            "localhost",
+            c.default_port("materialized"),
+            c.port("materialized", 6877),
+            args.seed,
+            args.runtime,
+            Complexity(args.complexity),
+            Scenario(args.scenario),
+            args.threads,
+            c,
+        )
+    except Exception as e:
+        print("--- Execution of parallel-workload failed")
+        print(e)
+        # Don't fail the entire run. We ran into a crash,
+        # ci-logged-errors-detect will handle this if it's an unknown failure.
+        return
     # Restart mz
     c.kill("materialized")
     c.up("materialized")

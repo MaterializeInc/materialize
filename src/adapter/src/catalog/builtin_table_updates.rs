@@ -13,9 +13,10 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{
-    ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaId, ReplicaLocation,
+    ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaLocation,
 };
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
@@ -27,16 +28,14 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItemType, CatalogSchema, CatalogType, TypeCategory,
-};
+use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::connections::KafkaConnection;
-use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
-use mz_storage_client::types::sources::{
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::KafkaConnection;
+use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
+use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
 };
 
@@ -555,18 +554,16 @@ impl CatalogState {
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(match connection.connection {
-                    mz_storage_client::types::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage_client::types::connections::Connection::Csr { .. } => {
+                    mz_storage_types::connections::Connection::Kafka { .. } => "kafka",
+                    mz_storage_types::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
-                    mz_storage_client::types::connections::Connection::Postgres { .. } => {
-                        "postgres"
-                    }
-                    mz_storage_client::types::connections::Connection::Aws(..) => "aws",
-                    mz_storage_client::types::connections::Connection::AwsPrivatelink(..) => {
+                    mz_storage_types::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage_types::connections::Connection::Aws(..) => "aws",
+                    mz_storage_types::connections::Connection::AwsPrivatelink(..) => {
                         "aws-privatelink"
                     }
-                    mz_storage_client::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
+                    mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -574,7 +571,7 @@ impl CatalogState {
             diff,
         }];
         match connection.connection {
-            mz_storage_client::types::connections::Connection::Ssh(ref ssh) => {
+            mz_storage_types::connections::Connection::Ssh(ref ssh) => {
                 if let Some(public_key_set) = ssh.public_keys.as_ref() {
                     updates.extend(self.pack_ssh_tunnel_connection_update(
                         id,
@@ -585,13 +582,13 @@ impl CatalogState {
                     tracing::error!("does this even happen?");
                 }
             }
-            mz_storage_client::types::connections::Connection::Kafka(ref kafka) => {
+            mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
-            mz_storage_client::types::connections::Connection::Csr(_)
-            | mz_storage_client::types::connections::Connection::Postgres(_)
-            | mz_storage_client::types::connections::Connection::Aws(_)
-            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {
+            mz_storage_types::connections::Connection::Csr(_)
+            | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::Aws(_)
+            | mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
                     updates.extend(self.pack_aws_privatelink_connection_update(
                         id,
@@ -1289,7 +1286,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
                 Datum::UInt32(conn.conn_id().unhandled()),
-                Datum::String(&conn.session_role_id().to_string()),
+                Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
             diff,
@@ -1544,13 +1541,27 @@ impl CatalogState {
         comment: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let (object_id_str, object_type_str) = match object_id {
-            CommentObjectId::Table(global_id) => {
-                (global_id.to_string(), CatalogItemType::Table.to_string())
-            }
-            CommentObjectId::View(global_id) => {
-                (global_id.to_string(), CatalogItemType::View.to_string())
-            }
+        // Use the audit log representation so it's easier to join against.
+        let object_type = mz_sql::catalog::ObjectType::from(object_id);
+        let audit_type = super::object_type_to_audit_object_type(object_type);
+        let object_type_str = audit_type.to_string();
+
+        let object_id_str = match object_id {
+            CommentObjectId::Table(global_id)
+            | CommentObjectId::View(global_id)
+            | CommentObjectId::MaterializedView(global_id)
+            | CommentObjectId::Source(global_id)
+            | CommentObjectId::Sink(global_id)
+            | CommentObjectId::Index(global_id)
+            | CommentObjectId::Func(global_id)
+            | CommentObjectId::Connection(global_id)
+            | CommentObjectId::Secret(global_id)
+            | CommentObjectId::Type(global_id) => global_id.to_string(),
+            CommentObjectId::Role(role_id) => role_id.to_string(),
+            CommentObjectId::Database(database_id) => database_id.to_string(),
+            CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),
+            CommentObjectId::Cluster(cluster_id) => cluster_id.to_string(),
+            CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
         };
         let column_pos_datum = match column_pos {
             Some(pos) => Datum::UInt64(CastFrom::cast_from(pos)),

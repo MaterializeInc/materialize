@@ -8,31 +8,31 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::iter;
 
 use itertools::max;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{RoleAttributes, RoleMembership, SystemObjectType};
+use mz_sql::catalog::{ObjectType, RoleAttributes, RoleMembership, SystemObjectType};
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
+use mz_sql::rbac;
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_stash::objects::proto::cluster_config::ManagedCluster;
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 
-use crate::catalog::builtin::{MZ_SUPPORT_ROLE, MZ_SYSTEM_ROLE};
-use crate::catalog::object_type_to_audit_object_type;
 use crate::catalog::storage::{
     BootstrapArgs, DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey,
-    SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, MZ_SUPPORT_ROLE_ID,
-    MZ_SYSTEM_ROLE_ID, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
-    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
-use crate::rbac;
 
 /// The key used within the "config" collection where we store the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
@@ -166,51 +166,39 @@ pub async fn initialize(
         None
     };
 
-    ROLES_COLLECTION
-        .initialize(
-            tx,
-            [
-                (
-                    proto::RoleKey {
-                        id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
-                    },
-                    proto::RoleValue {
-                        name: MZ_SYSTEM_ROLE.name.to_string(),
-                        attributes: Some(MZ_SYSTEM_ROLE.attributes.clone().into_proto()),
-                        membership: Some(RoleMembership::new().into_proto()),
-                    },
-                ),
-                (
-                    proto::RoleKey {
-                        id: Some(MZ_SUPPORT_ROLE_ID.into_proto()),
-                    },
-                    proto::RoleValue {
-                        name: MZ_SUPPORT_ROLE.name.to_string(),
-                        attributes: Some(MZ_SUPPORT_ROLE.attributes.clone().into_proto()),
-                        membership: Some(RoleMembership::new().into_proto()),
-                    },
-                ),
-                (
-                    proto::RoleKey {
-                        id: Some(RoleId::Public.into_proto()),
-                    },
-                    proto::RoleValue {
-                        name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(RoleAttributes::new().into_proto()),
-                        membership: Some(RoleMembership::new().into_proto()),
-                    },
-                ),
-            ]
-            .into_iter()
-            // Optionally insert a privilege for the bootstrap role.
-            .chain(bootstrap_role.as_ref().map(|(role_id, role_val)| {
-                let key = proto::RoleKey {
-                    id: Some(role_id.clone()),
-                };
-                (key, role_val.clone())
-            })),
-        )
-        .await?;
+    let roles = options
+        .builtin_roles
+        .iter()
+        .map(|role| {
+            (
+                proto::RoleKey {
+                    id: Some(role.id.into_proto()),
+                },
+                proto::RoleValue {
+                    name: role.name.to_string(),
+                    attributes: Some(role.attributes.clone().into_proto()),
+                    membership: Some(RoleMembership::new().into_proto()),
+                },
+            )
+        })
+        .chain(iter::once((
+            proto::RoleKey {
+                id: Some(RoleId::Public.into_proto()),
+            },
+            proto::RoleValue {
+                name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
+                attributes: Some(RoleAttributes::new().into_proto()),
+                membership: Some(RoleMembership::new().into_proto()),
+            },
+        )))
+        // Optionally insert a privilege for the bootstrap role.
+        .chain(bootstrap_role.as_ref().map(|(role_id, role_val)| {
+            let key = proto::RoleKey {
+                id: Some(role_id.clone()),
+            };
+            (key, role_val.clone())
+        }));
+    ROLES_COLLECTION.initialize(tx, roles).await?;
 
     let default_privileges = vec![
         // mz_support needs USAGE privileges on all clusters, databases, and schemas for
@@ -275,9 +263,26 @@ pub async fn initialize(
         )
         .await?;
     for (default_privilege_key, default_privilege_value) in &default_privileges {
+        let object_type = match default_privilege_key.object_type {
+            ObjectType::Table => mz_audit_log::ObjectType::Table,
+            ObjectType::View => mz_audit_log::ObjectType::View,
+            ObjectType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
+            ObjectType::Source => mz_audit_log::ObjectType::Source,
+            ObjectType::Sink => mz_audit_log::ObjectType::Sink,
+            ObjectType::Index => mz_audit_log::ObjectType::Index,
+            ObjectType::Type => mz_audit_log::ObjectType::Type,
+            ObjectType::Role => mz_audit_log::ObjectType::Role,
+            ObjectType::Cluster => mz_audit_log::ObjectType::Cluster,
+            ObjectType::ClusterReplica => mz_audit_log::ObjectType::ClusterReplica,
+            ObjectType::Secret => mz_audit_log::ObjectType::Secret,
+            ObjectType::Connection => mz_audit_log::ObjectType::Connection,
+            ObjectType::Database => mz_audit_log::ObjectType::Database,
+            ObjectType::Schema => mz_audit_log::ObjectType::Schema,
+            ObjectType::Func => mz_audit_log::ObjectType::Func,
+        };
         audit_events.push((
             proto::audit_log_event_v1::EventType::Grant,
-            object_type_to_audit_object_type(default_privilege_key.object_type).into_proto(),
+            object_type.into_proto(),
             proto::audit_log_event_v1::Details::AlterDefaultPrivilegeV1(
                 proto::audit_log_event_v1::AlterDefaultPrivilegeV1 {
                     role_id: default_privilege_key.role_id.to_string(),
@@ -860,10 +865,19 @@ pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, Stas
 }
 
 /// Defines the default config for a Cluster.
-fn default_cluster_config(_args: &BootstrapArgs) -> proto::ClusterConfig {
-    // TODO: Use managed clusters by default.
+fn default_cluster_config(args: &BootstrapArgs) -> proto::ClusterConfig {
     proto::ClusterConfig {
-        variant: Some(proto::cluster_config::Variant::Unmanaged(proto::Empty {})),
+        variant: Some(proto::cluster_config::Variant::Managed(ManagedCluster {
+            size: args.default_cluster_replica_size.to_string(),
+            replication_factor: 1,
+            availability_zones: vec![],
+            logging: Some(proto::ReplicaLogging {
+                log_logging: false,
+                interval: Some(proto::Duration::from_secs(1)),
+            }),
+            idle_arrangement_merge_effort: None,
+            disk: false,
+        })),
     }
 }
 

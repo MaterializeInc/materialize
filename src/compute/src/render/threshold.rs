@@ -13,7 +13,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use mz_compute_client::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
+use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::{Diff, Row};
 use timely::dataflow::Scope;

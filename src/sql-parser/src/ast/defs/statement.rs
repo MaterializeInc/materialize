@@ -102,7 +102,7 @@ pub enum Statement<T: AstInfo> {
     AlterDefaultPrivileges(AlterDefaultPrivilegesStatement<T>),
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
-    Comment(CommentStatement),
+    Comment(CommentStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -2334,8 +2334,12 @@ pub enum ShowObjectType<T: AstInfo> {
     },
     Table,
     View,
-    Source,
-    Sink,
+    Source {
+        in_cluster: Option<T::ClusterName>,
+    },
+    Sink {
+        in_cluster: Option<T::ClusterName>,
+    },
     Type,
     Role,
     Cluster,
@@ -2373,8 +2377,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         f.write_str(match &self.object_type {
             ShowObjectType::Table => "TABLES",
             ShowObjectType::View => "VIEWS",
-            ShowObjectType::Source => "SOURCES",
-            ShowObjectType::Sink => "SINKS",
+            ShowObjectType::Source { .. } => "SOURCES",
+            ShowObjectType::Sink { .. } => "SINKS",
             ShowObjectType::Type => "TYPES",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
@@ -2409,7 +2413,9 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         // append IN CLUSTER clause
         match &self.object_type {
             ShowObjectType::MaterializedView { in_cluster }
-            | ShowObjectType::Index { in_cluster, .. } => {
+            | ShowObjectType::Index { in_cluster, .. }
+            | ShowObjectType::Sink { in_cluster }
+            | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
@@ -3031,7 +3037,7 @@ pub enum ExplainStage {
     DecorrelatedPlan,
     /// The mz_expr::MirRelationExpr after optimization
     OptimizedPlan,
-    /// The mz_compute_client::plan::Plan
+    /// The mz_compute_types::plan::Plan
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
@@ -3784,12 +3790,12 @@ impl_display_t!(ReassignOwnedStatement);
 
 /// `COMMENT ON ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CommentStatement {
-    pub object: CommentObjectType,
+pub struct CommentStatement<T: AstInfo> {
+    pub object: CommentObjectType<T>,
     pub comment: Option<String>,
 }
 
-impl AstDisplay for CommentStatement {
+impl<T: AstInfo> AstDisplay for CommentStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("COMMENT ON ");
         f.write_node(&self.object);
@@ -3805,10 +3811,10 @@ impl AstDisplay for CommentStatement {
         }
     }
 }
-impl_display!(CommentStatement);
+impl_display_t!(CommentStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CommentObjectType {
+pub enum CommentObjectType<T: AstInfo> {
     Table {
         name: UnresolvedItemName,
     },
@@ -3819,9 +3825,48 @@ pub enum CommentObjectType {
         relation_name: UnresolvedItemName,
         column_name: Ident,
     },
+    MaterializedView {
+        name: UnresolvedItemName,
+    },
+    Source {
+        name: UnresolvedItemName,
+    },
+    Sink {
+        name: UnresolvedItemName,
+    },
+    Index {
+        name: UnresolvedItemName,
+    },
+    Func {
+        name: UnresolvedItemName,
+    },
+    Connection {
+        name: UnresolvedItemName,
+    },
+    Type {
+        name: UnresolvedItemName,
+    },
+    Secret {
+        name: UnresolvedItemName,
+    },
+    Role {
+        name: Ident,
+    },
+    Database {
+        name: UnresolvedDatabaseName,
+    },
+    Schema {
+        name: UnresolvedSchemaName,
+    },
+    Cluster {
+        name: T::ClusterName,
+    },
+    ClusterReplica {
+        name: QualifiedReplica,
+    },
 }
 
-impl AstDisplay for CommentObjectType {
+impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         use CommentObjectType::*;
 
@@ -3843,7 +3888,60 @@ impl AstDisplay for CommentObjectType {
                 f.write_str(".");
                 f.write_node(column_name);
             }
+            MaterializedView { name } => {
+                f.write_str("MATERIALIZED VIEW ");
+                f.write_node(name);
+            }
+            Source { name } => {
+                f.write_str("SOURCE ");
+                f.write_node(name);
+            }
+            Sink { name } => {
+                f.write_str("SINK ");
+                f.write_node(name);
+            }
+            Index { name } => {
+                f.write_str("INDEX ");
+                f.write_node(name);
+            }
+            Func { name } => {
+                f.write_str("FUNCTION ");
+                f.write_node(name);
+            }
+            Connection { name } => {
+                f.write_str("CONNECTION ");
+                f.write_node(name);
+            }
+            Type { name } => {
+                f.write_str("TYPE ");
+                f.write_node(name);
+            }
+            Secret { name } => {
+                f.write_str("SECRET ");
+                f.write_node(name);
+            }
+            Role { name } => {
+                f.write_str("ROLE ");
+                f.write_node(name);
+            }
+            Database { name } => {
+                f.write_str("DATABASE ");
+                f.write_node(name);
+            }
+            Schema { name } => {
+                f.write_str("SCHEMA ");
+                f.write_node(name);
+            }
+            Cluster { name } => {
+                f.write_str("CLUSTER ");
+                f.write_node(name);
+            }
+            ClusterReplica { name } => {
+                f.write_str("CLUSTER REPLICA ");
+                f.write_node(name);
+            }
         }
     }
 }
-impl_display!(CommentObjectType);
+
+impl_display_t!(CommentObjectType);

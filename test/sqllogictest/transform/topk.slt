@@ -37,7 +37,7 @@ Explained Query:
         TopK order_by=[#0 asc nulls_first] limit=4 // { arity: 3 }
           Project (#3, #5, #6) // { arity: 3 }
             Map ((#0 + #1), (#4 + #2), (#4 + #3)) // { arity: 7 }
-              Get materialize.public.test1 // { arity: 4 }
+              ReadStorage materialize.public.test1 // { arity: 4 }
 
 EOF
 
@@ -59,7 +59,7 @@ Explained Query:
   Project (#4, #0, #1) // { arity: 3 }
     Map ((bigint_to_numeric(#2) / bigint_to_numeric(case when (#3 = 0) then null else #3 end))) // { arity: 5 }
       Reduce group_by=[((#0 + #1) + #2), ((#0 + #1) + #3)] aggregates=[sum(#3), count(#3)] // { arity: 4 }
-        Get materialize.public.test1 // { arity: 4 }
+        ReadStorage materialize.public.test1 // { arity: 4 }
 
 EOF
 
@@ -69,9 +69,9 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM test1 UNION ALL SELECT * FROM test
 ----
 Explained Query:
   Union // { arity: 4 }
-    Get materialize.public.test1 // { arity: 4 }
-    Get materialize.public.test1 // { arity: 4 }
-    Get materialize.public.test1 // { arity: 4 }
+    ReadStorage materialize.public.test1 // { arity: 4 }
+    ReadStorage materialize.public.test1 // { arity: 4 }
+    ReadStorage materialize.public.test1 // { arity: 4 }
 
 EOF
 
@@ -102,6 +102,6 @@ explain with(arity, join_impls) materialized view mv1;
 ----
 materialize.public.mv1:
   TopK order_by=[#0 asc nulls_last] limit=3 offset=3 // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF

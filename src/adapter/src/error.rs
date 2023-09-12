@@ -21,17 +21,17 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::role_id::RoleId;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
+use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use smallvec::SmallVec;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
-use crate::{catalog, rbac};
+use crate::catalog;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -145,8 +145,6 @@ pub enum AdapterError {
     Canceled,
     /// An idle session in a transaction has timed out.
     IdleInTransactionSessionTimeout,
-    /// An error occurred in a SQL catalog operation.
-    SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-subscribe mode.
     SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
@@ -205,13 +203,11 @@ pub enum AdapterError {
     /// The transaction can only execute a single statement.
     SingleStatementTransaction,
     /// An error occurred in the storage layer
-    Storage(mz_storage_client::controller::StorageError),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
     Orchestrator(anyhow::Error),
-    /// The active role was dropped while a user was logged in.
-    ConcurrentRoleDrop(RoleId),
     /// A statement tried to drop a role that had dependent objects.
     ///
     /// The map keys are role names and values are detailed error messages.
@@ -275,7 +271,6 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::VarError(e) => e.detail(),
-            AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
             AdapterError::DependentObject(dependent_objects) => {
                 Some(dependent_objects
@@ -303,7 +298,6 @@ impl AdapterError {
                     .to_string(),
             ),
             AdapterError::Catalog(c) => c.hint(),
-            AdapterError::SqlCatalog(e) => e.hint(),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
@@ -412,7 +406,6 @@ impl AdapterError {
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UnallowedOnCluster { .. } => {
@@ -440,7 +433,6 @@ impl AdapterError {
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
             }
-            AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::VarError(e) => match e {
                 VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -581,7 +573,6 @@ impl fmt::Display for AdapterError {
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
-            AdapterError::SqlCatalog(e) => e.fmt(f),
             AdapterError::SubscribeOnlyTransaction => {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
@@ -650,9 +641,6 @@ impl fmt::Display for AdapterError {
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
-            AdapterError::ConcurrentRoleDrop(role_id) => {
-                write!(f, "role {role_id} was concurrently dropped")
-            }
             AdapterError::DependentObject(dependent_objects) => {
                 let role_str = if dependent_objects.keys().count() == 1 {
                     "role"
@@ -696,6 +684,12 @@ impl From<catalog::Error> for AdapterError {
     }
 }
 
+impl From<catalog::storage::Error> for AdapterError {
+    fn from(e: catalog::storage::Error) -> Self {
+        catalog::Error::from(e).into()
+    }
+}
+
 impl From<EvalError> for AdapterError {
     fn from(e: EvalError) -> AdapterError {
         AdapterError::Eval(e)
@@ -713,7 +707,7 @@ impl From<ExplainError> for AdapterError {
 
 impl From<mz_sql::catalog::CatalogError> for AdapterError {
     fn from(e: mz_sql::catalog::CatalogError) -> AdapterError {
-        AdapterError::SqlCatalog(e)
+        AdapterError::Catalog(catalog::Error::from(e))
     }
 }
 

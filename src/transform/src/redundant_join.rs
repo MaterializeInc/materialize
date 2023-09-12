@@ -150,7 +150,7 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::Get { id, typ } => {
+                MirRelationExpr::Get { id, typ, .. } => {
                     if let Id::Local(id) = id {
                         // Extract the value provenance (this should always exist).
                         let mut val_info = ctx.get(id).cloned().unwrap_or_else(|| {
@@ -789,8 +789,7 @@ impl ProvInfoCtx {
     pub fn extend_uses(&mut self, expr: &MirRelationExpr) {
         expr.visit_pre(&mut |expr: &MirRelationExpr| match expr {
             MirRelationExpr::Get {
-                id: Id::Local(id),
-                typ: _,
+                id: Id::Local(id), ..
             } => {
                 let count = self.uses.entry(id.clone()).or_insert(0_usize);
                 *count += 1;

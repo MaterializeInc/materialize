@@ -12,13 +12,13 @@
 use std::collections::BTreeSet;
 
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, RawClusterName, Statement};
-use mz_storage_client::types::sources::IngestionDescription;
+use mz_storage_types::sources::IngestionDescription;
 
 use crate::catalog::storage::Transaction;
 use crate::catalog::{

@@ -36,7 +36,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1
 ----
 Explained Query:
-  Get materialize.public.t1 // { arity: 2 }
+  ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -51,7 +51,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 ----
 Explained Query:
-  Get materialize.public.t1 // { arity: 2 }
+  ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -68,7 +68,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1
 Explained Query:
   Project (#0, #1, #0, #1) // { arity: 4 }
     Filter (#1 = 1) // { arity: 2 }
-      Get materialize.public.t1 // { arity: 2 }
+      ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#1 = 1))
@@ -98,7 +98,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCE
 ----
 Explained Query:
   Threshold // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -113,7 +113,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
 Explained Query:
-  Get materialize.public.t1 // { arity: 2 }
+  ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -129,7 +129,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCE
 ----
 Explained Query:
   Threshold // { arity: 2 }
-    Get materialize.public.t2 // { arity: 2 }
+    ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -144,7 +144,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCE
 ----
 Explained Query:
   Threshold // { arity: 2 }
-    Get materialize.public.t2 // { arity: 2 }
+    ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -161,10 +161,10 @@ Explained Query:
   Union // { arity: 2 }
     Threshold // { arity: 2 }
       Union // { arity: 2 }
-        Get materialize.public.t2 // { arity: 2 }
+        ReadStorage materialize.public.t2 // { arity: 2 }
         Negate // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -183,7 +183,7 @@ SELECT a1.* FROM t3_with_key AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.key = a2.k
 ----
 Explained Query:
   Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
-    Get materialize.public.t3 // { arity: 2 }
+    ReadStorage materialize.public.t3 // { arity: 2 }
 
 EOF
 
@@ -201,7 +201,7 @@ WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 ----
 Explained Query:
-  Get materialize.public.t3 // { arity: 2 }
+  ReadStorage materialize.public.t3 // { arity: 2 }
 
 EOF
 
@@ -220,7 +220,7 @@ WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key or (a1.f1 is null and a2.key is null));
 ----
 Explained Query:
-  Get materialize.public.t3 // { arity: 2 }
+  ReadStorage materialize.public.t3 // { arity: 2 }
 
 EOF
 
@@ -275,7 +275,7 @@ Explained Query:
     cte l0 =
       Union
         Project (#0)
-          Get materialize.public.init
+          ReadStorage materialize.public.init
         Get l2
 
 EOF

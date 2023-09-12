@@ -16,7 +16,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
 use mz_sql_parser::ast::visit_mut::VisitMut;
 use mz_sql_parser::ast::{Function, Ident};
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 

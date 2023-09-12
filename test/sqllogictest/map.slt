@@ -425,31 +425,6 @@ SELECT '{a=>true, b=>false}'::map[text=>bool] -> 'b'
 false
 
 query T
-SELECT ('{a=>true, b=>false}'::map[text=>bool] -> ARRAY[]::text[])::text
-----
-{}
-
-query T
-SELECT ('{a=>true, b=>false}'::map[text=>bool] -> ARRAY['']::text[])::text
-----
-{NULL}
-
-query T
-SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['a'])::text
-----
-{1}
-
-query T
-SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a'])::text
-----
-{2,1}
-
-query T
-SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a', 'c'])::text
-----
-{2,1,NULL}
-
-query T
 SELECT ('{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'missing'::text)::text
 ----
 NULL
@@ -466,9 +441,6 @@ nested
 
 query error operator is not unique: unknown \-> text
 SELECT NULL -> 'hello'::text
-
-query error could not determine polymorphic type because input has type unknown
-SELECT NULL -> '{a}'::text[]
 
 # 🔬 CREATE TYPE .. AS MAP
 

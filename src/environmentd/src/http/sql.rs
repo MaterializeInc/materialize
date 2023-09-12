@@ -29,7 +29,7 @@ use mz_adapter::{
     SessionClient, Severity,
 };
 use mz_interchange::encode::TypedDatum;
-use mz_interchange::json::ToJson;
+use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
@@ -665,7 +665,10 @@ impl ResultSender for WebSocket {
                                         datums
                                             .iter()
                                             .enumerate()
-                                            .map(|(i, d)| TypedDatum::new(*d, &types[i]).json())
+                                            .map(|(i, d)| {
+                                                TypedDatum::new(*d, &types[i])
+                                                    .json(&JsonNumberPolicy::ConvertNumberToString)
+                                            })
                                             .collect(),
                                     ),
                                 )
@@ -1065,7 +1068,7 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
@@ -1077,7 +1080,7 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()

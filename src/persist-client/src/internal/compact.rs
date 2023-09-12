@@ -687,6 +687,7 @@ where
         );
 
         let mut consolidator = Consolidator::new(
+            Arc::clone(&metrics),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
@@ -710,7 +711,7 @@ where
             metrics.compaction.not_all_prefetched.inc();
         }
 
-        while let Some(updates) = consolidator.next().await {
+        while let Some(updates) = consolidator.next().await? {
             for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
                 batch
                     .add(&real_schemas, &k.to_vec(), &v.to_vec(), &t, &d)
