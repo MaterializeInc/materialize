@@ -10,6 +10,8 @@
 
 from materialize.mzcompose import (
     DEFAULT_CONFLUENT_PLATFORM_VERSION,
+)
+from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )

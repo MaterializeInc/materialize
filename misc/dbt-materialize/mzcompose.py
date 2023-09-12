@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.dbt import Dbt
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda

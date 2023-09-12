@@ -13,6 +13,8 @@ from materialize.mzcompose import (
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
     DEFAULT_SYSTEM_PARAMETERS,
+)
+from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
     ServiceDependency,

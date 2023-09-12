@@ -16,6 +16,8 @@ from materialize.mzcompose import (
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_ORDINAL,
     DEFAULT_ORG_ID,
+)
+from materialize.mzcompose.composition import (
     Composition,
 )
 from materialize.mzcompose.services.localstack import Localstack

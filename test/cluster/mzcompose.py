@@ -18,7 +18,7 @@ from threading import Thread
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka

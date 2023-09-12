@@ -13,7 +13,7 @@ import time
 from materialize.data_ingest.executor import KafkaExecutor
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import Workload, execute_workload
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

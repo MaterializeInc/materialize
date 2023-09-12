@@ -10,7 +10,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

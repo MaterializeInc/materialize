@@ -10,7 +10,7 @@
 import os
 
 from materialize import MZ_ROOT, spawn, ui
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.postgres import Postgres

@@ -15,7 +15,7 @@ from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorPar
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium

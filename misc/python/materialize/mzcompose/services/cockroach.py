@@ -12,9 +12,11 @@ import os
 from materialize import MZ_ROOT
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
+    loader,
+)
+from materialize.mzcompose.service import (
     Service,
     ServiceHealthcheck,
-    loader,
 )
 
 

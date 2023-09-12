@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.mzcompose import (
+from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )

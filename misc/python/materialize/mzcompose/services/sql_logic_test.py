@@ -10,6 +10,8 @@
 
 from materialize.mzcompose import (
     DEFAULT_SYSTEM_PARAMETERS,
+)
+from materialize.mzcompose.service import (
     Service,
 )
 

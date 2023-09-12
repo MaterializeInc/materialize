@@ -10,6 +10,8 @@
 
 from materialize.mzcompose import (
     DEFAULT_MZ_VOLUMES,
+)
+from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )

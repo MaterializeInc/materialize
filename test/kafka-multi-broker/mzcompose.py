@@ -9,7 +9,7 @@
 
 import time
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry

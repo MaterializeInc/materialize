@@ -11,7 +11,7 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists

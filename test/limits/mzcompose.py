@@ -13,7 +13,7 @@ import sys
 import tempfile
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

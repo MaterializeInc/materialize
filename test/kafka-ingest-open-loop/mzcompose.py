@@ -11,7 +11,7 @@ import time
 
 from pg8000.dbapi import InterfaceError
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.kgen import Kgen
 from materialize.mzcompose.services.materialized import Materialized

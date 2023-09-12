@@ -37,7 +37,7 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.materialized import Materialized

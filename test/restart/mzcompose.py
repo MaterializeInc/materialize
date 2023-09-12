@@ -10,7 +10,7 @@ from textwrap import dedent
 
 import pg8000.exceptions
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

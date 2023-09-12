@@ -12,8 +12,10 @@ import tempfile
 import toml
 
 from materialize.mzcompose import (
-    Service,
     loader,
+)
+from materialize.mzcompose.service import (
+    Service,
 )
 
 

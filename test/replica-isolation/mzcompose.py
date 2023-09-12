@@ -15,7 +15,7 @@ from typing import Any
 
 from pg8000 import Cursor  # type: ignore
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack

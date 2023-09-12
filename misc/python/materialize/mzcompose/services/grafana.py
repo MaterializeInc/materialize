@@ -9,7 +9,7 @@
 
 
 from materialize import MZ_ROOT
-from materialize.mzcompose import (
+from materialize.mzcompose.service import (
     Service,
 )
 

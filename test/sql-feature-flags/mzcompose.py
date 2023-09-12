@@ -12,7 +12,7 @@ import os
 import tempfile
 from textwrap import dedent, indent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive

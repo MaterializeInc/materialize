@@ -10,6 +10,8 @@
 
 from materialize.mzcompose import (
     DEFAULT_DEBEZIUM_VERSION,
+)
+from materialize.mzcompose.service import (
     Service,
     ServiceDependency,
 )

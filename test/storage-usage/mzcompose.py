@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda

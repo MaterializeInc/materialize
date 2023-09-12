@@ -20,7 +20,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.endpoint import Endpoint

@@ -12,7 +12,7 @@ import re
 from datetime import timedelta
 from enum import Enum
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium

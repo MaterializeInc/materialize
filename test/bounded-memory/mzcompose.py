@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres

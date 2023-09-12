@@ -41,7 +41,7 @@ from materialize.feature_benchmark.termination import (
     RunAtMost,
     TerminationCondition,
 )
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
