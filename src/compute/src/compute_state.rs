@@ -11,24 +11,24 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::TraceReader;
 use mz_compute_client::logging::LoggingConfig;
-use mz_compute_client::plan::Plan;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
@@ -186,16 +186,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_create_instance(
-        &mut self,
-        InstanceConfig {
-            logging_config,
-            variable_length_row_encoding,
-        }: InstanceConfig,
-    ) {
-        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
-        self.initialize_logging(&logging_config);
+    fn handle_create_instance(&mut self, config: InstanceConfig) {
+        self.initialize_logging(&config.logging);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {

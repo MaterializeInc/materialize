@@ -18,6 +18,11 @@ ALTER SYSTEM SET enable_comment TO true;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_webhook_sources = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE a ( x int8, y text, z jsonb );
 
@@ -73,6 +78,12 @@ statement error column "b.does_not_exist" does not exist
 COMMENT ON COLUMN b.does_not_exist IS 'foo';
 
 statement ok
+CREATE INDEX b_idx ON b (ts);
+
+statement ok
+COMMENT ON INDEX b_idx IS 'speed_up';
+
+statement ok
 CREATE VIEW c (col_1, col_2) AS VALUES ('a', 'b');
 
 statement ok
@@ -81,8 +92,214 @@ COMMENT ON VIEW c IS 'this_is_a_view';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u3  view  NULL  this_is_a_view
+u3  index NULL  speed_up
+u4  view  NULL  this_is_a_view
 
-# We could support this, but don't right now.
-statement error COMMENT on view not yet supported
-COMMENT ON COLUMN c.col_1 IS 'this_will_work_one_day';
+statement ok
+DROP TABLE b CASCADE;
+
+statement ok
+COMMENT ON COLUMN c.col_1 IS 'this_works';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u4  view  NULL  this_is_a_view
+u4  view  1  this_works
+
+statement ok
+CREATE MATERIALIZED VIEW mv ( x ) AS SELECT 1
+
+statement ok
+COMMENT ON COLUMN mv.x IS 'comment_mat_view_col';
+
+statement ok
+COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u4  view  NULL  this_is_a_view
+u4  view  1  this_works
+u5  materialized-view  NULL  mat_foo
+u5  materialized-view  1  comment_mat_view_col
+
+statement ok
+DROP VIEW c;
+
+statement ok
+DROP MATERIALIZED VIEW mv;
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+
+statement ok
+CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
+
+statement ok
+COMMENT ON CLUSTER comment_cluster IS 'careful_now';
+
+statement ok
+COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u2 cluster NULL careful_now
+u3 cluster-replica NULL second_replicator
+
+statement ok
+DROP CLUSTER REPLICA comment_cluster.r2;
+
+statement ok
+CREATE SOURCE my_webhook IN CLUSTER comment_cluster FROM WEBHOOK BODY FORMAT TEXT;
+
+statement ok
+COMMENT ON SOURCE my_webhook IS 'all_the_data';
+
+statement ok
+COMMENT ON COLUMN my_webhook.body IS 'json_blob';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u2 cluster NULL careful_now
+u6 source NULL all_the_data
+u6 source 1 json_blob
+
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
+
+statement ok
+COMMENT ON TYPE int4_list IS 'supercool_list';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u2 cluster NULL careful_now
+u6 source NULL all_the_data
+u7 type NULL supercool_list
+u6 source 1 json_blob
+
+statement ok
+DROP CLUSTER comment_cluster CASCADE;
+
+statement ok
+CREATE SECRET my_secret AS 'foobar';
+
+statement ok
+COMMENT ON SECRET my_secret IS 'supersecret';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u8 secret NULL supersecret
+u7 type NULL supercool_list
+
+statement ok
+CREATE DATABASE comment_on_db;
+
+statement ok
+CREATE SCHEMA comment_on_schema;
+
+statement ok
+COMMENT ON DATABASE comment_on_db IS 'this_is_my_db';
+
+statement ok
+COMMENT ON SCHEMA comment_on_schema IS 'this_is_my_schema';
+
+statement ok
+DROP SECRET my_secret;
+
+statement ok
+DROP TYPE int4_list;
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u2 database NULL this_is_my_db
+u7 schema NULL this_is_my_schema
+
+statement ok
+DROP DATABASE comment_on_db;
+
+statement ok
+DROP SCHEMA comment_on_schema;
+
+# Test RBAC.
+
+statement ok
+CREATE ROLE student;
+
+statement ok
+COMMENT ON ROLE student IS 'limited_role';
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u2 role NULL limited_role
+
+statement ok
+CREATE TABLE foo ( x int8 );
+
+simple conn=student,user=student
+COMMENT ON TABLE foo IS 'comment_from_student';
+----
+db error: ERROR: must be owner of TABLE materialize.public.foo
+
+statement ok
+CREATE ROLE teacher;
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO student;
+----
+COMPLETE 0
+
+simple conn=student,user=student
+COMMENT ON ROLE teacher IS 'foo';
+----
+COMPLETE 0
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u3 role NULL foo
+u2 role NULL limited_role
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM student;
+----
+COMPLETE 0
+
+# To comment on a Role you must have the CREATEROLE privilege.
+simple conn=student,user=student
+COMMENT ON ROLE teacher IS 'updated_teacher_comment';
+----
+db error: ERROR: permission denied for SYSTEM
+
+statement ok
+DROP ROLE student;
+
+statement ok
+DROP ROLE teacher;
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+
+statement error must be owner of DATABASE materialize
+COMMENT ON DATABASE materialize IS 'main_db';
+
+statement error must be owner of SCHEMA materialize.public
+COMMENT ON SCHEMA public IS 'everyone_has_access';
+
+simple conn=mz_system,user=mz_system
+COMMENT ON DATABASE materialize IS 'main_db';
+----
+COMPLETE 0
+
+query TTTT
+SELECT * FROM mz_internal.mz_comments;
+----
+u1 database NULL main_db

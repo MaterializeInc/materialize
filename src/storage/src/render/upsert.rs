@@ -22,9 +22,9 @@ use futures::future::FutureExt;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::sources::UpsertEnvelope;
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
 };

@@ -16,7 +16,7 @@ use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
-use mz_storage_client::types::parameters::{
+use mz_storage_types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;
@@ -164,6 +164,7 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
+        feature_flags: config.persist_flags(),
     }
 }
 

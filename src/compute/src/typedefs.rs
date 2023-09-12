@@ -14,7 +14,7 @@
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{ColKeySpine, ColValSpine};
 use mz_repr::{Diff, Row, Timestamp};
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_types::errors::DataflowError;
 
 pub type RowSpine<K, V, T, R, O = usize> = ColValSpine<K, V, T, R, O>;
 pub type RowKeySpine<K, T, R, O = usize> = ColKeySpine<K, T, R, O>;

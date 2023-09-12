@@ -57,7 +57,7 @@ def pgwire_sql_conn(auth: AuthConfig, environment: Environment) -> Connection[An
         password=auth.app_password,
         host=pgwire_host,
         port=pgwire_port,
-        sslmode="require",
+        sslmode=auth.pgwire_ssl_mode,
     )
     conn.autocommit = True
     return conn

@@ -11,19 +11,21 @@ use std::iter;
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row, ScalarType};
-use mz_storage_client::types::sources::{Generator, GeneratorMessageType};
+use mz_storage_types::sources::{Generator, MzOffset};
+use timely::dataflow::operators::to_stream::Event;
 
 pub struct Datums {}
 
 // Note that this generator never issues retractions; if you change this,
-// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
 impl Generator for Datums {
     fn by_seed(
         &self,
         _: NowFn,
         _seed: Option<u64>,
-    ) -> Box<dyn Iterator<Item = (usize, GeneratorMessageType, Row, i64)>> {
+        _resume_offset: MzOffset,
+    ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
         let typs = ScalarType::enumerate();
         let mut datums: Vec<Vec<Datum>> = typs
             .iter()
@@ -45,22 +47,29 @@ impl Generator for Datums {
                 .collect(),
         );
         let mut idx = 0;
-        Box::new(iter::from_fn(move || {
-            if idx == len {
-                return None;
-            }
-            let mut row = Row::with_capacity(datums.len());
-            let mut packer = row.packer();
-            for d in &datums {
-                packer.push(d[idx]);
-            }
-            idx += 1;
-            let message = if idx == len {
-                GeneratorMessageType::Finalized
-            } else {
-                GeneratorMessageType::InProgress
-            };
-            Some((0, message, row, 1))
-        }))
+        let mut offset = 0;
+        Box::new(
+            iter::from_fn(move || {
+                if idx == len {
+                    return None;
+                }
+                let mut row = Row::with_capacity(datums.len());
+                let mut packer = row.packer();
+                for d in &datums {
+                    packer.push(d[idx]);
+                }
+                let msg = (0, Event::Message(MzOffset::from(offset), (row, 1)));
+
+                idx += 1;
+                let progress = if idx == len {
+                    offset += 1;
+                    Some((0, Event::Progress(Some(MzOffset::from(offset)))))
+                } else {
+                    None
+                };
+                Some(std::iter::once(msg).chain(progress))
+            })
+            .flatten(),
+        )
     }
 }

@@ -17,7 +17,7 @@ use mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::StringOrSecret;
+use mz_storage_types::connections::StringOrSecret;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;

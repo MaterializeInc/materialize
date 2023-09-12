@@ -981,8 +981,8 @@ pub struct TypedState<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-#[cfg(any(test, debug_assertions))]
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
         TypedState {
             state: State {
@@ -991,6 +991,20 @@ impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
                 hostname,
+                collections: self.collections.clone(),
+            },
+            _phantom: PhantomData,
+        }
+    }
+
+    pub(crate) fn clone_for_rollup(&self) -> Self {
+        TypedState {
+            state: State {
+                applier_version: self.applier_version.clone(),
+                shard_id: self.shard_id.clone(),
+                seqno: self.seqno.clone(),
+                walltime_ms: self.walltime_ms,
+                hostname: self.hostname.clone(),
                 collections: self.collections.clone(),
             },
             _phantom: PhantomData,

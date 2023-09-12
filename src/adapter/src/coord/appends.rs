@@ -123,6 +123,7 @@ macro_rules! guard_write_critical_section {
                 .try_grant_session_write_lock($ctx.session_mut())
                 .is_err()
             {
+                let role_metadata = $ctx.session().role_metadata().clone();
                 $coord.defer_write(Deferred::Plan(DeferredPlan {
                     ctx: $ctx,
                     plan: $plan_to_defer,
@@ -131,6 +132,7 @@ macro_rules! guard_write_critical_section {
                         dependency_ids: $dependency_ids,
                         cluster_id: None,
                         replica_id: None,
+                        role_metadata,
                     },
                 }));
                 return;

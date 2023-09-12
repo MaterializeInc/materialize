@@ -8,46 +8,42 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Formatter;
 use std::hash::Hash;
 use std::iter::once;
-use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, pin};
 
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLogging};
+use mz_compute_client::logging::LogVariant;
+use mz_controller::clusters::ReplicaLogging;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes,
+    CatalogError as SqlCatalogError, CatalogItemType, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
     SchemaId, SchemaSpecifier,
 };
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 
-use crate::catalog::builtin::{
-    BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-};
-use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::storage::stash::DEPLOY_GENERATION;
-use crate::catalog::{
-    is_reserved_name, ClusterConfig, ClusterVariant, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, RoleMembership, SystemObjectMapping,
-};
-use crate::coord::timeline;
 
 pub mod objects;
 pub mod stash;
@@ -61,9 +57,6 @@ pub use stash::{
     TIMESTAMP_COLLECTION,
 };
 
-pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
-pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
-
 const DATABASE_ID_ALLOC_KEY: &str = "database";
 const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
@@ -74,7 +67,10 @@ const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
+fn add_new_builtin_clusters_migration(
+    txn: &mut Transaction<'_>,
+    bootstrap_args: &BootstrapArgs,
+) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -82,20 +78,15 @@ fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), E
         .map(|value| value.name)
         .collect();
 
-    for builtin_cluster in &*BUILTIN_CLUSTERS {
-        assert!(
-            is_reserved_name(builtin_cluster.name),
-            "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
-            BUILTIN_PREFIXES.join(", ")
-        );
+    for builtin_cluster in &bootstrap_args.builtin_clusters {
         if !cluster_names.contains(builtin_cluster.name) {
             let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
             let id = ClusterId::System(id);
             txn.insert_system_cluster(
                 id,
                 builtin_cluster.name,
-                &vec![],
-                builtin_cluster.privileges.clone(),
+                vec![],
+                builtin_cluster.privileges.to_vec(),
                 ClusterConfig {
                     // TODO: Should builtin clusters be managed or unmanaged?
                     variant: ClusterVariant::Unmanaged,
@@ -128,7 +119,7 @@ fn add_new_builtin_cluster_replicas_migration(
                 acc
             });
 
-    for builtin_replica in &*BUILTIN_CLUSTER_REPLICAS {
+    for builtin_replica in &bootstrap_args.builtin_cluster_replicas {
         let cluster_id = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
@@ -171,11 +162,49 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 
+#[derive(Debug)]
+pub enum Error {
+    Catalog(SqlCatalogError),
+    Stash(StashError),
+}
+
+impl std::error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Catalog(e) => write!(f, "{e}"),
+            Error::Stash(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<SqlCatalogError> for Error {
+    fn from(e: SqlCatalogError) -> Self {
+        Self::Catalog(e)
+    }
+}
+
+impl From<StashError> for Error {
+    fn from(e: StashError) -> Self {
+        Self::Stash(e)
+    }
+}
+
+impl From<TryFromProtoError> for Error {
+    fn from(e: TryFromProtoError) -> Error {
+        Error::Stash(mz_stash::StashError::from(e))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
+    pub builtin_clusters: Vec<BuiltinCluster>,
+    pub builtin_cluster_replicas: Vec<BuiltinClusterReplica>,
+    pub builtin_roles: Vec<BuiltinRole>,
 }
 
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
@@ -187,7 +216,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection {
     stash: Stash,
-    boot_ts: mz_repr::Timestamp,
 }
 
 impl Connection {
@@ -212,8 +240,7 @@ impl Connection {
                 }
                 Err((given_stash, err)) => {
                     stash = given_stash;
-                    let should_retry =
-                        matches!(&err, Error{ kind: ErrorKind::Stash(se)} if se.should_retry());
+                    let should_retry = matches!(&err, Error::Stash(se) if se.should_retry());
                     if !should_retry || retry.next().await.is_none() {
                         return Err(err);
                     }
@@ -236,16 +263,17 @@ impl Connection {
                 return Err((stash, e.into()));
             }
         } {
-            // Get the current timestamp so we can record when we booted.
-            let previous_now = mz_repr::Timestamp::MIN;
-            let boot_ts = timeline::monotonic_now(now, previous_now);
+            // Get the current timestamp so we can record when we booted. We don't have to worry
+            // about `boot_ts` being less than a previously used timestamp because the stash is
+            // uninitialized and there are no previous timestamps.
+            let boot_ts = now();
 
             // Initialize the Stash
             let args = bootstrap_args.clone();
             match stash
                 .with_transaction(move |mut tx| {
                     Box::pin(async move {
-                        stash::initialize(&mut tx, &args, boot_ts.into(), deploy_generation).await
+                        stash::initialize(&mut tx, &args, boot_ts, deploy_generation).await
                     })
                 })
                 .await
@@ -254,7 +282,7 @@ impl Connection {
                 Err(e) => return Err((stash, e.into())),
             }
 
-            Connection { stash, boot_ts }
+            Connection { stash }
         } else {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
@@ -267,34 +295,9 @@ impl Connection {
                 }
             }
 
-            // Choose a time at which to boot. This is the time at which we will run
-            // internal migrations, and is also exposed upwards in case higher
-            // layers want to run their own migrations at the same timestamp.
-            //
-            // This time is usually the current system time, but with protection
-            // against backwards time jumps, even across restarts.
-            let previous =
-                match try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds).await {
-                    Ok(ts) => ts.unwrap_or(mz_repr::Timestamp::MIN),
-                    Err(e) => {
-                        return Err((stash, e));
-                    }
-                };
-            let boot_ts = timeline::monotonic_now(now, previous);
-
-            let mut conn = Connection { stash, boot_ts };
+            let mut conn = Connection { stash };
 
             if !conn.stash.is_readonly() {
-                // IMPORTANT: we durably record the new timestamp before using it.
-                match conn
-                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(e) => {
-                        return Err((conn.stash, e));
-                    }
-                }
                 if let Some(deploy_generation) = deploy_generation {
                     match conn.persist_deploy_generation(deploy_generation).await {
                         Ok(()) => {}
@@ -317,7 +320,7 @@ impl Connection {
                 }
             };
 
-            match add_new_builtin_clusters_migration(&mut txn) {
+            match add_new_builtin_clusters_migration(&mut txn, bootstrap_args) {
                 Ok(()) => {}
                 Err(e) => {
                     return Err((conn.stash, e));
@@ -344,17 +347,8 @@ impl Connection {
         self.stash.set_connect_timeout(connect_timeout).await;
     }
 
-    /// Returns the timestamp at which the storage layer booted.
-    ///
-    /// This is the timestamp that will have been used to write any data during
-    /// migrations. It is exposed so that higher layers performing their own
-    /// migrations can write data at the same timestamp, if desired.
-    ///
-    /// The boot timestamp is derived from the durable timestamp oracle and is
-    /// guaranteed to never go backwards, even in the face of backwards time
-    /// jumps across restarts.
-    pub fn boot_ts(&self) -> mz_repr::Timestamp {
-        self.boot_ts
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.stash.is_readonly()
     }
 
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
@@ -500,13 +494,15 @@ impl Connection {
     pub async fn fetch_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
+        boot_ts: mz_repr::Timestamp,
     ) -> Result<Vec<VersionedStorageUsage>, Error> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
             None => u128::MIN,
-            Some(period) => u128::from(self.boot_ts).saturating_sub(period.as_millis()),
+            Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
+        let is_read_only = self.is_read_only();
         Ok(self
             .stash
             .with_transaction(move |tx| {
@@ -526,7 +522,7 @@ impl Connection {
                     // Delete things only if a retention period is
                     // specified (otherwise opening readonly catalogs
                     // can fail).
-                    if retention_period.is_some() {
+                    if retention_period.is_some() && !is_read_only {
                         tx.append(vec![batch]).await?;
                     }
                     Ok(events)
@@ -816,12 +812,31 @@ impl Connection {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
                     Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }.into_proto()),
-                    None => Err(Error::new(ErrorKind::IdExhaustion)),
+                    None => Err(Error::from(SqlCatalogError::IdExhaustion)),
                 }
             })
             .await??;
         let id = prev.expect("must exist").next_id;
         Ok((id..next.next_id).collect())
+    }
+
+    /// Gets a global timestamp for a timeline that has been persisted to disk.
+    ///
+    /// Returns `None` if no persisted timestamp for the specified timeline exists.
+    pub async fn try_get_persisted_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<Option<mz_repr::Timestamp>, Error> {
+        let key = proto::TimestampKey {
+            id: timeline.to_string(),
+        };
+        let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
+            .peek_key_one(&mut self.stash, key)
+            .await?
+            .map(RustType::from_proto)
+            .transpose()?;
+
+        Ok(val.map(|v| v.ts))
     }
 
     /// Get all global timestamps that has been persisted to disk.
@@ -887,27 +902,6 @@ impl Connection {
     pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
         Ok(self.stash.confirm_leadership().await?)
     }
-}
-
-/// Gets a global timestamp for a timeline that has been persisted to disk.
-///
-/// Returns `None` if no persisted timestamp for the specified timeline exists.
-async fn try_get_persisted_timestamp(
-    stash: &mut Stash,
-    timeline: &Timeline,
-) -> Result<Option<mz_repr::Timestamp>, Error>
-where
-{
-    let key = proto::TimestampKey {
-        id: timeline.to_string(),
-    };
-    let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
-        .peek_key_one(stash, key)
-        .await?
-        .map(RustType::from_proto)
-        .transpose()?;
-
-    Ok(val.map(|v| v.ts))
 }
 
 #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
@@ -1093,9 +1087,7 @@ impl<'a> Transaction<'a> {
         ) {
             // TODO(parkertimmerman): Support creating databases in the System namespace.
             Ok(_) => Ok(DatabaseId::User(id)),
-            Err(_) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
-                database_name.to_owned(),
-            ))),
+            Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
     }
 
@@ -1121,9 +1113,7 @@ impl<'a> Transaction<'a> {
         ) {
             // TODO(parkertimmerman): Support creating schemas in the System namespace.
             Ok(_) => Ok(SchemaId::User(id)),
-            Err(_) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
-                schema_name.to_owned(),
-            ))),
+            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name.to_owned()).into()),
         }
     }
 
@@ -1144,7 +1134,7 @@ impl<'a> Transaction<'a> {
             },
         ) {
             Ok(_) => Ok(id),
-            Err(_) => Err(Error::new(ErrorKind::RoleAlreadyExists(name))),
+            Err(_) => Err(SqlCatalogError::RoleAlreadyExists(name).into()),
         }
     }
 
@@ -1154,7 +1144,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -1175,7 +1165,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
     ) -> Result<(), Error> {
@@ -1195,7 +1185,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -1210,9 +1200,7 @@ impl<'a> Transaction<'a> {
                 config,
             },
         ) {
-            return Err(Error::new(ErrorKind::ClusterAlreadyExists(
-                cluster_name.to_owned(),
-            )));
+            return Err(SqlCatalogError::ClusterAlreadyExists(cluster_name.to_owned()).into());
         };
 
         for (builtin, index_id) in introspection_source_indexes {
@@ -1324,10 +1312,11 @@ impl<'a> Transaction<'a> {
                 .clusters
                 .get(&ClusterKey { id: cluster_id })
                 .expect("cluster exists");
-            return Err(Error::new(ErrorKind::DuplicateReplica(
+            return Err(SqlCatalogError::DuplicateReplica(
                 replica_name.to_string(),
                 cluster.name.to_string(),
-            )));
+            )
+            .into());
         };
         Ok(())
     }
@@ -1352,9 +1341,9 @@ impl<'a> Transaction<'a> {
                     Some(ClusterIntrospectionSourceIndexValue { index_id }),
                 )?;
                 if prev.is_none() {
-                    return Err(Error {
-                        kind: ErrorKind::FailedBuiltinSchemaMigration(format!("{id}")),
-                    });
+                    return Err(
+                        SqlCatalogError::FailedBuiltinSchemaMigration(format!("{id}")).into(),
+                    );
                 }
             }
         }
@@ -1381,10 +1370,7 @@ impl<'a> Transaction<'a> {
             },
         ) {
             Ok(_) => Ok(()),
-            Err(_) => Err(Error::new(ErrorKind::ItemAlreadyExists(
-                id,
-                item_name.to_owned(),
-            ))),
+            Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
         }
     }
 
@@ -1395,9 +1381,7 @@ impl<'a> Transaction<'a> {
             .get(&IdAllocKey { name: key.clone() })
             .unwrap_or_else(|| panic!("{key} id allocator missing"))
             .next_id;
-        let next_id = id
-            .checked_add(1)
-            .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
+        let next_id = id.checked_add(1).ok_or(SqlCatalogError::IdExhaustion)?;
         let prev = self
             .id_allocator
             .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
@@ -1627,9 +1611,7 @@ impl<'a> Transaction<'a> {
 
         if usize::try_from(n).expect("update diff should fit into usize") != mappings.len() {
             let id_str = mappings.keys().map(|id| id.to_string()).join(",");
-            return Err(Error {
-                kind: ErrorKind::FailedBuiltinSchemaMigration(id_str),
-            });
+            return Err(SqlCatalogError::FailedBuiltinSchemaMigration(id_str).into());
         }
 
         Ok(())
@@ -2021,6 +2003,13 @@ pub struct Role {
     pub membership: RoleMembership,
 }
 
+#[derive(Clone, Debug)]
+pub struct BuiltinRole {
+    pub id: RoleId,
+    pub name: &'static str,
+    pub attributes: RoleAttributes,
+}
+
 #[derive(Debug, Clone)]
 pub struct Cluster {
     pub id: ClusterId,
@@ -2029,6 +2018,33 @@ pub struct Cluster {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub config: ClusterConfig,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterConfig {
+    pub variant: ClusterVariant,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterVariantManaged {
+    pub size: String,
+    pub availability_zones: Vec<String>,
+    pub logging: ReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
+    pub replication_factor: u32,
+    pub disk: bool,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ClusterVariant {
+    Managed(ClusterVariantManaged),
+    Unmanaged,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinCluster {
+    pub name: &'static str,
+    pub privileges: &'static [MzAclItem],
 }
 
 #[derive(Debug, Clone)]
@@ -2043,7 +2059,6 @@ pub struct ClusterReplica {
 // The on-disk replica configuration does not match the in-memory replica configuration, so we need
 // separate structs. As of writing this comment, it is mainly due to the fact that we don't persist
 // the replica allocation.
-
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ReplicaConfig {
     pub location: ReplicaLocation,
@@ -2126,6 +2141,12 @@ pub struct ComputeReplicaLogging {
     pub interval: Option<Duration>,
 }
 
+#[derive(Clone, Debug)]
+pub struct BuiltinClusterReplica {
+    pub name: &'static str,
+    pub cluster_name: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
@@ -2133,6 +2154,29 @@ pub struct Item {
     pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+}
+
+/// Functions can share the same name as any other catalog item type
+/// within a given schema.
+/// For example, a function can have the same name as a type, e.g.
+/// 'date'.
+/// As such, system objects are keyed in the catalog storage by the
+/// tuple (schema_name, object_type, object_name), which is guaranteed
+/// to be unique.
+#[derive(Debug, Clone)]
+pub struct SystemObjectMapping {
+    pub schema_name: String,
+    pub object_type: CatalogItemType,
+    pub object_name: String,
+    pub id: GlobalId,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinLog {
+    pub variant: LogVariant,
+    pub name: &'static str,
+    pub schema: &'static str,
 }
 
 // Structs used internally to represent on disk-state.

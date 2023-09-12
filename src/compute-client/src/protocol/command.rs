@@ -9,7 +9,8 @@
 
 //! Compute protocol commands.
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
@@ -17,7 +18,7 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoCompaction;
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};
@@ -28,21 +29,11 @@ use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
-use crate::types::dataflows::DataflowDescription;
 
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_compute_client.protocol.command.rs"
 ));
-
-/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
-/// if the controller attempt to reconcile them with different values
-/// for anything in this struct.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct InstanceConfig {
-    pub logging_config: LoggingConfig,
-    pub variable_length_row_encoding: bool,
-}
 
 /// Compute protocol commands, sent by the compute controller to replicas.
 ///
@@ -142,7 +133,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    CreateDataflow(DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<mz_compute_types::plan::Plan<T>, CollectionMetadata, T>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica’s dataflow.
@@ -240,13 +231,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     config: Some(config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
-                ComputeCommand::CreateInstance(InstanceConfig {
-                    logging_config,
-                    variable_length_row_encoding,
-                }) => CreateInstance(ProtoInstanceConfig {
-                    logging_config: Some(logging_config.into_proto()),
-                    variable_length_row_encoding: *variable_length_row_encoding,
-                }),
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
@@ -274,14 +259,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
                 })
             }
-            Some(CreateInstance(ProtoInstanceConfig {
-                logging_config,
-                variable_length_row_encoding,
-            })) => Ok(ComputeCommand::CreateInstance(InstanceConfig {
-                logging_config: logging_config
-                    .into_rust_if_some("ProtoCreateInstance::logging_config")?,
-                variable_length_row_encoding,
-            })),
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
@@ -312,20 +290,21 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            (any::<LoggingConfig>(), any::<bool>())
-                .prop_map(|(logging_config, variable_length_row_encoding)| {
-                    ComputeCommand::CreateInstance(InstanceConfig {
-                        logging_config,
-                        variable_length_row_encoding,
-                    })
-                })
+            any::<InstanceConfig>()
+                .prop_map(ComputeCommand::CreateInstance)
                 .boxed(),
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-            any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>()
-                .prop_map(ComputeCommand::CreateDataflow)
-                .boxed(),
+            any::<
+                DataflowDescription<
+                    mz_compute_types::plan::Plan,
+                    CollectionMetadata,
+                    mz_repr::Timestamp,
+                >,
+            >()
+            .prop_map(ComputeCommand::CreateDataflow)
+            .boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
                 .boxed(),
@@ -334,6 +313,30 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 .prop_map(|uuid| ComputeCommand::CancelPeek { uuid })
                 .boxed(),
         ])
+    }
+}
+
+/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
+/// if the controller attempt to reconcile them with different values
+/// for anything in this struct.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct InstanceConfig {
+    pub logging: LoggingConfig,
+}
+
+impl RustType<ProtoInstanceConfig> for InstanceConfig {
+    fn into_proto(&self) -> ProtoInstanceConfig {
+        ProtoInstanceConfig {
+            logging: Some(self.logging.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            logging: proto
+                .logging
+                .into_rust_if_some("ProtoCreateInstance::logging")?,
+        })
     }
 }
 
@@ -521,6 +524,15 @@ impl RustType<ProtoPeek> for Peek {
 
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
+impl TryIntoTimelyConfig for ComputeCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
+    }
 }
 
 #[cfg(test)]

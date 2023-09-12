@@ -24,6 +24,7 @@ use crate::columnar::Data;
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::ValidityRef;
 use crate::stats::impls::any_struct_stats_cols;
+use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
 
@@ -407,6 +408,18 @@ impl TrimStats for ProtoPrimitiveStats {
         use proto_primitive_stats::*;
         match (&mut self.lower, &mut self.upper) {
             (Some(Lower::LowerString(lower)), Some(Upper::UpperString(upper))) => {
+                // If the lower and upper strings both look like iso8601
+                // timestamps, then (1) they're small and (2) that's an
+                // extremely high signal that we might want to keep them around
+                // for filtering. We technically could still recover useful
+                // bounds here in the interpret code, but the complexity isn't
+                // worth it, so just skip any trimming.
+                if try_parse_monotonic_iso8601_timestamp(lower).is_some()
+                    && try_parse_monotonic_iso8601_timestamp(upper).is_some()
+                {
+                    return;
+                }
+
                 let common_prefix = lower
                     .char_indices()
                     .zip(upper.chars())
@@ -2026,5 +2039,23 @@ mod tests {
             panic!("ok was of unexpected type {:?}", ok);
         };
         assert!(ok_struct.cols.contains_key("foo_timestamp"));
+    }
+
+    // Regression test for a bug where "lossless" trimming would truncate an
+    // upper and lower bound that both parsed as our special iso8601 timestamps
+    // into something that no longer did.
+    #[mz_ore::test]
+    fn stats_trim_iso8601_recursion() {
+        use proto_primitive_stats::*;
+
+        let orig = PrimitiveStats {
+            lower: "2023-08-19T12:00:00.000Z".to_owned(),
+            upper: "2023-08-20T12:00:00.000Z".to_owned(),
+        };
+        let mut stats = RustType::into_proto(&orig);
+        stats.trim();
+        // Before the fix, this resulted in "2023-08-" and "2023-08.".
+        assert_eq!(stats.lower.unwrap(), Lower::LowerString(orig.lower));
+        assert_eq!(stats.upper.unwrap(), Upper::UpperString(orig.upper));
     }
 }

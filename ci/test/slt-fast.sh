@@ -132,6 +132,7 @@ tests_without_views=(
     test/sqllogictest/recursion_limit.slt
     test/sqllogictest/recursive_type_unioning.slt
     test/sqllogictest/regex.slt
+    test/sqllogictest/like.slt
     test/sqllogictest/regressions.slt
     test/sqllogictest/returning.slt
     test/sqllogictest/role.slt

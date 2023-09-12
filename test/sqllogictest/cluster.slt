@@ -424,6 +424,9 @@ ALTER CLUSTER default OWNER TO materialize
 ----
 COMPLETE 0
 
+statement ok
+ALTER CLUSTER default SET (MANAGED = false);
+
 statement error invalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;
 

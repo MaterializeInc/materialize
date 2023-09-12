@@ -6046,7 +6046,10 @@ impl<'a> Parser<'a> {
                 }
                 ObjectType::Table => ShowObjectType::Table,
                 ObjectType::View => ShowObjectType::View,
-                ObjectType::Source => ShowObjectType::Source,
+                ObjectType::Source => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Source { in_cluster }
+                }
                 ObjectType::Subsource => {
                     let on_source = if self.parse_one_of_keywords(&[ON]).is_some() {
                         Some(self.parse_raw_name()?)
@@ -6064,7 +6067,10 @@ impl<'a> Parser<'a> {
 
                     ShowObjectType::Subsource { on_source }
                 }
-                ObjectType::Sink => ShowObjectType::Sink,
+                ObjectType::Sink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Sink { in_cluster }
+                }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
@@ -7489,7 +7495,23 @@ impl<'a> Parser<'a> {
     fn parse_comment(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(ON)?;
 
-        let object = match self.expect_one_of_keywords(&[TABLE, VIEW, COLUMN])? {
+        let object = match self.expect_one_of_keywords(&[
+            TABLE,
+            VIEW,
+            COLUMN,
+            MATERIALIZED,
+            SOURCE,
+            SINK,
+            INDEX,
+            FUNCTION,
+            CONNECTION,
+            TYPE,
+            SECRET,
+            ROLE,
+            DATABASE,
+            SCHEMA,
+            CLUSTER,
+        ])? {
             TABLE => {
                 let name = self.parse_item_name()?;
                 CommentObjectType::Table { name }
@@ -7497,6 +7519,60 @@ impl<'a> Parser<'a> {
             VIEW => {
                 let name = self.parse_item_name()?;
                 CommentObjectType::View { name }
+            }
+            MATERIALIZED => {
+                self.expect_keyword(VIEW)?;
+                let name = self.parse_item_name()?;
+                CommentObjectType::MaterializedView { name }
+            }
+            SOURCE => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Source { name }
+            }
+            SINK => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Sink { name }
+            }
+            INDEX => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Index { name }
+            }
+            FUNCTION => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Func { name }
+            }
+            CONNECTION => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Connection { name }
+            }
+            TYPE => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Type { name }
+            }
+            SECRET => {
+                let name = self.parse_item_name()?;
+                CommentObjectType::Secret { name }
+            }
+            ROLE => {
+                let name = self.parse_identifier()?;
+                CommentObjectType::Role { name }
+            }
+            DATABASE => {
+                let name = self.parse_database_name()?;
+                CommentObjectType::Database { name }
+            }
+            SCHEMA => {
+                let name = self.parse_schema_name()?;
+                CommentObjectType::Schema { name }
+            }
+            CLUSTER => {
+                if self.parse_keyword(REPLICA) {
+                    let name = self.parse_cluster_replica_name()?;
+                    CommentObjectType::ClusterReplica { name }
+                } else {
+                    let name = self.parse_raw_ident()?;
+                    CommentObjectType::Cluster { name }
+                }
             }
             COLUMN => {
                 let start = self.peek_pos();

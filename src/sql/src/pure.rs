@@ -31,9 +31,9 @@ use mz_sql_parser::ast::{
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
     PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
 };
-use mz_storage_client::types::connections::inline::IntoInlineConnection;
-use mz_storage_client::types::connections::{Connection, ConnectionContext};
-use mz_storage_client::types::sources::{
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::{Connection, ConnectionContext};
+use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
 };
 use prost::Message;
@@ -194,15 +194,13 @@ async fn purify_create_source(
     let mut subsources = vec![];
 
     let progress_desc = match &connection {
-        CreateSourceConnection::Kafka(_) => &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC,
-        CreateSourceConnection::Postgres { .. } => {
-            &mz_storage_client::types::sources::PG_PROGRESS_DESC
-        }
+        CreateSourceConnection::Kafka(_) => &mz_storage_types::sources::KAFKA_PROGRESS_DESC,
+        CreateSourceConnection::Postgres { .. } => &mz_storage_types::sources::PG_PROGRESS_DESC,
         CreateSourceConnection::LoadGenerator { .. } => {
-            &mz_storage_client::types::sources::LOAD_GEN_PROGRESS_DESC
+            &mz_storage_types::sources::LOAD_GEN_PROGRESS_DESC
         }
         CreateSourceConnection::TestScript { .. } => {
-            &mz_storage_client::types::sources::TEST_SCRIPT_PROGRESS_DESC
+            &mz_storage_types::sources::TEST_SCRIPT_PROGRESS_DESC
         }
     };
 
@@ -257,7 +255,11 @@ async fn purify_create_source(
                 .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
             let consumer = connection
-                .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+                .create_with_context(
+                    &connection_context,
+                    MzClientContext::default(),
+                    &BTreeMap::new(),
+                )
                 .await
                 .map_err(|e| {
                     anyhow!(

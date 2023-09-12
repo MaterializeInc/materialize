@@ -90,6 +90,7 @@ use mz::error::Error;
 
 use mz::context::{Context, ContextLoadArgs};
 use mz_ore::cli::CliConfig;
+use upgrader::UpgradeChecker;
 
 use crate::command::app_password::AppPasswordCommand;
 use crate::command::config::ConfigCommand;
@@ -102,6 +103,7 @@ use clap_clippy_hack::*;
 
 mod command;
 mod mixin;
+mod upgrader;
 
 // Do not add anything but structs/enums with Clap derives in this module!
 //
@@ -185,8 +187,12 @@ async fn main() -> Result<(), Error> {
         enable_version_flag: true,
     });
 
-    // TODO: Check for an updated version of `mz` and print a warning if one
-    // is discovered. Can we use the GitHub tags API for this?
+    // Check if we need to update the version.
+    // The UpgradeChecker, in case of failure,
+    // shouldn't block the command execution or panic.
+    let upgrade_checker = UpgradeChecker::new(args.no_color);
+    let check = upgrade_checker.check_version();
+
     let cx = Context::load(ContextLoadArgs {
         config_file_path: args.config,
         output_format: args.format.into(),
@@ -207,8 +213,11 @@ async fn main() -> Result<(), Error> {
 
     if let Err(e) = res {
         println!("{}", e);
+
+        upgrade_checker.print_warning_if_needed(check.await);
         exit(1);
     }
 
+    upgrade_checker.print_warning_if_needed(check.await);
     Ok(())
 }

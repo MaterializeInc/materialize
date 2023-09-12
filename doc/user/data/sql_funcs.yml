@@ -917,3 +917,5 @@
         Reports whether the role with the specified role name or OID has the privilege on
         the type with the specified type name or OID. If the role is omitted then
         the `current_role` is assumed.
+    - signature: 'mz_is_superuser() -> bool'
+      description: Reports whether the `current_role` is a superuser.

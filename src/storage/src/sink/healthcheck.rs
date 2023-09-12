@@ -196,7 +196,7 @@ mod tests {
     use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::Row;
-    use mz_storage_client::types::sources::SourceData;
+    use mz_storage_types::sources::SourceData;
     use once_cell::sync::Lazy;
     use timely::progress::Antichain;
 

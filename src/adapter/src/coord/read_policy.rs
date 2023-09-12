@@ -25,7 +25,7 @@ use std::hash::Hash;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::controller::ReadPolicy;
 use timely::progress::frontier::MutableAntichain;

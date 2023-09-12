@@ -2,7 +2,7 @@
 name = "mz"
 description = "The Materialize command-line interface (CLI)."
 license = "Apache-2.0"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -12,6 +12,7 @@ clap = { version = "3.2.24", features = [ "derive" ] }
 csv = "1.2.1"
 dirs = "5.0.0"
 indicatif = "0.17.2"
+termcolor = "1.2.0"
 maplit = "1.0.2"
 mz-cloud-api = { path = "../cloud-api" }
 mz-frontegg-client = { path = "../frontegg-client" }
@@ -24,10 +25,12 @@ openssl-probe = "0.1.2"
 hyper = { version = "0.14.25" }
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 rpassword = "7.2.0"
+semver = "1.0.16"
 serde = { version = "1.0.152", features = ["derive"] }
 serde-aux = "4.1.2"
 serde_json = "1.0.89"
 tabled = "0.10.0"
+time = "0.3.17"
 tokio = { version = "1.24.2", features = ["full"] }
 toml = "0.5.9"
 toml_edit = { version = "0.19.7", features = ["serde"] }

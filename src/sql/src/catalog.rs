@@ -22,19 +22,20 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
+use mz_proto::IntoRustIfSome;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
-use mz_storage_client::types::connections::inline::{ConnectionResolver, ReferencedConnection};
-use mz_storage_client::types::connections::Connection;
-use mz_storage_client::types::sources::SourceDesc;
+use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
+use mz_storage_types::connections::Connection;
+use mz_storage_types::sources::SourceDesc;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
@@ -43,9 +44,9 @@ use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
-    SystemObjectId,
+    Aug, CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
+    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
@@ -424,7 +425,7 @@ pub struct RoleAttributes {
 
 impl RoleAttributes {
     /// Creates a new [`RoleAttributes`] with default attributes.
-    pub fn new() -> RoleAttributes {
+    pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
             _private: (),
@@ -432,7 +433,7 @@ impl RoleAttributes {
     }
 
     /// Adds all attributes.
-    pub fn with_all(mut self) -> RoleAttributes {
+    pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self
     }
@@ -1059,16 +1060,28 @@ impl Error for InvalidCloudProviderError {}
 pub enum CatalogError {
     /// Unknown database.
     UnknownDatabase(String),
+    /// Database already exists.
+    DatabaseAlreadyExists(String),
     /// Unknown schema.
     UnknownSchema(String),
+    /// Schema already exists.
+    SchemaAlreadyExists(String),
     /// Unknown role.
     UnknownRole(String),
+    /// Role already exists.
+    RoleAlreadyExists(String),
     /// Unknown cluster.
     UnknownCluster(String),
+    /// Cluster already exists.
+    ClusterAlreadyExists(String),
     /// Unknown cluster replica.
     UnknownClusterReplica(String),
+    /// Duplicate Replica. #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
+    DuplicateReplica(String, String),
     /// Unknown item.
     UnknownItem(String),
+    /// Item already exists.
+    ItemAlreadyExists(GlobalId, String),
     /// Unknown function.
     UnknownFunction {
         /// The identifier of the function we couldn't find
@@ -1094,21 +1107,31 @@ pub enum CatalogError {
         /// The invalid item's type.
         typ: CatalogItemType,
     },
+    /// Ran out of unique IDs.
+    IdExhaustion,
+    /// Builtin migrations failed.
+    FailedBuiltinSchemaMigration(String),
 }
 
 impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::DatabaseAlreadyExists(name) => write!(f, "database '{name}' already exists"),
             Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
+            Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
+            Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
+            Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
+            Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::ItemAlreadyExists(_gid, name) => write!(f, "catalog item '{name}' already exists"),
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1127,6 +1150,8 @@ impl fmt::Display for CatalogError {
                 },
                 typ,
             ),
+            Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
         }
     }
 }
@@ -1274,6 +1299,28 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+        }
+    }
+}
+
+impl From<CommentObjectId> for ObjectType {
+    fn from(value: CommentObjectId) -> ObjectType {
+        match value {
+            CommentObjectId::Table(_) => ObjectType::Table,
+            CommentObjectId::View(_) => ObjectType::View,
+            CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
+            CommentObjectId::Source(_) => ObjectType::Source,
+            CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::Index(_) => ObjectType::Index,
+            CommentObjectId::Func(_) => ObjectType::Func,
+            CommentObjectId::Connection(_) => ObjectType::Connection,
+            CommentObjectId::Type(_) => ObjectType::Type,
+            CommentObjectId::Secret(_) => ObjectType::Secret,
+            CommentObjectId::Role(_) => ObjectType::Role,
+            CommentObjectId::Database(_) => ObjectType::Database,
+            CommentObjectId::Schema(_) => ObjectType::Schema,
+            CommentObjectId::Cluster(_) => ObjectType::Cluster,
+            CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         }
     }
 }
@@ -1452,6 +1499,83 @@ impl Display for ErrorMessageObjectDescription {
             }
             ErrorMessageObjectDescription::System => f.write_str("SYSTEM"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+// These attributes are needed because the key of a map must be a string. We also
+// get the added benefit of flattening this struct in it's serialized form.
+#[serde(into = "BTreeMap<String, RoleId>")]
+#[serde(try_from = "BTreeMap<String, RoleId>")]
+/// Represents the grantee and a grantor of a role membership.
+pub struct RoleMembership {
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
+    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
+    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
+    // migration.
+    pub map: BTreeMap<RoleId, RoleId>,
+}
+
+impl RoleMembership {
+    /// Creates a new [`RoleMembership`].
+    pub fn new() -> RoleMembership {
+        RoleMembership {
+            map: BTreeMap::new(),
+        }
+    }
+}
+
+impl From<RoleMembership> for BTreeMap<String, RoleId> {
+    fn from(value: RoleMembership) -> Self {
+        value
+            .map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+}
+
+impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BTreeMap<String, RoleId>) -> Result<Self, Self::Error> {
+        Ok(RoleMembership {
+            map: value
+                .into_iter()
+                .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
+                .collect::<Result<_, anyhow::Error>>()?,
+        })
+    }
+}
+
+impl RustType<proto::RoleMembership> for RoleMembership {
+    fn into_proto(&self) -> proto::RoleMembership {
+        proto::RoleMembership {
+            map: self
+                .map
+                .iter()
+                .map(|(key, val)| proto::role_membership::Entry {
+                    key: Some(key.into_proto()),
+                    value: Some(val.into_proto()),
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: proto::RoleMembership) -> Result<Self, TryFromProtoError> {
+        Ok(RoleMembership {
+            map: proto
+                .map
+                .into_iter()
+                .map(|e| {
+                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
+                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
+
+                    Ok((key, val))
+                })
+                .collect::<Result<_, TryFromProtoError>>()?,
+        })
     }
 }
 

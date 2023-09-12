@@ -265,7 +265,7 @@ impl Coordinator {
     /// Record a new connection event
     pub fn begin_session_for_statement_logging(&mut self, session: &ConnMeta) {
         let id = session.uuid();
-        let session_role = session.session_role_id();
+        let session_role = session.authenticated_role_id();
         let event = SessionHistoryEvent {
             id,
             connected_at: session.connected_at(),

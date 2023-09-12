@@ -45,7 +45,7 @@ $ set-regex match=u\d+ replacement=UID
 ? EXPLAIN SELECT * FROM v;
 Explained Query:
   Filter (#0 = 1) AND (#3 = 3)
-    Get materialize.public.data
+    ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 3))
@@ -64,7 +64,7 @@ Source materialize.public.data
 Explained Query:
   Project (#1)
     Filter (#1 = 1)
-      Get materialize.public.data
+      ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#1 = 1))
@@ -87,7 +87,7 @@ Source materialize.public.data
 Explained Query:
   Project (#1)
     Filter (#0 = 1) AND (#3 = 4)
-      Get materialize.public.data
+      ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 4))
@@ -106,7 +106,7 @@ Source materialize.public.data
 Explained Query:
   Project (#3)
     Filter (#0 = 1) AND (#3 = 4)
-      Get materialize.public.data
+      ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 4))
@@ -126,11 +126,11 @@ Explained Query:
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#0) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
       ArrangeBy keys=[[#0]]
         Project (#1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
 
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
@@ -152,11 +152,11 @@ Explained Query:
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#3 = 4) AND (#0) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
       ArrangeBy keys=[[#1]]
         Project (#0, #1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#3 = 4))
@@ -184,7 +184,7 @@ Explained Query:
   With
     cte l0 =
       Filter (#0) IS NOT NULL
-        Get materialize.public.data
+        ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0) IS NOT NULL)
@@ -210,11 +210,11 @@ Explained Query:
         Reduce aggregates=[sum(#0)] monotonic
           Project (#1)
             Filter (#0 = 1)
-              Get materialize.public.data
+              ReadStorage materialize.public.data
     Project (#0, #4)
       Filter (#0 = 1)
         Map (bigint_to_numeric((1 + #2)))
-          Get materialize.public.data
+          ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1))
@@ -246,11 +246,11 @@ Explained Query:
   Threshold
     Union
       Project (#0, #2)
-        Get materialize.public.data
+        ReadStorage materialize.public.data
       Negate
         Project (#0, #2)
           Filter (#3) IS NULL
-            Get materialize.public.data2
+            ReadStorage materialize.public.data2
 
 Source materialize.public.data2
   filter=((#3) IS NULL)

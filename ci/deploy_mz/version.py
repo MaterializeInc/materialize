@@ -15,9 +15,10 @@ from .deploy_util import BINARIES_BUCKET, VERSION
 def main() -> None:
     print("--- Uploading version file")
     boto3.client("s3").put_object(
-        Body=f"{VERSION}\n",
+        Body=f"{VERSION}",
         Bucket=BINARIES_BUCKET,
-        Key="mz.version",
+        Key="mz-latest.version",
+        ContentType="text/plain",
     )
 
 

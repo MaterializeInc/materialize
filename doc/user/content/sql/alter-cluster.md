@@ -6,7 +6,8 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER CLUSTER` changes the configuration of a cluster.
+`ALTER CLUSTER` changes the configuration of a cluster. To rename a
+cluster, use [`ALTER ... RENAME`](/sql/alter-rename/).
 
 ## Syntax
 
@@ -34,16 +35,17 @@ Alter cluster to size `xsmall`:
 ALTER CLUSTER c1 SET (SIZE 'xsmall');
 ```
 
-### Converting managed to unmanaged clusters
-Alter the `managed` status of a cluster to unmanaged:
+## Converting unmanaged to managed clusters
 
-```sql
-ALTER CLUSTER c1 SET (MANAGED false);
-```
+{{< warning >}}
+[Unmanaged clusters](/sql/create-cluster-replica) are a deprecated feature of
+Materialize that required manual management of cluster replicas.
 
-### Converting unmanaged to managed clusters
+We recommend converting any unmanaged clusters to managed clusters
+by following the instructions below.
+{{< /warning >}}
 
-Alter the `managed` status of a cluster to unmanaged:
+Alter the `managed` status of a cluster to managed:
 
 ```sql
 ALTER CLUSTER c1 SET (MANAGED);
@@ -68,7 +70,7 @@ The privileges required to execute this statement are:
 
 ## See also
 
+- [`ALTER ... RENAME`](/sql/alter-rename/)
 - [`CREATE CLUSTER`](/sql/create-cluster/)
-- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 - [`CREATE SINK`](/sql/create-sink/)
 - [`SHOW SINKS`](/sql/show-sinks)

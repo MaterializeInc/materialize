@@ -104,9 +104,9 @@ fn main() {
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
-        .extern_path(".mz_repr.explain", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
+        .extern_path(".mz_compute_types", "::mz_compute_types")
         .extern_path(".mz_cluster_client", "::mz_cluster_client")
         .extern_path(".mz_storage_client", "::mz_storage_client")
         .extern_path(".mz_tracing", "::mz_tracing")
@@ -115,17 +115,9 @@ fn main() {
             config,
             &[
                 "compute-client/src/logging.proto",
-                "compute-client/src/plan.proto",
-                "compute-client/src/plan/join.proto",
-                "compute-client/src/plan/reduce.proto",
-                "compute-client/src/plan/threshold.proto",
-                "compute-client/src/plan/top_k.proto",
                 "compute-client/src/protocol/command.proto",
                 "compute-client/src/protocol/response.proto",
                 "compute-client/src/service.proto",
-                "compute-client/src/types/dataflows.proto",
-                "compute-client/src/types/sinks.proto",
-                "compute-client/src/types/sources.proto",
             ],
             &[".."],
         )

@@ -1686,46 +1686,50 @@ macro_rules! catalog_name_only {
 /// Generates an (OID, OID, TEXT) SQL implementation for has_X_privilege style functions.
 macro_rules! privilege_fn {
     ( $fn_name:expr, $catalog_tbl:expr ) => {
-        &format!(
-            "
-                CASE
-                -- We need to validate the privileges to return a proper error before anything
-                -- else.
-                WHEN NOT mz_internal.mz_validate_privileges($3)
-                OR $1 IS NULL
-                OR $2 IS NULL
-                OR $3 IS NULL
-                OR $1 NOT IN (SELECT oid FROM mz_roles)
-                OR $2 NOT IN (SELECT oid FROM {})
-                THEN NULL
-                ELSE COALESCE(
-                    (
-                        SELECT
-                            bool_or(
-                                mz_internal.mz_acl_item_contains_privilege(privilege, $3)
-                            )
-                                AS {}
-                        FROM
-                            (
-                                SELECT
-                                    unnest(privileges)
-                                FROM
-                                    {}
-                                WHERE
-                                    {}.oid = $2
-                            )
-                                AS user_privs (privilege)
-                            LEFT JOIN mz_roles ON
-                                    mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
-                        WHERE
-                            mz_internal.mz_aclitem_grantee(privilege) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
-                    ),
-                    false
-                )
-                END
-            ",
-            $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl, RoleId::Public,
-        )
+        {
+            let fn_name = $fn_name;
+            let catalog_tbl = $catalog_tbl;
+            let public_role = RoleId::Public;
+            &format!(
+                "
+                    CASE
+                    -- We need to validate the privileges to return a proper error before anything
+                    -- else.
+                    WHEN NOT mz_internal.mz_validate_privileges($3)
+                    OR $1 IS NULL
+                    OR $2 IS NULL
+                    OR $3 IS NULL
+                    OR $1 NOT IN (SELECT oid FROM mz_roles)
+                    OR $2 NOT IN (SELECT oid FROM {catalog_tbl})
+                    THEN NULL
+                    ELSE COALESCE(
+                        (
+                            SELECT
+                                bool_or(
+                                    mz_internal.mz_acl_item_contains_privilege(privilege, $3)
+                                )
+                                    AS {fn_name}
+                            FROM
+                                (
+                                    SELECT
+                                        unnest(privileges)
+                                    FROM
+                                        {catalog_tbl}
+                                    WHERE
+                                        {catalog_tbl}.oid = $2
+                                )
+                                    AS user_privs (privilege)
+                                LEFT JOIN mz_roles ON
+                                        mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
+                            WHERE
+                                mz_internal.mz_aclitem_grantee(privilege) = '{public_role}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
+                        ),
+                        false
+                    )
+                    END
+                ",
+            )
+    }
     };
 }
 
@@ -3498,6 +3502,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "mz_environment_id" => Scalar {
             params!() => UnmaterializableFunc::MzEnvironmentId => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
+        "mz_is_superuser" => Scalar {
+            params!() => UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
+        },
         "mz_logical_timestamp" => Scalar {
             params!() => Operation::nullary(|_ecx| sql_bail!("mz_logical_timestamp() has been renamed to mz_now()")) => MzTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
         },
@@ -3804,9 +3811,6 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 )
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
-        },
-        "mz_is_superuser" => Scalar {
-            params!() => UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
         },
         "mz_normalize_object_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -4251,12 +4255,11 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
-        //JSON, MAP, RANGE
+        // JSON, MAP, RANGE
         "->" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false } => Jsonb, 3212;
             params!(Jsonb, String) => JsonbGetString { stringify: false } => Jsonb, 3211;
             params!(MapAny, String) => MapGetValue => Any, oid::OP_GET_VALUE_MAP_OID;
-            params!(MapAny, ScalarType::Array(Box::new(ScalarType::String))) => MapGetValues => ArrayAnyCompatible, oid::OP_GET_VALUES_MAP_OID;
         },
         "->>" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true } => String, 3481;

@@ -79,9 +79,9 @@ If you already have a Materialize account, skip to the [next step](#step-2-creat
 
 ## Step 2. Create clusters
 
-In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an isolated environment, similar to a virtual warehouse in Snowflake. When you create a cluster, you choose the size of its physical compute resource (i.e., [replica](/get-started/key-concepts/#cluster-replicas)) based on the work you need the cluster to do, whether ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
+In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an isolated environment, similar to a virtual warehouse in Snowflake. When you create a cluster, you choose the size of its compute resource allocation based on the work you need the cluster to do, whether ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
 
-For this guide, you'll create 2 clusters, one for ingesting source data and the other for computing and serving query results. For now, each cluster will get a single `2xsmall` physical compute resource. Later, you'll explore how to use replication to increase tolerance to failure.
+For this guide, you'll create 2 clusters, one for ingesting source data and the other for computing and serving query results. For now, each cluster will have a size of `2xsmall`. Later, you'll explore how to use replication to increase tolerance to failure.
 
 1. In the [Materialize UI](https://console.materialize.com/), enable the region where you want to run Materialize.
 
@@ -107,7 +107,7 @@ For this guide, you'll create 2 clusters, one for ingesting source data and the 
 
     The `2xsmall` size is sufficient for the data ingestion and computation in this getting started scenario.
 
-1. The physical compute resources in your clusters are called [`replicas`](/get-started/key-concepts/#cluster-replicas). Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the replicas:
+1. Each instance of your cluster is called a replica. By default, each cluster has exactly one replica. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of your replicas:
 
     ```sql
     SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');

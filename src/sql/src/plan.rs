@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -48,9 +48,9 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
-use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -558,7 +558,15 @@ pub enum SourceSinkClusterConfig {
         /// The size of the replica to create in the linked cluster.
         size: String,
     },
-    /// The user did not specify a cluster behavior, so use the default.
+    /// The user did not specify a cluster behavior, so the actual behavior depends on
+    /// the context. For sources the behavior depends on the data source:
+    ///
+    ///   - Ingestion: Use the default behavior.
+    ///   - Source: Use the same cluster as the data source source.
+    ///   - Progress: Use the same cluster as the non-progress source.
+    ///   - Webhook: Does not allow undefined configs.
+    ///
+    /// For sinks, always use the default behavior.
     ///
     /// NOTE(benesch): we plan to remove this variant in the future by having
     /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
@@ -568,8 +576,7 @@ pub enum SourceSinkClusterConfig {
 }
 
 impl SourceSinkClusterConfig {
-    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
-    /// one doesn't exist, then a new cluster will be created.
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
     pub fn cluster_id(&self) -> Option<&ClusterId> {
         match self {
             SourceSinkClusterConfig::Existing { id } => Some(id),
@@ -590,7 +597,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -1196,7 +1203,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]

@@ -25,6 +25,7 @@ use mz_sql::names::{PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
+use mz_sql::rbac;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -45,9 +46,9 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{RoleMetadata, Session, TransactionOps, TransactionStatus};
+use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::{catalog, metrics, rbac, ExecuteContext};
+use crate::{catalog, metrics, ExecuteContext};
 
 use super::ExecuteContextExtra;
 
@@ -253,17 +254,12 @@ impl Coordinator {
                     secret_key,
                     notice_tx,
                     drop_sinks: Vec::new(),
-                    // TODO: Switch to authenticated role once implemented.
-                    authenticated_role: role_id,
                     connected_at: self.now(),
                     user,
                     application_name,
-                    role_metadata: RoleMetadata {
-                        current_role: role_id,
-                        session_role: role_id,
-                    },
                     uuid,
                     conn_id: conn_id.clone(),
+                    authenticated_role: role_id,
                 };
                 let update = self.catalog().state().pack_session_update(&conn, 1);
                 self.begin_session_for_statement_logging(&conn);
@@ -616,8 +612,13 @@ impl Coordinator {
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
-                    if let Err(e) = rbac::check_item_usage(&catalog, ctx.session(), &resolved_ids) {
-                        return ctx.retire(Err(e));
+                    if let Err(e) = rbac::check_item_usage(
+                        &catalog,
+                        ctx.session().role_metadata(),
+                        ctx.session().vars(),
+                        &resolved_ids,
+                    ) {
+                        return ctx.retire(Err(e.into()));
                     }
 
                     let result =

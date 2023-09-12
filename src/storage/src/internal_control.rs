@@ -11,9 +11,9 @@ use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::IngestionDescription;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::progress::Antichain;
@@ -31,11 +31,11 @@ pub struct DataflowParameters {
     pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig,
     /// A set of parameters to configure auto spill to disk behaviour for a `DISK`
     /// enabled upsert source
-    pub auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
+    pub auto_spill_config: mz_storage_types::parameters::UpsertAutoSpillConfig,
     /// Configuration options for the number of inflight bytes used by parts in `persist_source`,
     /// used in `UPSERT/DEBEZIUM` sources.
     pub storage_dataflow_max_inflight_bytes_config:
-        mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
+        mz_storage_types::parameters::StorageMaxInflightBytesConfig,
     /// Configuration for basic hydration backpressure.
     pub delay_sources_past_rehydration: bool,
     /// Configuration ratio to shrink upsert buffers.
@@ -67,8 +67,8 @@ impl DataflowParameters {
         &mut self,
         pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
         rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
-        auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
-        storage_dataflow_max_inflight_bytes_config: mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
+        auto_spill_config: mz_storage_types::parameters::UpsertAutoSpillConfig,
+        storage_dataflow_max_inflight_bytes_config: mz_storage_types::parameters::StorageMaxInflightBytesConfig,
         delay_sources_past_rehydration: bool,
         shrink_upsert_unused_buffers_by_ratio: usize,
     ) {
@@ -126,9 +126,9 @@ pub enum InternalStorageCommand {
         rocksdb: mz_rocksdb::RocksDBTuningParameters,
         /// Backpressure configuration.
         storage_dataflow_max_inflight_bytes_config:
-            mz_storage_client::types::parameters::StorageMaxInflightBytesConfig,
+            mz_storage_types::parameters::StorageMaxInflightBytesConfig,
         /// Upsert autospill configuration.
-        auto_spill_config: mz_storage_client::types::parameters::UpsertAutoSpillConfig,
+        auto_spill_config: mz_storage_types::parameters::UpsertAutoSpillConfig,
         /// Configuration for basic hydration backpressure.
         delay_sources_past_rehydration: bool,
         /// Configuration ratio to shrink upsert buffers by
