@@ -29,7 +29,7 @@ use crate::{
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
 where
-    T: DisplayText<PlanRenderingContext<'a, T>>,
+    T: DisplayText<PlanRenderingContext<'a, T>> + Ord,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = PlanRenderingContext::new(
@@ -40,7 +40,13 @@ where
         );
 
         if let Some(finishing) = &self.context.finishing {
-            finishing.fmt_text(f, &mut ctx)?;
+            if ctx.config.humanized_exprs {
+                let attrs = ctx.annotations.get(&self.plan.plan);
+                let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
+                HumanizedExpr::new(finishing, cols.as_ref()).fmt_text(f, &mut ctx)?;
+            } else {
+                finishing.fmt_text(f, &mut ctx)?;
+            }
             ctx.indented(|ctx| self.plan.plan.fmt_text(f, ctx))?;
         } else {
             self.plan.plan.fmt_text(f, &mut ctx)?;
@@ -70,12 +76,12 @@ where
 
 impl<'a, T: 'a> DisplayText for ExplainMultiPlan<'a, T>
 where
-    T: DisplayText<PlanRenderingContext<'a, T>>,
+    T: DisplayText<PlanRenderingContext<'a, T>> + Ord,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
 
-        // render plans
+        // Render plans.
         for (no, (id, plan)) in self.plans.iter().enumerate() {
             let mut ctx = PlanRenderingContext::new(
                 ctx.indent.clone(),
@@ -91,12 +97,18 @@ where
             writeln!(f, "{}{}:", ctx.indent, id)?;
             ctx.indented(|ctx| {
                 match &self.context.finishing {
-                    // if present, a RowSetFinishing always applies to the first rendered plan
+                    // If present, a RowSetFinishing always applies to the first rendered plan.
                     Some(finishing) if no == 0 => {
-                        finishing.fmt_text(f, ctx)?;
+                        if ctx.config.humanized_exprs {
+                            let attrs = ctx.annotations.get(plan.plan);
+                            let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
+                            HumanizedExpr::new(finishing, cols.as_ref()).fmt_text(f, ctx)?;
+                        } else {
+                            finishing.fmt_text(f, ctx)?;
+                        };
                         ctx.indented(|ctx| plan.plan.fmt_text(f, ctx))?;
                     }
-                    // all other plans are rendered without a RowSetFinishing
+                    // All other plans are rendered without a RowSetFinishing.
                     _ => {
                         plan.plan.fmt_text(f, ctx)?;
                     }
@@ -155,23 +167,32 @@ where
     C: AsMut<Indent>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+    }
+}
+
+impl<'a, C> DisplayText<C> for HumanizedExpr<'a, RowSetFinishing>
+where
+    C: AsMut<Indent>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         write!(f, "{}Finish", ctx.as_mut())?;
         // order by
-        if !self.order_by.is_empty() {
-            let order_by = separated(", ", &self.order_by);
-            write!(f, " order_by=[{}]", order_by)?;
+        if !self.expr.order_by.is_empty() {
+            let order_by = HumanizedExpr::seq(&self.expr.order_by, self.cols);
+            write!(f, " order_by=[{}]", separated(", ", order_by))?;
         }
         // limit
-        if let Some(limit) = self.limit {
+        if let Some(limit) = self.expr.limit {
             write!(f, " limit={}", limit)?;
         }
         // offset
-        if self.offset > 0 {
-            write!(f, " offset={}", self.offset)?;
+        if self.expr.offset > 0 {
+            write!(f, " offset={}", self.expr.offset)?;
         }
         // project
         {
-            let project = Indices(&self.project);
+            let project = Indices(&self.expr.project);
             write!(f, " output=[{}]", project)?;
         }
         writeln!(f, "")
