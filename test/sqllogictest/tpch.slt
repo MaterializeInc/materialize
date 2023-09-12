@@ -18,23 +18,23 @@ CREATE TABLE nation (
     n_name       char(25) NOT NULL,
     n_regionkey  integer NOT NULL,
     n_comment    varchar(152)
-)
+);
 
 statement ok
-CREATE INDEX pk_nation_nationkey ON nation (n_nationkey ASC)
+CREATE INDEX pk_nation_nationkey ON nation (n_nationkey ASC);
 
 statement ok
-CREATE INDEX fk_nation_regionkey ON nation (n_regionkey ASC)
+CREATE INDEX fk_nation_regionkey ON nation (n_regionkey ASC);
 
 statement ok
 CREATE TABLE region  (
     r_regionkey  integer,
     r_name       char(25) NOT NULL,
     r_comment    varchar(152)
-)
+);
 
 statement ok
-CREATE INDEX pk_region_regionkey ON region (r_regionkey ASC)
+CREATE INDEX pk_region_regionkey ON region (r_regionkey ASC);
 
 statement ok
 CREATE TABLE part (
@@ -47,10 +47,10 @@ CREATE TABLE part (
     p_container   char(10) NOT NULL,
     p_retailprice decimal(15, 2) NOT NULL,
     p_comment     varchar(23) NOT NULL
-)
+);
 
 statement ok
-CREATE INDEX pk_part_partkey ON part (p_partkey ASC)
+CREATE INDEX pk_part_partkey ON part (p_partkey ASC);
 
 statement ok
 CREATE TABLE supplier (
@@ -61,13 +61,13 @@ CREATE TABLE supplier (
     s_phone       char(15) NOT NULL,
     s_acctbal     decimal(15, 2) NOT NULL,
     s_comment     varchar(101) NOT NULL
-)
+);
 
 statement ok
-CREATE INDEX pk_supplier_suppkey ON supplier (s_suppkey ASC)
+CREATE INDEX pk_supplier_suppkey ON supplier (s_suppkey ASC);
 
 statement ok
-CREATE INDEX fk_supplier_nationkey ON supplier (s_nationkey ASC)
+CREATE INDEX fk_supplier_nationkey ON supplier (s_nationkey ASC);
 
 statement ok
 CREATE TABLE partsupp (
@@ -76,16 +76,16 @@ CREATE TABLE partsupp (
     ps_availqty    integer NOT NULL,
     ps_supplycost  decimal(15, 2) NOT NULL,
     ps_comment     varchar(199) NOT NULL
-)
+);
 
 statement ok
-CREATE INDEX pk_partsupp_partkey_suppkey ON partsupp (ps_partkey ASC, ps_suppkey ASC)
+CREATE INDEX pk_partsupp_partkey_suppkey ON partsupp (ps_partkey ASC, ps_suppkey ASC);
 
 statement ok
-CREATE INDEX fk_partsupp_partkey ON partsupp (ps_partkey ASC)
+CREATE INDEX fk_partsupp_partkey ON partsupp (ps_partkey ASC);
 
 statement ok
-CREATE INDEX fk_partsupp_suppkey ON partsupp (ps_suppkey ASC)
+CREATE INDEX fk_partsupp_suppkey ON partsupp (ps_suppkey ASC);
 
 statement ok
 CREATE TABLE customer (
@@ -97,13 +97,13 @@ CREATE TABLE customer (
     c_acctbal     decimal(15, 2) NOT NULL,
     c_mktsegment  char(10) NOT NULL,
     c_comment     varchar(117) NOT NULL
-)
+);
 
 statement ok
-CREATE INDEX pk_customer_custkey ON customer (c_custkey ASC)
+CREATE INDEX pk_customer_custkey ON customer (c_custkey ASC);
 
 statement ok
-CREATE INDEX fk_customer_nationkey ON customer (c_nationkey ASC)
+CREATE INDEX fk_customer_nationkey ON customer (c_nationkey ASC);
 
 statement ok
 CREATE TABLE orders (
@@ -116,13 +116,13 @@ CREATE TABLE orders (
     o_clerk          char(15) NOT NULL,
     o_shippriority   integer NOT NULL,
     o_comment        varchar(79) NOT NULL
-)
+);
 
 statement ok
-CREATE INDEX pk_orders_orderkey ON orders (o_orderkey ASC)
+CREATE INDEX pk_orders_orderkey ON orders (o_orderkey ASC);
 
 statement ok
-CREATE INDEX fk_orders_custkey ON orders (o_custkey ASC)
+CREATE INDEX fk_orders_custkey ON orders (o_custkey ASC);
 
 statement ok
 CREATE TABLE lineitem (
@@ -142,28 +142,29 @@ CREATE TABLE lineitem (
     l_shipinstruct   char(25) NOT NULL,
     l_shipmode       char(10) NOT NULL,
     l_comment        varchar(44) NOT NULL
-)
+);
 
 statement ok
-CREATE INDEX pk_lineitem_orderkey_linenumber ON lineitem (l_orderkey ASC, l_linenumber ASC)
+CREATE INDEX pk_lineitem_orderkey_linenumber ON lineitem (l_orderkey ASC, l_linenumber ASC);
 
 statement ok
-CREATE INDEX fk_lineitem_orderkey ON lineitem (l_orderkey ASC)
+CREATE INDEX fk_lineitem_orderkey ON lineitem (l_orderkey ASC);
 
 statement ok
-CREATE INDEX fk_lineitem_partkey ON lineitem (l_partkey ASC)
+CREATE INDEX fk_lineitem_partkey ON lineitem (l_partkey ASC);
 
 statement ok
-CREATE INDEX fk_lineitem_suppkey ON lineitem (l_suppkey ASC)
+CREATE INDEX fk_lineitem_suppkey ON lineitem (l_suppkey ASC);
 
 statement ok
-CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC)
+CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
 
 
 
 query T multiline
 -- Query 01
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
 	l_returnflag,
 	l_linestatus,
 	sum(l_quantity) AS sum_qty,
@@ -183,15 +184,15 @@ GROUP BY
 	l_linestatus
 ORDER BY
 	l_returnflag,
-	l_linestatus
+	l_linestatus;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#9]
+  Finish order_by=[l_returnflag asc nulls_last, l_linestatus asc nulls_last] output=[#0..=#9]
     Project (#0..=#5, #9..=#11, #6) // { arity: 10 }
       Map (bigint_to_numeric(case when (#6 = 0) then null else #6 end), (#2 / #8), (#3 / #8), (#7 / #8)) // { arity: 12 }
-        Reduce group_by=[#4, #5] aggregates=[sum(#0), sum(#1), sum((#1 * (1 - #2))), sum(((#1 * (1 - #2)) * (1 + #3))), count(*), sum(#2)] // { arity: 8 }
+        Reduce group_by=[l_returnflag, l_linestatus] aggregates=[sum(l_quantity), sum(l_extendedprice), sum((l_extendedprice * (1 - l_discount))), sum(((l_extendedprice * (1 - l_discount)) * (1 + l_tax))), count(*), sum(l_discount)] // { arity: 8 }
           Project (#4..=#9) // { arity: 6 }
-            Filter (date_to_timestamp(#10) <= 1998-10-02 00:00:00) // { arity: 16 }
+            Filter (date_to_timestamp(l_shipdate) <= 1998-10-02 00:00:00) // { arity: 16 }
               ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
@@ -202,7 +203,8 @@ EOF
 
 query T multiline
 -- Query 02
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     s_acctbal,
     s_name,
     n_name,
@@ -235,30 +237,30 @@ WHERE
                     AND r_name = 'EUROPE'
             )
 ORDER BY
-    s_acctbal DESC, n_name, s_name, p_partkey
+    s_acctbal DESC, n_name, s_name, p_partkey;
 ----
 Explained Query:
-  Finish order_by=[#0 desc nulls_first, #2 asc nulls_last, #1 asc nulls_last, #3 asc nulls_last] output=[#0..=#7]
+  Finish order_by=[s_acctbal desc nulls_first, n_name asc nulls_last, s_name asc nulls_last, p_partkey asc nulls_last] output=[#0..=#7]
     Return // { arity: 8 }
       Project (#5, #2, #8, #0, #1, #3, #4, #6) // { arity: 8 }
-        Join on=(#0 = #9 AND #7 = #10) type=differential // { arity: 11 }
+        Join on=(p_partkey = p_partkey AND ps_supplycost = #10) type=differential // { arity: 11 }
           implementation
             %1[#0, #1]UKK » %0:l4[#0, #7]KK
-          ArrangeBy keys=[[#0, #7]] // { arity: 9 }
+          ArrangeBy keys=[[p_partkey, ps_supplycost]] // { arity: 9 }
             Get l4 // { arity: 9 }
-          ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+          ArrangeBy keys=[[p_partkey, #1]] // { arity: 2 }
+            Reduce group_by=[p_partkey] aggregates=[min(ps_supplycost)] // { arity: 2 }
               Project (#0, #4) // { arity: 2 }
-                Filter (#18 = "EUROPE") AND (#2) IS NOT NULL AND (#9) IS NOT NULL AND (#15) IS NOT NULL // { arity: 20 }
-                  Join on=(#0 = #1 AND #2 = #6 AND #9 = #13 AND #15 = #17) type=delta // { arity: 20 }
+                Filter (r_name = "EUROPE") AND (ps_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL AND (n_regionkey) IS NOT NULL // { arity: 20 }
+                  Join on=(p_partkey = ps_partkey AND ps_suppkey = s_suppkey AND s_nationkey = n_nationkey AND n_regionkey = r_regionkey) type=delta // { arity: 20 }
                     implementation
                       %0 » %1:l1[#0]KA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
                       %1:l1 » %0[#0]UKA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
                       %2:l0 » %1:l1[#1]KA » %0[#0]UKA » %3:l2[#0]KA » %4:l3[#0]KAef
                       %3:l2 » %4:l3[#0]KAef » %2:l0[#3]KA » %1:l1[#1]KA » %0[#0]UKA
                       %4:l3 » %3:l2[#2]KA » %2:l0[#3]KA » %1:l1[#1]KA » %0[#0]UKA
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                    ArrangeBy keys=[[p_partkey]] // { arity: 1 }
+                      Distinct group_by=[p_partkey] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l4 // { arity: 9 }
                     Get l1 // { arity: 5 }
@@ -268,31 +270,31 @@ Explained Query:
     With
       cte l4 =
         Project (#0, #2, #10, #11, #13..=#15, #19, #22) // { arity: 9 }
-          Filter (#5 = 15) AND (#26 = "EUROPE") AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#23) IS NOT NULL AND like["%BRASS"](varchar_to_text(#4)) // { arity: 28 }
-            Join on=(#0 = #16 AND #9 = #17 AND #12 = #21 AND #23 = #25) type=delta // { arity: 28 }
+          Filter (p_size = 15) AND (r_name = "EUROPE") AND (p_partkey) IS NOT NULL AND (s_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL AND (n_regionkey) IS NOT NULL AND like["%BRASS"](varchar_to_text(p_type)) // { arity: 28 }
+            Join on=(p_partkey = ps_partkey AND s_suppkey = ps_suppkey AND s_nationkey = n_nationkey AND n_regionkey = r_regionkey) type=delta // { arity: 28 }
               implementation
                 %0:part » %2:l1[#0]KA » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
                 %1:l0 » %2:l1[#1]KA » %0:part[#0]KAelf » %3:l2[#0]KA » %4:l3[#0]KAef
                 %2:l1 » %0:part[#0]KAelf » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
                 %3:l2 » %4:l3[#0]KAef » %1:l0[#3]KA » %2:l1[#1]KA » %0:part[#0]KAelf
                 %4:l3 » %3:l2[#2]KA » %1:l0[#3]KA » %2:l1[#1]KA » %0:part[#0]KAelf
-              ArrangeBy keys=[[#0]] // { arity: 9 }
+              ArrangeBy keys=[[p_partkey]] // { arity: 9 }
                 ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
               Get l0 // { arity: 7 }
               Get l1 // { arity: 5 }
               Get l2 // { arity: 4 }
               Get l3 // { arity: 3 }
       cte l3 =
-        ArrangeBy keys=[[#0]] // { arity: 3 }
+        ArrangeBy keys=[[r_regionkey]] // { arity: 3 }
           ReadIndex on=region pk_region_regionkey=[delta join lookup] // { arity: 3 }
       cte l2 =
-        ArrangeBy keys=[[#0], [#2]] // { arity: 4 }
+        ArrangeBy keys=[[n_nationkey], [n_regionkey]] // { arity: 4 }
           ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
       cte l1 =
-        ArrangeBy keys=[[#0], [#1]] // { arity: 5 }
+        ArrangeBy keys=[[ps_partkey], [ps_suppkey]] // { arity: 5 }
           ReadIndex on=partsupp fk_partsupp_partkey=[delta join lookup] fk_partsupp_suppkey=[delta join lookup] // { arity: 5 }
       cte l0 =
-        ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
+        ArrangeBy keys=[[s_suppkey], [s_nationkey]] // { arity: 7 }
           ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
 
 Used Indexes:
@@ -310,7 +312,8 @@ EOF
 
 query T multiline
 -- Query 03
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     l_orderkey,
     sum(l_extendedprice * (1 - l_discount)) AS revenue,
     o_orderdate,
@@ -331,24 +334,24 @@ GROUP BY
     o_shippriority
 ORDER BY
     revenue DESC,
-    o_orderdate
+    o_orderdate;
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #2 asc nulls_last] output=[#0..=#3]
+  Finish order_by=[#1 desc nulls_first, o_orderdate asc nulls_last] output=[#0..=#3]
     Project (#0, #3, #1, #2) // { arity: 4 }
-      Reduce group_by=[#0..=#2] aggregates=[sum((#3 * (1 - #4)))] // { arity: 4 }
+      Reduce group_by=[o_orderkey, o_orderdate, o_shippriority] aggregates=[sum((l_extendedprice * (1 - l_discount)))] // { arity: 4 }
         Project (#8, #12, #15, #22, #23) // { arity: 5 }
-          Filter (#6 = "BUILDING") AND (#12 < 1995-03-15) AND (#27 > 1995-03-15) AND (#0) IS NOT NULL AND (#8) IS NOT NULL // { arity: 33 }
-            Join on=(#0 = #9 AND #8 = #17) type=delta // { arity: 33 }
+          Filter (c_mktsegment = "BUILDING") AND (o_orderdate < 1995-03-15) AND (l_shipdate > 1995-03-15) AND (c_custkey) IS NOT NULL AND (o_orderkey) IS NOT NULL // { arity: 33 }
+            Join on=(c_custkey = o_custkey AND o_orderkey = l_orderkey) type=delta // { arity: 33 }
               implementation
                 %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
                 %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
                 %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
-              ArrangeBy keys=[[#0]] // { arity: 8 }
+              ArrangeBy keys=[[c_custkey]] // { arity: 8 }
                 ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] // { arity: 8 }
-              ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+              ArrangeBy keys=[[o_orderkey], [o_custkey]] // { arity: 9 }
                 ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-              ArrangeBy keys=[[#0]] // { arity: 16 }
+              ArrangeBy keys=[[l_orderkey]] // { arity: 16 }
                 ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] // { arity: 16 }
 
 Used Indexes:
@@ -362,7 +365,8 @@ EOF
 
 query T multiline
 -- Query 04
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     o_orderpriority,
     count(*) AS order_count
 FROM
@@ -382,29 +386,29 @@ WHERE
 GROUP BY
     o_orderpriority
 ORDER BY
-    o_orderpriority
+    o_orderpriority;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
-    Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+  Finish order_by=[o_orderpriority asc nulls_last] output=[#0, #1]
+    Reduce group_by=[o_orderpriority] aggregates=[count(*)] // { arity: 2 }
       Project (#5) // { arity: 1 }
-        Filter (#4 >= 1993-07-01) AND (date_to_timestamp(#4) < 1993-10-01 00:00:00) // { arity: 11 }
-          Join on=(eq(#0, #9, #10)) type=delta // { arity: 11 }
+        Filter (o_orderdate >= 1993-07-01) AND (date_to_timestamp(o_orderdate) < 1993-10-01 00:00:00) // { arity: 11 }
+          Join on=(eq(o_orderkey, o_orderkey, l_orderkey)) type=delta // { arity: 11 }
             implementation
               %0:orders » %1[#0]UKA » %2[#0]UKA
               %1 » %2[#0]UKA » %0:orders[#0]KAiif
               %2 » %1[#0]UKA » %0:orders[#0]KAiif
-            ArrangeBy keys=[[#0]] // { arity: 9 }
+            ArrangeBy keys=[[o_orderkey]] // { arity: 9 }
               ReadIndex on=orders pk_orders_orderkey=[delta join 1st input (full scan)] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct group_by=[#0] // { arity: 1 }
+            ArrangeBy keys=[[o_orderkey]] // { arity: 1 }
+              Distinct group_by=[o_orderkey] // { arity: 1 }
                 Project (#0) // { arity: 1 }
-                  Filter (#4 >= 1993-07-01) AND (#0) IS NOT NULL AND (date_to_timestamp(#4) < 1993-10-01 00:00:00) // { arity: 9 }
+                  Filter (o_orderdate >= 1993-07-01) AND (o_orderkey) IS NOT NULL AND (date_to_timestamp(o_orderdate) < 1993-10-01 00:00:00) // { arity: 9 }
                     ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct group_by=[#0] // { arity: 1 }
+            ArrangeBy keys=[[l_orderkey]] // { arity: 1 }
+              Distinct group_by=[l_orderkey] // { arity: 1 }
                 Project (#0) // { arity: 1 }
-                  Filter (#11 < #12) // { arity: 16 }
+                  Filter (l_commitdate < l_receiptdate) // { arity: 16 }
                     ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
@@ -416,7 +420,8 @@ EOF
 
 query T multiline
 -- Query 05
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     n_name,
     sum(l_extendedprice * (1 - l_discount)) AS revenue
 FROM
@@ -439,29 +444,29 @@ WHERE
 GROUP BY
     n_name
 ORDER BY
-    revenue DESC
+    revenue DESC;
 ----
 Explained Query:
   Finish order_by=[#1 desc nulls_first] output=[#0, #1]
-    Reduce group_by=[#2] aggregates=[sum((#0 * (1 - #1)))] // { arity: 2 }
+    Reduce group_by=[n_name] aggregates=[sum((l_extendedprice * (1 - l_discount)))] // { arity: 2 }
       Project (#22, #23, #36) // { arity: 3 }
-        Filter (#40 = "ASIA") AND (#12 < 1995-01-01) AND (#12 >= 1994-01-01) AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#8) IS NOT NULL AND (#37) IS NOT NULL // { arity: 42 }
-          Join on=(#0 = #9 AND eq(#3, #34, #35) AND #8 = #17 AND #19 = #33 AND #37 = #39) type=differential // { arity: 42 }
+        Filter (r_name = "ASIA") AND (o_orderdate < 1995-01-01) AND (o_orderdate >= 1994-01-01) AND (c_custkey) IS NOT NULL AND (c_nationkey) IS NOT NULL AND (o_orderkey) IS NOT NULL AND (n_regionkey) IS NOT NULL // { arity: 42 }
+          Join on=(c_custkey = o_custkey AND eq(c_nationkey, s_nationkey, n_nationkey) AND o_orderkey = l_orderkey AND l_suppkey = s_suppkey AND n_regionkey = r_regionkey) type=differential // { arity: 42 }
             implementation
               %5:region[#0]KAef » %4:nation[#2]KAef » %0:customer[#3]KAef » %1:orders[#1]KAeiif » %2:lineitem[#0]KAeiif » %3:supplier[#0, #1]KKeiif
-            ArrangeBy keys=[[#3]] // { arity: 8 }
+            ArrangeBy keys=[[c_nationkey]] // { arity: 8 }
               ReadIndex on=customer fk_customer_nationkey=[differential join] // { arity: 8 }
-            ArrangeBy keys=[[#1]] // { arity: 9 }
+            ArrangeBy keys=[[o_custkey]] // { arity: 9 }
               ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 16 }
+            ArrangeBy keys=[[l_orderkey]] // { arity: 16 }
               ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
-            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+            ArrangeBy keys=[[s_suppkey, s_nationkey]] // { arity: 2 }
               Project (#0, #3) // { arity: 2 }
-                Filter (#0) IS NOT NULL // { arity: 7 }
+                Filter (s_suppkey) IS NOT NULL // { arity: 7 }
                   ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
-            ArrangeBy keys=[[#2]] // { arity: 4 }
+            ArrangeBy keys=[[n_regionkey]] // { arity: 4 }
               ReadIndex on=nation fk_nation_regionkey=[differential join] // { arity: 4 }
-            ArrangeBy keys=[[#0]] // { arity: 3 }
+            ArrangeBy keys=[[r_regionkey]] // { arity: 3 }
               ReadIndex on=region pk_region_regionkey=[differential join] // { arity: 3 }
 
 Used Indexes:
@@ -477,7 +482,8 @@ EOF
 
 query T multiline
 -- Query 06
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     sum(l_extendedprice * l_discount) AS revenue
 FROM
     lineitem
@@ -485,7 +491,7 @@ WHERE
     l_quantity < 24
     AND l_shipdate >= DATE '1994-01-01'
     AND l_shipdate < DATE '1994-01-01' + INTERVAL '1' year
-    AND l_discount BETWEEN 0.06 - 0.01 AND 0.07
+    AND l_discount BETWEEN 0.06 - 0.01 AND 0.07;
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -500,9 +506,9 @@ Explained Query:
             - ()
   With
     cte l0 =
-      Reduce aggregates=[sum((#0 * #1))] // { arity: 1 }
+      Reduce aggregates=[sum((l_extendedprice * l_discount))] // { arity: 1 }
         Project (#5, #6) // { arity: 2 }
-          Filter (#4 < 24) AND (#6 <= 0.07) AND (#6 >= 0.05) AND (#10 >= 1994-01-01) AND (date_to_timestamp(#10) < 1995-01-01 00:00:00) // { arity: 16 }
+          Filter (l_quantity < 24) AND (l_discount <= 0.07) AND (l_discount >= 0.05) AND (l_shipdate >= 1994-01-01) AND (date_to_timestamp(l_shipdate) < 1995-01-01 00:00:00) // { arity: 16 }
             ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
@@ -513,7 +519,8 @@ EOF
 
 query T multiline
 -- Query 07
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     supp_nation,
     cust_nation,
     l_year,
@@ -551,16 +558,16 @@ GROUP BY
 ORDER BY
     supp_nation,
     cust_nation,
-    l_year
+    l_year;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#3]
+  Finish order_by=[n_name asc nulls_last, n_name asc nulls_last, #2 asc nulls_last] output=[#0..=#3]
     Return // { arity: 4 }
-      Reduce group_by=[#3, #4, extract_year_d(#2)] aggregates=[sum((#0 * (1 - #1)))] // { arity: 4 }
+      Reduce group_by=[n_name, n_name, extract_year_d(l_shipdate)] aggregates=[sum((l_extendedprice * (1 - l_discount)))] // { arity: 4 }
         Project (#12, #13, #17, #41, #45) // { arity: 5 }
-          Filter (#17 <= 1996-12-31) AND (#17 >= 1995-01-01) AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#7) IS NOT NULL AND (#24) IS NOT NULL AND (#35) IS NOT NULL AND (#48 OR #49) AND (#50 OR #51) AND ((#48 AND #51) OR (#49 AND #50)) // { arity: 52 }
-            Map ((#41 = "FRANCE"), (#41 = "GERMANY"), (#45 = "FRANCE"), (#45 = "GERMANY")) // { arity: 52 }
-              Join on=(#0 = #9 AND #3 = #40 AND #7 = #23 AND #24 = #32 AND #35 = #44) type=delta // { arity: 48 }
+          Filter (l_shipdate <= 1996-12-31) AND (l_shipdate >= 1995-01-01) AND (s_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL AND (l_orderkey) IS NOT NULL AND (o_custkey) IS NOT NULL AND (c_nationkey) IS NOT NULL AND (#48 OR #49) AND (#50 OR #51) AND ((#48 AND #51) OR (#49 AND #50)) // { arity: 52 }
+            Map ((n_name = "FRANCE"), (n_name = "GERMANY"), (n_name = "FRANCE"), (n_name = "GERMANY")) // { arity: 52 }
+              Join on=(s_suppkey = l_suppkey AND s_nationkey = n_nationkey AND l_orderkey = o_orderkey AND o_custkey = c_custkey AND c_nationkey = n_nationkey) type=delta // { arity: 48 }
                 implementation
                   %0:supplier » %4:l0[#0]KAef » %1:lineitem[#2]KAiif » %2:orders[#0]KA » %3:customer[#0]KA » %5:l0[#0]KAef
                   %1:lineitem » %0:supplier[#0]KA » %4:l0[#0]KAef » %2:orders[#0]KA » %3:customer[#0]KA » %5:l0[#0]KAef
@@ -568,19 +575,19 @@ Explained Query:
                   %3:customer » %5:l0[#0]KAef » %2:orders[#1]KA » %1:lineitem[#0]KAiif » %0:supplier[#0]KA » %4:l0[#0]KAef
                   %4:l0 » %0:supplier[#3]KA » %1:lineitem[#2]KAiif » %2:orders[#0]KA » %3:customer[#0]KA » %5:l0[#0]KAef
                   %5:l0 » %3:customer[#3]KA » %2:orders[#1]KA » %1:lineitem[#0]KAiif » %0:supplier[#0]KA » %4:l0[#0]KAef
-                ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
+                ArrangeBy keys=[[s_suppkey], [s_nationkey]] // { arity: 7 }
                   ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
-                ArrangeBy keys=[[#0], [#2]] // { arity: 16 }
+                ArrangeBy keys=[[l_orderkey], [l_suppkey]] // { arity: 16 }
                   ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
-                ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+                ArrangeBy keys=[[o_orderkey], [o_custkey]] // { arity: 9 }
                   ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-                ArrangeBy keys=[[#0], [#3]] // { arity: 8 }
+                ArrangeBy keys=[[c_custkey], [c_nationkey]] // { arity: 8 }
                   ReadIndex on=customer pk_customer_custkey=[delta join lookup] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
                 Get l0 // { arity: 4 }
                 Get l0 // { arity: 4 }
     With
       cte l0 =
-        ArrangeBy keys=[[#0]] // { arity: 4 }
+        ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
           ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
@@ -599,7 +606,8 @@ EOF
 
 query T multiline
 -- Query 08
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     o_year,
     sum(case
         when nation = 'BRAZIL' then volume
@@ -635,16 +643,16 @@ FROM
 GROUP BY
     o_year
 ORDER BY
-    o_year
+    o_year;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0, #1]
     Project (#0, #3) // { arity: 2 }
       Map ((#1 / #2)) // { arity: 4 }
-        Reduce group_by=[extract_year_d(#2)] aggregates=[sum(case when (#3 = "BRAZIL") then (#0 * (1 - #1)) else 0 end), sum((#0 * (1 - #1)))] // { arity: 3 }
+        Reduce group_by=[extract_year_d(o_orderdate)] aggregates=[sum(case when (n_name = "BRAZIL") then (l_extendedprice * (1 - l_discount)) else 0 end), sum((l_extendedprice * (1 - l_discount)))] // { arity: 3 }
           Project (#21, #22, #36, #54) // { arity: 4 }
-            Filter (#58 = "AMERICA") AND (#36 <= 1996-12-31) AND (#36 >= 1995-01-01) AND (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#16) IS NOT NULL AND (#33) IS NOT NULL AND (#44) IS NOT NULL AND (#51) IS NOT NULL AND ("ECONOMY ANODIZED STEEL" = varchar_to_text(#4)) // { arity: 60 }
-              Join on=(#0 = #17 AND #9 = #18 AND #12 = #53 AND #16 = #32 AND #33 = #41 AND #44 = #49 AND #51 = #57) type=delta // { arity: 60 }
+            Filter (r_name = "AMERICA") AND (o_orderdate <= 1996-12-31) AND (o_orderdate >= 1995-01-01) AND (p_partkey) IS NOT NULL AND (s_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL AND (l_orderkey) IS NOT NULL AND (o_custkey) IS NOT NULL AND (c_nationkey) IS NOT NULL AND (n_regionkey) IS NOT NULL AND ("ECONOMY ANODIZED STEEL" = varchar_to_text(p_type)) // { arity: 60 }
+              Join on=(p_partkey = l_partkey AND s_suppkey = l_suppkey AND s_nationkey = n_nationkey AND l_orderkey = o_orderkey AND o_custkey = c_custkey AND c_nationkey = n_nationkey AND n_regionkey = r_regionkey) type=delta // { arity: 60 }
                 implementation
                   %0:part » %2:lineitem[#1]KA » %3:orders[#0]KAiif » %1:supplier[#0]KA » %4:customer[#0]KA » %5:nation[#0]KA » %7:region[#0]KAef » %6:nation[#0]KA
                   %1:supplier » %2:lineitem[#2]KA » %0:part[#0]KAef » %3:orders[#0]KAiif » %4:customer[#0]KA » %5:nation[#0]KA » %7:region[#0]KAef » %6:nation[#0]KA
@@ -654,21 +662,21 @@ Explained Query:
                   %5:nation » %7:region[#0]KAef » %4:customer[#3]KA » %3:orders[#1]KAiif » %2:lineitem[#0]KA » %0:part[#0]KAef » %1:supplier[#0]KA » %6:nation[#0]KA
                   %6:nation » %1:supplier[#3]KA » %2:lineitem[#2]KA » %0:part[#0]KAef » %3:orders[#0]KAiif » %4:customer[#0]KA » %5:nation[#0]KA » %7:region[#0]KAef
                   %7:region » %5:nation[#2]KA » %4:customer[#3]KA » %3:orders[#1]KAiif » %2:lineitem[#0]KA » %0:part[#0]KAef » %1:supplier[#0]KA » %6:nation[#0]KA
-                ArrangeBy keys=[[#0]] // { arity: 9 }
+                ArrangeBy keys=[[p_partkey]] // { arity: 9 }
                   ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
-                ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
+                ArrangeBy keys=[[s_suppkey], [s_nationkey]] // { arity: 7 }
                   ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
-                ArrangeBy keys=[[#0], [#1], [#2]] // { arity: 16 }
+                ArrangeBy keys=[[l_orderkey], [l_partkey], [l_suppkey]] // { arity: 16 }
                   ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_partkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
-                ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+                ArrangeBy keys=[[o_orderkey], [o_custkey]] // { arity: 9 }
                   ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-                ArrangeBy keys=[[#0], [#3]] // { arity: 8 }
+                ArrangeBy keys=[[c_custkey], [c_nationkey]] // { arity: 8 }
                   ReadIndex on=customer pk_customer_custkey=[delta join lookup] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
-                ArrangeBy keys=[[#0], [#2]] // { arity: 4 }
+                ArrangeBy keys=[[n_nationkey], [n_regionkey]] // { arity: 4 }
                   ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
-                ArrangeBy keys=[[#0]] // { arity: 4 }
+                ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
                   ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
-                ArrangeBy keys=[[#0]] // { arity: 3 }
+                ArrangeBy keys=[[r_regionkey]] // { arity: 3 }
                   ReadIndex on=region pk_region_regionkey=[delta join lookup] // { arity: 3 }
 
 Used Indexes:
@@ -691,7 +699,8 @@ EOF
 
 query T multiline
 -- Query 09
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     nation,
     o_year,
     sum(amount) AS sum_profit
@@ -722,14 +731,14 @@ GROUP BY
     o_year
 ORDER BY
     nation,
-    o_year DESC
+    o_year DESC;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
-    Reduce group_by=[#5, extract_year_d(#4)] aggregates=[sum(((#1 * (1 - #2)) - (#3 * #0)))] // { arity: 3 }
+  Finish order_by=[n_name asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
+    Reduce group_by=[n_name, extract_year_d(o_orderdate)] aggregates=[sum(((l_extendedprice * (1 - l_discount)) - (ps_supplycost * l_quantity)))] // { arity: 3 }
       Project (#20..=#22, #35, #41, #47) // { arity: 6 }
-        Filter (#0) IS NOT NULL AND (#9) IS NOT NULL AND (#12) IS NOT NULL AND (#16) IS NOT NULL AND like["%green%"](varchar_to_text(#1)) // { arity: 50 }
-          Join on=(eq(#0, #17, #32) AND eq(#9, #18, #33) AND #12 = #46 AND #16 = #37) type=delta // { arity: 50 }
+        Filter (p_partkey) IS NOT NULL AND (s_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL AND (l_orderkey) IS NOT NULL AND like["%green%"](varchar_to_text(p_name)) // { arity: 50 }
+          Join on=(eq(p_partkey, l_partkey, ps_partkey) AND eq(s_suppkey, l_suppkey, ps_suppkey) AND s_nationkey = n_nationkey AND l_orderkey = o_orderkey) type=delta // { arity: 50 }
             implementation
               %0:part » %2:lineitem[#1]KA » %3:partsupp[#0, #1]KKA » %1:supplier[#0]KA » %4:orders[#0]KA » %5:nation[#0]KA
               %1:supplier » %2:lineitem[#2]KA » %3:partsupp[#0, #1]KKA » %0:part[#0]KAlf » %4:orders[#0]KA » %5:nation[#0]KA
@@ -737,17 +746,17 @@ Explained Query:
               %3:partsupp » %2:lineitem[#1, #2]KKA » %0:part[#0]KAlf » %1:supplier[#0]KA » %4:orders[#0]KA » %5:nation[#0]KA
               %4:orders » %2:lineitem[#0]KA » %3:partsupp[#0, #1]KKA » %0:part[#0]KAlf » %1:supplier[#0]KA » %5:nation[#0]KA
               %5:nation » %1:supplier[#3]KA » %2:lineitem[#2]KA » %3:partsupp[#0, #1]KKA » %0:part[#0]KAlf » %4:orders[#0]KA
-            ArrangeBy keys=[[#0]] // { arity: 9 }
+            ArrangeBy keys=[[p_partkey]] // { arity: 9 }
               ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
-            ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
+            ArrangeBy keys=[[s_suppkey], [s_nationkey]] // { arity: 7 }
               ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
-            ArrangeBy keys=[[#0], [#1], [#1, #2], [#2]] // { arity: 16 }
+            ArrangeBy keys=[[l_orderkey], [l_partkey], [l_partkey, l_suppkey], [l_suppkey]] // { arity: 16 }
               ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_partkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] fk_lineitem_partsuppkey=[delta join lookup] // { arity: 16 }
-            ArrangeBy keys=[[#0, #1]] // { arity: 5 }
+            ArrangeBy keys=[[ps_partkey, ps_suppkey]] // { arity: 5 }
               ReadIndex on=partsupp pk_partsupp_partkey_suppkey=[delta join lookup] // { arity: 5 }
-            ArrangeBy keys=[[#0]] // { arity: 9 }
+            ArrangeBy keys=[[o_orderkey]] // { arity: 9 }
               ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 4 }
+            ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
               ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
@@ -767,7 +776,8 @@ EOF
 
 query T multiline
 -- Query 10
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     c_custkey,
     c_name,
     sum(l_extendedprice * (1 - l_discount)) AS revenue,
@@ -798,27 +808,27 @@ GROUP BY
     c_address,
     c_comment
 ORDER BY
-    revenue DESC
+    revenue DESC;
 ----
 Explained Query:
   Finish order_by=[#2 desc nulls_first] output=[#0..=#7]
     Project (#0, #1, #7, #2, #4, #5, #3, #6) // { arity: 8 }
-      Reduce group_by=[#0, #1, #4, #3, #8, #2, #5] aggregates=[sum((#6 * (1 - #7)))] // { arity: 8 }
+      Reduce group_by=[c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment] aggregates=[sum((l_extendedprice * (1 - l_discount)))] // { arity: 8 }
         Project (#0..=#2, #4, #5, #7, #22, #23, #34) // { arity: 9 }
-          Filter (#25 = "R") AND (#12 < 1994-01-01) AND (#12 >= 1993-10-01) AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#8) IS NOT NULL AND (date_to_timestamp(#12) < 1994-01-01 00:00:00) // { arity: 37 }
-            Join on=(#0 = #9 AND #3 = #33 AND #8 = #17) type=delta // { arity: 37 }
+          Filter (l_returnflag = "R") AND (o_orderdate < 1994-01-01) AND (o_orderdate >= 1993-10-01) AND (c_custkey) IS NOT NULL AND (c_nationkey) IS NOT NULL AND (o_orderkey) IS NOT NULL AND (date_to_timestamp(o_orderdate) < 1994-01-01 00:00:00) // { arity: 37 }
+            Join on=(c_custkey = o_custkey AND c_nationkey = n_nationkey AND o_orderkey = l_orderkey) type=delta // { arity: 37 }
               implementation
                 %0:customer » %1:orders[#1]KAiiif » %2:lineitem[#0]KAef » %3:nation[#0]KA
                 %1:orders » %2:lineitem[#0]KAef » %0:customer[#0]KA » %3:nation[#0]KA
                 %2:lineitem » %1:orders[#0]KAiiif » %0:customer[#0]KA » %3:nation[#0]KA
                 %3:nation » %0:customer[#3]KA » %1:orders[#1]KAiiif » %2:lineitem[#0]KAef
-              ArrangeBy keys=[[#0], [#3]] // { arity: 8 }
+              ArrangeBy keys=[[c_custkey], [c_nationkey]] // { arity: 8 }
                 ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join 1st input (full scan)] // { arity: 8 }
-              ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+              ArrangeBy keys=[[o_orderkey], [o_custkey]] // { arity: 9 }
                 ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-              ArrangeBy keys=[[#0]] // { arity: 16 }
+              ArrangeBy keys=[[l_orderkey]] // { arity: 16 }
                 ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] // { arity: 16 }
-              ArrangeBy keys=[[#0]] // { arity: 4 }
+              ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
                 ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
@@ -834,7 +844,8 @@ EOF
 
 query T multiline
 -- Query 11
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     ps_partkey,
     sum(ps_supplycost * ps_availqty) AS value
 FROM
@@ -860,7 +871,7 @@ GROUP BY
                 AND n_name = 'GERMANY'
         )
 ORDER BY
-    value DESC
+    value DESC;
 ----
 Explained Query:
   Finish order_by=[#1 desc nulls_first] output=[#0, #1]
@@ -871,26 +882,26 @@ Explained Query:
             implementation
               %1[×]UA » %0[×]
             ArrangeBy keys=[[]] // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[sum((#2 * integer_to_numeric(#1)))] // { arity: 2 }
+              Reduce group_by=[ps_partkey] aggregates=[sum((ps_supplycost * integer_to_numeric(ps_availqty)))] // { arity: 2 }
                 Get l0 // { arity: 3 }
             ArrangeBy keys=[[]] // { arity: 1 }
-              Reduce aggregates=[sum((#1 * integer_to_numeric(#0)))] // { arity: 1 }
+              Reduce aggregates=[sum((ps_supplycost * integer_to_numeric(ps_availqty)))] // { arity: 1 }
                 Project (#1, #2) // { arity: 2 }
                   Get l0 // { arity: 3 }
     With
       cte l0 =
         Project (#0, #2, #3) // { arity: 3 }
-          Filter (#13 = "GERMANY") AND (#1) IS NOT NULL AND (#8) IS NOT NULL // { arity: 16 }
-            Join on=(#1 = #5 AND #8 = #12) type=delta // { arity: 16 }
+          Filter (n_name = "GERMANY") AND (ps_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL // { arity: 16 }
+            Join on=(ps_suppkey = s_suppkey AND s_nationkey = n_nationkey) type=delta // { arity: 16 }
               implementation
                 %0:partsupp » %1:supplier[#0]KA » %2:nation[#0]KAef
                 %1:supplier » %2:nation[#0]KAef » %0:partsupp[#1]KA
                 %2:nation » %1:supplier[#3]KA » %0:partsupp[#1]KA
-              ArrangeBy keys=[[#1]] // { arity: 5 }
+              ArrangeBy keys=[[ps_suppkey]] // { arity: 5 }
                 ReadIndex on=partsupp fk_partsupp_suppkey=[delta join 1st input (full scan)] // { arity: 5 }
-              ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
+              ArrangeBy keys=[[s_suppkey], [s_nationkey]] // { arity: 7 }
                 ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
-              ArrangeBy keys=[[#0]] // { arity: 4 }
+              ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
                 ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
@@ -904,7 +915,8 @@ EOF
 
 query T multiline
 -- Query 12
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     l_shipmode,
     sum(case
         when o_orderpriority = '1-URGENT'
@@ -931,19 +943,19 @@ WHERE
 GROUP BY
     l_shipmode
 ORDER BY
-    l_shipmode
+    l_shipmode;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
-    Reduce group_by=[#1] aggregates=[sum(case when ((#0 = "2-HIGH") OR (#0 = "1-URGENT")) then 1 else 0 end), sum(case when ((#0 != "2-HIGH") AND (#0 != "1-URGENT")) then 1 else 0 end)] // { arity: 3 }
+  Finish order_by=[l_shipmode asc nulls_last] output=[#0..=#2]
+    Reduce group_by=[l_shipmode] aggregates=[sum(case when ((o_orderpriority = "2-HIGH") OR (o_orderpriority = "1-URGENT")) then 1 else 0 end), sum(case when ((o_orderpriority != "2-HIGH") AND (o_orderpriority != "1-URGENT")) then 1 else 0 end)] // { arity: 3 }
       Project (#5, #23) // { arity: 2 }
-        Filter (#21 >= 1994-01-01) AND (#0) IS NOT NULL AND (#19 < #20) AND (#20 < #21) AND (date_to_timestamp(#21) < 1995-01-01 00:00:00) AND ((#23 = "MAIL") OR (#23 = "SHIP")) // { arity: 25 }
-          Join on=(#0 = #9) type=differential // { arity: 25 }
+        Filter (l_receiptdate >= 1994-01-01) AND (o_orderkey) IS NOT NULL AND (l_shipdate < l_commitdate) AND (l_commitdate < l_receiptdate) AND (date_to_timestamp(l_receiptdate) < 1995-01-01 00:00:00) AND ((l_shipmode = "MAIL") OR (l_shipmode = "SHIP")) // { arity: 25 }
+          Join on=(o_orderkey = l_orderkey) type=differential // { arity: 25 }
             implementation
               %1:lineitem[#0]KAeiif » %0:orders[#0]KAeiif
-            ArrangeBy keys=[[#0]] // { arity: 9 }
+            ArrangeBy keys=[[o_orderkey]] // { arity: 9 }
               ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 16 }
+            ArrangeBy keys=[[l_orderkey]] // { arity: 16 }
               ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
 
 Used Indexes:
@@ -955,7 +967,8 @@ EOF
 
 query T multiline
 -- Query 13
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     c_count,
     count(*) AS custdist
 FROM
@@ -974,42 +987,42 @@ GROUP BY
     c_count
 ORDER BY
     custdist DESC,
-    c_count DESC
+    c_count DESC;
 ----
 Explained Query:
   Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
     Return // { arity: 2 }
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
-          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+          Reduce group_by=[c_custkey] aggregates=[count(o_orderkey)] // { arity: 2 }
             Union // { arity: 2 }
               Project (#0, #8) // { arity: 2 }
                 Get l0 // { arity: 9 }
               Project (#0, #16) // { arity: 2 }
                 Map (null) // { arity: 17 }
-                  Join on=(#0 = #8 AND #1 = #9 AND #2 = #10 AND #3 = #11 AND #4 = #12 AND #5 = #13 AND #6 = #14 AND #7 = #15) type=differential // { arity: 16 }
+                  Join on=(c_custkey = c_custkey AND c_name = c_name AND c_address = c_address AND c_nationkey = c_nationkey AND c_phone = c_phone AND c_acctbal = c_acctbal AND c_mktsegment = c_mktsegment AND c_comment = c_comment) type=differential // { arity: 16 }
                     implementation
                       %0[#0..=#7]KKKKKKKK » %1:customer[#0..=#7]KKKKKKKK
-                    ArrangeBy keys=[[#0..=#7]] // { arity: 8 }
+                    ArrangeBy keys=[[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment]] // { arity: 8 }
                       Union // { arity: 8 }
                         Negate // { arity: 8 }
-                          Distinct group_by=[#0..=#7] // { arity: 8 }
+                          Distinct group_by=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment] // { arity: 8 }
                             Project (#0..=#7) // { arity: 8 }
                               Get l0 // { arity: 9 }
-                        Distinct group_by=[#0..=#7] // { arity: 8 }
+                        Distinct group_by=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment] // { arity: 8 }
                           ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
-                    ArrangeBy keys=[[#0..=#7]] // { arity: 8 }
+                    ArrangeBy keys=[[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment]] // { arity: 8 }
                       ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
     With
       cte l0 =
         Project (#0..=#8) // { arity: 9 }
-          Filter (#0) IS NOT NULL AND NOT(like["%special%requests%"](varchar_to_text(#16))) // { arity: 17 }
-            Join on=(#0 = #9) type=differential // { arity: 17 }
+          Filter (c_custkey) IS NOT NULL AND NOT(like["%special%requests%"](varchar_to_text(o_comment))) // { arity: 17 }
+            Join on=(c_custkey = o_custkey) type=differential // { arity: 17 }
               implementation
                 %1:orders[#1]KAf » %0:customer[#0]KAf
-              ArrangeBy keys=[[#0]] // { arity: 8 }
+              ArrangeBy keys=[[c_custkey]] // { arity: 8 }
                 ReadIndex on=customer pk_customer_custkey=[differential join] // { arity: 8 }
-              ArrangeBy keys=[[#1]] // { arity: 9 }
+              ArrangeBy keys=[[o_custkey]] // { arity: 9 }
                 ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
 
 Used Indexes:
@@ -1021,7 +1034,8 @@ EOF
 
 query T multiline
 -- Query 14
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     100.00 * sum(case
         when p_type like 'PROMO%'
             then l_extendedprice * (1 - l_discount)
@@ -1033,7 +1047,7 @@ FROM
 WHERE
     l_partkey = p_partkey
     AND l_shipdate >= DATE '1995-09-01'
-    AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month
+    AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month;
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -1050,15 +1064,15 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[sum(case when like["PROMO%"](varchar_to_text(#2)) then (#0 * (1 - #1)) else 0 end), sum((#0 * (1 - #1)))] // { arity: 2 }
+      Reduce aggregates=[sum(case when like["PROMO%"](varchar_to_text(p_type)) then (l_extendedprice * (1 - l_discount)) else 0 end), sum((l_extendedprice * (1 - l_discount)))] // { arity: 2 }
         Project (#5, #6, #20) // { arity: 3 }
-          Filter (#10 >= 1995-09-01) AND (#1) IS NOT NULL AND (date_to_timestamp(#10) < 1995-10-01 00:00:00) // { arity: 25 }
-            Join on=(#1 = #16) type=differential // { arity: 25 }
+          Filter (l_shipdate >= 1995-09-01) AND (l_partkey) IS NOT NULL AND (date_to_timestamp(l_shipdate) < 1995-10-01 00:00:00) // { arity: 25 }
+            Join on=(l_partkey = p_partkey) type=differential // { arity: 25 }
               implementation
                 %0:lineitem[#1]KAiif » %1:part[#0]KAiif
-              ArrangeBy keys=[[#1]] // { arity: 16 }
+              ArrangeBy keys=[[l_partkey]] // { arity: 16 }
                 ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
-              ArrangeBy keys=[[#0]] // { arity: 9 }
+              ArrangeBy keys=[[p_partkey]] // { arity: 9 }
                 ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
 
 Used Indexes:
@@ -1083,7 +1097,8 @@ create view revenue (supplier_no, total_revenue) as
 
 query T multiline
 -- Query 15
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     s_suppkey,
     s_name,
     s_address,
@@ -1101,19 +1116,19 @@ WHERE
             revenue
     )
 ORDER BY
-    s_suppkey
+    s_suppkey;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0..=#4]
+  Finish order_by=[s_suppkey asc nulls_last] output=[#0..=#4]
     Return // { arity: 5 }
       Project (#0..=#2, #4, #8) // { arity: 5 }
-        Filter (#0) IS NOT NULL // { arity: 10 }
-          Join on=(#0 = #7 AND #8 = #9) type=differential // { arity: 10 }
+        Filter (s_suppkey) IS NOT NULL // { arity: 10 }
+          Join on=(s_suppkey = l_suppkey AND #8 = #9) type=differential // { arity: 10 }
             implementation
               %0:supplier[#0]KA » %1:l0[#0]UKA » %2[#0]UK
-            ArrangeBy keys=[[#0]] // { arity: 7 }
+            ArrangeBy keys=[[s_suppkey]] // { arity: 7 }
               ReadIndex on=supplier pk_supplier_suppkey=[differential join] // { arity: 7 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[l_suppkey]] // { arity: 2 }
               Get l0 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Reduce aggregates=[max(#0)] // { arity: 1 }
@@ -1121,9 +1136,9 @@ Explained Query:
                   Get l0 // { arity: 2 }
     With
       cte l0 =
-        Reduce group_by=[#0] aggregates=[sum((#1 * (1 - #2)))] // { arity: 2 }
+        Reduce group_by=[l_suppkey] aggregates=[sum((l_extendedprice * (1 - l_discount)))] // { arity: 2 }
           Project (#2, #5, #6) // { arity: 3 }
-            Filter (#10 >= 1996-01-01) AND (date_to_timestamp(#10) < 1996-04-01 00:00:00) // { arity: 16 }
+            Filter (l_shipdate >= 1996-01-01) AND (date_to_timestamp(l_shipdate) < 1996-04-01 00:00:00) // { arity: 16 }
               ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
@@ -1138,7 +1153,8 @@ drop view revenue
 
 query T multiline
 -- Query 16
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     p_brand,
     p_type,
     p_size,
@@ -1167,24 +1183,24 @@ ORDER BY
     supplier_cnt DESC,
     p_brand,
     p_type,
-    p_size
+    p_size;
 ----
 Explained Query:
-  Finish order_by=[#3 desc nulls_first, #0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#3]
+  Finish order_by=[#3 desc nulls_first, p_brand asc nulls_last, p_type asc nulls_last, p_size asc nulls_last] output=[#0..=#3]
     Return // { arity: 4 }
-      Reduce group_by=[#1..=#3] aggregates=[count(distinct #0)] // { arity: 4 }
+      Reduce group_by=[p_brand, p_type, p_size] aggregates=[count(distinct ps_suppkey)] // { arity: 4 }
         Project (#0..=#3) // { arity: 4 }
-          Join on=(#0 = #4) type=differential // { arity: 5 }
+          Join on=(ps_suppkey = ps_suppkey) type=differential // { arity: 5 }
             implementation
               %0:l0[#0]K » %1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 4 }
+            ArrangeBy keys=[[ps_suppkey]] // { arity: 4 }
               Get l0 // { arity: 4 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
+            ArrangeBy keys=[[ps_suppkey]] // { arity: 1 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct group_by=[ps_suppkey] // { arity: 1 }
                     Project (#0) // { arity: 1 }
-                      Filter ((#1) IS NULL OR (#0 = #1)) // { arity: 2 }
+                      Filter ((s_suppkey) IS NULL OR (ps_suppkey = s_suppkey)) // { arity: 2 }
                         CrossJoin type=differential // { arity: 2 }
                           implementation
                             %1:supplier[×]lf » %0:l1[×]lf
@@ -1192,23 +1208,23 @@ Explained Query:
                             Get l1 // { arity: 1 }
                           ArrangeBy keys=[[]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
-                              Filter like["%Customer%Complaints%"](varchar_to_text(#6)) // { arity: 7 }
+                              Filter like["%Customer%Complaints%"](varchar_to_text(s_comment)) // { arity: 7 }
                                 ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
                 Get l1 // { arity: 1 }
     With
       cte l1 =
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct group_by=[ps_suppkey] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 4 }
       cte l0 =
         Project (#1, #8..=#10) // { arity: 4 }
-          Filter (#8 != "Brand#45") AND (#0) IS NOT NULL AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(#9))) AND ((#10 = 3) OR (#10 = 9) OR (#10 = 14) OR (#10 = 19) OR (#10 = 23) OR (#10 = 36) OR (#10 = 45) OR (#10 = 49)) // { arity: 14 }
-            Join on=(#0 = #5) type=differential // { arity: 14 }
+          Filter (p_brand != "Brand#45") AND (ps_partkey) IS NOT NULL AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(p_type))) AND ((p_size = 3) OR (p_size = 9) OR (p_size = 14) OR (p_size = 19) OR (p_size = 23) OR (p_size = 36) OR (p_size = 45) OR (p_size = 49)) // { arity: 14 }
+            Join on=(ps_partkey = p_partkey) type=differential // { arity: 14 }
               implementation
                 %1:part[#0]KAef » %0:partsupp[#0]KAef
-              ArrangeBy keys=[[#0]] // { arity: 5 }
+              ArrangeBy keys=[[ps_partkey]] // { arity: 5 }
                 ReadIndex on=partsupp fk_partsupp_partkey=[differential join] // { arity: 5 }
-              ArrangeBy keys=[[#0]] // { arity: 9 }
+              ArrangeBy keys=[[p_partkey]] // { arity: 9 }
                 ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
 
 Used Indexes:
@@ -1221,7 +1237,8 @@ EOF
 
 query T multiline
 -- Query 17
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
   sum(l_extendedprice) / 7.0 AS avg_yearly
 FROM
   lineitem,
@@ -1237,7 +1254,7 @@ WHERE
       lineitem
     WHERE
       l_partkey = p_partkey
-  )
+  );
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -1254,36 +1271,36 @@ Explained Query:
                 - ()
   With
     cte l2 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
+      Reduce aggregates=[sum(l_extendedprice)] // { arity: 1 }
         Project (#2) // { arity: 1 }
-          Filter (#1 < (0.2 * (#4 / bigint_to_numeric(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
-            Join on=(#0 = #3) type=differential // { arity: 6 }
+          Filter (l_quantity < (0.2 * (#4 / bigint_to_numeric(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
+            Join on=(l_partkey = l_partkey) type=differential // { arity: 6 }
               implementation
                 %1[#0]UKA » %0:l1[#0]K
-              ArrangeBy keys=[[#0]] // { arity: 3 }
+              ArrangeBy keys=[[l_partkey]] // { arity: 3 }
                 Get l1 // { arity: 3 }
-              ArrangeBy keys=[[#0]] // { arity: 3 }
-                Reduce group_by=[#0] aggregates=[sum(#1), count(*)] // { arity: 3 }
+              ArrangeBy keys=[[l_partkey]] // { arity: 3 }
+                Reduce group_by=[l_partkey] aggregates=[sum(l_quantity), count(*)] // { arity: 3 }
                   Project (#0, #5) // { arity: 2 }
-                    Join on=(#0 = #2) type=differential // { arity: 17 }
+                    Join on=(l_partkey = l_partkey) type=differential // { arity: 17 }
                       implementation
                         %0[#0]UKA » %1:l0[#1]KA
-                      ArrangeBy keys=[[#0]] // { arity: 1 }
-                        Distinct group_by=[#0] // { arity: 1 }
+                      ArrangeBy keys=[[l_partkey]] // { arity: 1 }
+                        Distinct group_by=[l_partkey] // { arity: 1 }
                           Project (#0) // { arity: 1 }
                             Get l1 // { arity: 3 }
                       Get l0 // { arity: 16 }
     cte l1 =
       Project (#1, #4, #5) // { arity: 3 }
-        Filter (#19 = "Brand#23") AND (#22 = "MED BOX") AND (#1) IS NOT NULL // { arity: 25 }
-          Join on=(#1 = #16) type=differential // { arity: 25 }
+        Filter (p_brand = "Brand#23") AND (p_container = "MED BOX") AND (l_partkey) IS NOT NULL // { arity: 25 }
+          Join on=(l_partkey = p_partkey) type=differential // { arity: 25 }
             implementation
               %1:part[#0]KAef » %0:l0[#1]KAef
             Get l0 // { arity: 16 }
-            ArrangeBy keys=[[#0]] // { arity: 9 }
+            ArrangeBy keys=[[p_partkey]] // { arity: 9 }
               ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 16 }
+      ArrangeBy keys=[[l_partkey]] // { arity: 16 }
         ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
 
 Used Indexes:
@@ -1295,7 +1312,8 @@ EOF
 
 query T multiline
 -- Query 18
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     c_name,
     c_custkey,
     o_orderkey,
@@ -1326,46 +1344,46 @@ GROUP BY
     o_totalprice
 ORDER BY
     o_totalprice DESC,
-    o_orderdate
+    o_orderdate;
 ----
 Explained Query:
-  Finish order_by=[#4 desc nulls_first, #3 asc nulls_last] output=[#0..=#5]
+  Finish order_by=[o_totalprice desc nulls_first, o_orderdate asc nulls_last] output=[#0..=#5]
     Return // { arity: 6 }
-      Reduce group_by=[#1, #0, #2, #4, #3] aggregates=[sum(#5)] // { arity: 6 }
+      Reduce group_by=[c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice] aggregates=[sum(l_quantity)] // { arity: 6 }
         Project (#0..=#5) // { arity: 6 }
           Filter (#7 > 300) // { arity: 8 }
-            Join on=(#2 = #6) type=differential // { arity: 8 }
+            Join on=(o_orderkey = o_orderkey) type=differential // { arity: 8 }
               implementation
                 %1[#0]UKAif » %0:l1[#2]Kif
-              ArrangeBy keys=[[#2]] // { arity: 6 }
+              ArrangeBy keys=[[o_orderkey]] // { arity: 6 }
                 Get l1 // { arity: 6 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
-                Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+              ArrangeBy keys=[[o_orderkey]] // { arity: 2 }
+                Reduce group_by=[o_orderkey] aggregates=[sum(l_quantity)] // { arity: 2 }
                   Project (#0, #5) // { arity: 2 }
-                    Join on=(#0 = #1) type=differential // { arity: 17 }
+                    Join on=(o_orderkey = l_orderkey) type=differential // { arity: 17 }
                       implementation
                         %0[#0]UKA » %1:l0[#0]KA
-                      ArrangeBy keys=[[#0]] // { arity: 1 }
-                        Distinct group_by=[#0] // { arity: 1 }
+                      ArrangeBy keys=[[o_orderkey]] // { arity: 1 }
+                        Distinct group_by=[o_orderkey] // { arity: 1 }
                           Project (#2) // { arity: 1 }
                             Get l1 // { arity: 6 }
                       Get l0 // { arity: 16 }
     With
       cte l1 =
         Project (#0, #1, #8, #11, #12, #21) // { arity: 6 }
-          Filter (#0) IS NOT NULL AND (#8) IS NOT NULL // { arity: 33 }
-            Join on=(#0 = #9 AND #8 = #17) type=delta // { arity: 33 }
+          Filter (c_custkey) IS NOT NULL AND (o_orderkey) IS NOT NULL // { arity: 33 }
+            Join on=(c_custkey = o_custkey AND o_orderkey = l_orderkey) type=delta // { arity: 33 }
               implementation
                 %0:customer » %1:orders[#1]KA » %2:l0[#0]KA
                 %1:orders » %0:customer[#0]KA » %2:l0[#0]KA
                 %2:l0 » %1:orders[#0]KA » %0:customer[#0]KA
-              ArrangeBy keys=[[#0]] // { arity: 8 }
+              ArrangeBy keys=[[c_custkey]] // { arity: 8 }
                 ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] // { arity: 8 }
-              ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+              ArrangeBy keys=[[o_orderkey], [o_custkey]] // { arity: 9 }
                 ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
               Get l0 // { arity: 16 }
       cte l0 =
-        ArrangeBy keys=[[#0]] // { arity: 16 }
+        ArrangeBy keys=[[l_orderkey]] // { arity: 16 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[differential join, delta join lookup] // { arity: 16 }
 
 Used Indexes:
@@ -1379,7 +1397,8 @@ EOF
 
 query T multiline
 -- Query 19
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     sum(l_extendedprice* (1 - l_discount)) AS revenue
 FROM
     lineitem,
@@ -1413,7 +1432,7 @@ WHERE
         AND p_size BETWEEN CAST (1 AS smallint) AND CAST (15 AS smallint)
         AND l_shipmode IN ('AIR', 'AIR REG')
         AND l_shipinstruct = 'DELIVER IN PERSON'
-    )
+    );
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -1428,16 +1447,16 @@ Explained Query:
             - ()
   With
     cte l0 =
-      Reduce aggregates=[sum((#0 * (1 - #1)))] // { arity: 1 }
+      Reduce aggregates=[sum((l_extendedprice * (1 - l_discount)))] // { arity: 1 }
         Project (#5, #6) // { arity: 2 }
-          Filter (#13 = "DELIVER IN PERSON") AND (#21 >= 1) AND (#1) IS NOT NULL AND ((#14 = "AIR") OR (#14 = "AIR REG")) AND ((#25 AND #26) OR (#27 AND #28) OR (#29 AND #30)) AND ((#31 AND #32 AND #33) OR (#34 AND #35 AND #36) OR (#37 AND #38 AND #39)) AND ((#25 AND #26 AND #34 AND #35 AND #36) OR (#27 AND #28 AND #37 AND #38 AND #39) OR (#29 AND #30 AND #31 AND #32 AND #33)) // { arity: 40 }
-            Map ((#4 <= 20), (#4 >= 10), (#4 <= 30), (#4 >= 20), (#4 <= 11), (#4 >= 1), (#19 = "Brand#12"), (#21 <= 5), ((#22 = "SM BOX") OR (#22 = "SM PKG") OR (#22 = "SM CASE") OR (#22 = "SM PACK")), (#19 = "Brand#23"), (#21 <= 10), ((#22 = "MED BAG") OR (#22 = "MED BOX") OR (#22 = "MED PKG") OR (#22 = "MED PACK")), (#19 = "Brand#34"), (#21 <= 15), ((#22 = "LG BOX") OR (#22 = "LG PKG") OR (#22 = "LG CASE") OR (#22 = "LG PACK"))) // { arity: 40 }
-              Join on=(#1 = #16) type=differential // { arity: 25 }
+          Filter (l_shipinstruct = "DELIVER IN PERSON") AND (p_size >= 1) AND (l_partkey) IS NOT NULL AND ((l_shipmode = "AIR") OR (l_shipmode = "AIR REG")) AND ((#25 AND #26) OR (#27 AND #28) OR (#29 AND #30)) AND ((#31 AND #32 AND #33) OR (#34 AND #35 AND #36) OR (#37 AND #38 AND #39)) AND ((#25 AND #26 AND #34 AND #35 AND #36) OR (#27 AND #28 AND #37 AND #38 AND #39) OR (#29 AND #30 AND #31 AND #32 AND #33)) // { arity: 40 }
+            Map ((l_quantity <= 20), (l_quantity >= 10), (l_quantity <= 30), (l_quantity >= 20), (l_quantity <= 11), (l_quantity >= 1), (p_brand = "Brand#12"), (p_size <= 5), ((p_container = "SM BOX") OR (p_container = "SM PKG") OR (p_container = "SM CASE") OR (p_container = "SM PACK")), (p_brand = "Brand#23"), (p_size <= 10), ((p_container = "MED BAG") OR (p_container = "MED BOX") OR (p_container = "MED PKG") OR (p_container = "MED PACK")), (p_brand = "Brand#34"), (p_size <= 15), ((p_container = "LG BOX") OR (p_container = "LG PKG") OR (p_container = "LG CASE") OR (p_container = "LG PACK"))) // { arity: 40 }
+              Join on=(l_partkey = p_partkey) type=differential // { arity: 25 }
                 implementation
                   %1:part[#0]KAeiiif » %0:lineitem[#1]KAeiiiiif
-                ArrangeBy keys=[[#1]] // { arity: 16 }
+                ArrangeBy keys=[[l_partkey]] // { arity: 16 }
                   ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
-                ArrangeBy keys=[[#0]] // { arity: 9 }
+                ArrangeBy keys=[[p_partkey]] // { arity: 9 }
                   ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
 
 Used Indexes:
@@ -1449,7 +1468,8 @@ EOF
 
 query T multiline
 -- Query 20
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     s_name,
     s_address
 FROM
@@ -1485,69 +1505,69 @@ WHERE
     AND s_nationkey = n_nationkey
     AND n_name = 'CANADA'
 ORDER BY
-    s_name
+    s_name;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+  Finish order_by=[s_name asc nulls_last] output=[#0, #1]
     Return // { arity: 2 }
       Project (#1, #2) // { arity: 2 }
-        Join on=(#0 = #3) type=differential // { arity: 4 }
+        Join on=(s_suppkey = s_suppkey) type=differential // { arity: 4 }
           implementation
             %1[#0]UKA » %0:l0[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 3 }
+          ArrangeBy keys=[[s_suppkey]] // { arity: 3 }
             Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct group_by=[#0] // { arity: 1 }
+          ArrangeBy keys=[[s_suppkey]] // { arity: 1 }
+            Distinct group_by=[s_suppkey] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter (integer_to_numeric(#2) > #5) // { arity: 6 }
-                  Join on=(#0 = #4 AND #1 = #3) type=differential // { arity: 6 }
+                Filter (integer_to_numeric(ps_availqty) > #5) // { arity: 6 }
+                  Join on=(s_suppkey = ps_suppkey AND ps_partkey = ps_partkey) type=differential // { arity: 6 }
                     implementation
                       %1[#1, #0]UKK » %0:l1[#0, #1]KKf
-                    ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+                    ArrangeBy keys=[[s_suppkey, ps_partkey]] // { arity: 3 }
                       Project (#0, #1, #3) // { arity: 3 }
-                        Filter (#0 = #2) // { arity: 4 }
+                        Filter (s_suppkey = ps_suppkey) // { arity: 4 }
                           Get l1 // { arity: 4 }
-                    ArrangeBy keys=[[#1, #0]] // { arity: 3 }
+                    ArrangeBy keys=[[ps_suppkey, ps_partkey]] // { arity: 3 }
                       Project (#0, #1, #3) // { arity: 3 }
                         Map ((0.5 * #2)) // { arity: 4 }
-                          Reduce group_by=[#0, #1] aggregates=[sum(#2)] // { arity: 3 }
+                          Reduce group_by=[ps_partkey, ps_suppkey] aggregates=[sum(l_quantity)] // { arity: 3 }
                             Project (#0, #1, #6) // { arity: 3 }
-                              Filter (#12 >= 1995-01-01) AND (date_to_timestamp(#12) < 1996-01-01 00:00:00) // { arity: 18 }
-                                Join on=(#0 = #3 AND #1 = #4) type=differential // { arity: 18 }
+                              Filter (l_shipdate >= 1995-01-01) AND (date_to_timestamp(l_shipdate) < 1996-01-01 00:00:00) // { arity: 18 }
+                                Join on=(ps_partkey = l_partkey AND ps_suppkey = l_suppkey) type=differential // { arity: 18 }
                                   implementation
                                     %0[#0, #1]UKKA » %1:lineitem[#1, #2]KKAiif
-                                  ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                                    Distinct group_by=[#0, #1] // { arity: 2 }
+                                  ArrangeBy keys=[[ps_partkey, ps_suppkey]] // { arity: 2 }
+                                    Distinct group_by=[ps_partkey, ps_suppkey] // { arity: 2 }
                                       Project (#1, #2) // { arity: 2 }
                                         Get l1 // { arity: 4 }
-                                  ArrangeBy keys=[[#1, #2]] // { arity: 16 }
+                                  ArrangeBy keys=[[l_partkey, l_suppkey]] // { arity: 16 }
                                     ReadIndex on=lineitem fk_lineitem_partsuppkey=[differential join] // { arity: 16 }
     With
       cte l1 =
         Project (#0..=#3) // { arity: 4 }
-          Join on=(#1 = #6) type=differential // { arity: 7 }
+          Join on=(ps_partkey = p_partkey) type=differential // { arity: 7 }
             implementation
               %2[#0]UKA » %1:partsupp[#0]KA » %0[×]
             ArrangeBy keys=[[]] // { arity: 1 }
-              Distinct group_by=[#0] // { arity: 1 }
+              Distinct group_by=[s_suppkey] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Get l0 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 5 }
+            ArrangeBy keys=[[ps_partkey]] // { arity: 5 }
               ReadIndex on=partsupp fk_partsupp_partkey=[differential join] // { arity: 5 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct group_by=[#0] // { arity: 1 }
+            ArrangeBy keys=[[p_partkey]] // { arity: 1 }
+              Distinct group_by=[p_partkey] // { arity: 1 }
                 Project (#0) // { arity: 1 }
-                  Filter (#0) IS NOT NULL AND like["forest%"](varchar_to_text(#1)) // { arity: 9 }
+                  Filter (p_partkey) IS NOT NULL AND like["forest%"](varchar_to_text(p_name)) // { arity: 9 }
                     ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
       cte l0 =
         Project (#0..=#2) // { arity: 3 }
-          Filter (#8 = "CANADA") AND (#3) IS NOT NULL // { arity: 11 }
-            Join on=(#3 = #7) type=differential // { arity: 11 }
+          Filter (n_name = "CANADA") AND (s_nationkey) IS NOT NULL // { arity: 11 }
+            Join on=(s_nationkey = n_nationkey) type=differential // { arity: 11 }
               implementation
                 %1:nation[#0]KAef » %0:supplier[#3]KAef
-              ArrangeBy keys=[[#3]] // { arity: 7 }
+              ArrangeBy keys=[[s_nationkey]] // { arity: 7 }
                 ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
-              ArrangeBy keys=[[#0]] // { arity: 4 }
+              ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
                 ReadIndex on=nation pk_nation_nationkey=[differential join] // { arity: 4 }
 
 Used Indexes:
@@ -1562,7 +1582,8 @@ EOF
 
 query T multiline
 -- Query 21
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     s_name,
     count(*) AS numwait
 FROM
@@ -1600,74 +1621,74 @@ GROUP BY
     s_name
 ORDER BY
     numwait DESC,
-    s_name
+    s_name;
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] output=[#0, #1]
+  Finish order_by=[#1 desc nulls_first, s_name asc nulls_last] output=[#0, #1]
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+      Reduce group_by=[s_name] aggregates=[count(*)] // { arity: 2 }
         Project (#1) // { arity: 1 }
-          Join on=(#0 = #4 AND #2 = #3) type=differential // { arity: 5 }
+          Join on=(s_suppkey = s_suppkey AND l_orderkey = l_orderkey) type=differential // { arity: 5 }
             implementation
               %0:l2[#2, #0]KK » %1[#0, #1]KK
-            ArrangeBy keys=[[#2, #0]] // { arity: 3 }
+            ArrangeBy keys=[[l_orderkey, s_suppkey]] // { arity: 3 }
               Get l2 // { arity: 3 }
-            ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+            ArrangeBy keys=[[l_orderkey, s_suppkey]] // { arity: 2 }
               Union // { arity: 2 }
                 Negate // { arity: 2 }
-                  Distinct group_by=[#0, #1] // { arity: 2 }
+                  Distinct group_by=[l_orderkey, s_suppkey] // { arity: 2 }
                     Project (#0, #1) // { arity: 2 }
-                      Filter (#1 != #4) AND (#14 > #13) // { arity: 18 }
-                        Join on=(#0 = #2) type=differential // { arity: 18 }
+                      Filter (s_suppkey != l_suppkey) AND (l_receiptdate > l_commitdate) // { arity: 18 }
+                        Join on=(l_orderkey = l_orderkey) type=differential // { arity: 18 }
                           implementation
                             %1:l1[#0]KAf » %0:l3[#0]Kf
-                          ArrangeBy keys=[[#0]] // { arity: 2 }
+                          ArrangeBy keys=[[l_orderkey]] // { arity: 2 }
                             Get l3 // { arity: 2 }
                           Get l1 // { arity: 16 }
                 Get l3 // { arity: 2 }
     With
       cte l3 =
-        Distinct group_by=[#1, #0] // { arity: 2 }
+        Distinct group_by=[l_orderkey, s_suppkey] // { arity: 2 }
           Project (#0, #2) // { arity: 2 }
             Get l2 // { arity: 3 }
       cte l2 =
         Project (#0..=#2) // { arity: 3 }
-          Join on=(#0 = #4 AND #2 = #3) type=differential // { arity: 5 }
+          Join on=(s_suppkey = s_suppkey AND l_orderkey = l_orderkey) type=differential // { arity: 5 }
             implementation
               %1[#1, #0]UKK » %0:l0[#0, #2]KK
-            ArrangeBy keys=[[#0, #2]] // { arity: 3 }
+            ArrangeBy keys=[[s_suppkey, l_orderkey]] // { arity: 3 }
               Get l0 // { arity: 3 }
-            ArrangeBy keys=[[#1, #0]] // { arity: 2 }
-              Distinct group_by=[#0, #1] // { arity: 2 }
+            ArrangeBy keys=[[s_suppkey, l_orderkey]] // { arity: 2 }
+              Distinct group_by=[l_orderkey, s_suppkey] // { arity: 2 }
                 Project (#0, #1) // { arity: 2 }
-                  Filter (#1 != #4) // { arity: 18 }
-                    Join on=(#0 = #2) type=differential // { arity: 18 }
+                  Filter (s_suppkey != l_suppkey) // { arity: 18 }
+                    Join on=(l_orderkey = l_orderkey) type=differential // { arity: 18 }
                       implementation
                         %1:l1[#0]KA » %0[#0]K
-                      ArrangeBy keys=[[#0]] // { arity: 2 }
-                        Distinct group_by=[#1, #0] // { arity: 2 }
+                      ArrangeBy keys=[[l_orderkey]] // { arity: 2 }
+                        Distinct group_by=[l_orderkey, s_suppkey] // { arity: 2 }
                           Project (#0, #2) // { arity: 2 }
                             Get l0 // { arity: 3 }
                       Get l1 // { arity: 16 }
       cte l1 =
-        ArrangeBy keys=[[#0]] // { arity: 16 }
+        ArrangeBy keys=[[l_orderkey]] // { arity: 16 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
       cte l0 =
         Project (#0, #1, #7) // { arity: 3 }
-          Filter (#25 = "F") AND (#33 = "SAUDI ARABIA") AND (#0) IS NOT NULL AND (#3) IS NOT NULL AND (#7) IS NOT NULL AND (#19 > #18) // { arity: 36 }
-            Join on=(#0 = #9 AND #3 = #32 AND #7 = #23) type=delta // { arity: 36 }
+          Filter (o_orderstatus = "F") AND (n_name = "SAUDI ARABIA") AND (s_suppkey) IS NOT NULL AND (s_nationkey) IS NOT NULL AND (l_orderkey) IS NOT NULL AND (l_receiptdate > l_commitdate) // { arity: 36 }
+            Join on=(s_suppkey = l_suppkey AND s_nationkey = n_nationkey AND l_orderkey = o_orderkey) type=delta // { arity: 36 }
               implementation
                 %0:supplier » %3:nation[#0]KAef » %1:lineitem[#2]KAf » %2:orders[#0]KAef
                 %1:lineitem » %2:orders[#0]KAef » %0:supplier[#0]KA » %3:nation[#0]KAef
                 %2:orders » %1:lineitem[#0]KAf » %0:supplier[#0]KA » %3:nation[#0]KAef
                 %3:nation » %0:supplier[#3]KA » %1:lineitem[#2]KAf » %2:orders[#0]KAef
-              ArrangeBy keys=[[#0], [#3]] // { arity: 7 }
+              ArrangeBy keys=[[s_suppkey], [s_nationkey]] // { arity: 7 }
                 ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
-              ArrangeBy keys=[[#0], [#2]] // { arity: 16 }
+              ArrangeBy keys=[[l_orderkey], [l_suppkey]] // { arity: 16 }
                 ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
-              ArrangeBy keys=[[#0]] // { arity: 9 }
+              ArrangeBy keys=[[o_orderkey]] // { arity: 9 }
                 ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
-              ArrangeBy keys=[[#0]] // { arity: 4 }
+              ArrangeBy keys=[[n_nationkey]] // { arity: 4 }
                 ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
 
 Used Indexes:
@@ -1683,7 +1704,8 @@ EOF
 
 query T multiline
 -- Query 22
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(humanized_exprs, arity, join_impls)
+SELECT
     cntrycode,
     count(*) AS numcust,
     sum(c_acctbal) AS totacctbal
@@ -1729,41 +1751,41 @@ FROM
 GROUP BY
     cntrycode
 ORDER BY
-    cntrycode
+    cntrycode;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
     Return // { arity: 3 }
-      Reduce group_by=[substr(char_to_text(#0), 1, 2)] aggregates=[count(*), sum(#1)] // { arity: 3 }
+      Reduce group_by=[substr(char_to_text(c_phone), 1, 2)] aggregates=[count(*), sum(c_acctbal)] // { arity: 3 }
         Project (#1, #2) // { arity: 2 }
-          Join on=(#0 = #3) type=differential // { arity: 4 }
+          Join on=(c_custkey = c_custkey) type=differential // { arity: 4 }
             implementation
               %0:l1[#0]K » %1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 3 }
+            ArrangeBy keys=[[c_custkey]] // { arity: 3 }
               Get l1 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
+            ArrangeBy keys=[[c_custkey]] // { arity: 1 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
                   Project (#0) // { arity: 1 }
-                    Filter (#0) IS NOT NULL // { arity: 2 }
-                      Join on=(#0 = #1) type=differential // { arity: 2 }
+                    Filter (c_custkey) IS NOT NULL // { arity: 2 }
+                      Join on=(c_custkey = o_custkey) type=differential // { arity: 2 }
                         implementation
                           %0:l2[#0]UKA » %1[#0]UKA
-                        ArrangeBy keys=[[#0]] // { arity: 1 }
+                        ArrangeBy keys=[[c_custkey]] // { arity: 1 }
                           Get l2 // { arity: 1 }
-                        ArrangeBy keys=[[#0]] // { arity: 1 }
-                          Distinct group_by=[#0] // { arity: 1 }
+                        ArrangeBy keys=[[o_custkey]] // { arity: 1 }
+                          Distinct group_by=[o_custkey] // { arity: 1 }
                             Project (#1) // { arity: 1 }
                               ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
                 Get l2 // { arity: 1 }
     With
       cte l2 =
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct group_by=[c_custkey] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l1 // { arity: 3 }
       cte l1 =
         Project (#0..=#2) // { arity: 3 }
-          Filter (#2 > (#3 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
+          Filter (c_acctbal > (#3 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
             CrossJoin type=differential // { arity: 5 }
               implementation
                 %1[×]UA » %0:l0[×]ef
@@ -1772,12 +1794,12 @@ Explained Query:
                   Filter ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
                     Get l0 // { arity: 9 }
               ArrangeBy keys=[[]] // { arity: 2 }
-                Reduce aggregates=[sum(#0), count(*)] // { arity: 2 }
+                Reduce aggregates=[sum(c_acctbal), count(*)] // { arity: 2 }
                   Project (#5) // { arity: 1 }
-                    Filter (#5 > 0) AND ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
+                    Filter (c_acctbal > 0) AND ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
                       Get l0 // { arity: 9 }
       cte l0 =
-        Map (substr(char_to_text(#4), 1, 2)) // { arity: 9 }
+        Map (substr(char_to_text(c_phone), 1, 2)) // { arity: 9 }
           ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
@@ -1828,7 +1850,7 @@ WHERE
     AND s_nationkey = n_nationkey
     AND n_name = 'CANADA'
 ORDER BY
-    s_name
+    s_name;
 ----
 Finish order_by=[#0 asc nulls_last] output=[#0, #1]
   Project (#1, #2)
