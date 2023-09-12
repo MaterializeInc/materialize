@@ -260,7 +260,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--max-retries",
         metavar="N",
         type=int,
-        default=5,
+        default=10,
         help="Retry any potential performance regressions up to N times.",
     )
 
