@@ -121,11 +121,11 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
-mod consistency;
 mod error;
 mod migrate;
 
 pub mod builtin;
+pub(crate) mod consistency;
 mod inner;
 pub mod storage;
 
