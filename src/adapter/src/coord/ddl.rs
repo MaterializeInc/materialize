@@ -756,17 +756,25 @@ impl Coordinator {
         let storage_policies = self
             .storage_read_capabilities
             .iter()
-            .map(|(id, _)| (id, self.catalog().get_entry(id).item()))
-            .filter_map(|(id, item)| update_item(item).then(|| (*id, policy.clone())))
+            .filter_map(|(id, _)| {
+                self.catalog()
+                    .try_get_entry(id)
+                    .map(|entry| (*id, entry.item()))
+            })
+            .filter_map(|(id, item)| update_item(item).then(|| (id, policy.clone())))
             .collect::<Vec<_>>();
 
         let compute_policies = self
             .compute_read_capabilities
             .iter()
-            .map(|(id, _)| (id, self.catalog().get_entry(id).item()))
+            .filter_map(|(id, _)| {
+                self.catalog()
+                    .try_get_entry(id)
+                    .map(|entry| (*id, entry.item()))
+            })
             .filter_map(|(id, item)| {
                 item.cluster_id().and_then(|cluster_id| {
-                    update_item(item).then(|| (cluster_id, *id, policy.clone()))
+                    update_item(item).then(|| (cluster_id, id, policy.clone()))
                 })
             })
             .collect::<Vec<_>>();
