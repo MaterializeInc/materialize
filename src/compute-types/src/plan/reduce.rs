@@ -145,7 +145,7 @@ impl TryFrom<&ReducePlan> for ReductionType {
 /// shape / general computation of the rendered dataflow graph
 /// in this plan, and then make actually rendering the graph
 /// be as simple (and compiler verifiable) as possible.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
@@ -244,7 +244,7 @@ impl RustType<ProtoReducePlan> for ReducePlan {
 /// apply only to the distinct set of values. We need
 /// to apply a distinct operator to those before we
 /// combine them with everything else.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct AccumulablePlan {
     /// All of the aggregations we were asked to compute, stored
     /// in order.
@@ -301,7 +301,7 @@ impl RustType<ProtoAccumulablePlan> for AccumulablePlan {
 /// with monotonic plans, but otherwise, we need to render
 /// them with a reduction tree that splits the inputs into
 /// small, and then progressively larger, buckets
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum HierarchicalPlan {
     /// Plan hierarchical aggregations under monotonic inputs.
     Monotonic(MonotonicPlan),
@@ -358,7 +358,7 @@ impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
 /// append only, so we can change our computation to
 /// only retain the "best" value in the diff field, instead
 /// of holding onto all values.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
@@ -403,7 +403,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
 /// fraction of the original input) and redo the reduction in another
 /// layer. Effectively, we'll construct a min / max heap out of a series
 /// of reduce operators (each one is a separate layer).
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
@@ -459,7 +459,7 @@ impl RustType<ProtoBucketedPlan> for BucketedPlan {
 /// were only asked to compute a single aggregation, we can skip
 /// that step and return the arrangement provided by computing the aggregation
 /// directly.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum BasicPlan {
     /// Plan for rendering a single basic aggregation. Here, the
     /// first element denotes the index in the set of inputs
@@ -530,7 +530,7 @@ impl RustType<ProtoBasicPlan> for BasicPlan {
 /// types.
 ///
 /// TODO: could we express this as a delta join
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct CollationPlan {
     /// Accumulable aggregation results to collate, if any.
     pub accumulable: Option<AccumulablePlan>,
@@ -760,7 +760,7 @@ impl ReducePlan {
 }
 
 /// Plan for extracting keys and values in preparation for a reduction.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
     pub key_plan: mz_expr::SafeMfpPlan,
