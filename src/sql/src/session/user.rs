@@ -9,16 +9,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_repr::role_id::RoleId;
 use once_cell::sync::Lazy;
 use uuid::Uuid;
 
+pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_system".into(),
+    name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
 });
 
+pub const SUPPORT_USER_NAME: &str = "mz_support";
 pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_support".into(),
+    name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
 });
 
@@ -98,4 +101,24 @@ impl User {
     pub fn limit_max_connections(&self) -> bool {
         !self.is_internal() && !self.is_external_admin()
     }
+}
+
+pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
+pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
+
+/// Metadata about a Session's role.
+///
+/// Modeled after PostgreSQL role hierarchy:
+/// <https://github.com/postgres/postgres/blob/9089287aa037fdecb5a52cec1926e5ae9569e9f9/src/backend/utils/init/miscinit.c#L461-L493>
+#[derive(Debug, Clone)]
+pub struct RoleMetadata {
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    pub authenticated_role: RoleId,
+    /// Initially the same as `authenticated_role`, but can be changed by SET SESSION AUTHORIZATION
+    /// (not yet implemented). Used to determine what roles can be used for SET ROLE
+    /// (not yet implemented).
+    pub session_role: RoleId,
+    /// The role of the current execution context. This role is used for all normal privilege
+    /// checks.
+    pub current_role: RoleId,
 }

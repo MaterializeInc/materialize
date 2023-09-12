@@ -20,11 +20,9 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_client::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
-};
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
@@ -49,7 +47,6 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
-use mz_sql::plan;
 use mz_sql::plan::{
     AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
     Params, Plan, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom,
@@ -59,6 +56,7 @@ use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
+use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOptionName, CreateSourceConnection, CreateSourceSubsource,
@@ -67,10 +65,11 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ReadPolicy, StorageError,
+    CollectionDescription, DataSource, DataSourceOther, ReadPolicy,
 };
-use mz_storage_client::types::connections::inline::IntoInlineConnection;
-use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::StorageSinkConnectionBuilder;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
@@ -107,7 +106,6 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -287,8 +285,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedSource)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(id, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: if_not_exists_ids[&id].item.clone(),
@@ -313,7 +310,7 @@ impl Coordinator {
         };
 
         match plan.connection.connection {
-            mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
+            mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
                 let key_set = match SshKeyPairSet::new() {
                     Ok(key) => key,
                     Err(err) => return ctx.retire(Err(err.into())),
@@ -338,6 +335,7 @@ impl Coordinator {
             let conn_id = ctx.session().conn_id().clone();
             let connection_context = self.connection_context.clone();
             let otel_ctx = OpenTelemetryContext::obtain();
+            let role_metadata = ctx.session().role_metadata().clone();
 
             let connection = plan
                 .connection
@@ -365,6 +363,7 @@ impl Coordinator {
                             dependency_ids: resolved_ids.0,
                             cluster_id: None,
                             replica_id: None,
+                            role_metadata,
                         },
                         otel_ctx,
                     },
@@ -411,9 +410,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => {
                 match plan.connection.connection {
-                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                        ref privatelink,
-                    ) => {
+                    mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
@@ -429,8 +426,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedConnection)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
             Err(err) => Err(err),
         }
@@ -477,8 +473,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
                 Ok(ExecuteResponse::CreatedDatabase)
@@ -503,8 +498,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::SchemaAlreadyExists {
                     name: plan.schema_name,
@@ -608,8 +602,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -654,8 +647,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -760,8 +752,7 @@ impl Coordinator {
         match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -871,8 +862,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: plan.name.item,
@@ -1084,8 +1074,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1173,8 +1162,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedIndex)
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
-                ..
+                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1440,7 +1428,7 @@ impl Coordinator {
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
         let session_catalog = self.catalog().for_session(session);
-        if is_rbac_enabled_for_session(session_catalog.system_vars(), session)
+        if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session.vars())
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.
@@ -1933,7 +1921,11 @@ impl Coordinator {
                     for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
                         let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                            AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                            AdapterError::Catalog(catalog::Error {
+                                kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                    id.to_string(),
+                                )),
+                            })
                         })?;
                     }
 
@@ -2096,6 +2088,7 @@ impl Coordinator {
             dependency_ids: source_ids.clone(),
             cluster_id: Some(cluster.id()),
             replica_id: target_replica,
+            role_metadata: session.role_metadata().clone(),
         };
 
         Ok(PeekStageOptimize {
@@ -3191,8 +3184,8 @@ impl Coordinator {
             dataflow
                 .index_imports
                 .iter()
-                .map(|(id, index_import)| {
-                    (*id, index_import.usage_types.clone().expect("prune_and_annotate_dataflow_index_imports should have been called already"))
+                .map(|(id, _index_import)| {
+                    (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
                 })
                 .collect(),
         );
@@ -3256,6 +3249,7 @@ impl Coordinator {
                     dependency_ids: source_ids,
                     cluster_id: Some(cluster_id),
                     replica_id: None,
+                    role_metadata: ctx.session().role_metadata().clone(),
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
@@ -3465,9 +3459,11 @@ impl Coordinator {
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                            plan.id.to_string(),
-                        ))));
+                        ctx.retire(Err(AdapterError::Catalog(catalog::Error {
+                            kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                plan.id.to_string(),
+                            )),
+                        })));
                         return;
                     }
                 };
@@ -3534,9 +3530,9 @@ impl Coordinator {
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                ctx.retire(Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                ))));
+                ctx.retire(Err(AdapterError::Catalog(catalog::Error {
+                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
+                })));
                 return;
             }
         };

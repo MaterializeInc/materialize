@@ -81,11 +81,10 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
-};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::ComputeInstanceId;
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -106,22 +105,24 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
-use mz_sql::session::user::User;
+use mz_sql::rbac::UnauthorizedError;
+use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther,
 };
-use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::StorageSinkConnection;
+use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, info_span, span, warn, Instrument, Level, Span};
+use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -141,7 +142,7 @@ use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, RoleMetadata, Session};
+use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
@@ -423,6 +424,7 @@ pub struct PlanValidity {
     dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
+    role_metadata: RoleMetadata,
 }
 
 impl PlanValidity {
@@ -452,6 +454,33 @@ impl PlanValidity {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan);
             }
+        }
+        if catalog
+            .try_get_role(&self.role_metadata.current_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.current_role.clone()),
+            ));
+        }
+        if catalog
+            .try_get_role(&self.role_metadata.session_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.session_role.clone()),
+            ));
+        }
+
+        if catalog
+            .try_get_role(&self.role_metadata.authenticated_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(
+                    self.role_metadata.authenticated_role.clone(),
+                ),
+            ));
         }
         self.transient_revision = catalog.transient_revision();
         Ok(())
@@ -516,7 +545,6 @@ pub struct ConnMeta {
     connected_at: EpochMillis,
     user: User,
     application_name: String,
-    role_metadata: RoleMetadata,
     uuid: Uuid,
     conn_id: ConnectionId,
 
@@ -527,8 +555,10 @@ pub struct ConnMeta {
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 
-    /// The authenticated role of the session, set once at session connection.
-    pub(crate) authenticated_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    /// WARNING: This role reference is not updated when the role is dropped.
+    /// Consumers should not assume that this role exist.
+    authenticated_role: RoleId,
 }
 
 impl ConnMeta {
@@ -544,12 +574,8 @@ impl ConnMeta {
         &self.application_name
     }
 
-    pub fn current_role_id(&self) -> &RoleId {
-        &self.role_metadata.current_role
-    }
-
-    pub fn session_role_id(&self) -> &RoleId {
-        &self.role_metadata.session_role
+    pub fn authenticated_role_id(&self) -> &RoleId {
+        &self.authenticated_role
     }
 
     pub fn uuid(&self) -> Uuid {
@@ -1009,7 +1035,7 @@ impl Coordinator {
         // u64 anyway.
         let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
 
-        info!("coordinator init: creating compute replicas");
+        debug!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
@@ -1031,7 +1057,7 @@ impl Coordinator {
         }
         self.controller.create_replicas(replicas_to_start).await?;
 
-        info!("coordinator init: migrating builtin objects");
+        debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
@@ -1266,10 +1292,10 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
-        info!("coordinator init: installing existing objects in catalog");
+        debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
         for entry in &entries {
-            info!(
+            debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
                 entry.id()
@@ -1483,7 +1509,7 @@ impl Coordinator {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
+                    if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(
@@ -1532,12 +1558,12 @@ impl Coordinator {
             self.initialize_read_policies(&policies, Some(ts)).await;
         }
 
-        info!("coordinator init: announcing completion of initialization to controller");
+        debug!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
-        info!("coordinator init: announcing primary and foreign key relationships");
+        debug!("coordinator init: announcing primary and foreign key relationships");
         let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog().resolve_builtin_log(log).to_string();
@@ -1595,7 +1621,7 @@ impl Coordinator {
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
 
         // Advance all tables to the current timestamp
-        info!("coordinator init: advancing all tables to current timestamp");
+        debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: _,
             advance_to,
@@ -1614,13 +1640,13 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to append");
 
         // Add builtin table updates the clear the contents of all system tables
-        info!("coordinator init: resetting system tables");
+        debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts();
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
-            info!(
+            debug!(
                 "coordinator init: resetting system table {} ({})",
                 self.catalog().resolve_full_name(system_table.name(), None),
                 system_table.id()
@@ -1631,7 +1657,7 @@ impl Coordinator {
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap_or_terminate("cannot fail to fetch snapshot");
-            info!("coordinator init: table size {}", current_contents.len());
+            debug!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
@@ -1642,7 +1668,7 @@ impl Coordinator {
             builtin_table_updates.extend(retractions);
         }
 
-        info!("coordinator init: sending builtin table updates");
+        debug!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates).await;
 
         // Signal to the storage controller that it is now free to reconcile its

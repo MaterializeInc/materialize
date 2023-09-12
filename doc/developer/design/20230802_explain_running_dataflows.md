@@ -290,8 +290,8 @@ This will change with MaterializeInc/materialize#16598 and will most certainly c
 
 MIR ⇒ LIR lowering happens in the following stack (in reverse order):
 
-- `mz_compute_client::plan::Plan::lower_dataflow`
-  - `mz_compute_client::plan::Plan::finalize_dataflow`
+- `mz_compute_types::plan::Plan::lower_dataflow`
+  - `mz_compute_types::plan::Plan::finalize_dataflow`
     - `Coordinator::finalize_dataflow`
       - `Coordinator::create_peek_plan`
         - `Coordinator::plan_peek`

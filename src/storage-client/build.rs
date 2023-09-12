@@ -111,20 +111,7 @@ fn main() {
         .extern_path(".mz_cluster_client", "::mz_cluster_client")
         .extern_path(".mz_tracing", "::mz_tracing")
         .extern_path(".mz_service", "::mz_service")
-        .compile_with_config(
-            config,
-            &[
-                "storage-client/src/controller.proto",
-                "storage-client/src/client.proto",
-                "storage-client/src/types/errors.proto",
-                "storage-client/src/types/connections/aws.proto",
-                "storage-client/src/types/instances.proto",
-                "storage-client/src/types/parameters.proto",
-                "storage-client/src/types/sinks.proto",
-                "storage-client/src/types/sources.proto",
-                "storage-client/src/types/sources/encoding.proto",
-            ],
-            &[".."],
-        )
+        .extern_path(".mz_storage_types", "::mz_storage_types")
+        .compile_with_config(config, &["storage-client/src/client.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

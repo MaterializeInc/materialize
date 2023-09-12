@@ -99,8 +99,9 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
+use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
-    ActiveComputeController, ComputeController, ComputeControllerResponse, ReplicaId,
+    ActiveComputeController, ComputeController, ComputeControllerResponse,
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};

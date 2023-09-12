@@ -30,6 +30,7 @@ class DropDefaultReplica(Action):
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            ALTER CLUSTER default SET (MANAGED = false)
             DROP CLUSTER REPLICA default.r1
             """
             )

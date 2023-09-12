@@ -27,6 +27,7 @@ mz-prof = { path = "../prof" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-storage-client = { path = "../storage-client" }
+mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }

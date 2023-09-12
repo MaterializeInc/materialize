@@ -11,13 +11,13 @@ use std::iter;
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row, ScalarType};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::{Generator, MzOffset};
 use timely::dataflow::operators::to_stream::Event;
 
 pub struct Datums {}
 
 // Note that this generator never issues retractions; if you change this,
-// `mz_storage_client::types::sources::LoadGenerator::is_monotonic`
+// `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
 impl Generator for Datums {
     fn by_seed(

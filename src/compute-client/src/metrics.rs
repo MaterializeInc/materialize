@@ -13,6 +13,8 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use mz_cluster_client::ReplicaId;
+use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
@@ -24,7 +26,6 @@ use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
 use prometheus::core::{AtomicF64, AtomicU64};
 
-use crate::controller::{ComputeInstanceId, ReplicaId};
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 

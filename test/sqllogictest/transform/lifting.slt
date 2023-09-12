@@ -29,8 +29,8 @@ union all
 Explained Query:
   Map (2) // { arity: 3 }
     Union // { arity: 2 }
-      Get materialize.public.t // { arity: 2 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
       Constant // { arity: 2 }
         - (null, 1)
 
@@ -47,8 +47,8 @@ union all
 Explained Query:
   Map (2, 3) // { arity: 4 }
     Union // { arity: 2 }
-      Get materialize.public.t // { arity: 2 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
       Constant // { arity: 2 }
         - (null, 1)
 
@@ -65,9 +65,9 @@ union all
 Explained Query:
   Union // { arity: 3 }
     Map (2) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
     Map (3) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
     Constant // { arity: 3 }
       - (null, 1, 2)
 
@@ -84,7 +84,7 @@ Explained Query:
       Distinct group_by=[#0] // { arity: 1 }
         Project (#1) // { arity: 1 }
           Filter (#0 = 1) // { arity: 2 }
-            Get materialize.public.t // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#0 = 1))
@@ -100,7 +100,7 @@ Explained Query:
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Filter (#1 = 1) // { arity: 2 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#1 = 1))
@@ -122,9 +122,9 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#2) // { arity: 1 }
             Map ((#0 + 1)) // { arity: 3 }
-              Get materialize.public.t // { arity: 2 }
+              ReadStorage materialize.public.t // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 2 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -141,9 +141,9 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 2 }
           Project (#2, #3) // { arity: 2 }
             Map ((#1 + 1), (#0 + 1)) // { arity: 4 }
-              Get materialize.public.t // { arity: 2 }
+              ReadStorage materialize.public.t // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 2 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -160,9 +160,9 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 3 }
           Project (#2..=#4) // { arity: 3 }
             Map ((#1 + 1), (#0 + 2), (#0 + 1)) // { arity: 5 }
-              Get materialize.public.t // { arity: 2 }
+              ReadStorage materialize.public.t // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 2 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -173,7 +173,7 @@ select a+1 from (select 1 as a, b from t);
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (2) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -184,7 +184,7 @@ select z+1 from (select 2 as y, a, 1 as z, b from t);
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (2) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -204,7 +204,7 @@ Explained Query:
             - (() x 7)
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0) // { arity: 1 }
-            Get materialize.public.t // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -235,7 +235,7 @@ Explained Query:
             - (4)
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
-            Get materialize.public.t // { types: "(integer?, integer?)" }
+            ReadStorage materialize.public.t // { types: "(integer?, integer?)" }
 
 EOF
 
@@ -260,7 +260,7 @@ Explained Query:
             - (4, 5)
         ArrangeBy keys=[[]] // { types: "()" }
           Project () // { types: "()" }
-            Get materialize.public.t // { types: "(integer?, integer?)" }
+            ReadStorage materialize.public.t // { types: "(integer?, integer?)" }
 
 EOF
 
@@ -273,7 +273,7 @@ Explained Query:
     Map (1) // { arity: 2 }
       FlatMap generate_series(2, 4, 1) // { arity: 1 }
         Project () // { arity: 0 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -288,7 +288,7 @@ explain with(arity, join_impls) select 123 from (select 234 from t);
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (123) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -299,7 +299,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -310,7 +310,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -321,7 +321,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -334,7 +334,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -345,7 +345,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -357,7 +357,7 @@ explain with(arity, join_impls) select 123 from (select a from t);
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (123) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -369,7 +369,7 @@ Explained Query:
     Map (123) // { arity: 2 }
       Distinct group_by=[#0] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -380,7 +380,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -391,7 +391,7 @@ Explained Query:
   Map (123) // { arity: 1 }
     Distinct // { arity: 0 }
       Project () // { arity: 0 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -404,7 +404,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -415,7 +415,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -426,7 +426,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -437,7 +437,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -450,7 +450,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -461,7 +461,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -472,7 +472,7 @@ explain with(arity, join_impls) select distinct a1.a+2 from (select distinct a+1
 Explained Query:
   Distinct group_by=[((#0 + 1) + 2)] // { arity: 1 }
     Project (#0) // { arity: 1 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -483,7 +483,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[(#0 + 1)] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -494,7 +494,7 @@ Explained Query:
   Map (123) // { arity: 2 }
     Distinct group_by=[((#0 + 1) + 2)] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -506,7 +506,7 @@ Explained Query:
   Map (124) // { arity: 2 }
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -523,7 +523,7 @@ explain with(arity, join_impls) select a1.*, 123 from t_pk as a1, t_pk as a2 WHE
 ----
 Explained Query:
   Map (123) // { arity: 3 }
-    Get materialize.public.t_pk // { arity: 2 }
+    ReadStorage materialize.public.t_pk // { arity: 2 }
 
 EOF
 
@@ -532,7 +532,7 @@ explain with(arity, join_impls) select distinct a1.*, 123 from t_pk as a1, t_pk 
 ----
 Explained Query:
   Map (123) // { arity: 3 }
-    Get materialize.public.t_pk // { arity: 2 }
+    ReadStorage materialize.public.t_pk // { arity: 2 }
 
 EOF
 
@@ -547,7 +547,7 @@ Explained Query:
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 = 1) // { arity: 2 }
-            Get materialize.public.t // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#1 = 1))
@@ -564,7 +564,7 @@ Explained Query:
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 = 1) // { arity: 2 }
-            Get materialize.public.t // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#1 = 1))
@@ -580,7 +580,7 @@ Explained Query:
     Distinct group_by=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         Filter (#1 = 1) // { arity: 2 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#1 = 1))
@@ -606,7 +606,7 @@ Explained Query:
     cte l0 =
       Distinct // { arity: 0 }
         Project () // { arity: 0 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -628,7 +628,7 @@ Explained Query:
     cte l0 =
       Distinct // { arity: 0 }
         Project () // { arity: 0 }
-          Get materialize.public.t // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -656,7 +656,7 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
-                  Get materialize.public.t_pk // { arity: 2 }
+                  ReadStorage materialize.public.t_pk // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Union // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -669,7 +669,7 @@ Explained Query:
                           Get l0 // { arity: 2 }
     cte l0 =
       Filter (#0 = 1308) // { arity: 2 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#0 = 1308))
@@ -702,7 +702,7 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
-                  Get materialize.public.t // { arity: 2 }
+                  ReadStorage materialize.public.t // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Union // { arity: 1 }
                 Project (#0) // { arity: 1 }
@@ -715,7 +715,7 @@ Explained Query:
                           Get l0 // { arity: 2 }
     cte l0 =
       Filter (#0 = 1308) // { arity: 2 }
-        Get materialize.public.t // { arity: 2 }
+        ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -765,16 +765,16 @@ Explained Query:
       %1:t1 » %2[×]UA » %0:t1[×]A
       %2 » %1:t1[×]Aef » %0:t1[×]A
     ArrangeBy keys=[[]] // { arity: 2 }
-      Get materialize.public.t1 // { arity: 2 }
+      ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#1 = 9) // { arity: 2 }
-        Get materialize.public.t1 // { arity: 2 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 0 }
       Project () // { arity: 0 }
         Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
           Reduce aggregates=[count(*)] // { arity: 1 }
             Project () // { arity: 0 }
-              Get materialize.public.t1 // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 

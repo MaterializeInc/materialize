@@ -101,8 +101,8 @@ use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage::source::types::SourceRender;
 use mz_storage::DecodeMetrics;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
+use mz_storage_types::sources::encoding::SourceDataEncoding;
+use mz_storage_types::sources::{
     GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceTimestamp,
     TestScriptSourceConnection,
 };
@@ -223,10 +223,9 @@ where
 
             let persist_clients = Arc::new(persist_cache);
 
-            let connection_context =
-                mz_storage_client::types::connections::ConnectionContext::for_tests(Arc::new(
-                    mz_secrets::InMemorySecretsController::new(),
-                ));
+            let connection_context = mz_storage_types::connections::ConnectionContext::for_tests(
+                Arc::new(mz_secrets::InMemorySecretsController::new()),
+            );
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
 
@@ -251,7 +250,7 @@ where
                 )
             };
 
-            let collection_metadata = mz_storage_client::controller::CollectionMetadata {
+            let collection_metadata = mz_storage_types::controller::CollectionMetadata {
                 persist_location,
                 remap_shard: Some(mz_persist_client::ShardId::new()),
                 data_shard: mz_persist_client::ShardId::new(),
@@ -264,7 +263,7 @@ where
             let id = GlobalId::User(1);
             let source_exports = BTreeMap::from([(
                 id,
-                mz_storage_client::types::sources::SourceExport {
+                mz_storage_types::sources::SourceExport {
                     storage_metadata: collection_metadata.clone(),
                     output_index: 0,
                 },
@@ -298,22 +297,18 @@ where
                     &mut async_storage_worker.borrow_mut(),
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,
-                        ingestion_description:
-                            mz_storage_client::types::sources::IngestionDescription {
-                                desc: desc.clone(),
-                                ingestion_metadata: collection_metadata,
-                                source_exports,
-                                // Only used for Debezium
-                                source_imports: BTreeMap::new(),
-                                instance_id:
-                                    mz_storage_client::types::instances::StorageInstanceId::User(
-                                        100,
-                                    ),
-                                // This id is only used to fill in the
-                                // collection metadata, which we're filling in
-                                // elsewhere, so this value is unused.
-                                remap_collection_id: GlobalId::User(99),
-                            },
+                        ingestion_description: mz_storage_types::sources::IngestionDescription {
+                            desc: desc.clone(),
+                            ingestion_metadata: collection_metadata,
+                            source_exports,
+                            // Only used for Debezium
+                            source_imports: BTreeMap::new(),
+                            instance_id: mz_storage_types::instances::StorageInstanceId::User(100),
+                            // This id is only used to fill in the
+                            // collection metadata, which we're filling in
+                            // elsewhere, so this value is unused.
+                            remap_collection_id: GlobalId::User(99),
+                        },
                         // TODO: test resumption as well!
                         as_of: Antichain::from_elem(Timestamp::minimum()),
                         resume_uppers,

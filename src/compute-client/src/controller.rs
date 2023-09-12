@@ -38,6 +38,9 @@ use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::ReplicaId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -45,7 +48,6 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_stash::objects::proto;
 use mz_storage_client::controller::{ReadPolicy, StorageController};
-use mz_storage_client::types::instances::StorageInstanceId;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -64,18 +66,11 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
-use crate::types::dataflows::DataflowDescription;
 
 mod instance;
 mod replica;
 
 pub mod error;
-
-/// Identifier of a compute instance.
-pub type ComputeInstanceId = StorageInstanceId;
-
-/// Identifier of a replica.
-pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -104,10 +99,6 @@ pub struct ComputeReplicaConfig {
     /// See [`differential_dataflow::Config::idle_merge_effort`].
     pub idle_arrangement_merge_effort: Option<u32>,
 }
-
-/// The default logging interval for [`ComputeReplicaLogging`], in number
-/// of microseconds.
-pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
 
 /// Logging configuration of a replica.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -469,7 +460,7 @@ where
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
+        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
         self.instance(instance_id)?.create_dataflow(dataflow)?;
         Ok(())

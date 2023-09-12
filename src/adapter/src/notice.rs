@@ -112,7 +112,7 @@ pub enum AdapterNotice {
     UnknownSessionDatabase(String),
     OptimizerNotice {
         notice: String,
-        hint: Option<String>,
+        hint: String,
     },
     WebhookSourceCreated {
         url: url::Url,
@@ -153,7 +153,7 @@ impl AdapterNotice {
                  List available databases with SHOW DATABASES."
                     .into(),
             ),
-            AdapterNotice::OptimizerNotice { notice: _, hint } => hint.clone(),
+            AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
             _ => None
         }
     }

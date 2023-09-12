@@ -11,7 +11,6 @@
 
 use std::sync::Arc;
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use timely::worker::Worker as TimelyWorker;
@@ -41,37 +40,4 @@ pub trait AsRunnableWorker<C, R> {
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
     );
-}
-
-/// A trait for specific cluster commands that can be unpacked into
-/// `CreateTimely` variants.
-pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
-    /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
-    where
-        Self: Sized;
-}
-
-impl TryIntoTimelyConfig for mz_compute_client::protocol::command::ComputeCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            mz_compute_client::protocol::command::ComputeCommand::CreateTimely {
-                config,
-                epoch,
-            } => Ok((config, epoch)),
-            cmd => Err(cmd),
-        }
-    }
-}
-
-impl TryIntoTimelyConfig for mz_storage_client::client::StorageCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            mz_storage_client::client::StorageCommand::CreateTimely { config, epoch } => {
-                Ok((config, epoch))
-            }
-            cmd => Err(cmd),
-        }
-    }
 }

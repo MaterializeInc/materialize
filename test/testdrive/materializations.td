@@ -165,7 +165,7 @@ contains:test5 is a view, which cannot be exported as a sink
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
 > EXPLAIN SELECT * FROM test5;
-"Explained Query (fast path):  ReadExistingIndex materialize.public.test5_primary_idxUsed Indexes:  - materialize.public.test5_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  ReadIndex on=materialize.public.test5 test5_primary_idx=[*** full scan ***]Used Indexes:  - materialize.public.test5_primary_idx (*** full scan ***)"
 
 > SELECT * FROM test5
 b  c
@@ -187,7 +187,7 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 > DROP INDEX test5_primary_idx
 
 > EXPLAIN SELECT * FROM test5
-"Explained Query (fast path):  Project (#1, #0)    ReadExistingIndex materialize.public.idx1Used Indexes:  - materialize.public.idx1 (*** full scan ***)"
+"Explained Query (fast path):  Project (#1, #0)    ReadIndex on=materialize.public.test5 idx1=[*** full scan ***]Used Indexes:  - materialize.public.idx1 (*** full scan ***)"
 
 > SELECT * from test5
 b  c
@@ -335,12 +335,12 @@ a  b
 1  2
 
 > SHOW SOURCES
-name     type    size
----------------------
-data              kafka     ${arg.default-storage-size}
-data_progress     progress  <null>
-mat_data          kafka     ${arg.default-storage-size}
-mat_data_progress progress  <null>
+name     type    size    cluster
+--------------------------------
+data              kafka     ${arg.default-storage-size}   materialize_public_data
+data_progress     progress  <null>                        <null>
+mat_data          kafka     ${arg.default-storage-size}   materialize_public_mat_data
+mat_data_progress progress  <null>                        <null>
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

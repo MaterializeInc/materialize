@@ -117,10 +117,13 @@ In general these URLs have the following format:
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 ```
 
-Where `<HOST>` is the URL for your Materialize instance, which can be found on the [Materialize Web
-Console](https://console.materialize.com/). Then `<database>` and `<schema>` are the database and
-schema where you created your source, and `<src_name>` is the name you provided for your source at
-the time of creation.
+A breakdown of each component is as follows:
+
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize Web
+Console](https://console.materialize.com/).
+- `<database>`: The name of the database where the source is created (default is `materialize`).
+- `<schema>`: The schema name where the source gets created (default is `public`).
+- `<src_name>`: The name you provided for your source at the time of creation. For this guide, use `my_webhook_source`.
 
 {{< note >}}
 
@@ -145,7 +148,7 @@ CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
   CHECK (
     WITH (
       HEADERS, BODY AS request_body,
-      SECRET my_webhook_shared_secret,
+      SECRET my_webhook_shared_secret
     )
     decode(headers->'x-signature', 'base64') = hmac(request_body, my_webhook_shared_secret, 'sha256')
   );
@@ -266,7 +269,7 @@ To store the sensitive credentials and make them reusable across multiple `CREAT
 
 
 ```sql
-  CREATE SECRET BASIC_HOOK_AUTH AS 'Basic <base64_auth>';
+CREATE SECRET BASIC_HOOK_AUTH AS 'Basic <base64_auth>';
 ```
 
 ### Creating a Source
@@ -274,14 +277,14 @@ To store the sensitive credentials and make them reusable across multiple `CREAT
 After a successful secret creation, you can use the same secret to create different webhooks with the same basic authentication to check if a request is valid.
 
 ```sql
-  CREATE SOURCE webhook_with_basic_auth IN CLUSTER my_cluster
-  FROM WEBHOOK
+CREATE SOURCE webhook_with_basic_auth IN CLUSTER my_cluster
+FROM WEBHOOK
     BODY FORMAT JSON
     CHECK (
       WITH (
         HEADERS,
         BODY AS request_body,
-        SECRET BASIC_HOOK_AUTH,
+        SECRET BASIC_HOOK_AUTH
       )
       headers->'authorization' = BASIC_HOOK_AUTH
     );

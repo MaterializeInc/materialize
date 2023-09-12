@@ -722,6 +722,8 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0)]]"
 "ArrangeBy[[Column(0)]]"
 "ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
 "ArrangeBy[[Column(0)]]-errors"
 "ArrangeBy[[Column(0)]]-errors"
 "ArrangeBy[[Column(0)]]-errors"
@@ -756,10 +758,6 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(2)]]"
 "ArrangeBy[[Column(2)]]"
 "ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
 "ArrangeBy[[Column(2)]]-errors"
 "ArrangeBy[[Column(2)]]-errors"
 "ArrangeBy[[Column(2)]]-errors"
@@ -770,8 +768,16 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(2)]]-errors"
 "ArrangeBy[[Column(2)]]-errors"
 "ArrangeBy[[Column(3)]]"
+"ArrangeBy[[Column(4)]]"
+"ArrangeBy[[Column(4)]]"
+"ArrangeBy[[Column(4)]]"
+"ArrangeBy[[Column(4)]]"
+"ArrangeBy[[Column(4)]]"
+"ArrangeBy[[Column(4)]]-errors"
+"ArrangeBy[[Column(4)]]-errors"
 "ArrangeBy[[Column(5)]]"
 "ArrangeBy[[Column(5)]]-errors"
+"Arranged DistinctBy"
 "Arranged DistinctBy"
 "Arranged ReduceInaccumulable"
 "Arranged TopK input"
@@ -791,6 +797,8 @@ ReduceMinsMaxes
 "Arranged TopK input"
 "Arranged TopK input"
 "DistinctBy"
+"DistinctBy"
+"DistinctByErrorCheck"
 "DistinctByErrorCheck"
 "JoinStage"
 "JoinStage"
@@ -819,6 +827,7 @@ ReduceMinsMaxes
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'debug'
+ALTER CLUSTER default SET (MANAGED = false);
 CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;

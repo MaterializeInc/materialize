@@ -108,14 +108,14 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::izip;
-use mz_compute_client::plan::Plan;
-use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::source::persist_source;
-use mz_storage_client::source::persist_source::FlowControl;
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_operators::persist_source;
+use mz_storage_operators::persist_source::FlowControl;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::{self, ProbeNotify};
 use timely::communication::Allocate;
@@ -817,7 +817,7 @@ where
                     .lookup_id(id)
                     .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
                 match plan {
-                    mz_compute_client::plan::GetPlan::PassArrangements => {
+                    mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
                         assert!(keys
                             .arranged
@@ -830,7 +830,7 @@ where
                         });
                         collection
                     }
-                    mz_compute_client::plan::GetPlan::Arrangement(key, row, mfp) => {
+                    mz_compute_types::plan::GetPlan::Arrangement(key, row, mfp) => {
                         let (oks, errs) = collection.as_collection_core(
                             mfp,
                             Some((key, row)),
@@ -838,7 +838,7 @@ where
                         );
                         CollectionBundle::from_collections(oks, errs)
                     }
-                    mz_compute_client::plan::GetPlan::Collection(mfp) => {
+                    mz_compute_types::plan::GetPlan::Collection(mfp) => {
                         let (oks, errs) =
                             collection.as_collection_core(mfp, None, self.until.clone());
                         CollectionBundle::from_collections(oks, errs)
@@ -877,7 +877,7 @@ where
                 input,
                 func,
                 exprs,
-                mfp,
+                mfp_after: mfp,
                 input_key,
             } => {
                 let input = self.render_plan(*input);
@@ -889,10 +889,10 @@ where
                     .map(|input| self.render_plan(input))
                     .collect();
                 match plan {
-                    mz_compute_client::plan::join::JoinPlan::Linear(linear_plan) => {
+                    mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan)
                     }
-                    mz_compute_client::plan::join::JoinPlan::Delta(delta_plan) => {
+                    mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
                         self.render_delta_join(inputs, delta_plan)
                     }
                 }

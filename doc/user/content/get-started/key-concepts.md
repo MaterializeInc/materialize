@@ -23,13 +23,47 @@ Materialize offers the following components through its SQL API:
 
 Component                | Use
 -------------------------|-----
-**[Sources]**            | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
+**[Clusters]**           | Isolated pools of compute resources for sources, sinks, indexes, materialized views, and queries.
+**[Sources]**            | Sources describe an external system you want Materialize to read data from.
 **[Views]**              | Views represent queries of sources and other views that you want to save for repeated execution.
 **[Indexes]**            | Indexes represent query results stored in memory.
 **[Materialized views]** | Materialized views represent query results stored durably.
-**[Sinks]**              | Sinks represent output streams or files that Materialize sends data to.
-**[Clusters]**           | Clusters describe logical compute resources that can be used by sources, sinks, indexes, and materialized views.
-**[Cluster replicas]**   | Cluster replicas allocate physical compute resources for a cluster.
+**[Sinks]**              | Sinks describe an external system you want Materialize to write data to.
+
+## Clusters
+
+Clusters are pools of compute resources (CPU, memory, and, optionally, scratch
+disk space) for running your workloads.
+
+The following operations require compute resources in Materialize, and so need
+to be associated with a cluster:
+
+- Executing [`SELECT`] and [`SUBSCRIBE`] statements.
+- Maintaining [indexes](#indexes) and [materialized views](#materialized-views).
+- Maintaining [sources](#sources) and [sinks](#sinks).
+
+You choose the size of your cluster (`small`, `medium`, `large`, etc.) based on
+the resource requirements of your workload. Larger clusters have more compute
+resources available and can therefore process data faster and handle larger data
+volumes. You can resize a cluster at any time, even while the cluster is
+running, to respond to changes in your workload.
+
+Clusters provide two important properties:
+
+  * [**Resource isolation**](/sql/create-cluster#resource-isolation). Workloads
+    on one cluster cannot interfere with workloads on another cluster. You can
+    use multiple clusters to isolate your production workloads from your
+    development workloads, for example.
+
+  * [**Fault tolerance**](/sql/create-cluster#replication-factor). You can
+    increase the replication factor of a cluster to increase the number of
+    copies (i.e., _replicas_) of the cluster that Materialize provisions.
+    Clusters with multiple replicas can tolerate failures of the underlying
+    hardware that cause a replica to become unreachable. As long as one replica
+    of the cluster remains available, the cluster can continue to maintain
+    dataflows and serve queries.
+
+For details about clusters, see [`CREATE CLUSTER`](/sql/create-cluster).
 
 ## Sources
 
@@ -98,7 +132,8 @@ source, or table, Materialize automatically generates the required schema and wr
 the stream of changes to that view or source. In effect, Materialize sinks act as
 change data capture (CDC) producers for the given source or view.
 
-Currently, Materialize only supports sending sink data to Kafka.
+Currently, Materialize only supports sending sink data to Kafka. See
+the [Kafka sink documentation](/sql/create-sink/kafka) for details.
 
 ## Views
 
@@ -137,6 +172,9 @@ current result set from durable storage. To improve the speed of queries on
 materialized views, we recommend creating [indexes] based on
 common query patterns.
 
+See [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view) for details
+about materialized views.
+
 ### Non-materialized views
 
 Non-materialized views simply store a verbatim query and provide a shorthand
@@ -147,6 +185,9 @@ their embedded queries. The results of a view can be incrementally
 maintained in memory within a [cluster][clusters] by
 creating an index. This allows you to serve queries without
 the overhead of materializing the view.
+
+See [`CREATE VIEW`](/sql/create-view) for details about
+non-materialized views.
 
 ## Indexes
 
@@ -162,70 +203,6 @@ sophisticated operations like joins more efficiently.
 
 For a deeper dive into how indexes work, see [Arrangements](/overview/arrangements/).
 
-## Clusters
-
-Clusters are logical components that let you describe how to allocate compute
-resources for a group of dataflow-powered objects, i.e., sources, sinks,
-indexes, and materialized views. When creating dataflow-powered objects, you
-must specify which cluster you want to use. Not explicitly naming a cluster
-uses your session's default cluster.
-
-Importantly, clusters are strictly a logical component; they rely on [cluster
-replicas](#cluster-replicas) to run dataflows. Said a slightly different way, a
-cluster with no replicas does no computation. For example, if you create an
-index on a cluster with no replicas, you cannot select from that index because
-there is no physical representation of the index to read from.
-
-Though clusters only represent the logic of which objects you want to bundle
-together, this impacts the performance characteristics once you provision
-cluster replicas. Each object in a cluster gets instantiated on every replica,
-meaning that on a given physical replica, objects in the cluster are in
-contention for the same physical resources. To achieve the performance you need,
-this might require setting up more than one cluster.
-
-See the [`CREATE CLUSTER`](/sql/create-cluster/) documentation for more details.
-
-### Cluster deployment options
-
-When building your Materialize deployment, you can change its performance
-characteristics by...
-
-Action | Outcome
--------|---------
-Adding clusters + decreasing dataflow density | Reduced resource contention among dataflows, decoupled dataflow availability
-Adding replicas to clusters | See [Cluster replica scaling](#cluster-replica-deployment-options)
-
-## Cluster replicas
-
-Where clusters represent the logical set of dataflows you want to maintain,
-cluster replicas are their physical counterparts. Cluster replicas are where
-Materialize actually creates and maintains dataflows.
-
-Each cluster replica is essentially a clone, constructing the same dataflows.
-Each cluster replica receives a copy of all data that comes in from sources its
-dataflows use, and uses the data to perform identical computations. This design
-provides Materialize with active replication, and so long as one replica is
-still reachable, the cluster continues making progress.
-
-This also means that all of a cluster's dataflows contend for the same resources
-on each replica. This might mean, for instance, that instead of placing many
-complex materialized views on the same cluster, you choose some other
-distribution, or you replace all replicas in a cluster with more powerful
-machines.
-
-### Cluster replica deployment options
-
-Materialize is an active-replication-based system, which means you expect each
-cluster replica to have the same working set.
-
-With this in mind, when building your Materialize deployment, you can change its
-performance characteristics by...
-
-Action | Outcome
----------|---------
-Increase replicas' size | Ability to maintain more dataflows or more complex dataflows
-Add replicas to a cluster | Greater tolerance to replica failure
-
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source)
@@ -234,13 +211,13 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE INDEX`](/sql/create-index)
 - [`CREATE SINK`](/sql/create-sink)
 - [`CREATE CLUSTER`](/sql/create-cluster)
-- [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 
 [Clusters]: #clusters
-[Cluster replicas]: #cluster-replicas
 [Indexes]: #indexes
 [Materialized views]: #materialized-views
 [Debezium]: http://debezium.io
 [Sinks]: #sinks
 [Sources]: #sources
 [Views]: #views
+[`SELECT`]: /sql/select
+[`SUBSCRIBE`]: /sql/subscribe

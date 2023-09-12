@@ -32,7 +32,7 @@ mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
-mz-storage-client = { path = "../storage-client" }
+mz-storage-types = { path = "../storage-types" }
 mz-cloud-resources = { path = "../cloud-resources" }
 postgres-protocol = { version = "0.6.5" }
 regex = "1.7.0"
