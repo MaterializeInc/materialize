@@ -10,7 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
+from materialize.checks.executors import Executor, MzcomposeExecutorParallel
 from materialize.util import MzVersion
 
 
@@ -123,7 +123,10 @@ class Privileges(Check):
 
     def _can_run(self, e: Executor) -> bool:
         # Privilege changes weren't persisted in some cases earlier than 0.63.0.
-        return self.base_version >= MzVersion.parse("0.63.0-dev")
+        # GRANT ALL PRIVILEGES hangs in parallel mode - #21317
+        return self.base_version >= MzVersion.parse("0.63.0-dev") and not isinstance(
+            e, MzcomposeExecutorParallel
+        )
 
     def initialize(self) -> Testdrive:
         return Testdrive(
