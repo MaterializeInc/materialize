@@ -15,7 +15,7 @@ Configuring and managing access control in Materialize requires **administrator*
 {{</ note >}}
 
 Access control in Materialize is configured at two levels: access to the
-[Materialize console]((https://console.materialize.com/)) and access within the
+[Materialize console](https://console.materialize.com/) and access within the
 database. The privileges assigned on user invitation have implications at both
 levels, so we recommend carefully evaluating your access control needs ahead of
 expanding the number of users in your Materialize organization.
@@ -32,7 +32,7 @@ Depending on the level of access each user should have, you can assign them
      inviting new users, editing account and security information, or managing
      billing. Admins have _superuser_ privileges in the database.
 
-   - `Organization Member`: can login to the console and has restricted access
+   - `Organization Member`: can log in to the console and has restricted access
      to the database, depending  on the privileges defined via
      [role-based access control (RBAC)](#role-based-access-control-rbac).
 
@@ -78,13 +78,16 @@ time of region creation. For existing regions, we assume that migration to RBAC
 is whitegloved."
 
 The default level of access to the database is determined by the
-organization-level role a user is assigned on invitation (`Organization Admin` or `Organization Member`).
+organization-level role a user is assigned on invitation (`Organization Admin`
+or `Organization Member`). When an invited user logs in for the first time
+(and only then), a [role](./rbac/#roles) with the same name as their e-mail
+address is created.
 
 The first user in an organization, and subsequently any user that is assigned
 `Organization Admin`, is a database _superuser_, and has unrestricted access to
 all resources in a Materialize region. Users that are assigned `Organization
-Member` are restricted to a default set of basic privileges that need to be
-configured and modified via role-based access control (RBAC).
+Member` are restricted to a [default set of basic privileges](#modifying-default-privileges)
+that need to be configured and modified via role-based access control (RBAC).
 
 RBAC allows you to configure granular access control to the resources in your
 Materialize region through a hierarchy of [roles](/sql/grant-role/) and
@@ -107,12 +110,13 @@ or — if you just need to move fast and break things — [inviting users as adm
 Every Materialize region has a `PUBLIC` system role that determines the default
 privileges available to all other roles. On creation, users are automatically
 granted membership in `PUBLIC`, and inherit the privileges assigned to it. By
-default, members of this role (and therefore **all users**) have the following [privileges](/sql/grant-privilege/#privilege):
+default, members of this role (and therefore **all users**) have the following
+[privileges](/sql/grant-privilege/#privilege):
 
 Privilege                            | Scope     |
 -------------------------------------|-----------|
-`USAGE`                            | All types, all system catalog schemas, the `materialize.public` schema, the `materialize` database, and the `default` cluster.|
-`SELECT`                               | All system catalog objects.  |
+`USAGE`                              | All types, all system catalog schemas, the `materialize.public` schema, the `materialize` database, and the `default` cluster.|
+`SELECT`                             | All system catalog objects.  |
 
 This means that new, non-administrator users have limited access to resources in
 a Materialize region, and don't have the ability to e.g., create new clusters,
@@ -125,9 +129,8 @@ command.
 SHOW ROLES;
 
 -- Example: grant read-only access to all object types, to all roles in the
--- system via the PUBLIC role
---For PostgreSQL compatibility reasons, TABLE is the object type for sources,
---views, and materialized views
+-- system via the PUBLIC role For PostgreSQL compatibility reasons, TABLE is
+-- the object type for sources, views, tables and materialized views
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON DATABASES TO PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON SCHEMAS TO PUBLIC;
@@ -154,11 +157,11 @@ SHOW ROLES;
 
 -- Example: approximate full-blown admin access by modifying the default
 -- privileges inherited by all roles via the PUBLIC role
-GRANT USAGE, CREATE ON SCHEMA materialize.public TO PUBLIC;
+GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO PUBLIC;
 GRANT ALL PRIVILEGES ON DATABASE materialize TO PUBLIC;
-GRANT USAGE, CREATE ON CLUSTER default TO PUBLIC;
-GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO PUBLIC;
-GRANT CREATEROLE ON SYSTEM TO PUBLIC;
+GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO PUBLIC;
+GRANT ALL PRIVILEGES ON CLUSTER default TO PUBLIC;
+
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA materialize.public TO PUBLIC;
 GRANT ALL PRIVILEGES ON ALL TYPES IN SCHEMA materialize.public TO PUBLIC;
 GRANT ALL PRIVILEGES ON ALL SECRETS IN SCHEMA materialize.public TO PUBLIC;
@@ -169,6 +172,10 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PR
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA materialize.public GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC;
 ```
+
+It's important to note that, while [`GRANT ALL PRIVILEGES`](/sql/grant-privilege/)
+applies to all objects that exist when the grant is run, [`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges/)
+applies to objects created in the future (aka future grants).
 
 ### Configuring advanced RBAC
 
@@ -186,7 +193,7 @@ significantly over time, you can grant and revoke privileges directly to/from
 user roles.
 
 ```sql
--- Use SHOW ROLES to list existing roles in the system, which are 1:1 with invited users
+-- Use SHOW ROLES to list existing roles in the system.
 SHOW ROLES;
 
 -- Example: grant usage on a specific database & schema to individual roles
@@ -243,9 +250,9 @@ GRANT USAGE, CREATE ON CLUSTER c1 to data_engineer;
 
 -- Step 6: grant all privileges to all objects in the d1.s1 schema to the data_engineer role
 -- For pre-existing objects in the schema (skip if there are none!)
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA d1.s1 TO read_write;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA d1.s1 TO data_engineer;
 -- For future objects created in the schema
-ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA d1.s1 GRANT ALL PRIVILEGES ON TABLES TO read_write;
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA d1.s1 GRANT ALL PRIVILEGES ON TABLES TO data_engineer;
 
 -- Step 7: add member(s) to the respective role
 GRANT data_analyst TO "user1@company.com", "user2@company.com";
@@ -304,4 +311,5 @@ critical environments, and ensure that any user with privileges to perform
 destructive actions is performing them intentionally in that specific
 environment. It's like `sudo` for your database!
 
-[//]: # "TODO(morsapaes) It feels too specific to add the RBAC observability views here. Need to think about where to work these in."
+[//]: # "TODO(morsapaes) It feels too specific to add the RBAC observability
+views here. Need to think about where to work these in."

@@ -1,10 +1,6 @@
 ---
 title: "Invite users"
 description: "Invite new users to a Materialize organization."
-menu:
-  main:
-    parent: access-control
-    weight: 5
 aliases:
   - /invite-users/
 ---

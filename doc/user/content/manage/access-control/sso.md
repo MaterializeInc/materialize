@@ -1,10 +1,6 @@
 ---
 title: "Single sign-on (SSO)"
 description: "Configure single sign-on (SSO) using SAML or Open ID Connect as an additional layer of account security."
-menu:
-  main:
-    parent: access-control
-    weight: 10
 aliases:
   - /manage/sso/
 ---
