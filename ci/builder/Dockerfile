@@ -177,6 +177,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.8.0" --locked cargo-vet \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.18" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" --locked cargo-nextest \
