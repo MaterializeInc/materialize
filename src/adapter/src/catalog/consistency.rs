@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Internal consistency checks that validate invariants of [`CatalogState`].
-//! 
+//!
 //! Note: the implementation of consistency checks should favor simplicity over performance, to
 //! make it as easy as possible to understand what a given check is doing.
 
