@@ -70,6 +70,7 @@ members = [
     "src/stash-debug",
     "src/storage",
     "src/storage-client",
+    "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
     "src/test-macro",
