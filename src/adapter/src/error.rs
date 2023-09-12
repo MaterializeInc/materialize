@@ -684,8 +684,8 @@ impl From<catalog::Error> for AdapterError {
     }
 }
 
-impl From<catalog::storage::Error> for AdapterError {
-    fn from(e: catalog::storage::Error) -> Self {
+impl From<mz_catalog::Error> for AdapterError {
+    fn from(e: mz_catalog::Error) -> Self {
         catalog::Error::from(e).into()
     }
 }

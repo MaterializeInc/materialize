@@ -127,8 +127,8 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
+    ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -510,7 +510,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection,
+    pub storage: mz_catalog::Connection,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,

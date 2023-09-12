@@ -3408,6 +3408,7 @@ dependencies = [
  "maplit",
  "mz-audit-log",
  "mz-build-info",
+ "mz-catalog",
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-cluster-client",
@@ -3571,6 +3572,29 @@ version = "0.0.0"
 dependencies = [
  "compile-time-run",
  "semver",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-catalog"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "itertools",
+ "mz-audit-log",
+ "mz-compute-client",
+ "mz-controller",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "mz-sql",
+ "mz-sql-parser",
+ "mz-stash",
+ "mz-storage-types",
+ "proptest",
+ "proptest-derive",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -3922,6 +3946,7 @@ dependencies = [
  "mz-alloc",
  "mz-aws-secrets-controller",
  "mz-build-info",
+ "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
  "mz-expr",
@@ -5121,6 +5146,7 @@ dependencies = [
  "clap",
  "mz-adapter",
  "mz-build-info",
+ "mz-catalog",
  "mz-ore",
  "mz-postgres-util",
  "mz-secrets",

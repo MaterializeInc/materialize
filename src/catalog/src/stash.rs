@@ -27,7 +27,7 @@ use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
 use mz_storage_types::sources::Timeline;
 
-use crate::catalog::storage::{
+use crate::{
     BootstrapArgs, DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey,
     SystemPrivilegesValue, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
     STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
