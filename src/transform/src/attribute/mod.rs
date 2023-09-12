@@ -288,7 +288,7 @@ impl<'c> From<&ExplainContext<'c>> for DerivedAttributes<'c> {
         if context.config.cardinality {
             builder.require(Cardinality::default());
         }
-        if context.config.column_names {
+        if context.config.column_names || context.config.humanized_exprs {
             builder.require(ColumnNames::new(context.humanizer));
         }
         builder.finish()
@@ -508,7 +508,11 @@ pub fn annotate_plan<'a>(
     let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
     let config = context.config;
 
-    if config.requires_attributes() {
+    // We want to annotate the plan with attributes in the following cases:
+    // 1. An attribute was explicitly requested in the ExplainConfig.
+    // 2. Humanized expressions were requested in the ExplainConfig (in which
+    //    case we need to derive the ColumnNames attribute).
+    if config.requires_attributes() || config.humanized_exprs {
         // get the annotation keys
         let subtree_refs = plan.post_order_vec();
         // get the annotation values
@@ -577,7 +581,7 @@ pub fn annotate_plan<'a>(
             }
         }
 
-        if config.column_names {
+        if config.column_names || config.humanized_exprs {
             for (expr, column_names) in std::iter::zip(
                 subtree_refs.iter(),
                 attributes.remove_results::<ColumnNames>().into_iter(),

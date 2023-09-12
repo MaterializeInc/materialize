@@ -181,6 +181,8 @@ pub struct ExplainConfig {
     pub cardinality: bool,
     /// Show inferred column names.
     pub column_names: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
 }
 
 impl Default for ExplainConfig {
@@ -200,6 +202,7 @@ impl Default for ExplainConfig {
             filter_pushdown: false,
             cardinality: false,
             column_names: false,
+            humanized_exprs: false,
         }
     }
 }
@@ -240,6 +243,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -812,6 +816,7 @@ mod tests {
             filter_pushdown: false,
             cardinality: false,
             column_names: false,
+            humanized_exprs: false,
         };
         let context = ExplainContext {
             env,
