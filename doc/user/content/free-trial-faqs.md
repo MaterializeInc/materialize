@@ -11,17 +11,17 @@ When you [sign up for Materialize](https://materialize.com/register/), you get a
 
 ## What are the limits of a free trial?
 
-In Materialize, [cluster replicas](/get-started/key-concepts/#cluster-replicas) are the physical resources for doing computational work. Cluster replicas come in various sizes, and each size has a [credit consumption rate](https://materialize.com/pricing/).
+In Materialize, [clusters](/get-started/key-concepts/#clusters) are the pools of compute resources for running your workloads. The size and replication factor of each cluster determines its [credit usage](/sql/create-cluster/#credit-usage).
 
-During your free trial, your credit consumption rate across all replicas in a region cannot exceed 4 credits per hour at any point in time. This limit should accommodate most trial scenarios.
+During your free trial, the credit consumption rate across all clusters in a region cannot exceed 4 credits per hour at any point in time. This limit should accommodate most trial scenarios.
 
 For example, let's say you have 3 clusters in a region:
 
-Cluster | Replicas | Credits per hour
---------|----------|-----------------
-`ingest`| 1 `2xsmall` | 0.5
-`compute` | 2 `2xsmall` | 1 (0.5 each)
-`default` | 1 `2xsmall` | 0.5
+Cluster   | Size      | Replication factor | Credits per hour
+----------|-----------|--------------------|-----------------
+`ingest`  | `2xsmall` | 1                  | 0.5
+`compute` | `2xsmall` | 2                  | 1 (0.5 each)
+`default` | `2xsmall` | 1                  | 0.5
 
 In this case, your credit consumption rate would be 2 credits per hour, which is under the rate limit of 4 credits per hour.
 
