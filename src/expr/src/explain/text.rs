@@ -21,7 +21,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{GlobalId, Row};
 
-use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
     AccessStrategy, AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -104,29 +104,27 @@ where
                 Ok(())
             })?;
         }
-        if self
-            .sources
-            .iter()
-            .any(|ExplainSource { op, .. }| !op.is_identity())
-        {
-            // render one blank line between the plans and sources
+
+        if self.sources.iter().any(|src| !src.is_identity()) {
+            // Render one blank line between the plans and sources.
             writeln!(f)?;
-            // render sources
-            for ExplainSource {
-                id,
-                op,
-                pushdown_info,
-            } in self
-                .sources
-                .iter()
-                .filter(|ExplainSource { op, .. }| !op.is_identity())
-            {
-                writeln!(f, "{}Source {}", ctx.indent, id)?;
-                ctx.indented(|ctx| {
-                    op.fmt_text(f, ctx)?;
-                    pushdown_info.fmt_text(f, ctx)?;
-                    Ok(())
-                })?;
+            for src in self.sources.iter().filter(|src| !src.is_identity()) {
+                if self.context.config.humanized_exprs {
+                    let mut cols = ctx.humanizer.column_names_for_id(src.id);
+                    // The column names of the source needs to be extended with
+                    // anonymous columns for each source expression before we can
+                    // pass it to the ExplainSource rendering code.
+                    if let Some(cols) = cols.as_mut() {
+                        let from = cols.len();
+                        let to = from + src.op.expressions.len();
+                        cols.extend((from..to).map(|i| format!("#{i}")))
+                    };
+                    // Render source with humanized expressions.
+                    HumanizedExpr::new(src, cols.as_ref()).fmt_text(f, &mut ctx)?;
+                } else {
+                    // Render source without humanized expresions.
+                    src.fmt_text(f, &mut ctx)?;
+                }
             }
         }
 

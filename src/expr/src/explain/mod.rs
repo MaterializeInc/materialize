@@ -14,13 +14,14 @@ use std::fmt::Formatter;
 use std::time::Duration;
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, Indent};
+use mz_ore::str::{separated, Indent, IndentLike};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
+use mz_repr::GlobalId;
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
@@ -88,18 +89,14 @@ impl<'a, C: AsMut<Indent>> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<'a>
 
 #[allow(missing_debug_implementations)]
 pub struct ExplainSource<'a> {
-    pub id: String,
+    pub id: GlobalId,
     pub op: &'a MapFilterProject,
     pub pushdown_info: Option<PushdownInfo<'a>>,
 }
 
 impl<'a> ExplainSource<'a> {
-    pub fn new(
-        id: String,
-        op: &'a MapFilterProject,
-        context: &ExplainContext<'a>,
-    ) -> ExplainSource<'a> {
-        let pushdown_info = if context.config.filter_pushdown {
+    pub fn new(id: GlobalId, op: &'a MapFilterProject, filter_pushdown: bool) -> ExplainSource<'a> {
+        let pushdown_info = if filter_pushdown {
             let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
             let pushdown = op
                 .predicates
@@ -117,6 +114,40 @@ impl<'a> ExplainSource<'a> {
             op,
             pushdown_info,
         }
+    }
+
+    #[inline]
+    pub fn is_identity(&self) -> bool {
+        self.op.is_identity()
+    }
+}
+
+impl<'a, 'h, C> DisplayText<C> for ExplainSource<'a>
+where
+    C: AsMut<Indent> + AsRef<&'h dyn ExprHumanizer>,
+{
+    fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
+        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+    }
+}
+
+impl<'a, 'h, C> DisplayText<C> for HumanizedExpr<'a, ExplainSource<'a>>
+where
+    C: AsMut<Indent> + AsRef<&'h dyn ExprHumanizer>,
+{
+    fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
+        let id = ctx
+            .as_ref()
+            .humanize_id(self.expr.id)
+            .unwrap_or_else(|| self.expr.id.to_string());
+        writeln!(f, "{}Source {}", ctx.as_mut(), id)?;
+        ctx.indented(|ctx| {
+            self.child(self.expr.op).fmt_text(f, ctx)?;
+            if let Some(pushdown_info) = &self.expr.pushdown_info {
+                self.child(pushdown_info).fmt_text(f, ctx)?;
+            }
+            Ok(())
+        })
     }
 }
 
