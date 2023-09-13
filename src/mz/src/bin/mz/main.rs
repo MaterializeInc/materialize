@@ -134,6 +134,8 @@ mod clap_clippy_hack {
         pub(crate) command: Command,
         #[clap(long, env = "REGION", global = true)]
         pub(crate) region: Option<String>,
+        #[clap(long, env = "PROFILE", global = true, value_parser = mixin::validate_profile_name)]
+        pub(crate) profile: Option<String>,
     }
 
     /// Specifies an output format.
@@ -185,13 +187,12 @@ async fn main() -> Result<(), Error> {
         enable_version_flag: true,
     });
 
-    // TODO: Check for an updated version of `mz` and print a warning if one
-    // is discovered. Can we use the GitHub tags API for this?
     let cx = Context::load(ContextLoadArgs {
         config_file_path: args.config,
         output_format: args.format.into(),
         no_color: args.no_color,
         region: args.region,
+        profile: args.profile,
     })
     .await?;
 

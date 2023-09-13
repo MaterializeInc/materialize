@@ -147,7 +147,12 @@ mod tests {
             [profiles.default]
             app-password = "{}"
             region = "aws/us-east-1"
+
+            [profiles.alternative]
+            app-password = "{}"
+            region = "aws/eu-west-1"
         "#,
+            get_password(mock),
             get_password(mock)
         );
 
@@ -182,6 +187,67 @@ mod tests {
         let output = output_to_string(assert);
         assert!(output.trim() == "default");
 
+        // Asert `mz profile config get region --profile alternative`
+        let binding = cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("get")
+            .arg("region")
+            .arg("--profile")
+            .arg("alternative")
+            .assert()
+            .success();
+
+        let output = output_to_string(binding);
+        assert!(output.trim() == "aws/eu-west-1");
+
+        // Asert `mz profile config set region random --profile alternative`
+        cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("set")
+            .arg("admin-endpoint")
+            .arg("wrongUrl")
+            .arg("--profile")
+            .arg("alternative")
+            .assert()
+            .success();
+
+        let binding = cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("get")
+            .arg("admin-endpoint")
+            .arg("--profile")
+            .arg("alternative")
+            .assert()
+            .success();
+        let output = output_to_string(binding);
+        assert!(output.trim() == "wrongUrl");
+
+        cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("remove")
+            .arg("admin-endpoint")
+            .arg("--profile")
+            .arg("alternative")
+            .assert()
+            .success();
+
+        let binding = cmd()
+            .arg("profile")
+            .arg("config")
+            .arg("get")
+            .arg("admin-endpoint")
+            .arg("--profile")
+            .arg("alternative")
+            .assert()
+            .success();
+
+        let output = output_to_string(binding);
+        assert!(output.trim() == "<unset>");
+
         // Assert `mz config get list` output:
         //
         //  Name    | Value
@@ -213,7 +279,7 @@ mod tests {
         let output = output_to_string(assert);
         assert!(output.trim() == expected_command_output.trim());
 
-        // Assert `mz config set profile` + `mz config get profile output:
+        // Assert `mz config set profile` + `mz config get profile` output:
         cmd()
             .arg("config")
             .arg("set")
