@@ -124,6 +124,17 @@ impl PartialBatchKey {
         PartialBatchKey(format!("{}/{}", version, part_id))
     }
 
+    pub fn split(&self) -> (WriterKey, PartId) {
+        let (writer_key, part_id) = self
+            .0
+            .split_once('/')
+            .expect("partial batch key should contain a /");
+
+        let writer_key = WriterKey::from_str(writer_key).expect("correctly formatted writer key");
+        let part_id = PartId::from_str(part_id).expect("correctly formatted part id");
+        (writer_key, part_id)
+    }
+
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
         BlobKey(format!("{}/{}", shard_id, self))
     }
