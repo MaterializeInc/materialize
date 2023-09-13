@@ -18,20 +18,18 @@ from threading import Thread
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Kafka,
-    Localstack,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

@@ -94,6 +94,7 @@
 /src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
+/src/storage-controller             @MaterializeInc/storage
 /src/storage-operators              @MaterializeInc/storage
 /src/storage-types                  @MaterializeInc/storage
 /src/test-macro                     @MaterializeInc/testing

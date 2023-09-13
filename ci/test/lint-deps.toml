@@ -32,14 +32,14 @@ dependencies = [
 [[deny]]
 name = "mz-compute"
 dependencies = [
-    # TODO: "mz-storage-controller",
+    "mz-storage-controller",
     "mz-storage",
 ]
 
 [[deny]]
 name = "mz-storage"
 dependencies = [
-    # TODO: "mz-storage-controller",
+    "mz-storage-controller",
     "mz-compute",
 ]
 
@@ -56,7 +56,7 @@ dependencies = [
 [[deny]]
 name = "mz-clusterd"
 dependencies = [
-    # TODO: "mz-storage-controller",
+    "mz-storage-controller",
 ]
 
 # Persist is meant to be a strong enough abstraction that it doesn't depend on

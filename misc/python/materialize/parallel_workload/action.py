@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import pg8000
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,

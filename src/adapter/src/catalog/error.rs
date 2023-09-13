@@ -137,11 +137,11 @@ impl From<uuid::Error> for Error {
     }
 }
 
-impl From<crate::catalog::storage::Error> for Error {
-    fn from(e: crate::catalog::storage::Error) -> Self {
+impl From<mz_catalog::Error> for Error {
+    fn from(e: mz_catalog::Error) -> Self {
         match e {
-            crate::catalog::storage::Error::Catalog(e) => Error::new(ErrorKind::from(e)),
-            crate::catalog::storage::Error::Stash(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::Error::Catalog(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::Error::Stash(e) => Error::new(ErrorKind::from(e)),
         }
     }
 }

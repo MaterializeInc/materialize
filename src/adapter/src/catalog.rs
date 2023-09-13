@@ -26,6 +26,7 @@ use mz_audit_log::{
     VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_catalog::{BootstrapArgs, SystemObjectMapping, Transaction};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -110,7 +111,6 @@ use crate::catalog::builtin::{
     BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
     MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -127,7 +127,6 @@ mod migrate;
 
 pub mod builtin;
 mod inner;
-pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -166,7 +165,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
-    storage: Arc<tokio::sync::Mutex<storage::Connection>>,
+    storage: Arc<tokio::sync::Mutex<mz_catalog::Connection>>,
     transient_revision: u64,
 }
 
@@ -1711,7 +1710,7 @@ impl CatalogState {
         &self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        tx: &mut storage::Transaction,
+        tx: &mut mz_catalog::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
@@ -1729,7 +1728,7 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
@@ -1739,13 +1738,13 @@ impl CatalogState {
 
     fn add_to_storage_usage(
         &self,
-        tx: &mut storage::Transaction,
+        tx: &mut mz_catalog::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
+        let id = tx.get_and_increment_id(mz_catalog::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.pack_storage_usage_update(&details)?);
@@ -1992,9 +1991,9 @@ pub struct Database {
     pub privileges: PrivilegeMap,
 }
 
-impl From<Database> for storage::Database {
-    fn from(database: Database) -> storage::Database {
-        storage::Database {
+impl From<Database> for mz_catalog::Database {
+    fn from(database: Database) -> mz_catalog::Database {
+        mz_catalog::Database {
             id: database.id,
             name: database.name,
             owner_id: database.owner_id,
@@ -2016,8 +2015,8 @@ pub struct Schema {
 }
 
 impl Schema {
-    fn into_durable_schema(self, database_id: Option<DatabaseId>) -> storage::Schema {
-        storage::Schema {
+    fn into_durable_schema(self, database_id: Option<DatabaseId>) -> mz_catalog::Schema {
+        mz_catalog::Schema {
             id: self.id.into(),
             name: self.name.schema,
             database_id,
@@ -2043,9 +2042,9 @@ impl Role {
     }
 }
 
-impl From<Role> for storage::Role {
-    fn from(role: Role) -> storage::Role {
-        storage::Role {
+impl From<Role> for mz_catalog::Role {
+    fn from(role: Role) -> mz_catalog::Role {
+        mz_catalog::Role {
             id: role.id,
             name: role.name,
             attributes: role.attributes,
@@ -2091,9 +2090,9 @@ impl Cluster {
     }
 }
 
-impl From<Cluster> for storage::Cluster {
-    fn from(cluster: Cluster) -> storage::Cluster {
-        storage::Cluster {
+impl From<Cluster> for mz_catalog::Cluster {
+    fn from(cluster: Cluster) -> mz_catalog::Cluster {
+        mz_catalog::Cluster {
             id: cluster.id,
             name: cluster.name,
             linked_object_id: cluster.linked_object_id,
@@ -2138,9 +2137,9 @@ impl ClusterReplica {
     }
 }
 
-impl From<ClusterReplica> for storage::ClusterReplica {
-    fn from(replica: ClusterReplica) -> storage::ClusterReplica {
-        storage::ClusterReplica {
+impl From<ClusterReplica> for mz_catalog::ClusterReplica {
+    fn from(replica: ClusterReplica) -> mz_catalog::ClusterReplica {
+        mz_catalog::ClusterReplica {
             cluster_id: replica.cluster_id,
             replica_id: replica.replica_id,
             name: replica.name,
@@ -2184,9 +2183,9 @@ pub enum CatalogItem {
     Connection(Connection),
 }
 
-impl From<CatalogEntry> for storage::Item {
-    fn from(entry: CatalogEntry) -> storage::Item {
-        storage::Item {
+impl From<CatalogEntry> for mz_catalog::Item {
+    fn from(entry: CatalogEntry) -> mz_catalog::Item {
+        mz_catalog::Item {
             id: entry.id,
             name: entry.name,
             create_sql: entry.item.into_serialized(),
@@ -3635,7 +3634,7 @@ impl Catalog {
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
-        for storage::Database {
+        for mz_catalog::Database {
             id,
             name,
             owner_id,
@@ -3662,7 +3661,7 @@ impl Catalog {
         }
 
         let schemas = catalog.storage().await.load_schemas().await?;
-        for storage::Schema {
+        for mz_catalog::Schema {
             id,
             name,
             database_id,
@@ -3709,7 +3708,7 @@ impl Catalog {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        for storage::Role {
+        for mz_catalog::Role {
             id,
             name,
             attributes,
@@ -3963,7 +3962,7 @@ impl Catalog {
 
         let clusters = catalog.storage().await.load_clusters().await?;
         let mut cluster_azs = BTreeMap::new();
-        for storage::Cluster {
+        for mz_catalog::Cluster {
             id,
             name,
             linked_object_id,
@@ -4003,7 +4002,7 @@ impl Catalog {
                 )
                 .await?;
 
-            if let storage::ClusterVariant::Managed(managed) = &config.variant {
+            if let mz_catalog::ClusterVariant::Managed(managed) = &config.variant {
                 cluster_azs.insert(id, managed.availability_zones.clone());
             }
 
@@ -4019,7 +4018,7 @@ impl Catalog {
         }
 
         let replicas = catalog.storage().await.load_cluster_replicas().await?;
-        for storage::ClusterReplica {
+        for mz_catalog::ClusterReplica {
             cluster_id,
             replica_id,
             name,
@@ -4891,7 +4890,7 @@ impl Catalog {
     /// TODO(justin): it might be nice if these were two different types.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn load_catalog_items<'a>(
-        tx: &mut storage::Transaction<'a>,
+        tx: &mut mz_catalog::Transaction<'a>,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
@@ -4972,7 +4971,7 @@ impl Catalog {
 
         // Error on any unsatisfied dependencies.
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let storage::Item {
+            let mz_catalog::Item {
                 id,
                 name,
                 create_sql: _,
@@ -4991,7 +4990,7 @@ impl Catalog {
         }
 
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let storage::Item {
+            let mz_catalog::Item {
                 id,
                 name,
                 create_sql: _,
@@ -5061,7 +5060,7 @@ impl Catalog {
     /// Opens a debug catalog from a stash.
     pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(
+        let storage = mz_catalog::Connection::open(
             stash,
             now.clone(),
             &BootstrapArgs {
@@ -5180,7 +5179,7 @@ impl Catalog {
         Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, mz_catalog::Connection> {
         self.storage.lock().await
     }
 
@@ -5681,12 +5680,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: storage::ReplicaLocation,
+        location: mz_catalog::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            storage::ReplicaLocation::Unmanaged {
+            mz_catalog::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -5707,7 +5706,7 @@ impl Catalog {
                     workers,
                 })
             }
-            storage::ReplicaLocation::Managed {
+            mz_catalog::ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,
@@ -8516,7 +8515,7 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
 }
 
-impl From<ClusterConfig> for storage::ClusterConfig {
+impl From<ClusterConfig> for mz_catalog::ClusterConfig {
     fn from(config: ClusterConfig) -> Self {
         Self {
             variant: config.variant.into(),
@@ -8524,8 +8523,8 @@ impl From<ClusterConfig> for storage::ClusterConfig {
     }
 }
 
-impl From<storage::ClusterConfig> for ClusterConfig {
-    fn from(config: storage::ClusterConfig) -> Self {
+impl From<mz_catalog::ClusterConfig> for ClusterConfig {
+    fn from(config: mz_catalog::ClusterConfig) -> Self {
         Self {
             variant: config.variant.into(),
         }
@@ -8542,7 +8541,7 @@ pub struct ClusterVariantManaged {
     pub disk: bool,
 }
 
-impl From<ClusterVariantManaged> for storage::ClusterVariantManaged {
+impl From<ClusterVariantManaged> for mz_catalog::ClusterVariantManaged {
     fn from(managed: ClusterVariantManaged) -> Self {
         Self {
             size: managed.size,
@@ -8555,8 +8554,8 @@ impl From<ClusterVariantManaged> for storage::ClusterVariantManaged {
     }
 }
 
-impl From<storage::ClusterVariantManaged> for ClusterVariantManaged {
-    fn from(managed: storage::ClusterVariantManaged) -> Self {
+impl From<mz_catalog::ClusterVariantManaged> for ClusterVariantManaged {
+    fn from(managed: mz_catalog::ClusterVariantManaged) -> Self {
         Self {
             size: managed.size,
             availability_zones: managed.availability_zones,
@@ -8574,7 +8573,7 @@ pub enum ClusterVariant {
     Unmanaged,
 }
 
-impl From<ClusterVariant> for storage::ClusterVariant {
+impl From<ClusterVariant> for mz_catalog::ClusterVariant {
     fn from(variant: ClusterVariant) -> Self {
         match variant {
             ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
@@ -8583,11 +8582,11 @@ impl From<ClusterVariant> for storage::ClusterVariant {
     }
 }
 
-impl From<storage::ClusterVariant> for ClusterVariant {
-    fn from(variant: storage::ClusterVariant) -> Self {
+impl From<mz_catalog::ClusterVariant> for ClusterVariant {
+    fn from(variant: mz_catalog::ClusterVariant) -> Self {
         match variant {
-            storage::ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
-            storage::ClusterVariant::Unmanaged => Self::Unmanaged,
+            mz_catalog::ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
+            mz_catalog::ClusterVariant::Unmanaged => Self::Unmanaged,
         }
     }
 }

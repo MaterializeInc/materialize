@@ -21,12 +21,12 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::TimestampManipulation;
 use mz_repr::{GlobalId, Row};
+use mz_storage_client::client::PackableStats;
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 
-use crate::client::PackableStats;
-use crate::controller::collection_mgmt::CollectionManager;
+use crate::collection_mgmt::CollectionManager;
 
 /// An enum that tracks the lifecycle of statistics objects
 /// in the controller.
