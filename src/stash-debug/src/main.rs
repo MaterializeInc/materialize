@@ -99,7 +99,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
-use mz_storage_client::controller as storage;
+use mz_storage_controller as storage;
 use once_cell::sync::Lazy;
 
 pub const BUILD_INFO: BuildInfo = build_info!();

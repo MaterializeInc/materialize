@@ -21,14 +21,14 @@ use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_client::controller::MonotonicAppender;
 use timely::progress::Timestamp;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-use crate::client::TimestamplessUpdate;
-use crate::controller::{persist_handles, StorageError};
+use crate::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
 const CHANNEL_CAPACITY: usize = 255;
@@ -161,7 +161,7 @@ where
             .map(|(tx, _, _)| tx.clone())
             .ok_or(StorageError::IdentifierMissing(id))?;
 
-        Ok(MonotonicAppender { tx })
+        Ok(MonotonicAppender::new(tx))
     }
 }
 
@@ -332,43 +332,6 @@ where
 
     (tx, handle.abort_on_drop(), shutdown_tx)
 }
-
-/// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
-///
-/// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
-#[derive(Debug)]
-pub struct MonotonicAppender {
-    tx: WriteChannel,
-}
-
-impl MonotonicAppender {
-    pub async fn append(self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
-        let (tx, rx) = oneshot::channel();
-
-        // Make sure there is space available on the channel.
-        let permit = self.tx.try_reserve().map_err(|e| {
-            let msg = "collection manager";
-            match e {
-                TrySendError::Full(_) => StorageError::ResourceExhausted(msg),
-                TrySendError::Closed(_) => StorageError::ShuttingDown(msg),
-            }
-        })?;
-
-        // Send our update to the CollectionManager.
-        permit.send((updates, tx));
-
-        // Wait for a response, if we fail to receive then the CollectionManager has gone away.
-        let result = rx
-            .await
-            .map_err(|_| StorageError::ShuttingDown("collection manager"))?;
-
-        result
-    }
-}
-
-// Note(parkmycar): While it technically could be `Clone` we want `MonotonicAppender` to have the
-// same semantics as a oneshot channel, so we specifically don't make it `Clone`.
-static_assertions::assert_not_impl_any!(MonotonicAppender: Clone);
 
 // Helper method for notifying listeners.
 fn notify_listeners<T>(

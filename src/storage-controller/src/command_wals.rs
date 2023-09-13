@@ -20,11 +20,11 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::TimestampManipulation;
 use mz_stash::{self, TypedCollection};
+use mz_storage_client::client::{StorageCommand, StorageResponse};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
-use crate::client::{StorageCommand, StorageResponse};
-use crate::controller::{
+use crate::{
     Controller, DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse,
     StorageController,
 };
