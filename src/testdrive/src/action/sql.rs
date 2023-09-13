@@ -136,17 +136,22 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::GrantRole { .. }
         | Statement::RevokePrivileges { .. }
         | Statement::RevokeRole { .. } => {
+            let inconsistencies = reqwest::get(&format!(
+                "http://{}/api/coordinator/check",
+                state.materialize_internal_http_addr,
+            ))
+            .await?
+            .text()
+            .await?;
+            let inconsistencies: serde_json::Value = serde_json::from_str(&inconsistencies)?;
+            if inconsistencies != serde_json::json!("") {
+                bail!("Internal catalog inconsistencies {inconsistencies:#?}");
+            }
+
             let catalog_state = state
                 .with_catalog_copy(|catalog| catalog.state().clone())
                 .await
                 .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?;
-
-            // Run internal consistency checks.
-            if let Some(state) = &catalog_state {
-                if let Err(inconsistencies) = state.check_consistency() {
-                    bail!("Internal catalog inconsistencies {inconsistencies:#?}");
-                }
-            }
 
             // Check that our on-disk state matches the in-memory state.
             let disk_state =

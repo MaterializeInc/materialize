@@ -30,3 +30,11 @@ pub async fn handle_catalog_check(mut client: AuthedClient) -> impl IntoResponse
     };
     (TypedHeader(ContentType::json()), response.to_string())
 }
+
+pub async fn handle_coordinator_check(mut client: AuthedClient) -> impl IntoResponse {
+    let response = match client.client.check_coordinator().await {
+        Ok(_) => serde_json::Value::String("".to_string()),
+        Err(inconsistencies) => serde_json::json!({ "err": inconsistencies }),
+    };
+    (TypedHeader(ContentType::json()), response.to_string())
+}

@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::CatalogState;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct CatalogInconsistencies {
     /// Inconsistencies found with internal fields, if any.
     internal_fields: Vec<InternalFieldsInconsistency>,
@@ -284,7 +284,7 @@ impl CatalogState {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum InternalFieldsInconsistency {
     Database(String, DatabaseId),
     AmbientSchema(String, SchemaId),
@@ -293,7 +293,7 @@ enum InternalFieldsInconsistency {
     Role(String, RoleId),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum RoleInconsistency {
     Database(DatabaseId, RoleId),
     Schema(SchemaId, RoleId),
@@ -311,7 +311,7 @@ enum RoleInconsistency {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum CommentInconsistency {
     /// A comment was found for an object that no longer exists.
     Dangling(CommentObjectId),

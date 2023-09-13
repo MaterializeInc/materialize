@@ -574,6 +574,21 @@ impl SessionClient {
         catalog.check_consistency()
     }
 
+    /// Checks the coordinator for internal consistency, returning a JSON object describing the
+    /// inconsistencies, if there are any. This is a superset of checks that check_catalog performs,
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn check_coordinator(&mut self) -> Result<(), serde_json::Value> {
+        self.send_without_session(|tx| Command::CheckConsistency { tx })
+            .await
+            .map_err(|inconsistencies| {
+                serde_json::to_value(inconsistencies).unwrap_or_else(|_| {
+                    serde_json::Value::String("failed to serialize inconsistencies".to_string())
+                })
+            })
+    }
+
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
     pub fn retire_execute(
@@ -711,7 +726,8 @@ impl SessionClient {
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }
-                | Command::RetireExecute { .. } => {}
+                | Command::RetireExecute { .. }
+                | Command::CheckConsistency { .. } => {}
             };
             cmd
         });

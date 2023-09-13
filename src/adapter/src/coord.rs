@@ -159,6 +159,7 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
+pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;

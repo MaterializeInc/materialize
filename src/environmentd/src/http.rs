@@ -402,6 +402,10 @@ impl InternalHttpServer {
                 "/api/catalog/check",
                 routing::get(catalog::handle_catalog_check),
             )
+            .route(
+                "/api/coordinator/check",
+                routing::get(catalog::handle_coordinator_check),
+            )
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
             .layer(Extension(adapter_client_rx.shared()))
             .layer(Extension(active_connection_count));
