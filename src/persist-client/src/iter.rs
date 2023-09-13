@@ -10,7 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::bail;
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
 use std::marker::PhantomData;
@@ -643,21 +643,31 @@ where
                         return None;
                     }
                 }
-                Some((k1, v1, t1)) => match &mut self.state {
-                    None => {
-                        self.state = part.pop(&mut self.parts);
-                    }
-                    Some((k0, v0, t0, d0)) => {
-                        if (*k0, *v0, &*t0) == (*k1, *v1, t1) {
-                            let (_, _, _, d1) = part
-                                .pop(&mut self.parts)
-                                .expect("popping from a non-empty iterator");
-                            d0.plus_equals(&d1);
-                        } else {
-                            break;
+                Some((k1, v1, t1)) => {
+                    match &mut self.state {
+                        None => {
+                            self.state = part.pop(&mut self.parts);
+                        }
+                        Some((k0, v0, t0, d0)) => {
+                            match (*k0, *v0, &*t0).cmp(&(*k1, *v1, t1)) {
+                                Ordering::Less => {
+                                    break;
+                                }
+                                Ordering::Equal => {
+                                    let (_, _, _, d1) = part
+                                        .pop(&mut self.parts)
+                                        .expect("popping from a non-empty iterator");
+                                    d0.plus_equals(&d1);
+                                }
+                                Ordering::Greater => {
+                                    // Don't want to log the entire KV, but it's interesting to know
+                                    // whether it's KVs going backwards or 'just' timestamps.
+                                    panic!("data arrived at the consolidator out of order (kvs equal? {})", (*k0, *v0) == (*k1, *v1));
+                                }
+                            };
                         }
                     }
-                },
+                }
             }
         }
         self.state.take()
