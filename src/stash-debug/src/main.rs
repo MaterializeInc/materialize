@@ -359,7 +359,7 @@ impl Usage {
     fn names(&self) -> BTreeSet<String> {
         BTreeSet::from_iter(
             match self {
-                Self::Catalog => catalog::ALL_COLLECTIONS,
+                Self::Catalog => mz_catalog::ALL_COLLECTIONS,
                 Self::Storage => storage::ALL_COLLECTIONS,
             }
             .iter()
