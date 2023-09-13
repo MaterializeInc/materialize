@@ -159,9 +159,9 @@ interactive.
    created in the previous step also make joins more interactive (as in other
    databases)!
 
-[//]: # "NOTE(morsapaes) This query is borderline unpredictable since we're
-relying on a load generator, but _mostly_ returns some results. The experience
-won't be great when it doesn't."
+    [//]: # "NOTE(morsapaes) This query is borderline unpredictable since we're
+    relying on a load generator, but _mostly_ returns some results. The experience
+    won't be great when it doesn't."
 
 1. Create a view that detects when a user wins an auction as a bidder, and then
 is identified as a seller for an item at a higher price.
