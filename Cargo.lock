@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.1.3"
+version = "0.2.1"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -3370,11 +3370,14 @@ dependencies = [
  "reqwest",
  "rpassword",
  "security-framework",
+ "semver",
  "serde",
  "serde-aux",
  "serde_json",
  "tabled",
+ "termcolor",
  "thiserror",
+ "time",
  "tokio",
  "toml",
  "toml_edit",
@@ -3407,8 +3410,11 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-compute-client",
+ "mz-compute-types",
  "mz-controller",
+ "mz-controller-types",
  "mz-expr",
  "mz-kafka-util",
  "mz-orchestrator",
@@ -3429,6 +3435,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-stash",
  "mz-storage-client",
+ "mz-storage-types",
  "mz-tracing",
  "mz-transform",
  "once_cell",
@@ -3636,15 +3643,12 @@ dependencies = [
  "futures",
  "mz-build-info",
  "mz-cluster-client",
- "mz-compute-client",
- "mz-expr",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
  "mz-pid-file",
  "mz-repr",
  "mz-service",
- "mz-storage-client",
  "mz-timely-util",
  "once_cell",
  "prometheus",
@@ -3717,6 +3721,7 @@ dependencies = [
  "mz-service",
  "mz-storage",
  "mz-storage-client",
+ "mz-storage-types",
  "mz-timely-util",
  "once_cell",
  "timely",
@@ -3743,6 +3748,7 @@ dependencies = [
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
+ "mz-compute-types",
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
@@ -3750,7 +3756,8 @@ dependencies = [
  "mz-pid-file",
  "mz-repr",
  "mz-service",
- "mz-storage-client",
+ "mz-storage-operators",
+ "mz-storage-types",
  "mz-timely-util",
  "once_cell",
  "prometheus",
@@ -3773,13 +3780,12 @@ dependencies = [
  "async-trait",
  "bytesize",
  "chrono",
- "columnation",
  "differential-dataflow",
  "futures",
  "http",
- "itertools",
  "mz-build-info",
  "mz-cluster-client",
+ "mz-compute-types",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -3789,7 +3795,9 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
+ "mz-stash",
  "mz-storage-client",
+ "mz-storage-types",
  "mz-timely-util",
  "mz-tracing",
  "once_cell",
@@ -3814,6 +3822,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-compute-types"
+version = "0.0.0"
+dependencies = [
+ "columnation",
+ "differential-dataflow",
+ "itertools",
+ "mz-expr",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "mz-storage-types",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "timely",
+ "tonic-build",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-controller"
 version = "0.0.0"
 dependencies = [
@@ -3824,6 +3856,8 @@ dependencies = [
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-client",
+ "mz-compute-types",
+ "mz-controller-types",
  "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",
@@ -3842,6 +3876,15 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-controller-types"
+version = "0.0.0"
+dependencies = [
+ "mz-cluster-client",
+ "mz-compute-types",
  "workspace-hack",
 ]
 
@@ -3905,6 +3948,7 @@ dependencies = [
  "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
+ "mz-storage-types",
  "nix",
  "num_cpus",
  "once_cell",
@@ -3976,6 +4020,7 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist-types",
  "mz-pgrepr",
  "mz-proto",
  "mz-regexp",
@@ -4453,10 +4498,11 @@ name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
  "differential-dataflow",
+ "futures",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "serde_json",
+ "prost",
  "timely",
  "tokio",
  "tracing",
@@ -4470,6 +4516,7 @@ dependencies = [
  "anyhow",
  "arrow2",
  "bytes",
+ "chrono",
  "hex",
  "mz-ore",
  "mz-proto",
@@ -4881,8 +4928,7 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
- "mz-compute-client",
- "mz-controller",
+ "mz-controller-types",
  "mz-expr",
  "mz-expr-test-util",
  "mz-interchange",
@@ -4901,7 +4947,7 @@ dependencies = [
  "mz-sql-lexer",
  "mz-sql-parser",
  "mz-stash",
- "mz-storage-client",
+ "mz-storage-types",
  "mz-tracing",
  "once_cell",
  "paste",
@@ -4989,10 +5035,11 @@ dependencies = [
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
- "mz-storage-client",
+ "mz-storage-types",
  "once_cell",
  "postgres-protocol",
  "regex",
+ "reqwest",
  "serde_json",
  "shell-words",
  "tempfile",
@@ -5139,6 +5186,8 @@ dependencies = [
  "mz-service",
  "mz-sql-parser",
  "mz-storage-client",
+ "mz-storage-operators",
+ "mz-storage-types",
  "mz-timely-util",
  "num_cpus",
  "once_cell",
@@ -5174,14 +5223,9 @@ name = "mz-storage-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
- "aws-config",
- "aws-credential-types",
- "aws-types",
  "bytes",
  "chrono",
- "dec",
  "derivative",
  "differential-dataflow",
  "futures",
@@ -5189,13 +5233,78 @@ dependencies = [
  "itertools",
  "mz-build-info",
  "mz-ccsr",
- "mz-cloud-resources",
  "mz-cluster-client",
+ "mz-kafka-util",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-postgres-util",
+ "mz-proto",
+ "mz-repr",
+ "mz-service",
+ "mz-stash",
+ "mz-storage-types",
+ "mz-timely-util",
+ "once_cell",
+ "prometheus",
+ "proptest",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "timely",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-storage-operators"
+version = "0.0.0"
+dependencies = [
+ "async-stream",
+ "differential-dataflow",
+ "futures",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-storage-types",
+ "mz-timely-util",
+ "prometheus",
+ "proptest",
+ "timely",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-storage-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-types",
+ "bytes",
+ "dec",
+ "differential-dataflow",
+ "itertools",
+ "mz-ccsr",
+ "mz-cloud-resources",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-client",
  "mz-persist-types",
  "mz-postgres-util",
@@ -5209,28 +5318,19 @@ dependencies = [
  "mz-timely-util",
  "mz-tracing",
  "once_cell",
- "openssh",
- "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
  "rdkafka",
- "regex",
  "scopeguard",
  "serde",
- "serde_json",
- "static_assertions",
- "thiserror",
  "timely",
  "tokio",
  "tokio-postgres",
- "tokio-stream",
- "tonic",
  "tonic-build",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
  "workspace-hack",
@@ -5376,7 +5476,7 @@ dependencies = [
  "datadriven",
  "differential-dataflow",
  "itertools",
- "mz-compute-client",
+ "mz-compute-types",
  "mz-expr",
  "mz-expr-parser",
  "mz-expr-test-util",
@@ -7760,9 +7860,9 @@ dependencies = [
 
 [[package]]
 name = "termcolor"
-version = "1.1.3"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab24d30b911b2376f3a13cc2cd443142f0c81dda04c118693e35b3835757755"
+checksum = "be55cf8942feac5c765c2c993422806843c9a9a45d4d5c407ad6dd2ea95eb9b6"
 dependencies = [
  "winapi-util",
 ]

@@ -103,7 +103,7 @@ use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};

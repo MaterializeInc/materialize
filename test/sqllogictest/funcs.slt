@@ -235,7 +235,7 @@ EXPLAIN WITH(arity, join_impls) SELECT date_trunc('day', ts) FROM date_trunc_tim
 Explained Query:
   Project (#1) // { arity: 1 }
     Map (date_trunc_day_ts(#0)) // { arity: 2 }
-      Get materialize.public.date_trunc_timestamps // { arity: 1 }
+      ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
 
 EOF
 
@@ -249,9 +249,9 @@ Explained Query:
         implementation
           %0:date_trunc_fields[×] » %1:date_trunc_timestamps[×]
         ArrangeBy keys=[[]] // { arity: 1 }
-          Get materialize.public.date_trunc_fields // { arity: 1 }
+          ReadStorage materialize.public.date_trunc_fields // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Get materialize.public.date_trunc_timestamps // { arity: 1 }
+          ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
 
 EOF
 
@@ -727,7 +727,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -737,7 +737,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a + a + a + a + a IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -747,7 +747,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a + b IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -761,7 +761,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (a::bool AND b::bool) IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 

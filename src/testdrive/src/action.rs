@@ -790,14 +790,14 @@ pub async fn create_state(
         }
 
         let admin: AdminClient<_> = kafka_config
-            .create_with_context(MzClientContext)
+            .create_with_context(MzClientContext::default())
             .with_context(|| format!("opening Kafka connection: {}", config.kafka_addr))?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
         kafka_config.set("message.max.bytes", "15728640");
         let producer: FutureProducer<_> = kafka_config
-            .create_with_context(MzClientContext)
+            .create_with_context(MzClientContext::default())
             .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
 
         let topics = BTreeMap::new();

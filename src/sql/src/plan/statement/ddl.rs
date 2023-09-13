@@ -17,7 +17,7 @@ use std::fmt::Write;
 use std::iter;
 
 use itertools::Itertools;
-use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
@@ -40,21 +40,21 @@ use mz_sql_parser::ast::{
     DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
-use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::connections::{
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
     KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
-use mz_storage_client::types::sinks::{
+use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::encoding::{
+use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage_client::types::sources::{
+use mz_storage_types::sources::{
     GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
@@ -1453,7 +1453,7 @@ generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Interval),
     (ScaleFactor, f64),
-    (MaxCardinality, i64)
+    (MaxCardinality, u64)
 );
 
 pub(crate) fn load_generator_ast_to_generator(
@@ -1472,11 +1472,6 @@ pub(crate) fn load_generator_ast_to_generator(
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
             } = options.to_vec().try_into()?;
-            if let Some(max_cardinality) = max_cardinality {
-                if max_cardinality < 0 {
-                    sql_bail!("unsupported max cardinality {max_cardinality}");
-                }
-            }
             LoadGenerator::Counter { max_cardinality }
         }
         mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
@@ -1638,8 +1633,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection:
-        Option<mz_storage_client::types::connections::CsrConnection<ReferencedConnection>>,
+    pub csr_connection: Option<mz_storage_types::connections::CsrConnection<ReferencedConnection>>,
     pub confluent_wire_format: bool,
 }
 
@@ -3251,10 +3245,8 @@ impl KafkaConnectionOptionExtracted {
     pub fn get_brokers(
         &self,
         scx: &StatementContext,
-    ) -> Result<
-        Vec<mz_storage_client::types::connections::KafkaBroker<ReferencedConnection>>,
-        PlanError,
-    > {
+    ) -> Result<Vec<mz_storage_types::connections::KafkaBroker<ReferencedConnection>>, PlanError>
+    {
         let mut brokers = match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => sql_bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
             (None, None) => sql_bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
@@ -3331,7 +3323,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
             };
 
-            out.push(mz_storage_client::types::connections::KafkaBroker {
+            out.push(mz_storage_types::connections::KafkaBroker {
                 address: broker.address.clone(),
                 tunnel,
             });
@@ -3426,10 +3418,8 @@ impl KafkaConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<
-        mz_storage_client::types::connections::KafkaConnection<ReferencedConnection>,
-        PlanError,
-    > {
+    ) -> Result<mz_storage_types::connections::KafkaConnection<ReferencedConnection>, PlanError>
+    {
         Ok(KafkaConnection {
             brokers: self.get_brokers(scx)?,
             security: Option::<KafkaSecurity>::try_from(&self)?,
@@ -3462,8 +3452,7 @@ impl CsrConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage_client::types::connections::CsrConnection<ReferencedConnection>, PlanError>
-    {
+    ) -> Result<mz_storage_types::connections::CsrConnection<ReferencedConnection>, PlanError> {
         let url: reqwest::Url = match self.url {
             Some(url) => url
                 .parse()
@@ -3492,7 +3481,7 @@ impl CsrConnectionOptionExtracted {
 
         let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-        Ok(mz_storage_client::types::connections::CsrConnection {
+        Ok(mz_storage_types::connections::CsrConnection {
             url,
             tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
@@ -3521,10 +3510,8 @@ impl PostgresConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<
-        mz_storage_client::types::connections::PostgresConnection<ReferencedConnection>,
-        PlanError,
-    > {
+    ) -> Result<mz_storage_types::connections::PostgresConnection<ReferencedConnection>, PlanError>
+    {
         let cert = self.ssl_certificate;
         let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
@@ -3546,7 +3533,7 @@ impl PostgresConnectionOptionExtracted {
 
         let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-        Ok(mz_storage_client::types::connections::PostgresConnection {
+        Ok(mz_storage_types::connections::PostgresConnection {
             database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -3573,13 +3560,11 @@ generate_extracted_config!(
     (User, String)
 );
 
-impl TryFrom<SshConnectionOptionExtracted>
-    for mz_storage_client::types::connections::SshConnection
-{
+impl TryFrom<SshConnectionOptionExtracted> for mz_storage_types::connections::SshConnection {
     type Error = PlanError;
 
     fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(mz_storage_client::types::connections::SshConnection {
+        Ok(mz_storage_types::connections::SshConnection {
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
@@ -3700,7 +3685,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Ssh { options } => {
             let c = SshConnectionOptionExtracted::try_from(options)?;
-            let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
+            let connection = mz_storage_types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };
@@ -5133,12 +5118,15 @@ pub fn plan_alter_role(
 
 pub fn describe_comment(
     _: &StatementContext,
-    _: CommentStatement,
+    _: CommentStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Result<Plan, PlanError> {
+pub fn plan_comment(
+    scx: &mut StatementContext,
+    stmt: CommentStatement<Aug>,
+) -> Result<Plan, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
     if !scx.catalog.system_vars().enable_comment() {
@@ -5160,22 +5148,82 @@ pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Resul
         }
     }
 
-    let name = match &object {
-        CommentObjectType::Table { name } | CommentObjectType::View { name } => name,
-        CommentObjectType::Column { relation_name, .. } => relation_name,
-    };
-    let name = normalize::unresolved_item_name(name.clone())?;
-    let item = scx.catalog.resolve_item(&name)?;
+    let (object_id, column_pos) = match &object {
+        com_ty @ CommentObjectType::Table { name }
+        | com_ty @ CommentObjectType::View { name }
+        | com_ty @ CommentObjectType::MaterializedView { name }
+        | com_ty @ CommentObjectType::Index { name }
+        | com_ty @ CommentObjectType::Func { name }
+        | com_ty @ CommentObjectType::Connection { name }
+        | com_ty @ CommentObjectType::Source { name }
+        | com_ty @ CommentObjectType::Sink { name }
+        | com_ty @ CommentObjectType::Type { name }
+        | com_ty @ CommentObjectType::Secret { name } => {
+            let name = normalize::unresolved_item_name(name.clone())?;
+            let item = scx.catalog.resolve_item(&name)?;
 
-    let (object_id, column_pos) = match (item.item_type(), object) {
-        (CatalogItemType::Table, CommentObjectType::Table { .. }) => {
-            (CommentObjectId::Table(item.id()), None)
+            match (com_ty, item.item_type()) {
+                (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
+                    (CommentObjectId::Table(item.id()), None)
+                }
+                (CommentObjectType::View { .. }, CatalogItemType::View) => {
+                    (CommentObjectId::View(item.id()), None)
+                }
+                (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
+                    (CommentObjectId::MaterializedView(item.id()), None)
+                }
+                (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
+                    (CommentObjectId::Index(item.id()), None)
+                }
+                (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
+                    (CommentObjectId::Func(item.id()), None)
+                }
+                (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
+                    (CommentObjectId::Connection(item.id()), None)
+                }
+                (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
+                    (CommentObjectId::Source(item.id()), None)
+                }
+                (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
+                    (CommentObjectId::Sink(item.id()), None)
+                }
+                (CommentObjectType::Type { .. }, CatalogItemType::Type) => {
+                    (CommentObjectId::Type(item.id()), None)
+                }
+                (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
+                    (CommentObjectId::Secret(item.id()), None)
+                }
+                (com_ty, cat_ty) => {
+                    let expected_type = match com_ty {
+                        CommentObjectType::Table { .. } => ObjectType::Table,
+                        CommentObjectType::View { .. } => ObjectType::View,
+                        CommentObjectType::MaterializedView { .. } => ObjectType::MaterializedView,
+                        CommentObjectType::Index { .. } => ObjectType::Index,
+                        CommentObjectType::Func { .. } => ObjectType::Func,
+                        CommentObjectType::Connection { .. } => ObjectType::Connection,
+                        CommentObjectType::Source { .. } => ObjectType::Source,
+                        CommentObjectType::Sink { .. } => ObjectType::Sink,
+                        CommentObjectType::Type { .. } => ObjectType::Type,
+                        CommentObjectType::Secret { .. } => ObjectType::Secret,
+                        _ => unreachable!("these are the only types we match on"),
+                    };
+
+                    return Err(PlanError::InvalidObjectType {
+                        expected_type: SystemObjectType::Object(expected_type),
+                        actual_type: SystemObjectType::Object(cat_ty.into()),
+                        object_name: item.name().item.clone(),
+                    });
+                }
+            }
         }
-        (CatalogItemType::View, CommentObjectType::View { .. }) => {
-            (CommentObjectId::View(item.id()), None)
-        }
-        (CatalogItemType::Table, CommentObjectType::Column { column_name, .. }) => {
-            let column_name = normalize::column_name(column_name);
+        CommentObjectType::Column {
+            relation_name,
+            column_name,
+        } => {
+            let name = normalize::unresolved_item_name(relation_name.clone())?;
+            let item = scx.catalog.resolve_item(&name)?;
+
+            let column_name = normalize::column_name(column_name.clone());
             let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
 
             // Check to make sure this column exists.
@@ -5186,28 +5234,43 @@ pub fn plan_comment(scx: &mut StatementContext, stmt: CommentStatement) -> Resul
                 });
             };
 
-            (CommentObjectId::Table(item.id()), Some(pos + 1))
+            match item.item_type() {
+                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
+                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
+                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => {
+                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
+                }
+                r => {
+                    return Err(PlanError::Unsupported {
+                        feature: format!("Specifying comments on a column of {r}"),
+                        issue_no: Some(21465),
+                    });
+                }
+            }
         }
-        (ty, CommentObjectType::Table { .. }) => {
-            return Err(PlanError::InvalidObjectType {
-                expected_type: SystemObjectType::Object(ObjectType::Table),
-                actual_type: SystemObjectType::Object(ty.into()),
-                object_name: item.name().item.clone(),
-            })
+        CommentObjectType::Role { name } => {
+            let role = scx.catalog.resolve_role(name.as_str())?;
+            (CommentObjectId::Role(role.id()), None)
         }
-        (ty, CommentObjectType::View { .. }) => {
-            return Err(PlanError::InvalidObjectType {
-                expected_type: SystemObjectType::Object(ObjectType::View),
-                actual_type: SystemObjectType::Object(ty.into()),
-                object_name: item.name().item.clone(),
-            })
+        CommentObjectType::Database { name } => {
+            let database = scx.resolve_database(name)?;
+            (CommentObjectId::Database(database.id()), None)
         }
-        (ty, _) => {
-            return Err(PlanError::Unsupported {
-                feature: format!("COMMENT on {ty} not yet supported."),
-                // TODO(parkmycar): File an issue.
-                issue_no: None,
-            });
+        CommentObjectType::Schema { name } => {
+            let schema = scx.resolve_schema(name.clone())?;
+            (
+                CommentObjectId::Schema((*schema.database(), *schema.id())),
+                None,
+            )
+        }
+        CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
+        CommentObjectType::ClusterReplica { name } => {
+            let replica = scx.catalog.resolve_cluster_replica(name)?;
+            (
+                CommentObjectId::ClusterReplica((replica.cluster_id(), replica.replica_id())),
+                None,
+            )
         }
     };
 

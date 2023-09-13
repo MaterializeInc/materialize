@@ -18,12 +18,11 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::ClusterReplicaLocation;
-pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
-use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
-};
+use mz_compute_client::controller::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
+use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
@@ -40,9 +39,6 @@ use tracing::{error, warn};
 
 use crate::Controller;
 
-/// Identifies a cluster.
-pub type ClusterId = ComputeInstanceId;
-
 /// Configures a cluster.
 pub struct ClusterConfig {
     /// The logging variants to enable on the compute instance.
@@ -54,9 +50,6 @@ pub struct ClusterConfig {
 
 /// The status of a cluster.
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
-
-/// Identifies a cluster replica.
-pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Configures a cluster replica.
 #[derive(Clone, Debug, Serialize)]
@@ -239,7 +232,8 @@ where
         config: ClusterConfig,
         variable_length_row_encoding: bool,
     ) -> Result<(), anyhow::Error> {
-        self.storage.create_instance(id);
+        self.storage
+            .create_instance(id, variable_length_row_encoding);
         self.compute
             .create_instance(id, config.arranged_logs, variable_length_row_encoding)?;
         Ok(())

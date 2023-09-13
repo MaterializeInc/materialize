@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # Regression test for #21501.
+# Note that this test employs the old syntax with the EXPECTED GROUP SIZE because the behavior
+# tested is exactly the backwards-compatible one of assigning the hinted value to all operators
+# in the same query block.
 
 statement ok
 CREATE TABLE teachers (id INT, name TEXT);
@@ -49,6 +52,6 @@ materialize.public.distinct_on_group_by_limit:
     TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
       Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
         Project (#0..=#2)
-          Get materialize.public.sections
+          ReadStorage materialize.public.sections
 
 EOF

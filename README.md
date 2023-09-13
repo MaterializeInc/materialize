@@ -2,13 +2,20 @@
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.com/docs)
 [![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://materialize.com/s/chat)
 
-[<img src="https://user-images.githubusercontent.com/23521087/168297221-5d346edc-3a55-4055-b355-281b4bd76963.png" width=55%>](https://materialize.com)
+[<img src="https://github.com/MaterializeInc/materialize/assets/23521087/39270ecb-7ac4-4829-b98b-c5b5699a16b8" width=35%>](https://materialize.com)
 
-Materialize is a streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you use SQL to ask complex questions about your data, and then updates the results of your SQL queries incrementally as the underlying data changes.
+Materialize is a **data warehouse** purpose-built for **operational workloads**
+where an analytical data warehouse would be too slow, and a stream processor
+would be too complicated.
 
-## Sign up for Access
+Using SQL and common tools in the wider data ecosystem, Materialize allows you
+to build real-time automation, engaging customer experiences, and interactive
+data products that drive value for your business while reducing the cost of
+[data freshness](https://materialize.com/blog/decouple-cost-and-freshness/).
 
-Ready to get hands-on with Materialize? [Sign up](https://materialize.com/register/) to get started! 🚀
+## Sign up
+
+Ready to try out Materialize? [Sign up](https://materialize.com/register/) to get started! 🚀
 
 ## About
 
@@ -20,11 +27,11 @@ We support a large fraction of PostgreSQL, and are actively working on supportin
 
 ## Get data in
 
-Materialize can read data from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) and [Redpanda](https://materialize.com/docs/integrations/redpanda/), as well as directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) replication stream. It also supports regular database tables to which you can insert, update, and delete rows.
+Materialize can read data from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) (and other Kafka API-compatible systems like [Redpanda](https://materialize.com/docs/integrations/redpanda/)), directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) replication stream, or from SaaS applications [via webhooks](https://materialize.com/docs/sql/create-source/webhook/). It also supports regular database tables to which you can insert, update, and delete rows.
 
 ## Transform, manipulate, and read your data
 
-Once you've got the data in, define views and perform reads via the PostgreSQL protocol. Use your favorite PostgreSQL CLI, including the `psql` you probably already have on your system.
+Once you've got the data in, define views and perform reads via the PostgreSQL protocol. Use your favorite SQL client, including the `psql` you probably already have on your system.
 
 Materialize supports a comprehensive variety of SQL features, all using the PostgreSQL dialect and protocol:
 

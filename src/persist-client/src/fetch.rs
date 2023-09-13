@@ -23,6 +23,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
@@ -118,7 +119,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-enum FetchBatchFilter<T> {
+pub(crate) enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
     },
@@ -126,10 +127,32 @@ enum FetchBatchFilter<T> {
         as_of: Antichain<T>,
         lower: Antichain<T>,
     },
+    Compaction {
+        since: Antichain<T>,
+    },
 }
 
 impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
-    fn filter_ts(&self, t: &mut T) -> bool {
+    pub(crate) fn new(meta: &SerdeLeasedBatchPartMetadata) -> Self
+    where
+        T: Codec64,
+    {
+        match &meta {
+            SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
+                let as_of =
+                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                FetchBatchFilter::Snapshot { as_of }
+            }
+            SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
+                let as_of =
+                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                let lower =
+                    Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                FetchBatchFilter::Listen { as_of, lower }
+            }
+        }
+    }
+    pub(crate) fn filter_ts(&self, t: &mut T) -> bool {
         match self {
             FetchBatchFilter::Snapshot { as_of } => {
                 // This time is covered by a listen
@@ -157,6 +180,10 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 }
                 true
             }
+            FetchBatchFilter::Compaction { since } => {
+                t.advance_by(since.borrow());
+                true
+            }
         }
     }
 }
@@ -180,17 +207,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let ts_filter = match &part.metadata {
-        SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
-            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            FetchBatchFilter::Snapshot { as_of }
-        }
-        SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
-            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            let lower = Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            FetchBatchFilter::Listen { as_of, lower }
-        }
-    };
+    let ts_filter = FetchBatchFilter::new(&part.metadata);
 
     let encoded_part = fetch_batch_part(
         &part.shard_id,
@@ -603,6 +620,12 @@ where
             needs_truncation,
         }
     }
+
+    pub(crate) fn maybe_unconsolidated(&self) -> bool {
+        // At time of writing, only user parts may be unconsolidated, and they are always
+        // written with a since of [T::minimum()].
+        self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
+    }
 }
 
 /// A pointer into a particular encoded part, with methods for fetching an update and
@@ -662,6 +685,13 @@ impl Cursor {
             self.idx += 1;
         }
         update
+    }
+
+    /// Advance the cursor just past the end of the most recent update, if there is one.
+    pub fn advance<'a, T: Timestamp + Codec64>(&mut self, part: &'a EncodedPart<T>) {
+        if self.part_idx < part.part.updates.len() {
+            self.idx += 1;
+        }
     }
 }
 

@@ -177,6 +177,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.18" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.5.18" --locked cargo-llvm-cov \
@@ -291,6 +292,10 @@ ENV RUST_BACKTRACE=1
 
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+# remove Ubuntu user causing UID collisions
+# https://bugs.launchpad.net/cloud-images/+bug/2005129
+RUN userdel -r ubuntu
 
 # Ensure that all python output is unbuffered, otherwise it is not
 # logged properly in Buildkite

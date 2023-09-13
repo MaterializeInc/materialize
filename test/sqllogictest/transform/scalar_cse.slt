@@ -18,7 +18,7 @@ EXPLAIN WITH(arity, join_impls) SELECT b*b*b, b*b FROM x
 Explained Query:
   Project (#3, #2) // { arity: 2 }
     Map ((#1 * #1), (#2 * #1)) // { arity: 4 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -28,7 +28,7 @@ EXPLAIN WITH(arity, join_impls) SELECT b*b*b, b*b+1 FROM x
 Explained Query:
   Project (#3, #4) // { arity: 2 }
     Map ((#1 * #1), (#2 * #1), (#2 + 1)) // { arity: 5 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -42,7 +42,7 @@ FROM x
 Explained Query:
   Project (#3..=#5) // { arity: 3 }
     Map (text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -57,7 +57,7 @@ FROM x
 Explained Query:
   Project (#4, #5, #7, #8) // { arity: 4 }
     Map (text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -72,7 +72,7 @@ FROM x
 Explained Query:
   Project (#2, #3) // { arity: 2 }
     Map (case when (#1 = 0) then 0 else (1 / #1) end, case when (#1 != 0) then (1 / #1) else 0 end) // { arity: 4 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -90,7 +90,7 @@ FROM
 Explained Query:
   Project (#3, #4) // { arity: 2 }
     Map ((#1 / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
-      Get materialize.public.x // { arity: 2 }
+      ReadStorage materialize.public.x // { arity: 2 }
 
 EOF
 
@@ -106,7 +106,7 @@ Explained Query:
   Project (#0)
     Filter ((#1 + #1) > 0)
       Map ((2 * #0))
-        Get materialize.public.t
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(((#1 + #1) > 0))
@@ -121,7 +121,7 @@ Explained Query:
   Project (#0)
     Filter (((#1 + #1) + #1) > 0)
       Map ((2 * #0))
-        Get materialize.public.t
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((((#1 + #1) + #1) > 0))
@@ -136,7 +136,7 @@ Explained Query:
   Project (#0)
     Filter (((#1 + (5 * #0)) + #1) > 0)
       Map ((2 * #0))
-        Get materialize.public.t
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((((#1 + (5 * #0)) + #1) > 0))

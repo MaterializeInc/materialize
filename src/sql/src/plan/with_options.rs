@@ -12,7 +12,7 @@
 use mz_repr::adt::interval::Interval;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::{KafkaBroker, ReplicaDefinition};
-use mz_storage_client::types::connections::StringOrSecret;
+use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, IntervalValue, UnresolvedItemName, Value, WithOptionValue};

@@ -10,7 +10,7 @@
 //! An interactive cluster server.
 
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic, Arc, Mutex};
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -237,7 +237,13 @@ where
                 existing
             }
             None => {
-                let build_timely_result = Self::build_timely(
+                // Configure variable-length row encoding.
+                mz_repr::VARIABLE_LENGTH_ROW_ENCODING.store(
+                    config.variable_length_row_encoding,
+                    atomic::Ordering::SeqCst,
+                );
+
+                Self::build_timely(
                     worker_config,
                     config,
                     epoch,
@@ -245,14 +251,11 @@ where
                     tracing_handle,
                     handle,
                 )
-                .await;
-                match build_timely_result {
-                    Err(e) => {
-                        warn!("timely initialization failed: {}", e.display_with_causes());
-                        return Err(e);
-                    }
-                    Ok(ok) => ok,
-                }
+                .await
+                .map_err(|e| {
+                    warn!("timely initialization failed: {}", e.display_with_causes());
+                    e
+                })?
             }
         };
 
@@ -300,7 +303,7 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 impl<Worker, C, R> GenericClient<C, R>
     for ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
 where
-    C: Send + Debug + crate::types::TryIntoTimelyConfig + 'static,
+    C: Send + Debug + mz_cluster_client::client::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,

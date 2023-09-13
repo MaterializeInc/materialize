@@ -15,8 +15,8 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError};
-use mz_storage_client::types::sources::{
+use mz_storage_types::errors::{DataflowError, EnvelopeError};
+use mz_storage_types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,
 };

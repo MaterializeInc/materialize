@@ -172,7 +172,7 @@ database_objects = [
               FOR TABLES (pg_table);
             """
         ),
-        expected_size=1024,
+        expected_size=4 * 1024,
     ),
     # The pg-cdc data is expected to be in the sub-source,
     # unaffected by the presence of other tables

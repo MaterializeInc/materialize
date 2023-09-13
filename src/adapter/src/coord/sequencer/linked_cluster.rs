@@ -12,19 +12,15 @@
 use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
-use mz_controller::clusters::{
-    ClusterId, ReplicaAllocation, ReplicaConfig, ReplicaLogging,
-    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
-};
+use mz_controller::clusters::{ReplicaAllocation, ReplicaConfig, ReplicaLogging};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::SourceSinkClusterConfig;
 
-use crate::catalog::{
-    self, ClusterConfig, ClusterVariant, SerializedReplicaLocation, LINKED_CLUSTER_REPLICA_NAME,
-};
+use crate::catalog::{self, ClusterConfig, ClusterVariant, LINKED_CLUSTER_REPLICA_NAME};
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -82,7 +78,7 @@ impl Coordinator {
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = SerializedReplicaLocation::Managed {
+        let location = catalog::storage::ReplicaLocation::Managed {
             size: size.to_string(),
             availability_zone: None,
             disk,

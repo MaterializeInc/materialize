@@ -56,6 +56,7 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "could not translate host name",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "canceling statement due to statement timeout",
     "value too long for type",
     "list_agg on char not yet supported",
@@ -155,7 +156,6 @@ known_errors = [
     "csv_extract number of columns too large",
     "coalesce types text and oid cannot be matched",  # with ACL-related functions
     "coalesce types oid and text cannot be matched",  # with ACL-related functions
-    "Expected FOR, found WITH",  # introduced by the EXPLAIN refactor in #21383
 ]
 
 
@@ -273,10 +273,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     for frozen_key, errors in new_errors.items():
         key = dict(frozen_key)
-        occurences = f" ({len(errors)} occurences)" if len(errors) > 1 else ""
-        print(
-            f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurences}"
-        )
+        occurrences = f" ({len(errors)} occurrences)" if len(errors) > 1 else ""
+        # Print out crashes differently so that we don't get notified twice in ci_logged_errors_detect
+        if "server closed the connection unexpectedly" in key["message"]:
+            print(f"--- Server crash, check panics and segfaults {occurrences}")
+        else:
+            print(
+                f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurrences}"
+            )
         if len(errors) > 1:
             from_time = datetime.fromtimestamp(errors[0]["timestamp"]).strftime(
                 "%H:%M:%S"

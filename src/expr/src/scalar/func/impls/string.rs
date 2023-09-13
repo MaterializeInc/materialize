@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::scalar::func::{
-    array_create_scalar, format, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
+    array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
 };
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
@@ -226,7 +226,7 @@ sqlfunc!(
     fn try_parse_monotonic_iso8601_timestamp<'a>(
         a: &'a str,
     ) -> Option<CheckedTimestamp<NaiveDateTime>> {
-        let ts = format::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
         let ts = CheckedTimestamp::from_timestamplike(ts)
             .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
         Some(ts)

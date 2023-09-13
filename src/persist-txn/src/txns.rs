@@ -16,8 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Diagnostics, PersistClient, ShardId, ShardIdSchema};
-use mz_persist_types::codec_impls::StringSchema;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -25,7 +24,7 @@ use tracing::debug;
 
 use crate::txn_read::TxnsCache;
 use crate::txn_write::Txn;
-use crate::StepForward;
+use crate::{StepForward, TxnsCodec, TxnsCodecDefault};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -35,12 +34,12 @@ use crate::StepForward;
 ///
 /// # Implementation Details
 ///
-/// The structure of the txn shard is `(ShardId, Vec<u8>)` updates.
+/// The structure of the txns shard is `(ShardId, Vec<u8>)` updates.
 ///
 /// The core mechanism is that a txn commits a set of transmittable persist
 /// _batch handles_ as `(ShardId, <opaque blob>)` pairs at a single timestamp.
-/// This contractually both commits the txn and advances the upper of every data
-/// shard.
+/// This contractually both commits the txn and advances the logical upper of
+/// _every_ data shard (not just the ones involved in the txn).
 ///
 /// Example:
 ///
@@ -54,7 +53,7 @@ use crate::StepForward;
 /// ```
 ///
 /// However, the new commit is not yet readable until the txn apply has run,
-/// which is expected to be promptly run by the committer, except in the event
+/// which is expected to be promptly done by the committer, except in the event
 /// of a crash. This, in ts order, moves the batch handles into the data shards
 /// with a [compare_and_append_batch] (similar to how the multi-worker
 /// persist_sink works).
@@ -62,16 +61,17 @@ use crate::StepForward;
 /// [compare_and_append_batch]:
 ///     mz_persist_client::write::WriteHandle::compare_and_append_batch
 ///
-/// Once apply is run, this is noted in the txn shard by retracting the update
-/// adding the batch. As a result, the contents of the txn shard at any given
-/// timestamp is exactly the set of outstanding apply work.
+/// Once apply is run, we "tidy" the txns shard by retracting the update adding
+/// the batch. As a result, the contents of the txns shard at any given
+/// timestamp is exactly the set of outstanding apply work (plus registrations,
+/// see below).
 ///
 /// Example (building on the above):
 ///
 /// ```text
-/// // Apply for the first txn at ts=3
+/// // Tidy for the first txn at ts=3
 /// (d0, <opaque blob A>, 3, -1)
-/// // Apply for the second txn (the timestamps can be different for each
+/// // Tidy for the second txn (the timestamps can be different for each
 /// // retraction in a txn, but don't need to be)
 /// (d0, <opaque blob B>, 5, -1)
 /// (d0, <opaque blob C>, 6, -1)
@@ -92,24 +92,26 @@ use crate::StepForward;
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K, V, T, D>
+pub struct TxnsHandle<K, V, T, D, C = TxnsCodecDefault>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    C: TxnsCodec,
 {
-    pub(crate) txns_cache: TxnsCache<T>,
-    pub(crate) txns_write: WriteHandle<ShardId, String, T, i64>,
+    pub(crate) txns_cache: TxnsCache<T, C>,
+    pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
-impl<K, V, T, D> TxnsHandle<K, V, T, D>
+impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    C: TxnsCodec,
 {
     /// Returns a [TxnsHandle] committing to the given txn shard.
     ///
@@ -129,11 +131,12 @@ where
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
     ) -> Self {
+        let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
             .open(
                 txns_id,
-                Arc::new(ShardIdSchema),
-                Arc::new(StringSchema),
+                Arc::new(txns_key_schema),
+                Arc::new(txns_val_schema),
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
@@ -180,8 +183,9 @@ where
         &mut self,
         mut register_ts: T,
         data_write: WriteHandle<K, V, T, D>,
-    ) -> Result<(), T> {
+    ) -> Result<T, T> {
         let data_id = data_write.shard_id();
+
         // SUBTLE! We have to write the registration to the txns shard *before*
         // we write empty data to the physical shard. Otherwise we could race
         // with a commit at the same timestamp, which would then not be able to
@@ -192,7 +196,7 @@ where
             if let Ok(init_ts) = self.txns_cache.data_since(&data_id) {
                 debug!("txns register {:.9} already done at {:?}", data_id, init_ts);
                 if register_ts < init_ts {
-                    return Err(init_ts);
+                    return Ok(init_ts);
                 }
                 register_ts = init_ts;
                 break;
@@ -204,8 +208,8 @@ where
                 return Err(txns_upper);
             }
 
-            const TABLE_INIT: &String = &String::new();
-            let updates = vec![((&data_id, TABLE_INIT), &register_ts, 1)];
+            let (key, val) = C::encode(crate::TxnsEntry::Register(data_id));
+            let updates = vec![((&key, &val), &register_ts, 1)];
             let res = crate::small_caa(
                 || format!("txns register {:.9}", data_id.to_string()),
                 &mut self.txns_write,
@@ -216,6 +220,7 @@ where
             .await;
             match res {
                 Ok(()) => {
+                    debug!("txns register {:.9} at {:?} success", data_id, register_ts);
                     break;
                 }
                 Err(new_txns_upper) => {
@@ -235,7 +240,7 @@ where
         // schemas.
         self.apply_le(&register_ts).await;
 
-        Ok(())
+        Ok(register_ts)
     }
 
     /// "Applies" all committed txns <= the given timestamp, ensuring that reads
@@ -243,14 +248,14 @@ where
     ///
     /// In the common case, the txn committer will have done this work and this
     /// method will be a no-op, but it is not guaranteed. In the event of a
-    /// crash or race, this does whatever persist writes and resulting
-    /// maintenance work is necessary, which could be significant.
+    /// crash or race, this does whatever persist writes are necessary (and
+    /// returns the resulting maintenance work), which could be significant.
     ///
     /// If the requested timestamp has not yet been written, this could block
     /// for an unbounded amount of time.
     ///
     /// This method is idempotent.
-    pub async fn apply_le(&mut self, ts: &T) {
+    pub async fn apply_le(&mut self, ts: &T) -> Tidy {
         debug!("apply_le {:?}", ts);
         self.txns_cache.update_gt(ts).await;
 
@@ -267,59 +272,68 @@ where
             .await;
         }
 
-        let mut retractions = Vec::new();
+        let mut retractions = BTreeMap::new();
         for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
             if ts < commit_ts {
                 break;
             }
 
             let write = self.datas.get_write(data_id).await;
-            let by_us = crate::apply_caa(write, batch_raw, commit_ts.clone()).await;
-            if by_us {
-                // NB: Protos are not guaranteed to exactly roundtrip the
-                // encoded bytes, so we intentionally use the raw batch so that
-                // it definitely retracts.
-                retractions.push((data_id, batch_raw));
-            }
-            // TODO(txn): Commit as we go? This is idempotent but that could
-            // save us duplicate work when racing.
-        }
-
-        let mut retract_ts = recent_upper(&mut self.txns_write).await;
-        loop {
-            // TODO(txn): Need to filter here to avoid double retractions.
-            // Maelstrom won't catch this bug, so leaving it in to make sure the
-            // unit tests do once they're added.
-            let retractions = retractions
-                .iter()
-                .map(|(data_id, batch_desc)| ((*data_id, *batch_desc), &retract_ts, -1))
-                .collect::<Vec<_>>();
-            if retractions.is_empty() {
-                break;
-            }
-            let res = crate::small_caa(
-                || "txns retract",
-                &mut self.txns_write,
-                &retractions,
-                retract_ts.clone(),
-                retract_ts.step_forward(),
-            )
-            .await;
-            match res {
-                Ok(()) => break,
-                Err(current) => {
-                    retract_ts = current;
-                    continue;
-                }
-            }
+            crate::apply_caa(write, batch_raw, commit_ts.clone()).await;
+            // NB: Protos are not guaranteed to exactly roundtrip the
+            // encoded bytes, so we intentionally use the raw batch so that
+            // it definitely retracts.
+            retractions.insert(batch_raw.clone(), *data_id);
         }
 
         debug!("apply_le {:?} success", ts);
+        Tidy { retractions }
+    }
+
+    /// Commits the tidy work at the given time.
+    ///
+    /// Mostly a helper to make it obvious that we can throw away the apply work
+    /// (and not get into an infinite cycle of tidy->apply->tidy).
+    pub async fn tidy_at(&mut self, tidy_ts: T, tidy: Tidy) -> Result<(), T> {
+        debug!("tidy at {:?}", tidy_ts);
+
+        let mut txn = self.begin();
+        txn.tidy(tidy);
+        // We just constructed this txn, so it couldn't have committed any
+        // batches, and thus there's nothing to apply. We're free to throw it
+        // away.
+        let apply = txn.commit_at(self, tidy_ts.clone()).await?;
+        assert!(apply.is_empty());
+
+        debug!("tidy at {:?} success", tidy_ts);
+        Ok(())
+    }
+
+    /// Returns the [ShardId] of the txns shard.
+    pub fn txns_id(&self) -> ShardId {
+        self.txns_write.shard_id()
     }
 
     /// Returns the [TxnsCache] used by this handle.
-    pub fn read_cache(&self) -> &TxnsCache<T> {
+    pub fn read_cache(&self) -> &TxnsCache<T, C> {
         &self.txns_cache
+    }
+}
+
+/// A token representing maintenance writes (in particular, retractions) to the
+/// txns shard.
+///
+/// This can be written on its own with [TxnsHandle::tidy_at] or sidecar'd into
+/// a normal txn with [Txn::tidy].
+#[derive(Debug, Default)]
+pub struct Tidy {
+    pub(crate) retractions: BTreeMap<Vec<u8>, ShardId>,
+}
+
+impl Tidy {
+    /// Merges the work represented by the other tidy into this one.
+    pub fn merge(&mut self, other: Tidy) {
+        self.retractions.extend(other.retractions)
     }
 }
 
@@ -332,7 +346,7 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    client: PersistClient,
+    pub(crate) client: PersistClient,
     data_write: BTreeMap<ShardId, WriteHandle<K, V, T, D>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -366,9 +380,12 @@ where
     }
 }
 
-pub(crate) async fn recent_upper<T: Timestamp + Lattice + TotalOrder + Codec64>(
-    txns_or_data_write: &mut WriteHandle<ShardId, String, T, i64>,
-) -> T {
+pub(crate) async fn recent_upper<K, V, T>(txns_or_data_write: &mut WriteHandle<K, V, T, i64>) -> T
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + Codec64,
+{
     // TODO(txn): Replace this fetch_recent_upper call with pubsub in
     // maelstrom.
     txns_or_data_write
@@ -381,46 +398,77 @@ pub(crate) async fn recent_upper<T: Timestamp + Lattice + TotalOrder + Codec64>(
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
-    use timely::progress::Antichain;
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::tests::writer;
 
     use super::*;
 
-    async fn expect_snapshot(
-        txns: &mut TxnsHandle<Vec<u8>, (), u64, i64>,
-        data_id: ShardId,
-        as_of: u64,
-    ) -> Vec<(Vec<u8>, u64, i64)> {
-        let mut data_read = txns
-            .datas
-            .client
-            .open_leased_reader::<Vec<u8>, (), u64, i64>(
-                data_id,
-                Arc::new(VecU8Schema),
+    impl TxnsHandle<String, (), u64, i64, TxnsCodecDefault> {
+        pub(crate) async fn expect_open(client: PersistClient) -> Self {
+            Self::expect_open_id(client, ShardId::new()).await
+        }
+
+        pub(crate) async fn expect_open_id(client: PersistClient, txns_id: ShardId) -> Self {
+            Self::open(
+                0,
+                client.clone(),
+                txns_id,
+                Arc::new(StringSchema),
                 Arc::new(UnitSchema),
-                Diagnostics::for_tests(),
             )
             .await
-            .expect("schemas shouldn't change");
+        }
 
-        let () = txns.apply_le(&as_of).await;
-        let translated_as_of = txns
-            .read_cache()
-            .to_data_inclusive(&data_id, as_of)
-            .unwrap();
-        let updates = data_read
-            .snapshot_and_fetch(Antichain::from_elem(translated_as_of))
-            .await
-            .unwrap();
-        updates
-            .into_iter()
-            .map(|((k, v), t, d)| {
-                let (k, ()) = (k.unwrap(), v.unwrap());
-                (k, t, d)
-            })
-            .collect()
+        pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
+            let data_id = ShardId::new();
+            self.register(register_ts, writer(&self.datas.client, data_id).await)
+                .await
+                .unwrap();
+            data_id
+        }
+
+        pub(crate) async fn expect_commit_at(
+            &mut self,
+            commit_ts: u64,
+            data_id: ShardId,
+            keys: &[&str],
+        ) -> Tidy {
+            let mut txn = self.begin();
+            for key in keys {
+                txn.write(&data_id, (*key).into(), (), 1).await;
+            }
+            txn.commit_at(self, commit_ts)
+                .await
+                .unwrap()
+                .apply(self)
+                .await
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn register_at() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let d0 = txns.expect_register(2).await;
+        txns.apply_le(&2).await;
+
+        // Register a second time is a no-op and returns the original
+        // registration time, regardless of whether the second attempt is for
+        // before or after the original time.
+        assert_eq!(txns.register(1, writer(&client, d0).await).await, Ok(2));
+        assert_eq!(txns.register(3, writer(&client, d0).await).await, Ok(2));
+
+        // Cannot register a new data shard at an already closed off time. An
+        // error is returned with the first time that a registration would
+        // succeed.
+        let d1 = ShardId::new();
+        assert_eq!(txns.register(2, writer(&client, d1).await).await, Err(3));
+
+        // Can still register after txns have been committed.
+        txns.expect_commit_at(3, d0, &["foo"]).await;
+        assert_eq!(txns.register(4, writer(&client, d1).await).await, Ok(4));
     }
 
     // Regression test for a bug encountered during initial development:
@@ -435,16 +483,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn race_data_shard_register_and_commit() {
         let client = PersistClient::new_for_tests().await;
-        let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64>::open(
-            0,
-            client.clone(),
-            ShardId::new(),
-            Arc::new(VecU8Schema),
-            Arc::new(UnitSchema),
-        )
-        .await;
-        let d0 = ShardId::new();
-        txns.register(1, writer(&client, d0).await).await.unwrap();
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let d0 = txns.expect_register(1).await;
 
         let mut txn = txns.begin();
         txn.write(&d0, "foo".into(), (), 1).await;
@@ -454,11 +494,11 @@ mod tests {
 
         // Make sure that we can read empty at the register commit time even
         // before the txn commit apply.
-        let actual = expect_snapshot(&mut txns, d0, 1).await;
-        assert_eq!(actual, vec![]);
+        let actual = txns.txns_cache.expect_snapshot(&client, d0, 1).await;
+        assert_eq!(actual, Vec::<String>::new());
 
         commit_apply.apply(&mut txns).await;
-        let actual = expect_snapshot(&mut txns, d0, 2).await;
-        assert_eq!(actual, vec![("foo".into(), 2, 1)]);
+        let actual = txns.txns_cache.expect_snapshot(&client, d0, 2).await;
+        assert_eq!(actual, vec!["foo".to_owned()]);
     }
 }

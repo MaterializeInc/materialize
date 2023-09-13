@@ -10,13 +10,13 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts                subsource      <null>
-auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  progress       <null>
-auctions                subsource      <null>
-bids                    subsource      <null>
-organizations           subsource      <null>
-users                   subsource      <null>
+accounts                subsource      <null>                         <null>
+auction_house           load-generator ${arg.default-storage-size}    materialize_public_auction_house
+auction_house_progress  progress       <null>                         <null>
+auctions                subsource      <null>                         <null>
+bids                    subsource      <null>                         <null>
+organizations           subsource      <null>                         <null>
+users                   subsource      <null>                         <null>
 
 # FOR TABLES doesn't always work.
 # A previous test here checked bids, which worked.
@@ -30,13 +30,13 @@ contains: FOR TABLES (..) invalid for LOAD GENERATOR sources
 > CREATE SOURCE another.auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES FROM another;
-accounts                subsource      <null>
-auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  progress       <null>
-auctions                subsource      <null>
-bids                    subsource      <null>
-organizations           subsource      <null>
-users                   subsource      <null>
+accounts                subsource      <null>                       <null>
+auction_house           load-generator ${arg.default-storage-size}  materialize_another_auction_house
+auction_house_progress  progress       <null>                       <null>
+auctions                subsource      <null>                       <null>
+bids                    subsource      <null>                       <null>
+organizations           subsource      <null>                       <null>
+users                   subsource      <null>                       <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -67,7 +67,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 # Check that negative max cardinalities are rejected
 ! CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1)
-contains: unsupported max cardinality
+contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit found in string
 
 > CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0)
 

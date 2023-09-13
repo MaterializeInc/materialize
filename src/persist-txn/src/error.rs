@@ -13,6 +13,7 @@ use mz_persist_client::ShardId;
 
 /// The data shard was not registered.
 #[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct NotRegistered<T> {
     /// The data shard that was not registered.
     pub data_id: ShardId,

@@ -2256,7 +2256,18 @@ impl FilterCharacteristics {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
 pub enum DomainLimit {
     None,
@@ -2387,7 +2398,7 @@ pub enum EvalError {
         detail: Option<String>,
     },
     ArrayFillWrongArraySubscripts,
-    // TODO: propagate this check more widly throughout the expr crate
+    // TODO: propagate this check more widely throughout the expr crate
     MaxArraySizeExceeded(usize),
     DateDiffOverflow {
         unit: String,
