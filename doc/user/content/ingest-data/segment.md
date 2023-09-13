@@ -13,9 +13,9 @@ from your web and mobile app. You can use Materialize to process, sink or serve 
 
 This guide will walk you through the steps to ingest data from Segment to Materialize.
 
-### Pre-requisite
+### Before you begin
 
-* A Segment source.
+Ensure that you have a Segment source.
 
 ## Step 1. (Optional) Create a Materialize Cluster
 
@@ -26,7 +26,7 @@ create a [cluster guide](/sql/create-cluster),
 or create a managed cluster for all your webhooks using the following SQL statement:
 
 ```sql
-CREATE CLUSTER webhooks_cluster SIZE = '3xsmall', REPLICATION FACTOR = 2;
+CREATE CLUSTER webhooks_cluster SIZE = '3xsmall';
 ```
 
 ## Step 2. Create a Shared Secret
