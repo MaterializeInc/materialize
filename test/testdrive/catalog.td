@@ -538,12 +538,15 @@ mz_message_counts_sent_raw                   log   <null>   <null>
 mz_message_batch_counts_received_raw         log   <null>   <null>
 mz_message_batch_counts_sent_raw             log   <null>   <null>
 mz_peek_durations_histogram_raw              log   <null>   <null>
+mz_prepared_statement_history                source <null>  <null>
 mz_scheduling_elapsed_raw                    log   <null>   <null>
 mz_scheduling_parks_histogram_raw            log   <null>   <null>
+mz_session_history                           source <null>  <null>
 mz_sink_statistics                           source <null>  <null>
 mz_sink_status_history                       source <null>  <null>
 mz_source_statistics                         source <null>  <null>
 mz_source_status_history                     source <null>  <null>
+mz_statement_execution_history               source <null>  <null>
 mz_storage_shards                            source <null>  <null>
 
 > SHOW TABLES FROM mz_internal
@@ -559,10 +562,7 @@ mz_comments
 mz_compute_dependencies
 mz_kafka_sources
 mz_postgres_sources
-mz_prepared_statement_history
-mz_session_history
 mz_sessions
-mz_statement_execution_history
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
@@ -658,7 +658,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-53
+50
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

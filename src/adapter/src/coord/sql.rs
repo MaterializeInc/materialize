@@ -10,6 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
+use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{Params, StatementDesc};
@@ -46,9 +47,11 @@ impl Coordinator {
         params: Params,
     ) {
         let catalog = self.owned_catalog();
+        let now = self.now();
         mz_ore::task::spawn(|| "coord::declare", async move {
-            let result = Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, params)
-                .map(|()| ExecuteResponse::DeclaredCursor);
+            let result =
+                Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, params, now)
+                    .map(|()| ExecuteResponse::DeclaredCursor);
             ctx.retire(result);
         });
     }
@@ -60,6 +63,7 @@ impl Coordinator {
         stmt: Statement<Raw>,
         sql: String,
         params: Params,
+        now: EpochMillis,
     ) -> Result<(), AdapterError> {
         let param_types = params
             .types
@@ -69,7 +73,7 @@ impl Coordinator {
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = params.datums.into_iter().zip(params.types).collect();
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        let logging = session.mint_logging(sql);
+        let logging = session.mint_logging(sql, now);
         session.set_portal(
             name,
             desc,

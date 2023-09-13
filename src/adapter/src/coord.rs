@@ -235,6 +235,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+    DrainStatementLog,
 }
 
 impl Message {
@@ -261,6 +262,7 @@ impl Message {
             RetireExecute { .. } => "retire_execute",
             ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
             PeekStageReady { .. } => "peek_stage_ready",
+            DrainStatementLog => "drain_statement_log",
         }
     }
 }
@@ -1862,6 +1864,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        self.spawn_statement_logging_task();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         // Report if the handling of a single message takes longer than this threshold.
