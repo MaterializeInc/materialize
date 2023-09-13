@@ -88,9 +88,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use clap::Parser;
 use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
-use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::{self as catalog, BootstrapArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -469,7 +469,7 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let storage = mz_adapter::catalog::storage::Connection::open(
+        let storage = mz_catalog::Connection::open(
             stash,
             now.clone(),
             &BootstrapArgs {

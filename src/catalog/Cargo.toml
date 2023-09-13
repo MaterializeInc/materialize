@@ -1,0 +1,29 @@
+[package]
+name = "mz-catalog"
+description = "Materialize's catalog layer."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+futures = "0.3.25"
+itertools = "0.10.5"
+mz-audit-log = { path = "../audit-log" }
+mz-compute-client = { path = "../compute-client" }
+mz-controller = { path = "../controller" }
+mz-controller-types = { path = "../controller-types" }
+mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
+mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
+mz-stash = { path = "../stash" }
+mz-storage-types = { path = "../storage-types" }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
+tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

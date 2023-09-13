@@ -11,19 +11,15 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
-use crate::catalog::storage::{
-    ClusterConfig, ClusterVariant, ClusterVariantManaged, CommentValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, ReplicaConfig, ReplicaLocation, SystemPrivilegesKey,
-    SystemPrivilegesValue,
-};
-
-use super::{
-    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey,
-    IdAllocValue, ItemKey, ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey,
-    TimestampKey, TimestampValue,
+use crate::{
+    AuditLogKey, ClusterConfig, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaKey, ClusterReplicaValue,
+    ClusterValue, ClusterVariant, ClusterVariantManaged, CommentKey, CommentValue, ConfigKey,
+    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey, ItemValue, ReplicaConfig,
+    ReplicaLocation, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemPrivilegesKey,
+    SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 
 impl RustType<proto::ConfigKey> for ConfigKey {

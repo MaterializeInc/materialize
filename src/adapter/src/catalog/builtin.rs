@@ -108,7 +108,7 @@ pub struct BuiltinLog {
     pub schema: &'static str,
 }
 
-impl From<&BuiltinLog> for super::storage::BuiltinLog {
+impl From<&BuiltinLog> for mz_catalog::BuiltinLog {
     fn from(log: &BuiltinLog) -> Self {
         Self {
             variant: log.variant.clone(),
@@ -184,7 +184,7 @@ pub struct BuiltinRole {
     pub attributes: RoleAttributes,
 }
 
-impl From<&BuiltinRole> for super::storage::BuiltinRole {
+impl From<&BuiltinRole> for mz_catalog::BuiltinRole {
     fn from(role: &BuiltinRole) -> Self {
         Self {
             id: role.id,
@@ -203,7 +203,7 @@ pub struct BuiltinCluster {
     pub privileges: &'static [MzAclItem],
 }
 
-impl From<&BuiltinCluster> for super::storage::BuiltinCluster {
+impl From<&BuiltinCluster> for mz_catalog::BuiltinCluster {
     fn from(cluster: &BuiltinCluster) -> Self {
         Self {
             name: cluster.name,
@@ -220,7 +220,7 @@ pub struct BuiltinClusterReplica {
     pub cluster_name: &'static str,
 }
 
-impl From<&BuiltinClusterReplica> for super::storage::BuiltinClusterReplica {
+impl From<&BuiltinClusterReplica> for mz_catalog::BuiltinClusterReplica {
     fn from(replica: &BuiltinClusterReplica) -> Self {
         Self {
             name: replica.name,
