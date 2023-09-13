@@ -13,7 +13,7 @@ aliases:
 
 ---
 
-{{% network-security/ssh-host %}}
+{{% network-security/ssh-tunnel %}}
 
 ## Create a source connection
 

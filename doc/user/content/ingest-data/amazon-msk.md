@@ -47,7 +47,7 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
 {{< tab "SSH Tunnel">}}
 
-{{% network-security/ssh-host %}}
+{{% network-security/ssh-tunnel %}}
 
 ## Create a source connection
 
