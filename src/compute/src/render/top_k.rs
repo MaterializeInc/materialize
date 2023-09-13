@@ -50,7 +50,7 @@ where
         let (ok_input, err_input) = input.as_specific_collection(None);
 
         // We create a new region to compartmentalize the topk logic.
-        let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
+        let (ok_result, err_collection) = ok_input.scope().region_named("Region: TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);
 

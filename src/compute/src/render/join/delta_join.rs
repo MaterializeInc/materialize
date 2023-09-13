@@ -48,7 +48,8 @@ where
         join_plan: DeltaJoinPlan,
     ) -> CollectionBundle<G, Row> {
         // We create a new region to contain the dataflow paths for the delta join.
-        let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
+        let name = "Region: Join(Delta)";
+        let (oks, errs) = self.scope.clone().region_named(name, |inner| {
             // Collects error streams for the ambient scope.
             let mut inner_errs = Vec::new();
 
@@ -116,7 +117,7 @@ where
                 // This collection determines changes that result from updates inbound
                 // from `inputs[relation]` and reflects all strictly prior updates and
                 // concurrent updates from relations prior to `relation`.
-                let name = format!("delta path {}", source_relation);
+                let name = format!("Region: delta path {}", source_relation);
                 let path_results = inner.clone().region_named(&name, |region| {
                     // The plan is to move through each relation, starting from `relation` and in the order
                     // indicated in `orders[relation]`. At each moment, we will have the columns from the

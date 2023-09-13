@@ -203,7 +203,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
-                region.region_named(&format!("Source({:?})", source_id), |inner| {
+                region.region_named(&format!("Region: Source({:?})", source_id), |inner| {
                     let mut mfp = source.arguments.operators.clone().map(|ops| {
                         mz_expr::MfpPlan::create_from(ops)
                             .expect("Linear operators should always be valid")

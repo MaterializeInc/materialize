@@ -209,7 +209,7 @@ function Views(props) {
         <div>error: {error}</div>
       ) : (
         <div>
-          <table class="dataflows">
+          <table className="dataflows">
             <thead>
               <tr>
                 <th>dataflow id</th>
@@ -417,40 +417,63 @@ function View(props) {
       Object.values(records).map(([records, size]) => records)
     );
     const scopes = {};
+    const parent_scopes = {};
+    const region_ids = new Set();
     // Find all the scopes.
     Object.entries(opers).forEach(([id, name]) => {
-      if (name.startsWith('Region')) {
-        scopes[addrStr(addrs[id])] = [];
+      const addr = addrs[id].slice();
+      const addr_str = addrStr(addr);
+      addr.pop();
+      const parent_addr_str = addrStr(addr);
+      if (parent_scopes[addr_str] === undefined) {
+        if (scopes[parent_addr_str] === undefined) {
+          region_ids.add(id);
+          scopes[parent_addr_str] = [];
+        }
+        parent_scopes[addr_str] = parent_addr_str;
       }
     });
+    const child_scopes = Object.keys(parent_scopes).reduce((r, k) =>
+        Object.assign(r, { [parent_scopes[k]]: (r[parent_scopes[k]] || []).concat(k) }), {})
+
     // Populate scopes.
     Object.keys(opers).forEach((id) => {
-      const addr = addrs[id];
+      const addr = addrs[id].slice();
       addr.pop();
       const str = addrStr(addr);
       if (str in scopes) {
         scopes[str].push(id);
       }
     });
-    const clusters = Object.entries(scopes).map(([addr, ids]) => {
+    const render_clusters = (clusters, addr, ids, depth) => {
+      if (ids === undefined) {
+        return;
+      }
       const scope_id = lookup[addr];
-      const sg = [`subgraph "cluster_${addr}" {`];
-      //sg.push(`label="${opers[scope_id]} (id: ${scope_id})"`);
-      sg.push(`_${scope_id};`);
+      if (depth > 0) {
+        clusters.push(`subgraph "cluster_${addr}" {`);
+      }
+      if (opers[scope_id] !== undefined) {
+        clusters.push(`label="${opers[scope_id]} (id: ${scope_id})"`);
+      }
       ids.forEach((id) => {
-        sg.push(`_${id};`);
+          clusters.push(`_${id};`);
       });
-      sg.push('}');
-      return sg.join('\n');
-    });
+      (child_scopes[addr] || []).forEach((scope) => render_clusters(clusters, scope, scopes[scope], depth + 1));
+      if (depth > 0) {
+        clusters.push('}');
+      }
+    }
+    const clusters = [];
+    render_clusters(clusters, child_scopes[''], scopes[child_scopes['']], 0);
     const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
       if (!(id in addrs)) {
         return `// ${id} not in addrs`;
       }
       const from = makeAddrStr(addrs, id, source);
       const to = makeAddrStr(addrs, id, target);
-      const from_id = lookup[from];
-      const to_id = lookup[to];
+      let from_id = lookup[from];
+      let to_id = lookup[to];
       if (from_id === undefined) {
         return `// ${from} or not in lookup`;
       }
@@ -462,7 +485,7 @@ function View(props) {
         : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
-      if (!addrs[id].length) {
+      if (!addrs[id].length || addrs[id].length == 1) {
         return '';
       }
       const notes = [`id: ${id}`];
@@ -611,7 +634,7 @@ async function getCreateView(dataflow_name) {
 function makeAddrStr(addrs, id, other) {
   let addr = addrs[id].slice();
   // The 0 source or target should not append itself to the address.
-  if (other !== 0) {
+  if (parseInt(other) !== 0) {
     addr.push(other);
   }
   return addrStr(addr);

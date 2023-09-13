@@ -93,7 +93,7 @@ where
         inputs: Vec<CollectionBundle<G, Row, T>>,
         linear_plan: LinearJoinPlan,
     ) -> CollectionBundle<G, Row, T> {
-        self.scope.region_named("Join(Linear)", |inner| {
+        self.scope.region_named("Region: Join(Linear)", |inner| {
             // Collect all error streams, and concatenate them at the end.
             let mut errors = Vec::new();
 

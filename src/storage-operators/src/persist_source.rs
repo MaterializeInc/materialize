@@ -106,7 +106,7 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let (stream, token) = scope.scoped(
-        &format!("skip_granular_backpressure({})", source_id),
+        &format!("Region: skip_granular_backpressure({})", source_id),
         |scope| {
             let (stream, token) = persist_source_core(
                 scope,

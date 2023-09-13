@@ -57,7 +57,7 @@ where
         reduce_plan: ReducePlan,
         input_key: Option<Vec<MirScalarExpr>>,
     ) -> CollectionBundle<G, Row, T> {
-        input.scope().region_named("Reduce", |inner| {
+        input.scope().region_named("Region: Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,
                 mut val_plan,
@@ -693,8 +693,9 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        let name = "Region: ReduceHierarchical";
         let mut err_output: Option<Collection<S, _, _>> = None;
-        let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
+        let arranged_output = input.scope().region_named(name, |inner| {
             let input = input.enter(inner);
 
             // Gather the relevant values into a vec of rows ordered by aggregation_index
