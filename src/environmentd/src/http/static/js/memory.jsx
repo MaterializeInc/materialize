@@ -419,51 +419,53 @@ function View(props) {
     const scopes = {};
     const parent_scopes = {};
     const region_ids = new Set();
-    const targets = new Set(Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {return target;}));
-    const sources = new Set(Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {return source;}));
-    console.log("addrs", addrs);
     // Find all the scopes.
     Object.entries(opers).forEach(([id, name]) => {
-      if (name.match(/^(Dataflow)|(\w*Region)/)) {
-        scopes[addrStr(addrs[id])] = [];
-        parent_scopes[addrStr(addrs[id])] = addrStr(addrs[id].slice(0, -1));
-        region_ids.add(id);
+      const addr = addrs[id].slice();
+      const addr_str = addrStr(addr);
+      addr.pop();
+      const parent_addr_str = addrStr(addr);
+      if (parent_scopes[addr_str] === undefined) {
+        if (scopes[parent_addr_str] === undefined) {
+          region_ids.add(id);
+          scopes[parent_addr_str] = [];
+        }
+        parent_scopes[addr_str] = parent_addr_str;
       }
     });
     const child_scopes = Object.keys(parent_scopes).reduce((r, k) =>
         Object.assign(r, { [parent_scopes[k]]: (r[parent_scopes[k]] || []).concat(k) }), {})
-    console.log("parent_scopes", parent_scopes);
-    console.log("child_scopes", child_scopes);
 
     // Populate scopes.
     Object.keys(opers).forEach((id) => {
-      const addr = addrs[id];
+      const addr = addrs[id].slice();
       addr.pop();
       const str = addrStr(addr);
       if (str in scopes) {
         scopes[str].push(id);
       }
     });
-    console.log(scopes);
-    const render_clusters = (clusters, addr, ids) => {
+    const render_clusters = (clusters, addr, ids, depth) => {
+      if (ids === undefined) {
+        return;
+      }
       const scope_id = lookup[addr];
-      clusters.push(`subgraph "cluster_${addr}" {`);
+      if (depth > 0) {
+        clusters.push(`subgraph "cluster_${addr}" {`);
+      }
       if (opers[scope_id] !== undefined) {
         clusters.push(`label="${opers[scope_id]} (id: ${scope_id})"`);
       }
-      clusters.push(`_${scope_id}_in;`);
-      clusters.push(`_${scope_id}_out;`);
       ids.forEach((id) => {
-        if (!region_ids.has(id)) {
           clusters.push(`_${id};`);
-        }
       });
-      (child_scopes[addr] || []).forEach((scope) => render_clusters(clusters, scope, scopes[scope]));
-      clusters.push('}');
+      (child_scopes[addr] || []).forEach((scope) => render_clusters(clusters, scope, scopes[scope], depth + 1));
+      if (depth > 0) {
+        clusters.push('}');
+      }
     }
     const clusters = [];
-    render_clusters(clusters, child_scopes[''], scopes[child_scopes['']]);
-    console.log(clusters);
+    render_clusters(clusters, child_scopes[''], scopes[child_scopes['']], 0);
     const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
       if (!(id in addrs)) {
         return `// ${id} not in addrs`;
@@ -478,31 +480,12 @@ function View(props) {
       if (to_id === undefined) {
         return `// ${to} or not in lookup`;
       }
-      // if (region_ids.has(from_id) && region_ids.has(to_id)) {
-      //   from_id = `${from_id}_out`;
-      //   to_id = `${to_id}_in`;
-      // } else {
-        if (region_ids.has(to_id)) {
-          if (addrs[from_id].length <= addrs[to_id].length) {
-            to_id = `${to_id}_in`;
-          } else {
-            to_id = `${to_id}_out`;
-          }
-        }
-        if (region_ids.has(from_id)) {
-          if (addrs[from_id].length >= (addrs[to_id] || []).length) {
-            from_id = `${from_id}_out`;
-          } else {
-            from_id = `${from_id}_in`;
-          }
-        }
-      // }
       return sent == null
         ? `_${from_id} -> _${to_id} [style="dashed"];`
         : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
-      if (!addrs[id].length) {
+      if (!addrs[id].length || addrs[id].length == 1) {
         return '';
       }
       const notes = [`id: ${id}`];
@@ -526,14 +509,7 @@ function View(props) {
       if (name.length > maxLen + 3) {
         name = name.slice(0, maxLen) + '...';
       }
-      if (region_ids.has(id)) {
-        return `
-        _${id}_in [label="${name} ingress\n${notes.join(', ')}"${style},shape=box]
-        _${id}_out [label="${name} egress",shape=box]
-        `;
-      } else {
-        return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
-      }
+      return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
     });
     oper_labels.unshift('');
     clusters.unshift('');
@@ -658,7 +634,7 @@ async function getCreateView(dataflow_name) {
 function makeAddrStr(addrs, id, other) {
   let addr = addrs[id].slice();
   // The 0 source or target should not append itself to the address.
-  if (other !== 0) {
+  if (parseInt(other) !== 0) {
     addr.push(other);
   }
   return addrStr(addr);
