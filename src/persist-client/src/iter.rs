@@ -57,7 +57,7 @@ fn clone_tuple<T, D>((k, v, t, d): TupleRef<T, D>) -> Tuple<T, D> {
 /// The data needed to fetch a batch part, bundled up to make it easy
 /// to send between threads.
 #[derive(Debug)]
-pub(crate) enum FetchData<T: Timestamp + Codec64> {
+pub(crate) enum FetchData<T> {
     Unleased {
         shard_id: ShardId,
         blob: Arc<dyn Blob + Send + Sync>,
@@ -143,7 +143,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
 }
 
 #[derive(Debug)]
-pub(crate) enum ConsolidationPart<T: Timestamp + Codec64, D> {
+pub(crate) enum ConsolidationPart<T, D> {
     Queued {
         data: FetchData<T>,
     },
@@ -210,7 +210,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub(crate) struct Consolidator<T: Timestamp + Codec64, D> {
+pub(crate) struct Consolidator<T, D> {
     metrics: Arc<Metrics>,
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,

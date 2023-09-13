@@ -116,7 +116,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, CreateExportToken, DataSource, DataSourceOther,
     ExportDescription, ExportState, IntrospectionType, MonotonicAppender, ReadPolicy,
-    StorageController,
+    SnapshotCursor, StorageController,
 };
 use mz_storage_client::healthcheck::{
     self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
@@ -1208,6 +1208,26 @@ where
             }
             Err(_) => Err(StorageError::ReadBeforeSince(id)),
         }
+    }
+
+    async fn snapshot_cursor(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    where
+        Self::Timestamp: Timestamp + Lattice + Codec64,
+    {
+        let mut handle = self.read_handle_for_snapshot(id).await?;
+        let cursor = handle
+            .snapshot_cursor(Antichain::from_elem(as_of))
+            .await
+            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+
+        Ok(SnapshotCursor {
+            _read_handle: handle,
+            cursor,
+        })
     }
 
     async fn snapshot_stats(

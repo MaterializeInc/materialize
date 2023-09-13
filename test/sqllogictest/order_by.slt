@@ -876,10 +876,9 @@ CREATE TABLE t(x int, y int);
 query T multiline
 EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10) LIMIT 8;
 ----
-Explained Query:
+Explained Query (fast path):
   Finish limit=8 output=[#0, #1]
-    TopK limit=10
-      ReadStorage materialize.public.t
+    PersistPeek materialize.public.t
 
 EOF
 

@@ -31,10 +31,11 @@ use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
-use mz_repr::{Diff, GlobalId, RelationType, Row};
+use mz_repr::{DatumVec, Diff, GlobalId, RelationType, Row, RowArena};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
@@ -43,6 +44,8 @@ use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
+
+const SMALL_LIMIT: usize = 1000;
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -87,6 +90,8 @@ pub enum FastPathPlan {
     /// The view can be read out of an existing arrangement.
     /// (coll_id, idx_id, values to look up, mfp to apply)
     PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
+    /// The view can be read directly out of Persist.
+    PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
 }
 
 impl<'a, C> DisplayText<C> for FastPathPlan
@@ -142,6 +147,34 @@ where
                     None,
                 )?;
                 writeln!(f)?;
+                ctx.as_mut().reset();
+                Ok(())
+            }
+            FastPathPlan::PeekPersist(gid, mfp) => {
+                ctx.as_mut().set();
+                let (map, filter, project) = mfp.as_map_filter_project();
+                if project.len() != mfp.input_arity + map.len()
+                    || !project.iter().enumerate().all(|(i, o)| i == *o)
+                {
+                    let outputs = Indices(&project);
+                    writeln!(f, "{}Project ({})", ctx.as_mut(), outputs)?;
+                    *ctx.as_mut() += 1;
+                }
+                if !filter.is_empty() {
+                    let predicates = separated(" AND ", filter);
+                    writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
+                    *ctx.as_mut() += 1;
+                }
+                if !map.is_empty() {
+                    let scalars = CompactScalarSeq(&map);
+                    writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
+                    *ctx.as_mut() += 1;
+                }
+                let human_id = ctx
+                    .as_ref()
+                    .humanize_id(*gid)
+                    .unwrap_or_else(|| gid.to_string());
+                writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -262,6 +295,34 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
+                    // If there is no arrangement but there is a backing persist shard, peek it directly
+                    let safe_mfp = mfp
+                        .clone()
+                        .into_plan()
+                        .map_err(|e| AdapterError::Unstructured(::anyhow::anyhow!(e)))?
+                        .into_nontemporal()
+                        .map_err(|_e| {
+                            AdapterError::Unstructured(::anyhow::anyhow!(
+                                "OneShot plan has temporal constraints"
+                            ))
+                        })?;
+                    let (_m, filters, _p) = safe_mfp.as_map_filter_project();
+                    let small_finish = match &finishing {
+                        None => false,
+                        Some(RowSetFinishing {
+                            order_by,
+                            limit,
+                            offset,
+                            ..
+                        }) => {
+                            order_by.is_empty()
+                                && limit.iter().any(|l| *l < SMALL_LIMIT)
+                                && *offset == 0
+                        }
+                    };
+                    if filters.is_empty() && small_finish {
+                        return Ok(Some(FastPathPlan::PeekPersist(*get_id, safe_mfp)));
+                    }
                 }
                 MirRelationExpr::Join { implementation, .. } => {
                     if let mz_expr::JoinImplementation::IndexedFilter(coll_id, idx_id, key, vals) =
@@ -302,6 +363,7 @@ impl FastPathPlan {
                     }
                 }
             }
+            FastPathPlan::PeekPersist(..) => UsedIndexes::default(),
         }
     }
 }
@@ -423,6 +485,65 @@ impl crate::coord::Coordinator {
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
+
+        if let PeekPlan::FastPath(FastPathPlan::PeekPersist(id, mfp_plan)) = fast_path {
+            info!("Persist fast path peek against collection {id}");
+            let mut cursor = self
+                .controller
+                .storage
+                .snapshot_cursor(id, timestamp)
+                .await?;
+
+            return Ok(ExecuteResponse::SendingRows {
+                future: Box::pin(async move {
+                    let mut accum = vec![];
+                    let limit = finishing.limit.unwrap_or(usize::MAX);
+                    // Re-used state for processing and building rows.
+                    let mut datum_vec = DatumVec::new();
+                    let mut row_builder = Row::default();
+
+                    let arena = RowArena::new();
+                    while accum.len() < limit {
+                        let Some(batch) = cursor.next().await else {
+                            break;
+                        };
+                        for ((k, v), _, d) in batch.take(limit - accum.len()) {
+                            let row = match k {
+                                Ok(k) => match k.0 {
+                                    Ok(row) => row,
+                                    Err(e) => return PeekResponseUnary::Error(e.to_string()),
+                                },
+                                Err(e) => return PeekResponseUnary::Error(e),
+                            };
+                            let () = match v {
+                                Ok(()) => (),
+                                Err(e) => return PeekResponseUnary::Error(e),
+                            };
+                            let mut datum_local = datum_vec.borrow_with(&row);
+                            let eval_result =
+                                mfp_plan.evaluate_into(&mut datum_local, &arena, &mut row_builder);
+                            match eval_result {
+                                Ok(Some(row)) => {
+                                    for _ in 0..d {
+                                        accum.push(row.clone())
+                                    }
+                                }
+                                Ok(None) => {
+                                    // Noop!
+                                }
+                                Err(e) => return PeekResponseUnary::Error(e.to_string()),
+                            }
+                        }
+                    }
+
+                    if let Some(limit) = finishing.limit {
+                        accum.truncate(limit);
+                    }
+                    PeekResponseUnary::Rows(accum)
+                }),
+                span: tracing::Span::current(),
+            });
+        }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to
