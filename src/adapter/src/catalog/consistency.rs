@@ -382,7 +382,7 @@ enum CommentInconsistency {
     NonRelation(CommentObjectId, usize),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum ObjectDependencyInconsistency {
     /// Object A uses Object B, but Object B does not exist.
     MissingUses {
