@@ -2094,10 +2094,23 @@ where
         self.conn.flush().await?;
 
         let mut data = Vec::new();
+        let max_size =
+            usize::cast_from(self.adapter_client.session().vars().max_query_result_size());
         loop {
             let message = self.conn.recv().await?;
             match message {
-                Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
+                Some(FrontendMessage::CopyData(buf)) => {
+                    // Bail before we OOM.
+                    if (data.len() + buf.len()) > max_size {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::INSUFFICIENT_RESOURCES,
+                                "COPY FROM STDIN too large",
+                            ))
+                            .await;
+                    }
+                    data.extend(buf)
+                }
                 Some(FrontendMessage::CopyDone) => break,
                 Some(FrontendMessage::CopyFail(err)) => {
                     self.adapter_client.retire_execute(
