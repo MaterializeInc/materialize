@@ -114,17 +114,15 @@ Create a materialized view to parse the incoming events from Segment:
 
 ```sql
 CREATE VIEW segment_source_parsed AS
-WITH parse AS (
-    SELECT
-        body->>'email' AS email,
-        body->>'event' AS event,
-        body->>'messageId' AS message_id,
-        body->>'properties' AS properties,
-        body->>'timestamp' AS ts,
-        body->>'type' AS event_type,
-        body->>'userId' AS user_id
-    FROM my_segment_source
-);
+  SELECT
+      body->>'email' AS email,
+      body->>'event' AS event,
+      body->>'messageId' AS message_id,
+      body->>'properties' AS properties,
+      body->>'timestamp' AS ts,
+      body->>'type' AS event_type,
+      body->>'userId' AS user_id
+  FROM my_segment_source;
 ```
 
 This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `email`, `event`, `type`, and `userId`.
