@@ -31,6 +31,9 @@ class Environment:
         self.env_kubectl = env_kubectl
         self.sys_kubectl = sys_kubectl
         self.region_api_requests = WebRequests(self.auth, region_api_server_base_url)
+        self.create_env_assignment_get_retries = 120
+        self.envd_waiting_region_api_timeout = 45
+        self.envd_waiting_get_env_retries = 900
 
     def create_environment_assignment(
         self,
@@ -51,7 +54,7 @@ class Environment:
             None,
             "environment",
             environment,
-            10,
+            self.create_env_assignment_get_retries,
         )
         return self.sys_kubectl.get(
             None,
@@ -63,6 +66,7 @@ class Environment:
         def get_environment() -> Response:
             response = self.region_api_requests.get(
                 "/api/region",
+                self.envd_waiting_region_api_timeout,
             )
             region_info = response.json().get("regionInfo")
             assert region_info
@@ -71,7 +75,7 @@ class Environment:
             return response
 
         environment_json: dict[str, Any] = retry(
-            get_environment, 600, [AssertionError]
+            get_environment, self.envd_waiting_get_env_retries, [AssertionError]
         ).json()
         pgwire_url = environment_json["regionInfo"]["sqlAddress"]
         (pgwire_host, pgwire_port) = pgwire_url.split(":")
