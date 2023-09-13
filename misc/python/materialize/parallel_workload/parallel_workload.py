@@ -18,8 +18,8 @@ from collections import Counter, defaultdict
 
 import pg8000
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
     CancelAction,

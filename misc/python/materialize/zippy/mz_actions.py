@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.minio_capabilities import MinioIsRunning

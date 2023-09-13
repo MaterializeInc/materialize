@@ -31,7 +31,8 @@ from typing import Any
 
 import yaml
 
-from materialize import mzbuild, mzcompose, spawn
+from materialize import mzbuild, spawn
+from materialize.mzcompose.composition import Composition
 
 from ..deploy.deploy_util import rust_version
 
@@ -198,7 +199,7 @@ def trim_pipeline(pipeline: Any, coverage: bool) -> None:
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
-                        composition = mzcompose.Composition(repo, name)
+                        composition = Composition(repo, name)
                         for dep in composition.dependencies:
                             step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))

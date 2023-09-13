@@ -11,7 +11,7 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.debezium_capabilities import (
     DebeziumRunning,
     DebeziumSourceExists,

@@ -33,7 +33,7 @@ from kubernetes.client import (
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
-from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 
 try:
     from semver.version import Version
