@@ -47,6 +47,11 @@ close ::=
 col_option ::=
   'NOT' 'NULL' |
   'DEFAULT' expr
+comment_on ::=
+  'COMMENT ON' (
+    'TABLE' | 'COLUMN' | 'VIEW' | 'MATERIALIZED VIEW' | 'SOURCE' | 'SINK' | 'INDEX' | 'FUNCTION' |
+    'CONNECTION' | 'TYPE' | 'SECRET' | 'ROLE' | 'DATABASE' | 'SCHEMA' | 'CLUSTER' | 'CLUSTER REPLICA'
+  ) object_name 'IS' ( string_literal | 'NULL' )
 commit ::=
   'COMMIT'
 copy_to ::=
