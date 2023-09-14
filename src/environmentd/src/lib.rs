@@ -96,7 +96,7 @@ use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, B
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{stash, BootstrapArgs};
+use mz_catalog::{initialize, BootstrapArgs};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -388,7 +388,7 @@ impl Listeners {
             // TODO: once all stashes have a deploy_generation, don't need to handle the Option
             let stash_generation = stash
                 .with_transaction(move |tx| {
-                    Box::pin(async move { stash::deploy_generation(&tx).await })
+                    Box::pin(async move { initialize::deploy_generation(&tx).await })
                 })
                 .await?;
             tracing::info!("Found stash generation {stash_generation:?}");
