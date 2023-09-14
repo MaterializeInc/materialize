@@ -547,14 +547,22 @@ impl SourceRender for KafkaSourceConnection {
                 assert!(reader.partition_consumers.is_empty());
                 reader.partition_consumers = consumers;
 
-                for (pid, last_offset) in reader.last_offsets.iter() {
-                    let pid_upper = MzOffset::from(u64::try_from(*last_offset + 1).unwrap());
-                    let upper = Partitioned::with_partition(*pid, pid_upper);
-                    let part_cap = reader.partition_capabilities.get_mut(pid).unwrap();
-                    part_cap.data.downgrade(&upper);
-                    // This can fail because the progress capability initially jumps ahead of the
-                    // data capability.
-                    let _ = part_cap.progress.try_downgrade(&upper);
+                let positions = reader.consumer.position().unwrap();
+                let topic_positions = positions.elements_for_topic(&reader.topic_name);
+                for position in topic_positions {
+                    // The offset begins in the `Offset::Invalid` state in which case we simply
+                    // skip this partition.
+                    if let Offset::Offset(offset) = position.offset() {
+                        let pid = position.partition();
+                        let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
+                        let upper = Partitioned::with_partition(pid, upper_offset);
+
+                        let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
+                        part_cap.data.downgrade(&upper);
+                        // This can fail because the progress capability initially jumps ahead of
+                        // the data capability.
+                        let _ = part_cap.progress.try_downgrade(&upper);
+                    }
                 }
 
                 let status = reader.health_status.lock().unwrap().take();
