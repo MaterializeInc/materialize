@@ -18,20 +18,28 @@ version: 2
 # https://materialize.com/docs/get-started/quickstart/
 
 models:
-  - name: avg_bids
-    description: "The average price of bids that arrived before their auctions closed"
+  - name: fraud_activity
+    description: "Detects when a user wins an auction as a bidder, and then is identified as a seller for an item at a higher price."
     columns:
-      - name: item
-        description: "The primary key for this table"
+      - name: seller
+        description: "The seller for an auction"
         tests:
           - unique
           - not_null
 
-  - name: num_bids
-    description: "The number of eligible bids per item"
+  - name: funds_movement
+    description: "Tracks the credits and debits of all winning bids."
     columns:
-      - name: item
-        description: "The primary key for this table"
+      - name: id
+        description: "The id of the buyer or seller"
+        tests:
+          - not_null
+
+  - name: winning_bids
+    description: "joins data from `auctions` and `bids` to get the bid with the highest `amount` for each auction at its `end_time`."
+    columns:
+      - name: id
+        description: "The primary key of the auction"
         tests:
           - unique
           - not_null

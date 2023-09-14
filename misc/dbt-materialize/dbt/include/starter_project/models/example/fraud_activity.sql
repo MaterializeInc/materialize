@@ -13,13 +13,15 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{{ config(materialized='view', indexes=[{'columns': ['item']}]) }}
+{{ config(materialized='view') }}
 
 SELECT
-  auctions.item,
-  avg(bids.amount) AS average_bid
-FROM {{ source('auction','bids') }} AS bids
-JOIN {{ source('auction','auctions') }} AS auctions
-  ON bids.auction_id = auctions.id
-WHERE bids.bid_time < auctions.end_time
-GROUP BY auctions.item
+  w2.seller,
+  w2.item AS seller_item,
+  w2.amount AS seller_amount,
+  w1.item buyer_item,
+  w1.amount buyer_amount
+FROM {{ ref('winning_bids') }} w1
+JOIN {{ ref('winning_bids') }} w2
+WHERE w1.buyer = w2.seller
+  AND w2.amount > w1.amount

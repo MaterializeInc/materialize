@@ -13,13 +13,14 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{{ config(materialized='materializedview', indexes=[{'columns': ['item']}]) }}
+{{ config(materialized='view', indexes=[{'columns': ['item', 'buyer', 'seller']}]) }}
 
-SELECT
+SELECT DISTINCT ON
+  (auctions.id) bids.*,
   auctions.item,
-  count(bids.id) AS number_of_bids
-FROM {{ source('auction','bids') }} AS bids
-JOIN {{ source('auction','auctions') }} AS auctions
-  ON bids.auction_id = auctions.id
-WHERE bids.bid_time < auctions.end_time
-GROUP BY auctions.item
+  auctions.seller
+FROM {{ source('auction','auctions') }}
+JOIN {{ source('auction','bids') }}
+WHERE auctions.id = bids.auction_id
+  AND bids.bid_time < auctions.end_time
+  AND mz_now() >= auctions.end_time
