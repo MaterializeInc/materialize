@@ -77,7 +77,7 @@ tests_with_views=(
      test/sqllogictest/sqlite/test/random/aggregates/slt_good_129.test \
 )
 
-readarray -d '' tests < <(find test/sqllogictest/sqlite/test -type f -print0)
+readarray -d '' tests < <(find test/sqllogictest/sqlite/test -type f -print0 | sort -z)
 # Exclude tests_with_views from tests
 for f in "${tests_with_views[@]}"; do
     tests=("${tests[@]/$f}")
