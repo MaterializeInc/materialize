@@ -226,13 +226,18 @@ impl ProfileContext {
             .config_file
             .load_profile(&self.profile_name)
             .unwrap();
+
+        // Region must be lower case.
+        // Cloud's API response returns the region in
+        // lower case.
         let region_name = self
             .context
             .region
             .clone()
             .or(profile.region().map(|r| r.to_string()))
             .ok_or_else(|| panic!("no region configured"))
-            .unwrap();
+            .unwrap()
+            .to_lowercase();
         Ok(RegionContext {
             context: self,
             region_name,
