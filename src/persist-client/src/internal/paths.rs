@@ -119,20 +119,23 @@ impl Display for WriterKey {
 #[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PartialBatchKey(pub(crate) String);
 
+fn split_batch_key(key: &str) -> Result<(WriterKey, PartId), String> {
+    let (writer_key, part_id) = key
+        .split_once('/')
+        .ok_or("partial batch key should contain a /".to_owned())?;
+
+    let writer_key = WriterKey::from_str(writer_key)?;
+    let part_id = PartId::from_str(part_id)?;
+    Ok((writer_key, part_id))
+}
+
 impl PartialBatchKey {
     pub fn new(version: &WriterKey, part_id: &PartId) -> Self {
         PartialBatchKey(format!("{}/{}", version, part_id))
     }
 
     pub fn split(&self) -> (WriterKey, PartId) {
-        let (writer_key, part_id) = self
-            .0
-            .split_once('/')
-            .expect("partial batch key should contain a /");
-
-        let writer_key = WriterKey::from_str(writer_key).expect("correctly formatted writer key");
-        let part_id = PartId::from_str(part_id).expect("correctly formatted part id");
-        (writer_key, part_id)
+        split_batch_key(&self.0).expect("valid partial batch key")
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
@@ -254,17 +257,20 @@ impl Deref for BlobKey {
 
 impl BlobKey {
     pub fn parse_ids(key: &str) -> Result<(ShardId, PartialBlobKey), String> {
-        let ids = key.split('/').collect::<Vec<_>>();
+        let err = || {
+            format!("invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}", key)
+        };
+        let (shard, blob) = key.split_once('/').ok_or(err())?;
+        let shard_id = ShardId::from_str(shard)?;
 
-        match ids[..] {
-            [shard, writer, part] if writer.starts_with('w') | writer.starts_with('n') => Ok(
-                (ShardId::from_str(shard)?, PartialBlobKey::Batch(WriterKey::from_str(writer)?, PartId::from_str(part)?))
-            ),
-            [shard, seqno, rollup] if seqno.starts_with('v') => Ok(
-                (ShardId::from_str(shard)?, PartialBlobKey::Rollup(SeqNo::from_str(seqno)?, RollupId::from_str(rollup)?))
-            ),
-            _ => Err(format!("invalid blob key format. expected either <shard_id>/<writer_id>/<part_id> or <shard_id>/<seqno>/<rollup_id>. got: {}", key)),
-        }
+        let blob_key = if blob.starts_with('w') | blob.starts_with('n') {
+            let (writer, part) = split_batch_key(blob)?;
+            PartialBlobKey::Batch(writer, part)
+        } else {
+            let (seqno, rollup) = blob.split_once('/').ok_or(err())?;
+            PartialBlobKey::Rollup(SeqNo::from_str(seqno)?, RollupId::from_str(rollup)?)
+        };
+        Ok((shard_id, blob_key))
     }
 }
 
