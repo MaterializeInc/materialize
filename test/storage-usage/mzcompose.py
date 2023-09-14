@@ -11,8 +11,11 @@ import time
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres, Redpanda, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 COLLECTION_INTERVAL_SECS = 5
 
@@ -172,7 +175,7 @@ database_objects = [
               FOR TABLES (pg_table);
             """
         ),
-        expected_size=1024,
+        expected_size=4 * 1024,
     ),
     # The pg-cdc data is expected to be in the sub-source,
     # unaffected by the presence of other tables

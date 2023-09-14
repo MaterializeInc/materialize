@@ -24,9 +24,13 @@ launchdarkly-server-sdk = { version = "1.0.0", default_features = false, feature
 maplit = "1.0.2"
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
+mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }
+mz-controller-types = { path = "../controller-types" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator = { path = "../orchestrator" }
@@ -47,6 +51,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
+mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-cloud-resources = { path = "../cloud-resources" }

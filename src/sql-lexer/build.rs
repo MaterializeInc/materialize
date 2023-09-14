@@ -142,7 +142,7 @@ fn main() -> Result<()> {
             phf.entry(UncasedStr::new(kw), &format!("Keyword::{}", kw));
         }
         buf.writeln(format!(
-            "static KEYWORDS: phf::Map<&'static UncasedStr, Keyword> = {};",
+            "pub static KEYWORDS: phf::Map<&'static UncasedStr, Keyword> = {};",
             phf.build()
         ));
 

@@ -10,7 +10,7 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning

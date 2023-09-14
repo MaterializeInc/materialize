@@ -34,7 +34,7 @@ pub use mz_sql::session::vars::{
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -118,16 +118,17 @@ impl<T: TimestampManipulation> Session<T> {
     // binding a statement directly to a portal without creating an
     // intermediate prepared statement. Thus, for those cases, a
     // mechanism for generating the logging metadata directly is needed.
-    pub(crate) fn mint_logging(&self, sql: String) -> Arc<QCell<PreparedStatementLoggingInfo>> {
+    pub(crate) fn mint_logging(
+        &self,
+        sql: String,
+        now: EpochMillis,
+    ) -> Arc<QCell<PreparedStatementLoggingInfo>> {
         Arc::new(QCell::new(
             &self.qcell_owner,
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 session_id: self.uuid,
-                prepared_at: Utc::now()
-                    .timestamp_millis()
-                    .try_into()
-                    .expect("sane system time"),
+                prepared_at: now,
                 name: "".to_string(),
                 accounted: false,
             },
@@ -699,8 +700,9 @@ impl<T: TimestampManipulation> Session<T> {
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
         self.role_metadata = Some(RoleMetadata {
-            current_role: role_id,
+            authenticated_role: role_id,
             session_role: role_id,
+            current_role: role_id,
         });
     }
 
@@ -714,18 +716,6 @@ impl<T: TimestampManipulation> Session<T> {
             .expect("role_metadata invariant violated")
     }
 
-    /// Returns the session's current role ID.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn current_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .current_role
-    }
-
     /// Returns the session's session role ID.
     ///
     /// # Panics
@@ -736,6 +726,18 @@ impl<T: TimestampManipulation> Session<T> {
             .as_ref()
             .expect("role_metadata invariant violated")
             .session_role
+    }
+
+    /// Returns the session's current role ID.
+    ///
+    /// # Panics
+    /// If the session has not connected successfully.
+    pub fn current_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .current_role
     }
 }
 

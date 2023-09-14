@@ -13,7 +13,7 @@
 //! Logic for executing a planned SQL query.
 
 use inner::return_if_err;
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
@@ -26,11 +26,11 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
-use mz_storage_client::types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, ErrorKind};
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
@@ -38,7 +38,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{ExecuteContext, ExecuteResponseKind};
+use crate::{catalog, ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -102,7 +102,9 @@ impl Coordinator {
             &self
                 .active_conns()
                 .into_iter()
-                .map(|(conn_id, conn_meta)| (conn_id.unhandled(), conn_meta.authenticated_role))
+                .map(|(conn_id, conn_meta)| {
+                    (conn_id.unhandled(), *conn_meta.authenticated_role_id())
+                })
                 .collect(),
             ctx.session().role_metadata(),
             ctx.session().vars(),
@@ -674,9 +676,9 @@ impl Coordinator {
                 table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
             }
             None => {
-                return Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                )))
+                return Err(AdapterError::Catalog(catalog::Error {
+                    kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
+                }))
             }
         };
 

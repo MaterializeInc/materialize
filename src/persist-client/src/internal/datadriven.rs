@@ -192,6 +192,7 @@ mod tests {
                         };
                         let mut state = state.lock().await;
                         let res = match tc.directive.as_str() {
+                            "add-rollup" => machine_dd::add_rollup(&mut state, args).await,
                             "apply-merge-res" => {
                                 machine_dd::apply_merge_res(&mut state, args).await
                             }

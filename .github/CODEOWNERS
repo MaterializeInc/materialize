@@ -14,6 +14,7 @@
 /.github                            @benesch
 /bin
 /ci                                 @MaterializeInc/testing
+/ci/test/lint-deps.toml             @danhhz @benesch
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
@@ -33,7 +34,9 @@
 /src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute
+/src/compute-types                  @MaterializeInc/compute
 /src/controller                     @MaterializeInc/compute @MaterializeInc/storage
+/src/controller-types               @MaterializeInc/compute @MaterializeInc/storage
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute
@@ -91,6 +94,9 @@
 /src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
+/src/storage-controller             @MaterializeInc/storage
+/src/storage-operators              @MaterializeInc/storage
+/src/storage-types                  @MaterializeInc/storage
 /src/test-macro                     @MaterializeInc/testing
 /src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/compute

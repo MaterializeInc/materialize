@@ -1272,6 +1272,21 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
         internal: false,
     });
 
+pub const TRUNCATE_STATEMENT_LOG: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("truncate_statement_log"),
+    value: &true,
+    description: "Whether to garbage-collect old statement log entries on startup (Materialize).",
+    internal: true,
+};
+
+pub const STATEMENT_LOGGING_RETENTION: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("statement_logging_retention"),
+    // 30 days
+    value: &Duration::from_secs(30 * 24 * 60 * 60),
+    description: "The time to retain logged statements (Materialize).",
+    internal: true,
+};
+
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -1287,7 +1302,7 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
-/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_source_status_history_entries`].
 const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_source_status_history_entries"),
     value: &5,
@@ -1295,7 +1310,7 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     internal: true
 };
 
-/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
 const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_sink_status_history_entries"),
     value: &5,
@@ -2350,6 +2365,8 @@ impl SystemVars {
                 &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
+            .with_var(&TRUNCATE_STATEMENT_LOG)
+            .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
 
@@ -3061,6 +3078,16 @@ impl SystemVars {
     /// Returns the `statement_logging_default_sample_rate` configuration parameter.
     pub fn statement_logging_default_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
+    }
+
+    /// Returns the `truncate_statement_log` configuration parameter.
+    pub fn truncate_statement_log(&self) -> bool {
+        *self.expect_value(&TRUNCATE_STATEMENT_LOG)
+    }
+
+    /// Returns the `statement_logging_retention` configuration parameter.
+    pub fn statement_logging_retention(&self) -> Duration {
+        *self.expect_value(&STATEMENT_LOGGING_RETENTION)
     }
 
     /// Returns the `optimizer_stats_timeout` configuration parameter.

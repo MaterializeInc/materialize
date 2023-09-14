@@ -13,13 +13,13 @@
 //! produced by the upstream service. The main export of this module is
 //! [`create_raw_source`], which turns
 //! [`RawSourceCreationConfigs`](RawSourceCreationConfig) and
-//! [`SourceConnections`](mz_storage_client::types::sources::SourceConnection)
+//! [`SourceConnections`](mz_storage_types::sources::SourceConnection)
 //! implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the
 //! actual object created by a `CREATE SOURCE` statement, is created by
 //! composing [`create_raw_source`] with decoding,
-//! [`SourceEnvelope`](mz_storage_client::types::sources::SourceEnvelope) rendering, and
+//! [`SourceEnvelope`](mz_storage_types::sources::SourceEnvelope) rendering, and
 //! more.
 
 // https://github.com/tokio-rs/prost/issues/237

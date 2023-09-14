@@ -37,7 +37,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
-| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 
 ### `mz_cluster_replica_sizes`
 
@@ -57,7 +57,7 @@ any kind of capacity planning.
 | `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
 | `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
 ### `mz_cluster_links`
@@ -108,7 +108,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
-| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 
 ### `mz_cluster_replica_heartbeats`
 
@@ -1108,6 +1108,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sinks -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->

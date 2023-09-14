@@ -16,7 +16,7 @@ from materialize.data_ingest.definition import Definition
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.rowlist import RowList
 from materialize.data_ingest.transaction import Transaction
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 
 
 class TransactionSize(Enum):

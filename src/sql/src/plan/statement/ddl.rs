@@ -17,7 +17,7 @@ use std::fmt::Write;
 use std::iter;
 
 use itertools::Itertools;
-use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
@@ -40,21 +40,21 @@ use mz_sql_parser::ast::{
     DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
-use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::connections::{
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
     KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
-use mz_storage_client::types::sinks::{
+use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::encoding::{
+use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage_client::types::sources::{
+use mz_storage_types::sources::{
     GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
@@ -1633,8 +1633,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection:
-        Option<mz_storage_client::types::connections::CsrConnection<ReferencedConnection>>,
+    pub csr_connection: Option<mz_storage_types::connections::CsrConnection<ReferencedConnection>>,
     pub confluent_wire_format: bool,
 }
 
@@ -3246,10 +3245,8 @@ impl KafkaConnectionOptionExtracted {
     pub fn get_brokers(
         &self,
         scx: &StatementContext,
-    ) -> Result<
-        Vec<mz_storage_client::types::connections::KafkaBroker<ReferencedConnection>>,
-        PlanError,
-    > {
+    ) -> Result<Vec<mz_storage_types::connections::KafkaBroker<ReferencedConnection>>, PlanError>
+    {
         let mut brokers = match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => sql_bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
             (None, None) => sql_bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
@@ -3326,7 +3323,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
             };
 
-            out.push(mz_storage_client::types::connections::KafkaBroker {
+            out.push(mz_storage_types::connections::KafkaBroker {
                 address: broker.address.clone(),
                 tunnel,
             });
@@ -3421,10 +3418,8 @@ impl KafkaConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<
-        mz_storage_client::types::connections::KafkaConnection<ReferencedConnection>,
-        PlanError,
-    > {
+    ) -> Result<mz_storage_types::connections::KafkaConnection<ReferencedConnection>, PlanError>
+    {
         Ok(KafkaConnection {
             brokers: self.get_brokers(scx)?,
             security: Option::<KafkaSecurity>::try_from(&self)?,
@@ -3457,8 +3452,7 @@ impl CsrConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage_client::types::connections::CsrConnection<ReferencedConnection>, PlanError>
-    {
+    ) -> Result<mz_storage_types::connections::CsrConnection<ReferencedConnection>, PlanError> {
         let url: reqwest::Url = match self.url {
             Some(url) => url
                 .parse()
@@ -3487,7 +3481,7 @@ impl CsrConnectionOptionExtracted {
 
         let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-        Ok(mz_storage_client::types::connections::CsrConnection {
+        Ok(mz_storage_types::connections::CsrConnection {
             url,
             tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
@@ -3516,10 +3510,8 @@ impl PostgresConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<
-        mz_storage_client::types::connections::PostgresConnection<ReferencedConnection>,
-        PlanError,
-    > {
+    ) -> Result<mz_storage_types::connections::PostgresConnection<ReferencedConnection>, PlanError>
+    {
         let cert = self.ssl_certificate;
         let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
@@ -3541,7 +3533,7 @@ impl PostgresConnectionOptionExtracted {
 
         let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-        Ok(mz_storage_client::types::connections::PostgresConnection {
+        Ok(mz_storage_types::connections::PostgresConnection {
             database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -3568,13 +3560,11 @@ generate_extracted_config!(
     (User, String)
 );
 
-impl TryFrom<SshConnectionOptionExtracted>
-    for mz_storage_client::types::connections::SshConnection
-{
+impl TryFrom<SshConnectionOptionExtracted> for mz_storage_types::connections::SshConnection {
     type Error = PlanError;
 
     fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(mz_storage_client::types::connections::SshConnection {
+        Ok(mz_storage_types::connections::SshConnection {
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
@@ -3695,7 +3685,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Ssh { options } => {
             let c = SshConnectionOptionExtracted::try_from(options)?;
-            let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
+            let connection = mz_storage_types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };

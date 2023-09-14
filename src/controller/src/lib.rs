@@ -99,8 +99,9 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
+use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
-    ActiveComputeController, ComputeController, ComputeControllerResponse, ReplicaId,
+    ActiveComputeController, ComputeController, ComputeControllerResponse,
 };
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -374,11 +375,11 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    mz_storage_client::controller::Controller<T>: StorageController<Timestamp = T>,
+    mz_storage_controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
-        let storage_controller = mz_storage_client::controller::Controller::new(
+        let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
             config.persist_location,

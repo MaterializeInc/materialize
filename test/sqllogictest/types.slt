@@ -1102,3 +1102,73 @@ true
 true
 true
 true
+
+## coalesce nullability
+
+statement ok
+CREATE TABLE t1(key int, val int, n int NOT NULL);
+
+# coalesce's output type should be non-nullable when any of its input types are non-nullable
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, 0)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer)" }
+    Map (coalesce(#0, 0)) // { types: "(integer?, integer?, integer, integer)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, n)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer)" }
+    Map (coalesce(#0, #2)) // { types: "(integer?, integer?, integer, integer)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, 0), sum(val)
+FROM t1
+GROUP BY key;
+----
+Explained Query:
+  Project (#2, #1) // { types: "(integer, bigint?)" }
+    Map (coalesce(#0, 0)) // { types: "(integer?, bigint?, integer)" }
+      Reduce group_by=[#0] aggregates=[sum(#1)] // { types: "(integer?, bigint?)" }
+        Project (#0, #1) // { types: "(integer?, integer?)" }
+          ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+# coalesce's output type should be nullable when all of its input types are nullable
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, val)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer?)" }
+    Map (coalesce(#0, #1)) // { types: "(integer?, integer?, integer, integer?)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, val + 5)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer?)" }
+    Map (coalesce(#0, (#1 + 5))) // { types: "(integer?, integer?, integer, integer?)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF

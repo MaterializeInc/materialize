@@ -82,10 +82,7 @@
 //! The public API for the compute layer.
 
 pub mod controller;
-pub mod explain;
 pub mod logging;
 pub mod metrics;
-pub mod plan;
 pub mod protocol;
 pub mod service;
-pub mod types;

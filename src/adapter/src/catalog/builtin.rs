@@ -37,15 +37,20 @@ use mz_sql::catalog::{
     TypeReference,
 };
 use mz_sql::rbac;
-use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{
+    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
+};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
+use mz_storage_client::healthcheck::{
+    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
+    MZ_SOURCE_STATUS_HISTORY_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 
-pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_", "external_"]);
+pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 
 #[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
@@ -101,6 +106,16 @@ pub struct BuiltinLog {
     pub variant: LogVariant,
     pub name: &'static str,
     pub schema: &'static str,
+}
+
+impl From<&BuiltinLog> for mz_catalog::BuiltinLog {
+    fn from(log: &BuiltinLog) -> Self {
+        Self {
+            variant: log.variant.clone(),
+            name: log.name,
+            schema: log.schema,
+        }
+    }
 }
 
 #[derive(Hash, Debug)]
@@ -161,11 +176,22 @@ pub struct BuiltinIndex {
 
 #[derive(Clone, Debug)]
 pub struct BuiltinRole {
+    pub id: RoleId,
     /// Name of the builtin role.
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
     pub attributes: RoleAttributes,
+}
+
+impl From<&BuiltinRole> for mz_catalog::BuiltinRole {
+    fn from(role: &BuiltinRole) -> Self {
+        Self {
+            id: role.id,
+            name: role.name,
+            attributes: role.attributes.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -174,7 +200,16 @@ pub struct BuiltinCluster {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
-    pub privileges: Vec<MzAclItem>,
+    pub privileges: &'static [MzAclItem],
+}
+
+impl From<&BuiltinCluster> for mz_catalog::BuiltinCluster {
+    fn from(cluster: &BuiltinCluster) -> Self {
+        Self {
+            name: cluster.name,
+            privileges: cluster.privileges,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -183,6 +218,15 @@ pub struct BuiltinClusterReplica {
     pub name: &'static str,
     /// Name of the cluster that this replica belongs to.
     pub cluster_name: &'static str,
+}
+
+impl From<&BuiltinClusterReplica> for mz_catalog::BuiltinClusterReplica {
+    fn from(replica: &BuiltinClusterReplica) -> Self {
+        Self {
+            name: replica.name,
+            cluster_name: replica.cluster_name,
+        }
+    }
 }
 
 /// Uniquely identifies the definition of a builtin object.
@@ -2002,6 +2046,30 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     is_retained_metrics_object: false,
 });
 
+pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_statement_execution_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::StatementExecutionHistory),
+    desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_prepared_statement_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::PreparedStatementHistory),
+    desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
+    is_retained_metrics_object: false,
+});
+
+pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_session_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::SessionHistory),
+    desc: MZ_SESSION_HISTORY_DESC.clone(),
+    is_retained_metrics_object: false,
+});
+
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2207,49 +2275,6 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("sub_id", ScalarType::UInt64.nullable(true))
         .with_column("comment", ScalarType::String.nullable(false)),
-    is_retained_metrics_object: false,
-});
-
-pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_prepared_statement_history",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Uuid.nullable(false))
-        .with_column("session_id", ScalarType::Uuid.nullable(false))
-        .with_column("name", ScalarType::String.nullable(false))
-        .with_column("sql", ScalarType::String.nullable(false))
-        .with_column("prepared_at", ScalarType::TimestampTz.nullable(false)),
-    is_retained_metrics_object: false,
-});
-
-pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_statement_execution_history",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Uuid.nullable(false))
-        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
-        .with_column("sample_rate", ScalarType::Float64.nullable(false))
-        .with_column(
-            "params",
-            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
-        )
-        .with_column("began_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("finished_at", ScalarType::TimestampTz.nullable(true))
-        .with_column("finished_status", ScalarType::String.nullable(true))
-        .with_column("error_message", ScalarType::String.nullable(true))
-        .with_column("rows_returned", ScalarType::Int64.nullable(true))
-        .with_column("execution_strategy", ScalarType::String.nullable(true)),
-    is_retained_metrics_object: false,
-});
-
-pub static MZ_SESSION_HISTORY: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_session_history",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Uuid.nullable(false))
-        .with_column("connected_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("application_name", ScalarType::String.nullable(false))
-        .with_column("authenticated_user", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
 
@@ -4253,6 +4278,24 @@ WHERE false
     ",
 };
 
+pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
+    name: "mz_show_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_show_sources
+AS SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
+FROM mz_catalog.mz_sources AS sources
+LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id",
+};
+
+pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
+    name: "mz_show_sinks",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_show_sinks
+AS SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
+FROM mz_catalog.mz_sinks AS sinks
+JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
+};
+
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4683,7 +4726,7 @@ pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sources_ind
 IN CLUSTER mz_introspection
-ON mz_catalog.mz_sources (schema_id)",
+ON mz_internal.mz_show_sources (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4710,7 +4753,7 @@ pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sinks_ind
 IN CLUSTER mz_introspection
-ON mz_catalog.mz_sinks (schema_id)",
+ON mz_internal.mz_show_sinks (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4885,19 +4928,21 @@ ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_SYSTEM_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*SYSTEM_USER.name,
+pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
+    id: MZ_SYSTEM_ROLE_ID,
+    name: SYSTEM_USER_NAME,
     attributes: RoleAttributes::new().with_all(),
-});
+};
 
-pub static MZ_SUPPORT_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
-    name: &*SUPPORT_USER.name,
+pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
+    id: MZ_SUPPORT_ROLE_ID,
+    name: SUPPORT_USER_NAME,
     attributes: RoleAttributes::new(),
-});
+};
 
-pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
-    name: &*SYSTEM_USER.name,
-    privileges: vec![
+pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {
+    name: SYSTEM_USER_NAME,
+    privileges: &[
         MzAclItem {
             grantee: MZ_SUPPORT_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
@@ -4905,17 +4950,16 @@ pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
-});
+};
 
-pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
-    Lazy::new(|| BuiltinClusterReplica {
-        name: DEFAULT_CLUSTER_REPLICA_NAME,
-        cluster_name: MZ_SYSTEM_CLUSTER.name,
-    });
+pub const MZ_SYSTEM_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
+    name: DEFAULT_CLUSTER_REPLICA_NAME,
+    cluster_name: MZ_SYSTEM_CLUSTER.name,
+};
 
-pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
+pub const MZ_INTROSPECTION_CLUSTER: BuiltinCluster = BuiltinCluster {
     name: "mz_introspection",
-    privileges: vec![
+    privileges: &[
         MzAclItem {
             grantee: RoleId::Public,
             grantor: MZ_SYSTEM_ROLE_ID,
@@ -4928,13 +4972,12 @@ pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| Builtin
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
-});
+};
 
-pub static MZ_INTROSPECTION_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
-    Lazy::new(|| BuiltinClusterReplica {
-        name: DEFAULT_CLUSTER_REPLICA_NAME,
-        cluster_name: MZ_INTROSPECTION_CLUSTER.name,
-    });
+pub const MZ_INTROSPECTION_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
+    name: DEFAULT_CLUSTER_REPLICA_NAME,
+    cluster_name: MZ_INTROSPECTION_CLUSTER.name,
+};
 
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
@@ -5118,11 +5161,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
-        Builtin::Table(&MZ_SESSION_HISTORY),
         Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
         Builtin::Table(&MZ_SYSTEM_PRIVILEGES),
-        Builtin::Table(&MZ_PREPARED_STATEMENT_HISTORY),
-        Builtin::Table(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::View(&MZ_RELATIONS),
@@ -5172,6 +5212,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
+        Builtin::View(&MZ_SHOW_SOURCES),
+        Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
@@ -5244,6 +5286,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_STATEMENT_EXECUTION_HISTORY),
+        Builtin::Source(&MZ_PREPARED_STATEMENT_HISTORY),
+        Builtin::Source(&MZ_SESSION_HISTORY),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_SOURCE_STATISTICS),
@@ -5282,16 +5327,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_SUPPORT_ROLE]);
-pub static BUILTIN_CLUSTERS: Lazy<Vec<&BuiltinCluster>> =
-    Lazy::new(|| vec![&*MZ_SYSTEM_CLUSTER, &*MZ_INTROSPECTION_CLUSTER]);
-pub static BUILTIN_CLUSTER_REPLICAS: Lazy<Vec<&BuiltinClusterReplica>> = Lazy::new(|| {
-    vec![
-        &*MZ_SYSTEM_CLUSTER_REPLICA,
-        &*MZ_INTROSPECTION_CLUSTER_REPLICA,
-    ]
-});
+pub const BUILTIN_ROLES: &[&BuiltinRole] = &[&MZ_SYSTEM_ROLE, &MZ_SUPPORT_ROLE];
+pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[&MZ_SYSTEM_CLUSTER, &MZ_INTROSPECTION_CLUSTER];
+pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
+    &MZ_SYSTEM_CLUSTER_REPLICA,
+    &MZ_INTROSPECTION_CLUSTER_REPLICA,
+];
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

@@ -463,7 +463,8 @@ impl SessionClient {
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        let logging = self.session().mint_logging(sql);
+        let now = self.now();
+        let logging = self.session().mint_logging(sql, now);
         self.session().set_portal(
             name,
             desc,

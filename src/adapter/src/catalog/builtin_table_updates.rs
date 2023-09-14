@@ -13,28 +13,28 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{
-    ClusterId, ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
-    ReplicaAllocation, ReplicaId, ReplicaLocation,
+    ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaLocation,
 };
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::to_datetime;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::connections::KafkaConnection;
-use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
-use mz_storage_client::types::sources::{
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::KafkaConnection;
+use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
+use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
 };
 
@@ -50,19 +50,12 @@ use crate::catalog::builtin::{
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
-use crate::catalog::builtin::{
-    MZ_PREPARED_STATEMENT_HISTORY, MZ_SESSION_HISTORY, MZ_STATEMENT_EXECUTION_HISTORY,
-};
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
     Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
     StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;
-use crate::statement_logging::{
-    SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementPreparedRecord,
-};
 use crate::subscribe::ActiveSubscribe;
 
 /// An update to a built-in table.
@@ -553,18 +546,16 @@ impl CatalogState {
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(match connection.connection {
-                    mz_storage_client::types::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage_client::types::connections::Connection::Csr { .. } => {
+                    mz_storage_types::connections::Connection::Kafka { .. } => "kafka",
+                    mz_storage_types::connections::Connection::Csr { .. } => {
                         "confluent-schema-registry"
                     }
-                    mz_storage_client::types::connections::Connection::Postgres { .. } => {
-                        "postgres"
-                    }
-                    mz_storage_client::types::connections::Connection::Aws(..) => "aws",
-                    mz_storage_client::types::connections::Connection::AwsPrivatelink(..) => {
+                    mz_storage_types::connections::Connection::Postgres { .. } => "postgres",
+                    mz_storage_types::connections::Connection::Aws(..) => "aws",
+                    mz_storage_types::connections::Connection::AwsPrivatelink(..) => {
                         "aws-privatelink"
                     }
-                    mz_storage_client::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
+                    mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -572,7 +563,7 @@ impl CatalogState {
             diff,
         }];
         match connection.connection {
-            mz_storage_client::types::connections::Connection::Ssh(ref ssh) => {
+            mz_storage_types::connections::Connection::Ssh(ref ssh) => {
                 if let Some(public_key_set) = ssh.public_keys.as_ref() {
                     updates.extend(self.pack_ssh_tunnel_connection_update(
                         id,
@@ -583,13 +574,13 @@ impl CatalogState {
                     tracing::error!("does this even happen?");
                 }
             }
-            mz_storage_client::types::connections::Connection::Kafka(ref kafka) => {
+            mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
-            mz_storage_client::types::connections::Connection::Csr(_)
-            | mz_storage_client::types::connections::Connection::Postgres(_)
-            | mz_storage_client::types::connections::Connection::Aws(_)
-            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {
+            mz_storage_types::connections::Connection::Csr(_)
+            | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::Aws(_)
+            | mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
                     updates.extend(self.pack_aws_privatelink_connection_update(
                         id,
@@ -1287,33 +1278,10 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
                 Datum::UInt32(conn.conn_id().unhandled()),
-                Datum::String(&conn.session_role_id().to_string()),
+                Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
             diff,
-        }
-    }
-
-    pub fn pack_session_history_update(&self, event: &SessionHistoryEvent) -> BuiltinTableUpdate {
-        let SessionHistoryEvent {
-            id,
-            connected_at,
-            application_name,
-            authenticated_user,
-        } = event;
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_SESSION_HISTORY),
-            row: Row::pack_slice(&[
-                Datum::Uuid(*id),
-                Datum::TimestampTz(
-                    mz_ore::now::to_datetime(*connected_at)
-                        .try_into()
-                        .expect("must fit"),
-                ),
-                Datum::String(&*application_name),
-                Datum::String(&*authenticated_user),
-            ]),
-            diff: 1,
         }
     }
 
@@ -1378,145 +1346,6 @@ impl CatalogState {
             )
             .expect("privileges is 1 dimensional, and its length is used for the array length");
         row
-    }
-
-    pub fn pack_statement_prepared_update(
-        &self,
-        record: &StatementPreparedRecord,
-    ) -> BuiltinTableUpdate {
-        let StatementPreparedRecord {
-            id,
-            session_id,
-            name,
-            sql,
-            prepared_at,
-        } = record;
-        let row = Row::pack_slice(&[
-            Datum::Uuid(*id),
-            Datum::Uuid(*session_id),
-            Datum::String(name.as_str()),
-            Datum::String(sql.as_str()),
-            Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
-        ]);
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_PREPARED_STATEMENT_HISTORY),
-            row,
-            diff: 1,
-        }
-    }
-
-    fn pack_statement_execution_inner(
-        &self,
-        record: &StatementBeganExecutionRecord,
-        packer: &mut RowPacker,
-    ) {
-        let StatementBeganExecutionRecord {
-            id,
-            prepared_statement_id,
-            sample_rate,
-            params,
-            began_at,
-        } = record;
-
-        packer.extend([
-            Datum::Uuid(*id),
-            Datum::Uuid(*prepared_statement_id),
-            Datum::Float64((*sample_rate).into()),
-        ]);
-        packer
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: params.len(),
-                }],
-                params
-                    .iter()
-                    .map(|p| Datum::from(p.as_ref().map(String::as_str))),
-            )
-            .expect("correct array dimensions");
-        packer.push(Datum::TimestampTz(
-            to_datetime(*began_at).try_into().expect("Sane system time"),
-        ));
-    }
-
-    pub fn pack_statement_began_execution_update(
-        &self,
-        record: &StatementBeganExecutionRecord,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        self.pack_statement_execution_inner(record, &mut packer);
-        packer.extend([
-            // finished_at
-            Datum::Null,
-            // finished_status
-            Datum::Null,
-            // error_message
-            Datum::Null,
-            // rows_returned
-            Datum::Null,
-            // execution_status
-            Datum::Null,
-        ]);
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
-            row,
-            diff,
-        }
-    }
-
-    pub fn pack_full_statement_execution_update(
-        &self,
-        began_record: &StatementBeganExecutionRecord,
-        ended_record: &StatementEndedExecutionRecord,
-    ) -> BuiltinTableUpdate {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        self.pack_statement_execution_inner(began_record, &mut packer);
-        let (status, error_message, rows_returned, execution_strategy) = match &ended_record.reason
-        {
-            StatementEndedExecutionReason::Success {
-                rows_returned,
-                execution_strategy,
-            } => (
-                "success",
-                None,
-                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                execution_strategy.map(|es| es.name()),
-            ),
-            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
-            StatementEndedExecutionReason::Errored { error } => {
-                ("error", Some(error.as_str()), None, None)
-            }
-            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
-        };
-        packer.extend([
-            Datum::TimestampTz(
-                to_datetime(ended_record.ended_at)
-                    .try_into()
-                    .expect("Sane system time"),
-            ),
-            status.into(),
-            error_message.into(),
-            rows_returned.into(),
-            execution_strategy.into(),
-        ]);
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_STATEMENT_EXECUTION_HISTORY),
-            row,
-            diff: 1,
-        }
-    }
-
-    pub fn pack_statement_ended_execution_updates(
-        &self,
-        began_record: &StatementBeganExecutionRecord,
-        ended_record: &StatementEndedExecutionRecord,
-    ) -> Vec<BuiltinTableUpdate> {
-        let retraction = self.pack_statement_began_execution_update(began_record, -1);
-        let new = self.pack_full_statement_execution_update(began_record, ended_record);
-        vec![retraction, new]
     }
 
     pub fn pack_compute_dependency_update(

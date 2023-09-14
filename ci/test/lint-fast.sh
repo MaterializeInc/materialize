@@ -21,6 +21,7 @@ ci_try cargo --locked fmt -- --check
 ci_try cargo --locked deny check licenses bans sources
 ci_try cargo hakari generate --diff
 ci_try cargo hakari manage-deps --dry-run
+ci_try cargo deplint Cargo.lock ci/test/lint-deps.toml
 
 # Smoke out failures in generating the license metadata page, even though we
 # don't care about its output in the test pipeline, so that we don't only

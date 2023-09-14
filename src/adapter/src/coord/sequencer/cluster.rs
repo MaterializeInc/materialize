@@ -14,9 +14,10 @@ use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ClusterId, CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaId,
-    ReplicaLocation, ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaLocation,
+    ReplicaLogging,
 };
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
@@ -168,7 +169,7 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = catalog::storage::ReplicaLocation::Managed {
+        let location = mz_catalog::ReplicaLocation::Managed {
             size: size.clone(),
             availability_zone: None,
             disk,
@@ -270,7 +271,7 @@ impl Coordinator {
                     workers,
                     compute,
                 } => {
-                    let location = catalog::storage::ReplicaLocation::Unmanaged {
+                    let location = mz_catalog::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
                         storage_addrs,
                         computectl_addrs,
@@ -285,7 +286,7 @@ impl Coordinator {
                     compute,
                     disk,
                 } => {
-                    let location = catalog::storage::ReplicaLocation::Managed {
+                    let location = mz_catalog::ReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
                         disk,
@@ -393,7 +394,7 @@ impl Coordinator {
                 workers,
                 compute,
             } => {
-                let location = catalog::storage::ReplicaLocation::Unmanaged {
+                let location = mz_catalog::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -415,7 +416,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
-                let location = catalog::storage::ReplicaLocation::Managed {
+                let location = mz_catalog::ReplicaLocation::Managed {
                     size,
                     availability_zone,
                     disk,

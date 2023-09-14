@@ -92,10 +92,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_adapter::catalog::storage::{stash, BootstrapArgs};
+use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::{initialize, BootstrapArgs};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -108,7 +109,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
@@ -387,13 +388,13 @@ impl Listeners {
             // TODO: once all stashes have a deploy_generation, don't need to handle the Option
             let stash_generation = stash
                 .with_transaction(move |tx| {
-                    Box::pin(async move { stash::deploy_generation(&tx).await })
+                    Box::pin(async move { initialize::deploy_generation(&tx).await })
                 })
                 .await?;
             tracing::info!("Found stash generation {stash_generation:?}");
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = mz_adapter::catalog::storage::Connection::open(
+                if let Err(e) = mz_catalog::Connection::open(
                     stash,
                     config.now.clone(),
                     &BootstrapArgs {
@@ -404,6 +405,18 @@ impl Listeners {
                             .bootstrap_builtin_cluster_replica_size
                             .clone(),
                         bootstrap_role: config.bootstrap_role.clone(),
+                        builtin_clusters: BUILTIN_CLUSTERS
+                            .into_iter()
+                            .map(|cluster| (*cluster).into())
+                            .collect(),
+                        builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                            .into_iter()
+                            .map(|replica| (*replica).into())
+                            .collect(),
+                        builtin_roles: BUILTIN_ROLES
+                            .into_iter()
+                            .map(|role| (*role).into())
+                            .collect(),
                     },
                     None,
                 )
@@ -450,13 +463,25 @@ impl Listeners {
         let envd_epoch = stash
             .epoch()
             .expect("a real environmentd should always have an epoch number");
-        let adapter_storage = mz_adapter::catalog::storage::Connection::open(
+        let adapter_storage = mz_catalog::Connection::open(
             stash,
             config.now.clone(),
             &BootstrapArgs {
                 default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
                 builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
                 bootstrap_role: config.bootstrap_role,
+                builtin_clusters: BUILTIN_CLUSTERS
+                    .into_iter()
+                    .map(|cluster| (*cluster).into())
+                    .collect(),
+                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                    .into_iter()
+                    .map(|replica| (*replica).into())
+                    .collect(),
+                builtin_roles: BUILTIN_ROLES
+                    .into_iter()
+                    .map(|role| (*role).into())
+                    .collect(),
             },
             config.deploy_generation,
         )

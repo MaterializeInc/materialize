@@ -12,8 +12,8 @@ from collections.abc import Callable
 from textwrap import dedent
 from typing import Any
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
 
 
 class Executor:

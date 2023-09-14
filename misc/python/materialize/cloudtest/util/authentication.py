@@ -27,6 +27,8 @@ class AuthConfig:
 
     refresh_fn: Callable[[AuthConfig], None]
 
+    pgwire_ssl_mode: str = "require"
+
     def refresh(self) -> None:
         self.refresh_fn(self)
 

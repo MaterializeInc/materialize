@@ -1220,7 +1220,7 @@ ty  =U/materialize
 ty  materialize=U/materialize
 
 query B
-SELECT has_type_privilege('joe', 'ty', 'SELECT')
+SELECT has_type_privilege('joe', 'ty', 'USAGE')
 ----
 true
 
@@ -2262,17 +2262,17 @@ mz_system=RBN/mz_system
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
 ----
-true
+false
 
 query B
 SELECT has_system_privilege('child', 'CREATEDB')
 ----
-true
+false
 
 query B
 SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
 ----
-true
+false
 
 ### Duplicate revokes have no effect
 simple conn=mz_system,user=mz_system

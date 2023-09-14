@@ -10,18 +10,18 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
+use mz_catalog::{self, Transaction};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
 use mz_sql_parser::ast::visit_mut::VisitMut;
 use mz_sql_parser::ast::{Function, Ident};
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
-use crate::catalog::storage::Transaction;
-use crate::catalog::{storage, Catalog, ConnCatalog};
+use crate::catalog::{Catalog, ConnCatalog};
 
 /// A flag to indicate whether or not we've already run the migration to rename existing uses of
 /// the AVG(...) function. Runs in versions <=0.66.
@@ -184,7 +184,7 @@ fn _add_to_audit_log(
     details: mz_audit_log::EventDetails,
     occurred_at: EpochMillis,
 ) -> Result<(), anyhow::Error> {
-    let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+    let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
     let event =
         mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
     tx.insert_audit_log_event(event);

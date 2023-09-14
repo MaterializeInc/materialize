@@ -13,17 +13,16 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::collections::CollectionExt;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::ClientContext;
-use tracing::warn;
-
-use crate::types::connections::inline::ReferencedConnection;
-use crate::types::connections::ConnectionContext;
-use crate::types::sinks::{
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
     KafkaSinkConnectionRetention, KafkaSinkFormat, KafkaSinkProgressConnection,
     PublishedSchemaInfo, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
+use rdkafka::ClientContext;
+use tracing::warn;
 
 /// Build a sink connection.
 // N.B.: We don't want to use a `StorageError` here because some of those variants should not be

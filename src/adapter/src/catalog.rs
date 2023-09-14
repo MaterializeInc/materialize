@@ -26,20 +26,23 @@ use mz_audit_log::{
     VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_catalog::{BootstrapArgs, SystemObjectMapping, Transaction};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
-    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
-    ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+    ClusterEvent, ClusterRole, ClusterStatus, ManagedReplicaAvailabilityZones,
+    ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaLocation,
+    ReplicaLogging, UnmanagedReplicaLocation,
 };
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::option::FallibleMapExt;
+use mz_ore::result::ResultExt as _;
 use mz_ore::soft_assert;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -85,13 +88,11 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::types::connections::inline::{
+use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection, ReferencedConnection,
 };
-use mz_storage_client::types::sinks::{
-    SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
-};
-use mz_storage_client::types::sources::{
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
+use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
 use mz_transform::dataflow::DataflowMetainfo;
@@ -107,9 +108,9 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, Fingerprint,
-    BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
+    BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER,
 };
-use crate::catalog::storage::{BootstrapArgs, SystemObjectMapping, Transaction};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -126,7 +127,6 @@ mod migrate;
 
 pub mod builtin;
 mod inner;
-pub mod storage;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -165,7 +165,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
-    storage: Arc<tokio::sync::Mutex<storage::Connection>>,
+    storage: Arc<tokio::sync::Mutex<mz_catalog::Connection>>,
     transient_revision: u64,
 }
 
@@ -709,6 +709,10 @@ impl CatalogState {
             ReplicaLocation::Unmanaged(_) => None,
             ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) => Some(size),
         }
+    }
+
+    fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
+        self.roles_by_id.get(id)
     }
 
     pub fn get_role(&self, id: &RoleId) -> &Role {
@@ -1706,7 +1710,7 @@ impl CatalogState {
         &self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        tx: &mut storage::Transaction,
+        tx: &mut mz_catalog::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
@@ -1724,7 +1728,7 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
@@ -1734,13 +1738,13 @@ impl CatalogState {
 
     fn add_to_storage_usage(
         &self,
-        tx: &mut storage::Transaction,
+        tx: &mut mz_catalog::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let id = tx.get_and_increment_id(storage::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
+        let id = tx.get_and_increment_id(mz_catalog::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.pack_storage_usage_update(&details)?);
@@ -1790,8 +1794,8 @@ impl ConnectionResolver for CatalogState {
     fn resolve_connection(
         &self,
         id: GlobalId,
-    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
-        use mz_storage_client::types::connections::Connection::*;
+    ) -> mz_storage_types::connections::Connection<InlinedConnection> {
+        use mz_storage_types::connections::Connection::*;
         match self
             .get_entry(&id)
             .connection()
@@ -1812,7 +1816,7 @@ impl ConnectionResolver for CatalogState {
 #[derive(Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
-    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_client::plan::Plan>>,
+    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
     dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo>,
 }
 
@@ -1832,7 +1836,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_client::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
         self.plans.physical_plan_by_id.insert(id, plan);
     }
@@ -1851,7 +1855,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_client::plan::Plan>> {
+    ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
         self.plans.physical_plan_by_id.get(id)
     }
 
@@ -1969,7 +1973,7 @@ impl ConnectionResolver for ConnCatalog<'_> {
     fn resolve_connection(
         &self,
         id: GlobalId,
-    ) -> mz_storage_client::types::connections::Connection<InlinedConnection> {
+    ) -> mz_storage_types::connections::Connection<InlinedConnection> {
         self.state().resolve_connection(id)
     }
 }
@@ -1987,9 +1991,9 @@ pub struct Database {
     pub privileges: PrivilegeMap,
 }
 
-impl From<Database> for storage::Database {
-    fn from(database: Database) -> storage::Database {
-        storage::Database {
+impl From<Database> for mz_catalog::Database {
+    fn from(database: Database) -> mz_catalog::Database {
+        mz_catalog::Database {
             id: database.id,
             name: database.name,
             owner_id: database.owner_id,
@@ -2011,8 +2015,8 @@ pub struct Schema {
 }
 
 impl Schema {
-    fn into_durable_schema(self, database_id: Option<DatabaseId>) -> storage::Schema {
-        storage::Schema {
+    fn into_durable_schema(self, database_id: Option<DatabaseId>) -> mz_catalog::Schema {
+        mz_catalog::Schema {
             id: self.id.into(),
             name: self.name.schema,
             database_id,
@@ -2038,9 +2042,9 @@ impl Role {
     }
 }
 
-impl From<Role> for storage::Role {
-    fn from(role: Role) -> storage::Role {
-        storage::Role {
+impl From<Role> for mz_catalog::Role {
+    fn from(role: Role) -> mz_catalog::Role {
+        mz_catalog::Role {
             id: role.id,
             name: role.name,
             attributes: role.attributes,
@@ -2086,15 +2090,15 @@ impl Cluster {
     }
 }
 
-impl From<Cluster> for storage::Cluster {
-    fn from(cluster: Cluster) -> storage::Cluster {
-        storage::Cluster {
+impl From<Cluster> for mz_catalog::Cluster {
+    fn from(cluster: Cluster) -> mz_catalog::Cluster {
+        mz_catalog::Cluster {
             id: cluster.id,
             name: cluster.name,
             linked_object_id: cluster.linked_object_id,
             owner_id: cluster.owner_id,
             privileges: cluster.privileges.into_all_values().collect(),
-            config: cluster.config,
+            config: cluster.config.into(),
         }
     }
 }
@@ -2133,9 +2137,9 @@ impl ClusterReplica {
     }
 }
 
-impl From<ClusterReplica> for storage::ClusterReplica {
-    fn from(replica: ClusterReplica) -> storage::ClusterReplica {
-        storage::ClusterReplica {
+impl From<ClusterReplica> for mz_catalog::ClusterReplica {
+    fn from(replica: ClusterReplica) -> mz_catalog::ClusterReplica {
+        mz_catalog::ClusterReplica {
             cluster_id: replica.cluster_id,
             replica_id: replica.replica_id,
             name: replica.name,
@@ -2179,9 +2183,9 @@ pub enum CatalogItem {
     Connection(Connection),
 }
 
-impl From<CatalogEntry> for storage::Item {
-    fn from(entry: CatalogEntry) -> storage::Item {
-        storage::Item {
+impl From<CatalogEntry> for mz_catalog::Item {
+    fn from(entry: CatalogEntry) -> mz_catalog::Item {
+        mz_catalog::Item {
             id: entry.id,
             name: entry.name,
             create_sql: entry.item.into_serialized(),
@@ -2398,8 +2402,8 @@ impl Source {
                     Some("debezium")
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                    mz_storage_client::types::sources::UpsertStyle::Default(_) => Some("upsert"),
-                    mz_storage_client::types::sources::UpsertStyle::Debezium { .. } => {
+                    mz_storage_types::sources::UpsertStyle::Default(_) => Some("upsert"),
+                    mz_storage_types::sources::UpsertStyle::Debezium { .. } => {
                         // NOTE(aljoscha): Should we somehow mark that this is
                         // using upsert internally? See note above about
                         // DEBEZIUM.
@@ -2561,7 +2565,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     pub resolved_ids: ResolvedIds,
 }
 
@@ -2990,7 +2994,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_storage_client::types::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage_types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`, if any.
     pub fn source_desc(
         &self,
@@ -3538,6 +3542,21 @@ impl Catalog {
         ),
         AdapterError,
     > {
+        for builtin_role in BUILTIN_ROLES {
+            assert!(
+                is_reserved_name(builtin_role.name),
+                "builtin role {builtin_role:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+        for builtin_cluster in BUILTIN_CLUSTERS {
+            assert!(
+                is_reserved_name(builtin_cluster.name),
+                "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
+                BUILTIN_PREFIXES.join(", ")
+            );
+        }
+
         let mut catalog = Catalog {
             state: CatalogState {
                 database_by_name: BTreeMap::new(),
@@ -3615,7 +3634,7 @@ impl Catalog {
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
-        for storage::Database {
+        for mz_catalog::Database {
             id,
             name,
             owner_id,
@@ -3642,7 +3661,7 @@ impl Catalog {
         }
 
         let schemas = catalog.storage().await.load_schemas().await?;
-        for storage::Schema {
+        for mz_catalog::Schema {
             id,
             name,
             database_id,
@@ -3689,7 +3708,7 @@ impl Catalog {
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        for storage::Role {
+        for mz_catalog::Role {
             id,
             name,
             attributes,
@@ -3943,7 +3962,7 @@ impl Catalog {
 
         let clusters = catalog.storage().await.load_clusters().await?;
         let mut cluster_azs = BTreeMap::new();
-        for storage::Cluster {
+        for mz_catalog::Cluster {
             id,
             name,
             linked_object_id,
@@ -3983,7 +4002,7 @@ impl Catalog {
                 )
                 .await?;
 
-            if let ClusterVariant::Managed(managed) = &config.variant {
+            if let mz_catalog::ClusterVariant::Managed(managed) = &config.variant {
                 cluster_azs.insert(id, managed.availability_zones.clone());
             }
 
@@ -3994,12 +4013,12 @@ impl Catalog {
                 all_indexes,
                 owner_id,
                 PrivilegeMap::from_mz_acl_items(privileges),
-                config,
+                config.into(),
             );
         }
 
         let replicas = catalog.storage().await.load_cluster_replicas().await?;
-        for storage::ClusterReplica {
+        for mz_catalog::ClusterReplica {
             cluster_id,
             replica_id,
             name,
@@ -4154,7 +4173,7 @@ impl Catalog {
         // Load public keys for SSH connections from the secrets store to the catalog
         for (id, entry) in catalog.state.entry_by_id.iter_mut() {
             if let CatalogItem::Connection(ref mut connection) = entry.item {
-                if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
+                if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
                     connection.connection
                 {
                     let secret = config.secrets_reader.read(*id).await?;
@@ -4871,7 +4890,7 @@ impl Catalog {
     /// TODO(justin): it might be nice if these were two different types.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn load_catalog_items<'a>(
-        tx: &mut storage::Transaction<'a>,
+        tx: &mut mz_catalog::Transaction<'a>,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
@@ -4889,9 +4908,9 @@ impl Catalog {
 
             let catalog_item = match c.deserialize_item(item.id, d_c) {
                 Ok(item) => item,
-                Err(AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(name)))
-                    if LOGGING_ERROR.is_match(&name.to_string()) =>
-                {
+                Err(AdapterError::Catalog(Error {
+                    kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
+                })) if LOGGING_ERROR.is_match(&name.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
                         depender_name: name,
                     }));
@@ -4952,7 +4971,7 @@ impl Catalog {
 
         // Error on any unsatisfied dependencies.
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let storage::Item {
+            let mz_catalog::Item {
                 id,
                 name,
                 create_sql: _,
@@ -4971,7 +4990,7 @@ impl Catalog {
         }
 
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let storage::Item {
+            let mz_catalog::Item {
                 id,
                 name,
                 create_sql: _,
@@ -4984,7 +5003,9 @@ impl Catalog {
                     "failed to deserialize item {} ({}): {}",
                     id,
                     name,
-                    AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(missing_dep))
+                    AdapterError::Catalog(Error {
+                        kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(missing_dep))
+                    })
                 ),
             }));
         }
@@ -5039,13 +5060,25 @@ impl Catalog {
     /// Opens a debug catalog from a stash.
     pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(
+        let storage = mz_catalog::Connection::open(
             stash,
             now.clone(),
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
+                builtin_clusters: BUILTIN_CLUSTERS
+                    .into_iter()
+                    .map(|cluster| (*cluster).into())
+                    .collect(),
+                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
+                    .into_iter()
+                    .map(|replica| (*replica).into())
+                    .collect(),
+                builtin_roles: BUILTIN_ROLES
+                    .into_iter()
+                    .map(|role| (*role).into())
+                    .collect(),
             },
             None,
         )
@@ -5146,7 +5179,7 @@ impl Catalog {
         Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, mz_catalog::Connection> {
         self.storage.lock().await
     }
 
@@ -5205,7 +5238,7 @@ impl Catalog {
     }
 
     pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
-        self.storage().await.allocate_user_id().await
+        self.storage().await.allocate_user_id().await.err_into()
     }
 
     #[cfg(test)]
@@ -5215,14 +5248,23 @@ impl Catalog {
             .allocate_system_ids(1)
             .await
             .map(|ids| ids.into_element())
+            .err_into()
     }
 
     pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
-        self.storage().await.allocate_user_cluster_id().await
+        self.storage()
+            .await
+            .allocate_user_cluster_id()
+            .await
+            .err_into()
     }
 
     pub async fn allocate_user_replica_id(&self) -> Result<ReplicaId, Error> {
-        self.storage().await.allocate_user_replica_id().await
+        self.storage()
+            .await
+            .allocate_user_replica_id()
+            .await
+            .err_into()
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -5233,17 +5275,29 @@ impl Catalog {
     pub async fn get_all_persisted_timestamps(
         &self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        self.storage().await.get_all_persisted_timestamps().await
+        self.storage()
+            .await
+            .get_all_persisted_timestamps()
+            .await
+            .err_into()
     }
 
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
-        self.storage().await.get_next_system_replica_id().await
+        self.storage()
+            .await
+            .get_next_system_replica_id()
+            .await
+            .err_into()
     }
 
     /// Get the next user replica id without allocating it.
     pub async fn get_next_user_replica_id(&self) -> Result<u64, Error> {
-        self.storage().await.get_next_user_replica_id().await
+        self.storage()
+            .await
+            .get_next_user_replica_id()
+            .await
+            .err_into()
     }
 
     /// Persist new global timestamp for a timeline to disk.
@@ -5256,6 +5310,7 @@ impl Catalog {
             .await
             .persist_timestamp(timeline, timestamp)
             .await
+            .err_into()
     }
 
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
@@ -5447,6 +5502,10 @@ impl Catalog {
         self.state.get_database(id)
     }
 
+    pub fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
+        self.state.try_get_role(id)
+    }
+
     pub fn get_role(&self, id: &RoleId) -> &Role {
         self.state.get_role(id)
     }
@@ -5572,10 +5631,9 @@ impl Catalog {
                         && !temporary_drops.contains(&(conn_id, name.item.clone()))
                         || creating.contains(&(conn_id, &name.item))
                     {
-                        return Err(Error::new(ErrorKind::ItemAlreadyExists(
-                            *id,
-                            name.item.clone(),
-                        )));
+                        return Err(
+                            SqlCatalogError::ItemAlreadyExists(*id, name.item.clone()).into()
+                        );
                     } else {
                         creating.insert((conn_id, &name.item));
                         temporary_ids.push(id.clone());
@@ -5622,12 +5680,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: storage::ReplicaLocation,
+        location: mz_catalog::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            storage::ReplicaLocation::Unmanaged {
+            mz_catalog::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -5648,7 +5706,7 @@ impl Catalog {
                     workers,
                 })
             }
-            storage::ReplicaLocation::Managed {
+            mz_catalog::ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,
@@ -6376,10 +6434,13 @@ impl Catalog {
                         id,
                         &name,
                         linked_object_id,
-                        &introspection_sources,
+                        introspection_sources
+                            .iter()
+                            .map(|(builtin_log, gid)| ((*builtin_log).into(), gid))
+                            .collect(),
                         owner_id,
                         privileges.clone(),
-                        config.clone(),
+                        config.clone().into(),
                     )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -6968,7 +7029,7 @@ impl Catalog {
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
                             executed_by: session
-                                .map(|session| session.current_role_id())
+                                .map(|session| session.authenticated_role_id())
                                 .unwrap_or(&MZ_SYSTEM_ROLE_ID)
                                 .to_string(),
                         }),
@@ -7000,7 +7061,7 @@ impl Catalog {
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
                             executed_by: session
-                                .map(|session| session.current_role_id())
+                                .map(|session| session.authenticated_role_id())
                                 .unwrap_or(&MZ_SYSTEM_ROLE_ID)
                                 .to_string(),
                         }),
@@ -7651,7 +7712,7 @@ impl Catalog {
                     ));
 
                     let mut connection = entry.connection()?.clone();
-                    if let mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) =
+                    if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
                         ssh.public_keys = Some(new_public_key_pair)
@@ -8454,6 +8515,22 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
 }
 
+impl From<ClusterConfig> for mz_catalog::ClusterConfig {
+    fn from(config: ClusterConfig) -> Self {
+        Self {
+            variant: config.variant.into(),
+        }
+    }
+}
+
+impl From<mz_catalog::ClusterConfig> for ClusterConfig {
+    fn from(config: mz_catalog::ClusterConfig) -> Self {
+        Self {
+            variant: config.variant.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterVariantManaged {
     pub size: String,
@@ -8464,10 +8541,54 @@ pub struct ClusterVariantManaged {
     pub disk: bool,
 }
 
+impl From<ClusterVariantManaged> for mz_catalog::ClusterVariantManaged {
+    fn from(managed: ClusterVariantManaged) -> Self {
+        Self {
+            size: managed.size,
+            availability_zones: managed.availability_zones,
+            logging: managed.logging,
+            idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
+            replication_factor: managed.replication_factor,
+            disk: managed.disk,
+        }
+    }
+}
+
+impl From<mz_catalog::ClusterVariantManaged> for ClusterVariantManaged {
+    fn from(managed: mz_catalog::ClusterVariantManaged) -> Self {
+        Self {
+            size: managed.size,
+            availability_zones: managed.availability_zones,
+            logging: managed.logging,
+            idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
+            replication_factor: managed.replication_factor,
+            disk: managed.disk,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub enum ClusterVariant {
     Managed(ClusterVariantManaged),
     Unmanaged,
+}
+
+impl From<ClusterVariant> for mz_catalog::ClusterVariant {
+    fn from(variant: ClusterVariant) -> Self {
+        match variant {
+            ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
+            ClusterVariant::Unmanaged => Self::Unmanaged,
+        }
+    }
+}
+
+impl From<mz_catalog::ClusterVariant> for ClusterVariant {
+    fn from(variant: mz_catalog::ClusterVariant) -> Self {
+        match variant {
+            mz_catalog::ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
+            mz_catalog::ClusterVariant::Unmanaged => Self::Unmanaged,
+        }
+    }
 }
 
 impl ConnCatalog<'_> {
@@ -9165,10 +9286,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn connection(
         &self,
-    ) -> Result<
-        &mz_storage_client::types::connections::Connection<ReferencedConnection>,
-        SqlCatalogError,
-    > {
+    ) -> Result<&mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
+    {
         Ok(&self.connection()?.connection)
     }
 
@@ -9255,7 +9374,7 @@ mod tests {
     use std::iter;
 
     use itertools::Itertools;
-    use mz_controller::clusters::{ClusterId, ReplicaId};
+    use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};

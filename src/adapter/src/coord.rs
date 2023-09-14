@@ -81,11 +81,10 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
-};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::ComputeInstanceId;
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -106,15 +105,17 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, DataSourceOther, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther,
 };
-use mz_storage_client::types::connections::inline::{IntoInlineConnection, ReferencedConnection};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::StorageSinkConnection;
+use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
@@ -126,8 +127,8 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
+    ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -234,6 +235,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+    DrainStatementLog,
 }
 
 impl Message {
@@ -260,6 +262,7 @@ impl Message {
             RetireExecute { .. } => "retire_execute",
             ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
             PeekStageReady { .. } => "peek_stage_ready",
+            DrainStatementLog => "drain_statement_log",
         }
     }
 }
@@ -443,6 +446,7 @@ pub struct PlanValidity {
     dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
+    role_metadata: RoleMetadata,
 }
 
 impl PlanValidity {
@@ -473,6 +477,33 @@ impl PlanValidity {
                 return Err(AdapterError::ChangedPlan);
             }
         }
+        if catalog
+            .try_get_role(&self.role_metadata.current_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.current_role.clone()),
+            ));
+        }
+        if catalog
+            .try_get_role(&self.role_metadata.session_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.session_role.clone()),
+            ));
+        }
+
+        if catalog
+            .try_get_role(&self.role_metadata.authenticated_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(
+                    self.role_metadata.authenticated_role.clone(),
+                ),
+            ));
+        }
         self.transient_revision = catalog.transient_revision();
         Ok(())
     }
@@ -481,7 +512,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection,
+    pub storage: mz_catalog::Connection,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -536,7 +567,6 @@ pub struct ConnMeta {
     connected_at: EpochMillis,
     user: User,
     application_name: String,
-    role_metadata: RoleMetadata,
     uuid: Uuid,
     conn_id: ConnectionId,
 
@@ -547,8 +577,10 @@ pub struct ConnMeta {
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 
-    /// The authenticated role of the session, set once at session connection.
-    pub(crate) authenticated_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    /// WARNING: This role reference is not updated when the role is dropped.
+    /// Consumers should not assume that this role exist.
+    authenticated_role: RoleId,
 }
 
 impl ConnMeta {
@@ -564,12 +596,8 @@ impl ConnMeta {
         &self.application_name
     }
 
-    pub fn current_role_id(&self) -> &RoleId {
-        &self.role_metadata.current_role
-    }
-
-    pub fn session_role_id(&self) -> &RoleId {
-        &self.role_metadata.session_role
+    pub fn authenticated_role_id(&self) -> &RoleId {
+        &self.authenticated_role
     }
 
     pub fn uuid(&self) -> Uuid {
@@ -1502,7 +1530,7 @@ impl Coordinator {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
+                    if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(
@@ -1836,6 +1864,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        self.spawn_statement_logging_task();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         // Report if the handling of a single message takes longer than this threshold.

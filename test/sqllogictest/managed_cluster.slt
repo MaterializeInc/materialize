@@ -55,7 +55,7 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters
 ----
 s1  mz_system  false  NULL  NULL
 s2  mz_introspection  false  NULL  NULL
-u1  default  false  NULL  NULL
+u1  default  true  1  1
 
 
 query T rowsort

@@ -28,12 +28,12 @@ use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_storage_client::types::connections::{ConnectionContext, CsrConnection};
-use mz_storage_client::types::errors::{DecodeError, DecodeErrorKind};
-use mz_storage_client::types::sources::encoding::{
+use mz_storage_types::connections::{ConnectionContext, CsrConnection};
+use mz_storage_types::errors::{DecodeError, DecodeErrorKind};
+use mz_storage_types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
-use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
+use mz_storage_types::sources::{IncludedColumnSource, MzOffset};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;

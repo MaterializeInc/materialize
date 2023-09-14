@@ -1938,7 +1938,7 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     let privileges = b.unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
-    let contains = !mz_acl_item.acl_mode.union(acl_mode).is_empty();
+    let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();
     Ok(contains.into())
 }
 
@@ -7467,10 +7467,21 @@ impl VariadicFunc {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
-            Coalesce | Greatest | Least => input_types
+            Greatest | Least => input_types
                 .into_iter()
                 .reduce(|l, r| l.union(&r).unwrap())
                 .unwrap(),
+            Coalesce => {
+                // Note that the parser doesn't allow empty argument lists for variadic functions
+                // that use the standard function call syntax (ArrayCreate and co. are different
+                // because of the special syntax for calling them).
+                let nullable = input_types.iter().all(|typ| typ.nullable);
+                input_types
+                    .into_iter()
+                    .reduce(|l, r| l.union(&r).unwrap())
+                    .unwrap()
+                    .nullable(nullable)
+            }
             Concat | ConcatWs => ScalarType::String.nullable(in_nullable),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
             PadLeading => ScalarType::String.nullable(in_nullable),

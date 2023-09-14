@@ -9,7 +9,8 @@
 
 //! Compute protocol commands.
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
@@ -17,7 +18,7 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoCompaction;
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};
@@ -28,7 +29,6 @@ use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
-use crate::types::dataflows::DataflowDescription;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -133,7 +133,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    CreateDataflow(DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<mz_compute_types::plan::Plan<T>, CollectionMetadata, T>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica’s dataflow.
@@ -296,9 +296,15 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-            any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>()
-                .prop_map(ComputeCommand::CreateDataflow)
-                .boxed(),
+            any::<
+                DataflowDescription<
+                    mz_compute_types::plan::Plan,
+                    CollectionMetadata,
+                    mz_repr::Timestamp,
+                >,
+            >()
+            .prop_map(ComputeCommand::CreateDataflow)
+            .boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
                 .boxed(),
@@ -518,6 +524,15 @@ impl RustType<ProtoPeek> for Peek {
 
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
+impl TryIntoTimelyConfig for ComputeCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -18,13 +18,13 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
-use mz_compute_client::plan::top_k::{
+use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{DatumVec, Diff, Row};
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;

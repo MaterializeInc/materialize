@@ -202,9 +202,9 @@ use std::rc::Rc;
 
 use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::IngestionDescription;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::IngestionDescription;
 use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;

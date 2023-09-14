@@ -142,9 +142,7 @@ create_source_load_generator ::=
   ('IN CLUSTER' cluster_name)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'MARKETING' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
-  (
-    'FOR ALL TABLES' |
-    'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')?
+  'FOR ALL TABLES'
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
@@ -416,9 +414,9 @@ show_variable ::=
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'SINKS' ('FROM' schema_name)?
+   'SHOW' 'SINKS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_sources ::=
-  'SHOW' 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'SOURCES' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_subsources ::=
   'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
 show_tables ::=

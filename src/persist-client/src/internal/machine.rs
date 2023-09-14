@@ -39,7 +39,7 @@ use crate::internal::compact::CompactReq;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
     IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
@@ -111,7 +111,11 @@ where
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
-        let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
+        let rollup = self.applier.write_rollup_for_state().await;
+        let Some(rollup) = rollup else {
+            return RoutineMaintenance::default();
+        };
+
         let (applied, maintenance) = self.add_rollup((rollup.seqno, &rollup.to_hollow())).await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
@@ -1021,7 +1025,6 @@ where
 #[cfg(test)]
 pub mod datadriven {
     use std::collections::BTreeMap;
-    use std::marker::PhantomData;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1039,7 +1042,7 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
-    use crate::internal::state::TypedState;
+    use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -1056,6 +1059,7 @@ pub mod datadriven {
         pub machine: Machine<String, (), u64, i64>,
         pub gc: GarbageCollector<String, (), u64, i64>,
         pub batches: BTreeMap<String, HollowBatch<u64>>,
+        pub rollups: BTreeMap<String, EncodedRollup>,
         pub listens: BTreeMap<String, Listen<String, (), u64, i64>>,
         pub routine: Vec<RoutineMaintenance>,
     }
@@ -1104,6 +1108,7 @@ pub mod datadriven {
                 machine,
                 gc,
                 batches: BTreeMap::default(),
+                rollups: BTreeMap::default(),
                 listens: BTreeMap::default(),
                 routine: Vec::new(),
             }
@@ -1257,42 +1262,38 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let seqno: SeqNo = args.expect("seqno");
+        let output = args.expect_str("output");
 
-        let mut all_live_states = datadriven
+        let rollup = datadriven
             .machine
             .applier
-            .state_versions
-            .fetch_all_live_states::<u64>(datadriven.shard_id)
+            .write_rollup_for_state()
             .await
-            .expect("shard initialized")
-            .check_ts_codec()
-            .expect("codec matches");
+            .expect("rollup");
 
-        while let Some(state) = all_live_states.next(|_| {}) {
-            if state.seqno == seqno {
-                break;
-            }
-        }
+        datadriven
+            .rollups
+            .insert(output.to_string(), rollup.clone());
 
-        let state = all_live_states.state();
-        if state.seqno != seqno {
-            return Err(anyhow!(
-                "seqno {} cannot be reached while writing rollup",
-                seqno
-            ));
-        }
+        Ok(format!(
+            "state={} diffs=[{}, {})\n",
+            rollup.seqno,
+            rollup._desc.lower().first().expect("seqno"),
+            rollup._desc.upper().first().expect("seqno"),
+        ))
+    }
 
-        let typed_state = TypedState::<String, (), u64, i64> {
-            state: state.clone(),
-            _phantom: PhantomData::default(),
-        };
-        let rollup = datadriven.state_versions.encode_rollup_blob(
-            datadriven.machine.applier.shard_metrics.as_ref(),
-            &typed_state,
-            PartialRollupKey::new(state.seqno, &RollupId::new()),
-        );
-        let () = datadriven.state_versions.write_rollup_blob(&rollup).await;
+    pub async fn add_rollup(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let rollup = datadriven
+            .rollups
+            .get(input)
+            .expect("unknown batch")
+            .clone();
+
         let (applied, maintenance) = datadriven
             .machine
             .add_rollup((rollup.seqno, &rollup.to_hollow()))

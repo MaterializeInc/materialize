@@ -22,7 +22,7 @@ use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 
@@ -103,6 +103,9 @@ impl Coordinator {
             }
             Message::PeekStageReady { ctx, stage } => {
                 self.sequence_peek_stage(ctx, stage).await;
+            }
+            Message::DrainStatementLog => {
+                self.drain_statement_log().await;
             }
         }
     }

@@ -28,7 +28,7 @@ use crate::{
     AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
-pub use crate::explain::text::display_singleton_row;
+pub use crate::explain::text::{display_singleton_row, HumanizedExpr};
 
 mod json;
 mod text;

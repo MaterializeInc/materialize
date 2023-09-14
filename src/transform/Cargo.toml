@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 differential-dataflow = "0.12.0"
 itertools = "0.10.5"
-mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-persist-client = { path = "../persist-client" }

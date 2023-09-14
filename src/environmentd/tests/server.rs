@@ -106,6 +106,7 @@ use mz_ore::{
 };
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -199,12 +200,13 @@ fn test_persistence() {
     );
 }
 
-fn setup_statement_logging(
+fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
+    extra_config: util::Config,
 ) -> (util::Server, postgres::Client) {
     let server = util::start_server(
-        util::Config::default()
+        extra_config
             .with_system_parameter_default(
                 "statement_logging_max_sample_rate".to_string(),
                 max_sample_rate.to_string(),
@@ -223,6 +225,13 @@ fn setup_statement_logging(
         )
         .unwrap();
     (server, client)
+}
+
+fn setup_statement_logging(
+    max_sample_rate: f64,
+    sample_rate: f64,
+) -> (util::Server, postgres::Client) {
+    setup_statement_logging_core(max_sample_rate, sample_rate, util::Config::default())
 }
 
 #[mz_ore::test]
@@ -615,6 +624,69 @@ fn test_statement_logging_unsampled_metrics() {
         .get_value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
+}
+
+#[mz_ore::test]
+// NOTE: Unfortunately, this test requires sleeping
+// for over a minute. I tried to get it to work by manipulating
+// a `NowFn`, but storage and persist seem to get confused by that.
+fn test_statement_logging_persistence() {
+    let data_dir = tempfile::tempdir().unwrap();
+
+    let cfg = util::Config::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "statement_logging_retention".to_string(),
+            "30s".to_string(),
+        );
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, cfg.clone());
+
+    // Issue one statement, then wait long enough for it to surely not be retained on reboot,
+    // then issue another statement. After reboot, check that only the second statement remains.
+    client.simple_query("SELECT 1").unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+    client.simple_query("SELECT 2").unwrap();
+    std::thread::sleep(Duration::from_secs(10));
+
+    std::mem::drop(client);
+    std::mem::drop(server);
+
+    let (_server, mut client) = setup_statement_logging_core(0.0, 0.0, cfg);
+    // Check that we only retained the second query.
+    let result = client
+        .simple_query(
+            "SELECT sql
+FROM
+    mz_internal.mz_statement_execution_history AS mseh,
+    mz_internal.mz_prepared_statement_history AS mpsh,
+    mz_internal.mz_session_history AS msh
+WHERE
+    mseh.prepared_statement_id = mpsh.id
+        AND
+    mpsh.session_id = msh.id",
+        )
+        .unwrap();
+    // one for row, one for "CommandComplete"
+    assert_eq!(result.len(), 2, "the log should have exactly one statement");
+    let SimpleQueryMessage::Row(row) = result.into_iter().next().unwrap() else {
+        panic!("`SELECT` must return a result set");
+    };
+    let sql = row.get(0).expect("`sql` must be present");
+    assert_eq!(sql, "SELECT 2");
+    // Since we only retained the second query, we should also have garbage-collected
+    // the prepared statement and session history entries for the first statement. Verify that here.
+    for tbl in [
+        "mz_internal.mz_statement_execution_history",
+        "mz_internal.mz_prepared_statement_history",
+        "mz_internal.mz_session_history",
+    ] {
+        let result: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {tbl}"), &[])
+            .unwrap()
+            .get(0);
+
+        assert_eq!(result, 1);
+    }
 }
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
@@ -1823,7 +1895,7 @@ fn test_max_connections_on_all_interfaces() {
             assert_eq!(status, StatusCode::OK);
             let result: HttpResponse<HttpRows> = res.json().unwrap();
             assert_eq!(result.results.len(), 1);
-            assert_eq!(result.results[0].rows, vec![vec![1]]);
+            assert_eq!(result.results[0].rows, vec![vec!["1"]]);
             Ok(())
         }).unwrap();
 
@@ -1847,7 +1919,7 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
+                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string())
             );
             tracing::info!("data: {:?}", ws.read().unwrap());
         }
@@ -2415,7 +2487,7 @@ fn test_github_20262() {
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
         r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Row","payload":[1]}"#,
+        r#"{"type":"Row","payload":["1"]}"#,
         r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
     ]);

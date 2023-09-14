@@ -20,7 +20,7 @@ try:
 except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
