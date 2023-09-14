@@ -79,6 +79,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
+use std::io::Write as _;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -2966,4 +2967,53 @@ fn test_webhook_url_notice() {
         .expect("success");
     let body: String = row.get("body");
     assert_eq!(body, "request_foo");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn copy_from() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let mut system_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    system_client
+        .batch_execute("ALTER SYSTEM SET max_copy_from_size = 50")
+        .unwrap();
+    drop(system_client);
+
+    client
+        .execute("CREATE TABLE copy_from_test ( x text )", &[])
+        .expect("success");
+
+    let mut writer = client
+        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
+        .expect("success");
+    writer
+        .write_all(b"hello\nworld\n")
+        .expect("write all to succeed");
+    writer.finish().expect("success");
+
+    let rows = client
+        .query("SELECT * FROM copy_from_test", &[])
+        .expect("success");
+    assert_eq!(rows.len(), 2);
+
+    // This copy from is 53 bytes long, which is greater than our limit of 50.
+    let mut writer = client
+        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
+        .expect("success");
+    writer
+        .write_all(b"this\ncopy\nis\nlarger\nthan\nour\ngreatest\nsupported\nsize\n")
+        .expect("write all to succeed");
+    let result = writer.finish().unwrap_db_error();
+    assert_eq!(result.code(), &SqlState::INSUFFICIENT_RESOURCES);
+
+    let rows = client
+        .query("SELECT * FROM copy_from_test", &[])
+        .expect("success");
+    assert_eq!(rows.len(), 2);
 }
