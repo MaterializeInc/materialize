@@ -229,6 +229,10 @@ impl GetVariablesResponse {
                 .collect(),
         )
     }
+
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.get(name).map(|s| s.as_str())
+    }
 }
 
 impl Transmittable for GetVariablesResponse {

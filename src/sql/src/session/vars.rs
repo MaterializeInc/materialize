@@ -533,6 +533,14 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
+pub const MAX_COPY_FROM_SIZE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_copy_from_size"),
+    // 1 GiB
+    value: &1_073_741_824,
+    description: "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
+    internal: false,
+};
+
 pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("max_identifier_length"),
     value: &mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
@@ -2257,6 +2265,7 @@ impl SystemVars {
             .with_var(&MAX_SECRETS)
             .with_var(&MAX_ROLES)
             .with_var(&MAX_RESULT_SIZE)
+            .with_var(&MAX_COPY_FROM_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
@@ -2657,6 +2666,11 @@ impl SystemVars {
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u32 {
         *self.expect_value(&MAX_RESULT_SIZE)
+    }
+
+    /// Returns the value of the `max_copy_from_size` configuration parameter.
+    pub fn max_copy_from_size(&self) -> u32 {
+        *self.expect_value(&MAX_COPY_FROM_SIZE)
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.

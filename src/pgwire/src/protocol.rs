@@ -36,7 +36,7 @@ use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, Var, VarInput, MAX_COPY_FROM_SIZE};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -2093,9 +2093,17 @@ where
         .await?;
         self.conn.flush().await?;
 
+        let system_vars = self.adapter_client.get_system_vars().await.ok();
+        let max_size = system_vars
+            .as_ref()
+            .map(|resp| resp.get(MAX_COPY_FROM_SIZE.name()))
+            .flatten()
+            .map(|max_size| max_size.parse().ok())
+            .flatten()
+            .unwrap_or(usize::MAX);
+        tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
+
         let mut data = Vec::new();
-        let max_size =
-            usize::cast_from(self.adapter_client.session().vars().max_query_result_size());
         loop {
             let message = self.conn.recv().await?;
             match message {
