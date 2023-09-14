@@ -36,9 +36,8 @@ import junit_xml
 from humanize import naturalsize
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, UnknownCompositionError
 from materialize.ui import UIError
-from misc.python.materialize.mzcompose.composition import UnknownCompositionError
 
 MIN_COMPOSE_VERSION = (2, 6, 0)
 RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
