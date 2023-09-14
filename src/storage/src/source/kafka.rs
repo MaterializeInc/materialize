@@ -456,7 +456,11 @@ impl SourceRender for KafkaSourceConnection {
                         if config.responsible_for(pid) {
                             reader.ensure_partition(pid);
                             if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
-                                let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
+                                let start_offset = match reader.start_offsets.get(&pid) {
+                                    Some(&offset) => offset.try_into().unwrap(),
+                                    None => 0u64,
+                                };
+                                let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(start_offset));
                                 let upper_offset = MzOffset::from(u64::try_from(upper).expect("invalid negative offset"));
                                 let part_upper_ts = Partitioned::with_partition(pid, upper_offset);
                                 entry.insert(PartitionCapability {
