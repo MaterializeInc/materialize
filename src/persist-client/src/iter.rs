@@ -633,40 +633,38 @@ where
             let Some(mut part) = self.heap.peek_mut() else {
                 break;
             };
-            match part.next_kvt.0.as_ref() {
-                None => {
-                    if part.last_in_run {
-                        PeekMut::pop(part);
+            if let Some((k1, v1, t1)) = part.next_kvt.0.as_ref() {
+                if let Some((k0, v0, t0, d0)) = &mut self.state {
+                    let consolidates = match (*k0, *v0, &*t0).cmp(&(*k1, *v1, t1)) {
+                        Ordering::Less => false,
+                        Ordering::Equal => true,
+                        Ordering::Greater => {
+                            // Don't want to log the entire KV, but it's interesting to know
+                            // whether it's KVs going backwards or 'just' timestamps.
+                            panic!(
+                                "data arrived at the consolidator out of order (kvs equal? {})",
+                                (*k0, *v0) == (*k1, *v1)
+                            );
+                        }
+                    };
+                    if consolidates {
+                        let (_, _, _, d1) = part
+                            .pop(&mut self.parts)
+                            .expect("popping from a non-empty iterator");
+                        d0.plus_equals(&d1);
                     } else {
-                        // NB: this is the only case this method exits without returning the current state:
-                        // there may be more instances of the KVT in a later part of the same run.
-                        return None;
+                        break;
                     }
+                } else {
+                    self.state = part.pop(&mut self.parts);
                 }
-                Some((k1, v1, t1)) => {
-                    match &mut self.state {
-                        None => {
-                            self.state = part.pop(&mut self.parts);
-                        }
-                        Some((k0, v0, t0, d0)) => {
-                            match (*k0, *v0, &*t0).cmp(&(*k1, *v1, t1)) {
-                                Ordering::Less => {
-                                    break;
-                                }
-                                Ordering::Equal => {
-                                    let (_, _, _, d1) = part
-                                        .pop(&mut self.parts)
-                                        .expect("popping from a non-empty iterator");
-                                    d0.plus_equals(&d1);
-                                }
-                                Ordering::Greater => {
-                                    // Don't want to log the entire KV, but it's interesting to know
-                                    // whether it's KVs going backwards or 'just' timestamps.
-                                    panic!("data arrived at the consolidator out of order (kvs equal? {})", (*k0, *v0) == (*k1, *v1));
-                                }
-                            };
-                        }
-                    }
+            } else {
+                if part.last_in_run {
+                    PeekMut::pop(part);
+                } else {
+                    // NB: this is the only case this method exits without returning the current state:
+                    // there may be more instances of the KVT in a later part of the same run.
+                    return None;
                 }
             }
         }
