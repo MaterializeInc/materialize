@@ -98,6 +98,7 @@ use mz_environmentd::WebSocketResponse;
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::{
@@ -106,6 +107,7 @@ use mz_ore::{
 };
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql_parser::ast::display::AstDisplay;
 use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
@@ -261,6 +263,7 @@ fn test_statement_logging_immediate() {
         "SHOW ALL",
         "SHOW application_name",
     ];
+    let constants: &[&str] = &["1", "2", "3", "hunter2", "my_application"];
 
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
@@ -278,7 +281,8 @@ SELECT
     mseh.finished_at,
     mseh.finished_status,
     mpsh.sql,
-    mpsh.prepared_at
+    mpsh.prepared_at,
+    mpsh.redacted_sql
 FROM
     mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
@@ -296,6 +300,7 @@ ORDER BY mseh.began_at;",
         finished_status: String,
         sql: String,
         prepared_at: DateTime<Utc>,
+        redacted_sql: String,
     }
     assert_eq!(sl.len(), successful_immediates.len());
     for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
@@ -306,6 +311,7 @@ ORDER BY mseh.began_at;",
             finished_status: r.get(3),
             sql: r.get(4),
             prepared_at: r.get(5),
+            redacted_sql: r.get(6),
         };
         assert_eq!(r.sample_rate, 1.0);
         assert_eq!(
@@ -319,7 +325,16 @@ ORDER BY mseh.began_at;",
         // both the start and end time, but the `NowFn` mechanism doesn't
         // appear to give us any way to do that. Instead, let's just check
         // that none of these statements took longer than 5s wall-clock time.
-        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5))
+        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5));
+        let expected_redacted = mz_sql::parse::parse(&r.sql)
+            .unwrap()
+            .into_element()
+            .ast
+            .to_ast_string_redacted();
+        assert_eq!(r.redacted_sql, expected_redacted);
+        for constant in constants {
+            assert!(!r.redacted_sql.contains(constant));
+        }
     }
 }
 

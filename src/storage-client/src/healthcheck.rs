@@ -66,6 +66,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(||
         .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("sql", ScalarType::String.nullable(false))
+        .with_column("redacted_sql", ScalarType::String.nullable(false))
         .with_column("prepared_at", ScalarType::TimestampTz.nullable(false))
 });
 

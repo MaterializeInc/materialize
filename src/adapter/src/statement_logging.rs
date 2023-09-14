@@ -72,6 +72,7 @@ pub struct StatementEndedExecutionRecord {
 pub struct StatementPreparedRecord {
     pub id: Uuid,
     pub sql: String,
+    pub redacted_sql: String,
     pub name: String,
     pub session_id: Uuid,
     pub prepared_at: EpochMillis,
