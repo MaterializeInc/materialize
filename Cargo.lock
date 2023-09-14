@@ -3087,15 +3087,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lol_alloc"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36aabc32b791f1a506e0bb90e0fa03e983500549d7b1f2dad45b5fc20ef45974"
-dependencies = [
- "spin 0.9.8",
-]
-
-[[package]]
 name = "loom"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5002,13 +4993,11 @@ name = "mz-sql-lexer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "lol_alloc",
  "mz-ore",
  "phf",
  "phf_codegen",
  "serde",
  "uncased",
- "wasm-bindgen",
  "workspace-hack",
 ]
 
@@ -6946,7 +6935,7 @@ dependencies = [
  "cc",
  "libc",
  "once_cell",
- "spin 0.5.2",
+ "spin",
  "untrusted",
  "web-sys",
  "winapi",
@@ -7637,15 +7626,6 @@ name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
-
-[[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
-]
 
 [[package]]
 name = "ssh-key"
