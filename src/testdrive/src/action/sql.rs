@@ -140,10 +140,18 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 "http://{}/api/coordinator/check",
                 state.materialize_internal_http_addr,
             ))
-            .await?
+            .await
+            .context("while getting response from coordinator check")?
             .text()
-            .await?;
-            let inconsistencies: serde_json::Value = serde_json::from_str(&inconsistencies)?;
+            .await
+            .context("while getting text from coordinator check")?;
+            let inconsistencies: serde_json::Value = serde_json::from_str(&inconsistencies)
+                .with_context(|| {
+                    format!(
+                        "while parsing result from consistency check: {:?}",
+                        inconsistencies
+                    )
+                })?;
             if inconsistencies != serde_json::json!("") {
                 bail!("Internal catalog inconsistencies {inconsistencies:#?}");
             }
