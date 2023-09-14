@@ -20,12 +20,12 @@ use crate::objects::{
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    builtin_cluster_replica_config, BootstrapArgs, Connection, Error, DATABASE_ID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    BootstrapArgs, Connection, Error, ReplicaLocation, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -44,6 +44,7 @@ use mz_stash::objects::proto;
 use mz_stash::TableTransaction;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 pub(crate) fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
@@ -116,6 +117,25 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
         }
     }
     Ok(())
+}
+
+pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
+    ReplicaConfig {
+        location: ReplicaLocation::Managed {
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
+            availability_zone: None,
+            disk: false,
+        },
+        logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
+    }
+}
+
+fn default_logging_config() -> ReplicaLogging {
+    ReplicaLogging {
+        log_logging: false,
+        interval: Some(Duration::from_secs(1)),
+    }
 }
 
 /// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
@@ -1061,7 +1081,7 @@ impl<'a> Transaction<'a> {
 
 /// Describes a set of changes to apply as the result of a catalog transaction.
 #[derive(Debug, Clone)]
-pub(crate) struct TransactionBatch {
+pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,

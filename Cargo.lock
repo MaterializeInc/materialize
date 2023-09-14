@@ -3570,6 +3570,7 @@ dependencies = [
 name = "mz-catalog"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "futures",
  "itertools",
  "mz-audit-log",
@@ -3586,6 +3587,7 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "once_cell",
+ "postgres-openssl",
  "proptest",
  "proptest-derive",
  "serde",
