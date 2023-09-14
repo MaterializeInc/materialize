@@ -535,7 +535,7 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
 
 pub const MAX_COPY_FROM_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_copy_from_size"),
-    // 1 GiB
+    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
     value: &1_073_741_824,
     description: "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
     internal: false,
