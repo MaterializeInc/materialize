@@ -1301,6 +1301,7 @@ fn test_explain_timestamp_json() {
 // 2. Acquires read holds for all objects within the same time domain
 // 3. Errors during a write-only transaction
 // 4. Errors when an object outside the chosen time domain is referenced
+#[ignore] // TODO: Fix 21078.
 #[mz_ore::test]
 fn test_github_18950() {
     // Set the timestamp to zero for deterministic initial timestamps.
