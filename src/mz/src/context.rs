@@ -108,38 +108,6 @@ impl Context {
         Ok(None)
     }
 
-    // Prints a warning comment about the cloud endpoint
-    /// TODO: Remove after releasing version 0.1.6 and give anyone using `mz` time to apply the fix.
-    pub fn print_warning_comment(&self) {
-        eprintln!("⚠️ \t Warning\t ⚠️ \nStarting from version 0.1.3, it is a must to include the 'api.' subdomain in the cloud endpoint.");
-        eprintln!("\nWrong: cloud-endpoint = \"https://staging.cloud.materialize.com\"");
-        eprintln!("Right: cloud-endpoint = \"https://api.staging.cloud.materialize.com\"");
-        eprintln!("\nPlease address this in your config before upcoming releases.");
-        eprintln!("Config path: ~/.config/materialize/mz.toml.\n");
-    }
-
-    /// Verifies the cloud endpoint is ok.
-    /// Otherwise raises a warning message.
-    /// This function is temporal.
-    /// TODO: Remove after version 0.1.6 and give anyone using `mz` time to apply the fix.
-    pub fn verify_and_return_cloud_endpoint_url(
-        &self,
-        cloud_endpoint: Option<&str>,
-    ) -> Result<Option<Url>, ParseError> {
-        if let Some(endpoint) = cloud_endpoint {
-            let mut endpoint_url = endpoint.parse::<Url>()?;
-            if let Some(host) = endpoint_url.host_str().as_mut() {
-                if !host.starts_with("api.") {
-                    self.print_warning_comment();
-                    endpoint_url.set_host(Some(&format!("api.{}", host)))?;
-                }
-                return Ok(Some(endpoint_url));
-            }
-        }
-
-        Ok(None)
-    }
-
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
@@ -148,7 +116,11 @@ impl Context {
         let config_file = self.config_file.clone();
         let profile = config_file.load_profile(&profile_name)?;
 
-        let cloud_endpoint = self.verify_and_return_cloud_endpoint_url(profile.cloud_endpoint())?;
+        // Parse the endpoint form the string in the config to URL.
+        let cloud_endpoint = match profile.cloud_endpoint() {
+            Some(endpoint) => Some(endpoint.parse::<Url>()?),
+            None => None,
+        };
 
         // Build clients
         let mut admin_client_builder = AdminClientBuilder::default();
