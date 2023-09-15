@@ -38,10 +38,12 @@ class WebRequests:
         auth: AuthConfig | None,
         base_url: str,
         client_cert: tuple[str, str] | None = None,
+        additional_headers: dict[str, str] | None = None,
     ):
         self.auth = auth
         self.base_url = base_url
         self.client_cert = client_cert
+        self.additional_headers = additional_headers
 
     def get(
         self,
@@ -176,7 +178,7 @@ class WebRequests:
         return response
 
     def _create_headers(self, auth: AuthConfig | None) -> dict[str, Any]:
-        headers = {}
+        headers = self.additional_headers.copy() if self.additional_headers else {}
         if auth:
             headers["Authorization"] = f"Bearer {auth.token}"
 
