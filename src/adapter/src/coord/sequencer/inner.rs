@@ -2979,13 +2979,13 @@ impl Coordinator {
 
         let pipeline_result = {
             self.explain_query_optimizer_pipeline(
+                &optimizer_trace,
                 raw_plan,
                 broken,
                 target_cluster,
                 ctx.session_mut(),
                 &row_set_finishing,
             )
-            .with_subscriber(&optimizer_trace)
             .await
         };
 
@@ -3060,6 +3060,7 @@ impl Coordinator {
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
+        optimizer_trace: &OptimizerTrace,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
         target_cluster: TargetCluster,
@@ -3099,9 +3100,13 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(Level::INFO, "raw").in_scope(|| {
-            trace_plan(&raw_plan);
-        });
+        async {
+            tracing::span!(Level::INFO, "raw").in_scope(|| {
+                trace_plan(&raw_plan);
+            });
+        }
+        .with_subscriber(optimizer_trace)
+        .await;
 
         // Execute the `optimize/hir_to_mir` stage.
         let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
@@ -3125,15 +3130,20 @@ impl Coordinator {
             .sufficient_collections(&source_ids);
 
         // Execute the `optimize/local` stage.
-        let optimized_plan = catch_unwind(no_errors, "local", || {
-            tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
-                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                if let Ok(ref optimized_plan) = optimized_plan {
-                    trace_plan(optimized_plan.as_inner());
-                }
-                optimized_plan.map_err(Into::into)
+
+        let optimized_plan = async {
+            catch_unwind(no_errors, "local", || {
+                tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
+                    let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
+                    if let Ok(ref optimized_plan) = optimized_plan {
+                        trace_plan(optimized_plan.as_inner());
+                    }
+                    optimized_plan.map_err(Into::into)
+                })
             })
-        })?;
+        }
+        .with_subscriber(optimizer_trace)
+        .await?;
 
         let mut dataflow = DataflowDesc::new("explanation".to_string());
         let mut builder = self.dataflow_builder(cluster_id);
@@ -3225,7 +3235,11 @@ impl Coordinator {
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&dataflow_plan);
+        async {
+            trace_plan(&dataflow_plan);
+        }
+        .with_subscriber(optimizer_trace)
+        .await;
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
@@ -5078,17 +5092,33 @@ impl Coordinator {
         .await;
 
         match cached_stats {
-            Ok(stats) => Ok(Box::new(stats)),
-            Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
-                warn!(
+            Ok(stats) => {
+                ::tracing::info!(
                     is_oneshot = is_oneshot,
-                    "optimizer statistics collection timed out after {}ms",
+                    "optimizer statistics collection completed for {}/{} tables",
+                    stats.cache.len(),
+                    source_ids.len(),
+                );
+                Ok(Box::new(stats))
+            }
+            Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                ::tracing::info!(
+                    is_oneshot = is_oneshot,
+                    "optimizer statistics collection for {} tables timed out after {}ms",
+                    source_ids.len(),
                     timeout.as_millis()
                 );
 
                 Ok(Box::new(EmptyStatisticsOracle))
             }
-            Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+            Err(mz_ore::future::TimeoutError::Inner(e)) => {
+                ::tracing::info!(
+                    is_oneshot = is_oneshot,
+                    "optimizer statistics collection for {} tables failed {e:?}",
+                    source_ids.len()
+                );
+                Err(AdapterError::Storage(e))
+            }
         }
     }
 }
