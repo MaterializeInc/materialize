@@ -1223,6 +1223,13 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const ENABLE_PER_REPLICA_NOTICE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_per_replica_notice"),
+    value: &true,
+    description: "Whether to print a notice when querying per-replica introspection sources.",
+    internal: false,
+};
+
 // TODO(mgree) change this to a SelectOption
 pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_cardinality_estimates"),
@@ -1790,6 +1797,7 @@ impl SessionVars {
                 &STATEMENT_LOGGING_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
+            .with_var(&ENABLE_PER_REPLICA_NOTICE)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -2066,7 +2074,7 @@ impl SessionVars {
         self.expect_value(&*CLUSTER).as_str()
     }
 
-    /// Returns the value of the `cluster_replica` configuration parameter.
+    /// Returns the value of te `cluster_replica` configuration parameter.
     pub fn cluster_replica(&self) -> Option<&str> {
         self.expect_value(&CLUSTER_REPLICA).as_deref()
     }
@@ -2205,6 +2213,11 @@ impl SessionVars {
 
     pub fn get_statement_logging_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_SAMPLE_RATE)
+    }
+
+    /// Returns the value of the `enable_per_replica_notice` configuration parameter.
+    pub fn enable_per_replica_notice(&self) -> bool {
+        *self.expect_value(&ENABLE_PER_REPLICA_NOTICE)
     }
 }
 
