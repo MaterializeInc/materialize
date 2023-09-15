@@ -20,5 +20,6 @@ ci_try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --d
 echo "<!doctype html>" > ci/www/public/index.html
 ci_try htmltest -s ci/www/public -c doc/user/.htmltest.yml
 ci_try ci/test/lint-docs-catalog.sh
+ci_try vale doc/user/content/* --config doc/user/.vale.ini --ext=.md
 
 ci_status_report

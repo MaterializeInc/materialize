@@ -234,6 +234,14 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && rm hugo.tar.gz; \
     fi
 
+# Documentation dependency for linting prose.
+RUN if [ $ARCH_GCC = x86_64 ]; then \
+    curl -fsSL https://github.com/errata-ai/vale/releases/download/v2.28.3/vale_2.28.3_Linux_64-bit.tar.gz > vale.tar.gz \
+    && echo '3ad5305d56e19d97a061931f6c7c09709002e0ae527f36b2594017d5aa23de3c  vale.tar.gz' | sha256sum --check \
+    && tar -xzf vale.tar.gz -C /usr/local/bin vale \
+    && rm vale.tar.gz; \
+    fi
+
 # Install KinD and kubectl
 
 RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
