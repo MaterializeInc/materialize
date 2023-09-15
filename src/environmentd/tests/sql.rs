@@ -1301,8 +1301,10 @@ fn test_explain_timestamp_json() {
 // 2. Acquires read holds for all objects within the same time domain
 // 3. Errors during a write-only transaction
 // 4. Errors when an object outside the chosen time domain is referenced
+//
+// GitHub issue # 18950
 #[mz_ore::test]
-fn test_github_18950() {
+fn test_transactional_explain_timestamps() {
     let config = util::Config::default().workers(2).unsafe_mode();
 
     let server = util::start_server(config).unwrap();
