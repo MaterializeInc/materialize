@@ -611,7 +611,7 @@ async function getCreateView(dataflow_name) {
 function makeAddrStr(addrs, id, other) {
   let addr = addrs[id].slice();
   // The 0 source or target should not append itself to the address.
-  if (other !== 0) {
+  if (other !== "0") {
     addr.push(other);
   }
   return addrStr(addr);

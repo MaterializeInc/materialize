@@ -261,8 +261,8 @@ function Dataflows(props) {
           let ids_seen = [];
           const edges = scope_channels.get(addr).map(([source, target, source_port, target_port, sent, batch_sent]) => {
             // if either `source` or `target` are zero, they signify a scope input or output, respectively.
-            let source1 = source != 0 ? addr_to_id[addr.concat(", ").concat(source)] : `input_${source_port}`;
-            let target1 = target != 0 ? addr_to_id[addr.concat(", ").concat(target)] : `output_${target_port}`;
+            let source1 = source != "0" ? addr_to_id[addr.concat(", ").concat(source)] : `input_${source_port}`;
+            let target1 = target != "0" ? addr_to_id[addr.concat(", ").concat(target)] : `output_${target_port}`;
             ids_seen.push(source1);
             ids_seen.push(target1);
             return sent == null ? `${source1} -> ${target1} [style="dashed"]` :
