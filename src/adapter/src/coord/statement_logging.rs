@@ -44,6 +44,9 @@ pub enum PreparedStatementLoggingInfo {
     StillToLog {
         /// The SQL text of the statement.
         sql: String,
+        /// The SQL text of the statement, redacted to follow our data management
+        /// policy
+        redacted_sql: String,
         /// When the statement was prepared
         prepared_at: EpochMillis,
         /// The name with which the statement was prepared
@@ -147,6 +150,7 @@ impl Coordinator {
             PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
+                redacted_sql,
                 prepared_at,
                 name,
                 session_id,
@@ -160,6 +164,7 @@ impl Coordinator {
                 out = Some(StatementPreparedRecord {
                     id: uuid,
                     sql: std::mem::take(sql),
+                    redacted_sql: std::mem::take(redacted_sql),
                     name: std::mem::take(name),
                     session_id: *session_id,
                     prepared_at: *prepared_at,
@@ -277,6 +282,7 @@ impl Coordinator {
             session_id,
             name,
             sql,
+            redacted_sql,
             prepared_at,
         } = record;
         let row = Row::pack_slice(&[
@@ -284,6 +290,7 @@ impl Coordinator {
             Datum::Uuid(*session_id),
             Datum::String(name.as_str()),
             Datum::String(sql.as_str()),
+            Datum::String(redacted_sql.as_str()),
             Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
         ]);
         row

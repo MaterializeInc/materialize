@@ -14,6 +14,7 @@ use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{Params, StatementDesc};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
@@ -73,7 +74,8 @@ impl Coordinator {
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = params.datums.into_iter().zip(params.types).collect();
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        let logging = session.mint_logging(sql, now);
+        let redacted_sql = stmt.to_ast_string_redacted();
+        let logging = session.mint_logging(sql, redacted_sql, now);
         session.set_portal(
             name,
             desc,
