@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
+use uuid::Uuid;
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::metrics::RehydratingStorageClientMetrics;
@@ -710,6 +711,7 @@ impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
         ProtoTrace {
             id: Some(self.0.into_proto()),
             upper: Some(self.1.into_proto()),
+            uuid: None,
         }
     }
 
@@ -717,6 +719,24 @@ impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
         Ok((
             proto.id.into_rust_if_some("ProtoTrace::id")?,
             proto.upper.into_rust_if_some("ProtoTrace::upper")?,
+        ))
+    }
+}
+
+impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>, Uuid) {
+    fn into_proto(&self) -> ProtoTrace {
+        ProtoTrace {
+            id: Some(self.0.into_proto()),
+            upper: Some(self.1.into_proto()),
+            uuid: Some(self.2.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.id.into_rust_if_some("ProtoTrace::id")?,
+            proto.upper.into_rust_if_some("ProtoTrace::upper")?,
+            proto.uuid.into_rust_if_some("ProtoTrace::uuid")?,
         ))
     }
 }

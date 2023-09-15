@@ -31,6 +31,7 @@ use proptest::prelude::*;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -1848,6 +1849,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             as_of: desc.as_of,
             until: desc.until,
             debug_name: desc.debug_name,
+            uuid: Uuid::nil(),
         };
 
         mz_repr::explain::trace_plan(&dataflow);

@@ -259,11 +259,14 @@ where
             ComputeResponse::FrontierUpper {
                 id,
                 upper: new_shard_upper,
+                uuid,
             } => {
                 // Initialize frontier tracking state for this collection, if necessary.
                 if !self.uppers.contains_key(&id) {
                     self.start_frontier_tracking(id);
                 }
+
+                // TODO: Check that the uuid matches the expected value.
 
                 let (frontier, shard_frontiers) = self.uppers.get_mut(&id).unwrap();
 
@@ -279,6 +282,7 @@ where
                     Some(Ok(ComputeResponse::FrontierUpper {
                         id,
                         upper: new_upper.to_owned(),
+                        uuid,
                     }))
                 } else {
                     None

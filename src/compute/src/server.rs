@@ -245,6 +245,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         as_of: dataflow.as_of.clone(),
                         until: dataflow.until.clone(),
                         debug_name: dataflow.debug_name.clone(),
+                        uuid: dataflow.uuid,
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()
@@ -555,6 +556,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                 old_dataflows.remove(&export_ids);
                                 for id in export_ids.iter() {
                                     old_compaction.insert(*id, as_of.clone());
+                                    compute_state
+                                        .collections
+                                        .get_mut(id)
+                                        .expect("collection missing")
+                                        .uuid = dataflow.uuid;
                                 }
                                 retain_ids.extend(export_ids);
                             } else {

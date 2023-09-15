@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
@@ -20,6 +20,7 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use uuid::Uuid;
 
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
@@ -60,6 +61,8 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,
+    /// Unique identifier for this instantiation.
+    pub uuid: Uuid,
 }
 
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
@@ -93,6 +96,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             as_of: Default::default(),
             until: Antichain::new(),
             debug_name: name,
+            uuid: Uuid::nil(),
         }
     }
 
@@ -379,6 +383,7 @@ impl RustType<ProtoDataflowDescription>
             as_of: self.as_of.into_proto(),
             until: Some(self.until.into_proto()),
             debug_name: self.debug_name.clone(),
+            uuid: Some(self.uuid.into_proto()),
         }
     }
 
@@ -396,6 +401,7 @@ impl RustType<ProtoDataflowDescription>
                 .transpose()?
                 .unwrap_or_else(Antichain::new),
             debug_name: proto.debug_name,
+            uuid: proto.uuid.into_rust_if_some("DataflowDescription::uuid")?,
         })
     }
 }
@@ -527,6 +533,7 @@ proptest::prop_compose! {
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         debug_name in ".*",
+        uuid in any_uuid(),
     ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -543,6 +550,7 @@ proptest::prop_compose! {
             },
             until: Antichain::new(),
             debug_name,
+            uuid,
         }
     }
 }

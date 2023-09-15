@@ -9,7 +9,7 @@
 
 //! A client for replicas of a compute instance.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -27,6 +27,7 @@ use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
+use uuid::Uuid;
 
 use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
@@ -65,6 +66,8 @@ pub(super) struct Replica<T> {
     pub config: ReplicaConfig,
     /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// Tombstones for dropped replicas
+    pub collection_tombstones: BTreeSet<(GlobalId, Uuid)>,
 }
 
 impl<T> Replica<T>
@@ -106,6 +109,7 @@ where
             _task: task.abort_on_drop(),
             config,
             metrics,
+            collection_tombstones: Default::default(),
         }
     }
 
@@ -295,6 +299,7 @@ where
                         metrics,
                         created_at: Instant::now(),
                         as_of: dataflow.as_of.clone().unwrap(),
+                        uuid: dataflow.uuid,
                     };
                     self.collections.insert(id, state);
                 }
@@ -318,15 +323,22 @@ where
 
         // Apply changes to the `initial_output_duration_seconds` metric.
         let collection_frontier = match response {
-            ComputeResponse::FrontierUpper { id, upper } => Some((id, upper.clone())),
+            ComputeResponse::FrontierUpper { id, upper, uuid } => {
+                Some((id, upper.clone(), Some(uuid)))
+            }
             ComputeResponse::SubscribeResponse(id, resp) => match resp {
-                SubscribeResponse::Batch(batch) => Some((id, batch.upper.clone())),
-                SubscribeResponse::DroppedAt(_) => Some((id, Antichain::new())),
+                SubscribeResponse::Batch(batch) => Some((id, batch.upper.clone(), None)),
+                SubscribeResponse::DroppedAt(_) => Some((id, Antichain::new(), None)),
             },
             _ => None,
         };
-        if let Some((id, frontier)) = collection_frontier {
+        if let Some((id, frontier, uuid)) = collection_frontier {
             if let Some(state) = self.collections.get(id) {
+                if let Some(uuid) = uuid {
+                    if state.uuid != *uuid {
+                        return;
+                    }
+                }
                 state.observe_frontier_update(&frontier);
             }
         }
@@ -343,6 +355,7 @@ struct CollectionState<T> {
     created_at: Instant,
     /// Original as_of of this collection.
     as_of: Antichain<T>,
+    uuid: Uuid,
 }
 
 impl<T: Timestamp> CollectionState<T> {

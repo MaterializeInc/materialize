@@ -645,6 +645,9 @@ pub struct CollectionState<T> {
     write_frontier: Antichain<T>,
     /// The write frontiers reported by individual replicas.
     replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
+
+    /// The unique identifier of the collection.
+    uuid: Uuid,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -653,6 +656,7 @@ impl<T: Timestamp> CollectionState<T> {
         since: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
+        uuid: Uuid,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
@@ -666,12 +670,13 @@ impl<T: Timestamp> CollectionState<T> {
             compute_dependencies,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
             replica_write_frontiers: BTreeMap::new(),
+            uuid,
         }
     }
 
     pub fn new_log_collection() -> Self {
         let since = Antichain::from_elem(Timestamp::minimum());
-        let mut state = Self::new(since, Vec::new(), Vec::new());
+        let mut state = Self::new(since, Vec::new(), Vec::new(), Uuid::nil());
         state.log_collection = true;
         state
     }

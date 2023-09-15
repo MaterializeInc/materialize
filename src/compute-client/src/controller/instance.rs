@@ -23,6 +23,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSin
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
@@ -173,14 +174,35 @@ impl<T> Instance<T> {
         self.collections.iter()
     }
 
-    fn add_collection(&mut self, id: GlobalId, state: CollectionState<T>) {
-        self.collections.insert(id, state);
+    fn add_collection(&mut self, id: GlobalId, state: CollectionState<T>)
+    where
+        T: std::fmt::Debug,
+    {
+        let old = self.collections.insert(id, state);
+        soft_assert_or_log!(
+            old.is_none(),
+            "Overriding existing collection {id}, previously: {old:?}\nnew: {:?}",
+            self.collections.get(&id),
+        );
+
         self.report_dependency_updates(id, 1);
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
         self.report_dependency_updates(id, -1);
-        self.collections.remove(&id);
+        if let Some(collection) = self.collections.remove(&id) {
+            for (replica_id, replica_state) in &mut self.replicas {
+                if collection
+                    .replica_write_frontiers
+                    .get(replica_id)
+                    .map_or(false, |frontier| !frontier.is_empty())
+                {
+                    replica_state
+                        .collection_tombstones
+                        .insert((id, collection.uuid));
+                }
+            }
+        }
     }
 
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
@@ -655,6 +677,8 @@ where
             .collect();
         self.update_read_capabilities(&mut compute_read_updates);
 
+        let uuid = Uuid::new_v4();
+
         // Install collection state for each of the exports.
         let mut updates = Vec::new();
         for export_id in dataflow.export_ids() {
@@ -664,6 +688,7 @@ where
                     as_of.clone(),
                     storage_dependencies.clone(),
                     compute_dependencies.clone(),
+                    uuid,
                 ),
             );
             updates.push((export_id, replica_write_frontier.clone()));
@@ -735,6 +760,7 @@ where
             as_of: dataflow.as_of,
             until: dataflow.until,
             debug_name: dataflow.debug_name,
+            uuid,
         };
 
         self.compute
@@ -1108,8 +1134,8 @@ where
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
-            ComputeResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_upper(id, upper, replica_id);
+            ComputeResponse::FrontierUpper { id, upper, uuid } => {
+                self.handle_frontier_upper(id, upper, uuid, replica_id);
                 None
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
@@ -1144,20 +1170,38 @@ where
         &mut self,
         id: GlobalId,
         new_frontier: Antichain<T>,
+        uuid: Uuid,
         replica_id: ReplicaId,
     ) {
         // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
         let Ok(coll) = self.compute.collection(id) else {
-            tracing::warn!(
-                ?replica_id,
-                "Frontier update for unknown collection {id}: {:?}",
-                new_frontier.elements(),
-            );
-            tracing::error!("Replica reported an untracked collection frontier");
+            let replica = self.compute.replicas.get_mut(&replica_id);
+            if replica.as_ref().map_or(false, |replica| {
+                replica.collection_tombstones.contains(&(id, uuid))
+            }) {
+                if new_frontier.is_empty() {
+                    replica
+                        .expect("validated to exist")
+                        .collection_tombstones
+                        .remove(&(id, uuid));
+                }
+            } else {
+                tracing::warn!(
+                    ?replica_id,
+                    "Frontier update for unknown collection {id}: {:?}",
+                    new_frontier.elements(),
+                );
+                tracing::error!("Replica reported an untracked collection frontier");
+            }
             return;
         };
+
+        if coll.uuid != uuid {
+            tracing::info!("Replica reported a collection frontier for old incarnation");
+            return;
+        }
 
         if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
             if !PartialOrder::less_equal(old_frontier, &new_frontier) {

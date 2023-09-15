@@ -74,7 +74,11 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    FrontierUpper { id: GlobalId, upper: Antichain<T> },
+    FrontierUpper {
+        id: GlobalId,
+        upper: Antichain<T>,
+        uuid: Uuid,
+    },
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
     /// a `Uuid` that matches the command's [`Peek::uuid`].
@@ -135,9 +139,10 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
         use proto_compute_response::*;
         ProtoComputeResponse {
             kind: Some(match self {
-                ComputeResponse::FrontierUpper { id, upper } => FrontierUpper(ProtoTrace {
+                ComputeResponse::FrontierUpper { id, upper, uuid } => FrontierUpper(ProtoTrace {
                     id: Some(id.into_proto()),
                     upper: Some(upper.into_proto()),
+                    uuid: Some(uuid.into_proto()),
                 }),
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
@@ -162,6 +167,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
             Some(FrontierUpper(trace)) => Ok(ComputeResponse::FrontierUpper {
                 id: trace.id.into_rust_if_some("ProtoTrace::id")?,
                 upper: trace.upper.into_rust_if_some("ProtoTrace::upper")?,
+                uuid: trace.uuid.into_rust_if_some("ProtoTrace::uuid")?,
             }),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
@@ -187,8 +193,8 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            (any::<GlobalId>(), any_antichain())
-                .prop_map(|(id, upper)| ComputeResponse::FrontierUpper { id, upper })
+            (any::<GlobalId>(), any_antichain(), any_uuid())
+                .prop_map(|(id, upper, uuid)| ComputeResponse::FrontierUpper { id, upper, uuid })
                 .boxed(),
             (any_uuid(), any::<PeekResponse>())
                 .prop_map(|(id, resp)| {

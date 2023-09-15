@@ -13,6 +13,7 @@ import "compute-types/src/plan.proto";
 import "compute-types/src/sinks.proto";
 import "compute-types/src/sources.proto";
 import "expr/src/scalar.proto";
+import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
@@ -52,6 +53,7 @@ message ProtoDataflowDescription {
     optional mz_repr.antichain.ProtoU64Antichain as_of = 6;
     mz_repr.antichain.ProtoU64Antichain until = 7;
     string debug_name = 8;
+    mz_proto.ProtoU128 uuid = 9;
 }
 
 message ProtoIndexDesc {

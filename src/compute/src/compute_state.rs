@@ -59,7 +59,7 @@ pub struct ComputeState {
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<GlobalId>,
+    pub dropped_collections: Vec<(GlobalId, Uuid)>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -120,8 +120,12 @@ impl ComputeState {
     }
 
     /// Return whether a collection with the given ID exists.
-    pub fn collection_exists(&self, id: GlobalId) -> bool {
-        self.collections.contains_key(&id)
+    pub fn collection_exists(&self, id: GlobalId, uuid: Uuid) -> bool {
+        if let Some(collection) = self.collections.get(&id) {
+            collection.uuid == uuid
+        } else {
+            false
+        }
     }
 
     /// Return a reference to the identified collection.
@@ -231,6 +235,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let mut collection = CollectionState::new();
+            collection.uuid = dataflow.uuid;
 
             let as_of = dataflow.as_of.clone().unwrap();
             collection.reported_frontier = ReportedFrontier::NotReported { lower: as_of };
@@ -344,7 +349,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         //    the final `FrontierUpper` response already serves the purpose of reporting
         //    the end of the dataflow.
         if !collection.is_subscribe() && !collection.reported_frontier.is_empty() {
-            self.compute_state.dropped_collections.push(id);
+            self.compute_state
+                .dropped_collections
+                .push((id, collection.uuid));
         }
     }
 
@@ -437,12 +444,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 }
             }
 
-            new_uppers.push((id, new_frontier.clone()));
+            new_uppers.push((id, new_frontier.clone(), collection.uuid));
             collection.reported_frontier = new_reported_frontier;
         }
 
-        for (id, upper) in new_uppers {
-            self.send_compute_response(ComputeResponse::FrontierUpper { id, upper });
+        for (id, upper, uuid) in new_uppers {
+            self.send_compute_response(ComputeResponse::FrontierUpper { id, upper, uuid });
         }
     }
 
@@ -454,15 +461,16 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // advanced to the empty frontier by announcing that it has advanced to the empty
         // frontier. We should introduce a new compute response variant that has the right
         // semantics.
-        for id in dropped_collections {
+        for (id, uuid) in dropped_collections {
             // Sanity check: A collection that was dropped should not exist.
             assert!(
-                !self.compute_state.collection_exists(id),
+                !self.compute_state.collection_exists(id, uuid),
                 "tried to report a dropped collection that still exists: {id}"
             );
             self.send_compute_response(ComputeResponse::FrontierUpper {
                 id,
                 upper: Antichain::new(),
+                uuid,
             });
         }
     }
@@ -890,6 +898,8 @@ pub struct CollectionState {
     /// New dataflows that depend on this index are expected to report their output frontiers
     /// through these probe handles.
     pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
+    /// Unique identifier
+    pub uuid: Uuid,
 }
 
 impl CollectionState {
@@ -899,6 +909,7 @@ impl CollectionState {
             sink_token: None,
             sink_write_frontier: None,
             index_flow_control_probes: Default::default(),
+            uuid: Uuid::nil(),
         }
     }
 
