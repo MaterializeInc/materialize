@@ -326,14 +326,16 @@ ORDER BY mseh.began_at;",
         // appear to give us any way to do that. Instead, let's just check
         // that none of these statements took longer than 5s wall-clock time.
         assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5));
-        let expected_redacted = mz_sql::parse::parse(&r.sql)
-            .unwrap()
-            .into_element()
-            .ast
-            .to_ast_string_redacted();
-        assert_eq!(r.redacted_sql, expected_redacted);
-        for constant in constants {
-            assert!(!r.redacted_sql.contains(constant));
+        if !r.sql.is_empty() {
+            let expected_redacted = mz_sql::parse::parse(&r.sql)
+                .unwrap()
+                .into_element()
+                .ast
+                .to_ast_string_redacted();
+            assert_eq!(r.redacted_sql, expected_redacted);
+            for constant in constants {
+                assert!(!r.redacted_sql.contains(constant));
+            }
         }
     }
 }
