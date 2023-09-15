@@ -1215,6 +1215,22 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+const OPTIMIZER_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("optimizer_stats_timeout"),
+    value: &Duration::from_millis(250),
+    description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
+    applied to non-oneshot, i.e., long-lasting queries, like CREATE MATERIALIZED VIEW (Materialize).",
+    internal: true,
+};
+
+const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("optimizer_oneshot_stats_timeout"),
+    value: &Duration::from_millis(20),
+    description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
+    applied to oneshot queries, like SELECT (Materialize).",
+    internal: true,
+};
+
 static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
 pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
@@ -1464,7 +1480,7 @@ macro_rules! feature_flags {
     (@inner $name:expr, $feature_desc:literal) => {
         feature_flags!(@inner $name, $feature_desc, false);
     };
-    // Match `$name, $feature_desc, $value`, default `$internal` to false.
+    // Match `$name, $feature_desc, $value`, default `$internal` to true.
     (@inner $name:expr, $feature_desc:literal, $value:expr) => {
         feature_flags!(@inner $name, $feature_desc, $value, true);
     };
@@ -2116,7 +2132,7 @@ impl SessionVars {
         *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
     }
 
-    /// Returns the value of `enable_cardinality_estimates` configuration parameter.
+    /// Returns the value of `enable_session_cardinality_estimates` configuration parameter.
     pub fn enable_session_cardinality_estimates(&self) -> bool {
         *self.expect_value(&ENABLE_SESSION_CARDINALITY_ESTIMATES)
     }
@@ -2359,7 +2375,9 @@ impl SystemVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
             .with_var(&TRUNCATE_STATEMENT_LOG)
-            .with_var(&STATEMENT_LOGGING_RETENTION);
+            .with_var(&STATEMENT_LOGGING_RETENTION)
+            .with_var(&OPTIMIZER_STATS_TIMEOUT)
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3084,6 +3102,16 @@ impl SystemVars {
     /// Returns the `statement_logging_retention` configuration parameter.
     pub fn statement_logging_retention(&self) -> Duration {
         *self.expect_value(&STATEMENT_LOGGING_RETENTION)
+    }
+
+    /// Returns the `optimizer_stats_timeout` configuration parameter.
+    pub fn optimizer_stats_timeout(&self) -> Duration {
+        *self.expect_value(&OPTIMIZER_STATS_TIMEOUT)
+    }
+
+    /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
+    pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
+        *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
     }
 }
 
