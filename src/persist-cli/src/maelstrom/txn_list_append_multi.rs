@@ -230,7 +230,7 @@ impl Transactor {
                 )
                 .await
                 .expect("data schema shouldn't change");
-            let res = self.txns.register(init_ts, data_write).await;
+            let res = self.txns.register(init_ts, [data_write]).await;
             match res {
                 Ok(_) => {
                     self.data_reads.insert(*data_id, (init_ts, data_read));

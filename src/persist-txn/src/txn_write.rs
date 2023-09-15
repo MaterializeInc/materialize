@@ -418,7 +418,7 @@ mod tests {
             let task = async move {
                 let data_write = writer(&client, d0).await;
                 let mut txns = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
-                let register_ts = txns.register(1, data_write).await.unwrap();
+                let register_ts = txns.register(1, [data_write]).await.unwrap();
                 debug!("{} registered at {}", idx, register_ts);
 
                 // Add some jitter to the commit timestamps (to create gaps) and

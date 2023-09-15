@@ -199,8 +199,8 @@
 //! # let d1_write = c.open_writer(
 //! #    d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! txns.register(1u64, d0_write).await.expect("not previously initialized");
-//! txns.register(2u64, d1_write).await.expect("not previously initialized");
+//! txns.register(1u64, [d0_write]).await.expect("not previously initialized");
+//! txns.register(2u64, [d1_write]).await.expect("not previously initialized");
 //!
 //! // Commit a txn. This is durable if/when the `commit_at` succeeds, but reads
 //! // at the commit ts will _block_ until after the txn is applied. Users are

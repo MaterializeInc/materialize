@@ -165,15 +165,16 @@ where
         Txn::new()
     }
 
-    /// Registers a data shard for use with this txn set.
+    /// Registers data shards for use with this txn set.
     ///
-    /// The data shard will be initially readable at `register_ts`. First, a
-    /// registration entry is written to the txn shard. If it is not possible to
-    /// register the data at that time, an Err will be returned with the minimum
-    /// time the data shard could be registered. Second, the data shard will be
-    /// made readable at `register_ts` by appending empty updates to it, if
-    /// necessary. If the data has already been registered, this method is
-    /// idempotent.
+    /// First, a registration entry is written to the txn shard. If it is not
+    /// possible to register the data at the requested time, an Err will be
+    /// returned with the minimum time the data shards could be registered.
+    /// Second, the data shard will be made readable through `register_ts` by
+    /// appending empty updates to it, if necessary.
+    ///
+    /// This method is idempotent. Data shards registered previously to
+    /// `register_ts` will not be registered a second time.
     ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
@@ -182,9 +183,17 @@ where
     pub async fn register(
         &mut self,
         mut register_ts: T,
-        data_write: WriteHandle<K, V, T, D>,
+        data_writes: impl IntoIterator<Item = WriteHandle<K, V, T, D>>,
     ) -> Result<T, T> {
-        let data_id = data_write.shard_id();
+        let mut max_registered_ts = T::minimum();
+
+        let data_writes = data_writes.into_iter().collect::<Vec<_>>();
+        let mut data_ids = data_writes.iter().map(|x| x.shard_id()).collect::<Vec<_>>();
+        let data_ids_debug = data_ids
+            .iter()
+            .map(|x| format!("{:.9}", x.to_string()))
+            .collect::<Vec<_>>()
+            .join(" ");
 
         // SUBTLE! We have to write the registration to the txns shard *before*
         // we write empty data to the physical shard. Otherwise we could race
@@ -193,25 +202,41 @@ where
         let mut txns_upper = recent_upper(&mut self.txns_write).await;
         loop {
             self.txns_cache.update_ge(&txns_upper).await;
-            if let Ok(init_ts) = self.txns_cache.data_since(&data_id) {
-                debug!("txns register {:.9} already done at {:?}", data_id, init_ts);
-                if register_ts < init_ts {
-                    return Ok(init_ts);
+            data_ids.retain(|data_id| {
+                let Ok(ts) = self.txns_cache.data_since(data_id) else {
+                    return true;
+                };
+                debug!(
+                    "txns register {:.9} already done at {:?}",
+                    data_id.to_string(),
+                    ts
+                );
+                if max_registered_ts < ts {
+                    max_registered_ts = ts;
                 }
-                register_ts = init_ts;
+                false
+            });
+            if data_ids.is_empty() {
+                register_ts = max_registered_ts;
                 break;
             } else if register_ts < txns_upper {
                 debug!(
-                    "txns register {:.9} at {:?} mismatch current={:?}",
-                    data_id, register_ts, txns_upper,
+                    "txns register {} at {:?} mismatch current={:?}",
+                    data_ids_debug, register_ts, txns_upper,
                 );
                 return Err(txns_upper);
             }
 
-            let (key, val) = C::encode(crate::TxnsEntry::Register(data_id));
-            let updates = vec![((&key, &val), &register_ts, 1)];
+            let updates = data_ids
+                .iter()
+                .map(|data_id| C::encode(crate::TxnsEntry::Register(*data_id)))
+                .collect::<Vec<_>>();
+            let updates = updates
+                .iter()
+                .map(|(key, val)| ((key, val), &register_ts, 1i64))
+                .collect::<Vec<_>>();
             let res = crate::small_caa(
-                || format!("txns register {:.9}", data_id.to_string()),
+                || format!("txns register {}", data_ids_debug),
                 &mut self.txns_write,
                 &updates,
                 txns_upper,
@@ -220,7 +245,10 @@ where
             .await;
             match res {
                 Ok(()) => {
-                    debug!("txns register {:.9} at {:?} success", data_id, register_ts);
+                    debug!(
+                        "txns register {} at {:?} success",
+                        data_ids_debug, register_ts
+                    );
                     break;
                 }
                 Err(new_txns_upper) => {
@@ -229,7 +257,11 @@ where
                 }
             }
         }
-        self.datas.data_write.insert(data_id, data_write);
+        for data_write in data_writes {
+            self.datas
+                .data_write
+                .insert(data_write.shard_id(), data_write);
+        }
 
         // Now that we've written the initialization into the txns shard, we
         // know it's safe to make the data shard readable at `commit_ts`. We
@@ -422,7 +454,7 @@ mod tests {
 
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
             let data_id = ShardId::new();
-            self.register(register_ts, writer(&self.datas.client, data_id).await)
+            self.register(register_ts, [writer(&self.datas.client, data_id).await])
                 .await
                 .unwrap();
             data_id
@@ -457,18 +489,36 @@ mod tests {
         // Register a second time is a no-op and returns the original
         // registration time, regardless of whether the second attempt is for
         // before or after the original time.
-        assert_eq!(txns.register(1, writer(&client, d0).await).await, Ok(2));
-        assert_eq!(txns.register(3, writer(&client, d0).await).await, Ok(2));
+        assert_eq!(txns.register(1, [writer(&client, d0).await]).await, Ok(2));
+        assert_eq!(txns.register(3, [writer(&client, d0).await]).await, Ok(2));
 
         // Cannot register a new data shard at an already closed off time. An
         // error is returned with the first time that a registration would
         // succeed.
         let d1 = ShardId::new();
-        assert_eq!(txns.register(2, writer(&client, d1).await).await, Err(3));
+        assert_eq!(txns.register(2, [writer(&client, d1).await]).await, Err(3));
 
         // Can still register after txns have been committed.
         txns.expect_commit_at(3, d0, &["foo"]).await;
-        assert_eq!(txns.register(4, writer(&client, d1).await).await, Ok(4));
+        assert_eq!(txns.register(4, [writer(&client, d1).await]).await, Ok(4));
+
+        // Reregistration returns the latest original registration time.
+        assert_eq!(txns.register(5, [writer(&client, d0).await]).await, Ok(2));
+        assert_eq!(
+            txns.register(5, [writer(&client, d0).await, writer(&client, d1).await])
+                .await,
+            Ok(4)
+        );
+
+        // If some are registered but some are not, then register_ts is
+        // returned. This also tests that the previous entirely registered calls
+        // did not consume the timestamp.
+        let d2 = ShardId::new();
+        assert_eq!(
+            txns.register(5, [writer(&client, d0).await, writer(&client, d2).await])
+                .await,
+            Ok(5)
+        );
     }
 
     // Regression test for a bug encountered during initial development:
@@ -490,7 +540,7 @@ mod tests {
         txn.write(&d0, "foo".into(), (), 1).await;
         let commit_apply = txn.commit_at(&mut txns, 2).await.unwrap();
 
-        txns.register(2, writer(&client, d0).await).await.unwrap();
+        txns.register(2, [writer(&client, d0).await]).await.unwrap();
 
         // Make sure that we can read empty at the register commit time even
         // before the txn commit apply.
