@@ -439,6 +439,7 @@ impl Coordinator {
     }
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
         self.pending_writes.push(pending_write_txn);
         self.trigger_group_commit();
