@@ -27,7 +27,7 @@ the superpowers of an operational data warehouse first-hand:
 ## Before you begin
 
 All you need is a Materialize account. If you already have one —
-great! If not, [sign up for a playground account](https://materialize.com/register/) first.
+great! If not, [sign up for a playground account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) first.
 
 When you're ready, head over to the [Materialize console](https://console.materialize.com/),
 and pop open the SQL Shell.
@@ -297,4 +297,4 @@ DROP TABLE fraud_accounts;
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started with your own data, [reach out to our team](https://materialize.com/trial/) to upgrade your playground to a trial account.
+To get started with your own data, [upgrade your playground to a trial account](https://materialize.com/trial/?utm_campaign=General&utm_source=documentation).
