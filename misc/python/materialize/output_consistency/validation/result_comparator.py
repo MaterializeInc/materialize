@@ -311,9 +311,15 @@ class ResultComparator:
             return True
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
-            return value1.is_nan() and value2.is_nan()
+            if value1.is_nan() and value2.is_nan():
+                return True
+            else:
+                return value1 == value2
 
         if isinstance(value1, float) and isinstance(value2, float):
-            return math.isnan(value1) and math.isnan(value2)
+            if math.isnan(value1) and math.isnan(value2):
+                return True
+            else:
+                return value1 == value2
 
         return False
