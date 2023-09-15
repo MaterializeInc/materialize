@@ -2074,7 +2074,7 @@ impl SessionVars {
         self.expect_value(&*CLUSTER).as_str()
     }
 
-    /// Returns the value of te `cluster_replica` configuration parameter.
+    /// Returns the value of the `cluster_replica` configuration parameter.
     pub fn cluster_replica(&self) -> Option<&str> {
         self.expect_value(&CLUSTER_REPLICA).as_deref()
     }
