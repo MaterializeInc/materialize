@@ -310,6 +310,9 @@ class ResultComparator:
         if value1 == value2:
             return True
 
+        if isinstance(value1, list) and isinstance(value2, list):
+            return self.is_list_equal(value1, value2)
+
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             if value1.is_nan() and value2.is_nan():
                 return True
@@ -323,3 +326,13 @@ class ResultComparator:
                 return value1 == value2
 
         return False
+
+    def is_list_equal(self, list1: list[Any], list2: list[Any]) -> bool:
+        if len(list1) != len(list2):
+            return False
+
+        for value1, value2 in zip(list1, list2):
+            if not self.is_value_equal(value1, value2):
+                return False
+
+        return True
