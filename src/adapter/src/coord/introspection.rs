@@ -248,21 +248,26 @@ pub fn user_privilege_hack(
         // **Special Cases**
         //
         // Generally we want to prevent the mz_support user from being able to
-        // access user objects. But there are a few special cases where we permit
-        // limited access, which are:
-        //   * SHOW CREATE ... commands, which are very useful for debugging, see
-        //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
-        //     details.
+        // access user objects. But there are a few special cases where we
+        // permit limited access, which are are very useful for debugging. More
+        // specifically:
+        //   * SHOW CREATE ... commands. See
+        //     <https://github.com/MaterializeInc/materialize/issues/18027> for
+        //     more details.
+        //   * EXPLAIN PLAN ... and EXPLAIN TIMESTAMP ... and commands. See
+        //     <https://github.com/MaterializeInc/materialize/issues/20478> for
+        //     more details.
         //
-        Plan::ShowCreate(_) | Plan::ShowColumns(_) => {
+        Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainTimestamp(_) => {
             return Ok(());
         }
 
         Plan::Subscribe(_)
         | Plan::Select(_)
         | Plan::CopyFrom(_)
-        | Plan::ExplainPlan(_)
-        | Plan::ExplainTimestamp(_)
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
