@@ -726,9 +726,17 @@ fn generate_rbac_requirements(
         },
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
-            raw_plan: _,
+            raw_plan,
         }) => RbacRequirements {
-            privileges: generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id),
+            privileges: raw_plan
+                .depends_on()
+                .into_iter()
+                .map(|id| {
+                    let item = catalog.get_item(&id);
+                    let schema_id: ObjectId = item.name().qualifiers.clone().into();
+                    (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
+                })
+                .collect(),
             ..Default::default()
         },
         Plan::Insert(plan::InsertPlan {
