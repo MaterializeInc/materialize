@@ -3058,15 +3058,23 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn explain_query_optimizer_pipeline(
+    async fn explain_query_optimizer_pipeline_part1(
         &mut self,
-        optimizer_trace: &OptimizerTrace,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
         target_cluster: TargetCluster,
         session: &mut Session,
-        finishing: &Option<RowSetFinishing>,
-    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
+    ) -> Result<
+        (
+            DataflowDescription<OptimizedMirRelationExpr>,
+            mz_storage_types::instances::StorageInstanceId,
+            BTreeSet<GlobalId>,
+            TimestampContext<Timestamp>,
+            Antichain<Timestamp>,
+            bool,
+        ),
+        AdapterError,
+    > {
         use mz_repr::explain::trace_plan;
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
@@ -3100,13 +3108,9 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        async {
-            tracing::span!(Level::INFO, "raw").in_scope(|| {
-                trace_plan(&raw_plan);
-            });
-        }
-        .with_subscriber(optimizer_trace)
-        .await;
+        tracing::span!(Level::INFO, "raw").in_scope(|| {
+            trace_plan(&raw_plan);
+        });
 
         // Execute the `optimize/hir_to_mir` stage.
         let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
@@ -3131,19 +3135,15 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
 
-        let optimized_plan = async {
-            catch_unwind(no_errors, "local", || {
-                tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
-                    let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                    if let Ok(ref optimized_plan) = optimized_plan {
-                        trace_plan(optimized_plan.as_inner());
-                    }
-                    optimized_plan.map_err(Into::into)
-                })
+        let optimized_plan = catch_unwind(no_errors, "local", || {
+            tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
+                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
+                if let Ok(ref optimized_plan) = optimized_plan {
+                    trace_plan(optimized_plan.as_inner());
+                }
+                optimized_plan.map_err(Into::into)
             })
-        }
-        .with_subscriber(optimizer_trace)
-        .await?;
+        })?;
 
         let mut dataflow = DataflowDesc::new("explanation".to_string());
         let mut builder = self.dataflow_builder(cluster_id);
@@ -3175,10 +3175,50 @@ impl Coordinator {
             .timestamp_context;
         let query_as_of = timestamp_context.antichain();
 
-        // Load cardinality statistics.
-        let stats = self
-            .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
-            .await?;
+        Ok((
+            dataflow,
+            cluster_id,
+            source_ids,
+            timestamp_context,
+            query_as_of,
+            is_oneshot,
+        ))
+    }
+
+    #[tracing::instrument(level = "info", name = "optimize", skip_all)]
+    async fn explain_query_optimizer_pipeline_part2(
+        &mut self,
+        no_errors: bool,
+        session: &mut Session,
+        finishing: &Option<RowSetFinishing>,
+        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: mz_storage_types::instances::StorageInstanceId,
+        timestamp_context: TimestampContext<Timestamp>,
+        query_as_of: Antichain<Timestamp>,
+        stats: Box<dyn StatisticsOracle>,
+    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
+        use mz_repr::explain::trace_plan;
+
+        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
+        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+        where
+            F: FnOnce() -> Result<R, E>,
+            E: Into<AdapterError>,
+        {
+            if guard {
+                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+                match r {
+                    Ok(result) => result.map_err(Into::into),
+                    Err(_) => {
+                        let msg = format!("panic at the `{}` optimization stage", stage);
+                        Err(AdapterError::Internal(msg))
+                    }
+                }
+            } else {
+                f().map_err(Into::into)
+            }
+        }
 
         // Execute the `optimize/global` stage.
         let dataflow_metainfo = catch_unwind(no_errors, "global", || {
@@ -3191,14 +3231,14 @@ impl Coordinator {
 
         // Collect the list of indexes used by the dataflow at this point
         let mut used_indexes = UsedIndexes::new(
-            dataflow
-                .index_imports
-                .iter()
-                .map(|(id, _index_import)| {
-                    (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                })
-                .collect(),
-        );
+                    dataflow
+                        .index_imports
+                        .iter()
+                        .map(|(id, _index_import)| {
+                            (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                        })
+                        .collect(),
+                );
 
         // Determine if fast path plan will be used for this explainee.
         let fast_path_plan = {
@@ -3235,15 +3275,44 @@ impl Coordinator {
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
-        async {
-            trace_plan(&dataflow_plan);
-        }
-        .with_subscriber(optimizer_trace)
-        .await;
+        trace_plan(&dataflow_plan);
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
         Ok((used_indexes, fast_path_plan, dataflow_metainfo))
+    }
+
+    async fn explain_query_optimizer_pipeline(
+        &mut self,
+        optimizer_trace: &OptimizerTrace,
+        raw_plan: mz_sql::plan::HirRelationExpr,
+        no_errors: bool,
+        target_cluster: TargetCluster,
+        session: &mut Session,
+        finishing: &Option<RowSetFinishing>,
+    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
+        let (dataflow, cluster_id, source_ids, timestamp_context, query_as_of, is_oneshot) = self
+            .explain_query_optimizer_pipeline_part1(raw_plan, no_errors, target_cluster, session)
+            .with_subscriber(optimizer_trace)
+            .await?;
+
+        // Load cardinality statistics.
+        let stats = self
+            .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
+            .await?;
+
+        self.explain_query_optimizer_pipeline_part2(
+            no_errors,
+            session,
+            finishing,
+            dataflow,
+            cluster_id,
+            timestamp_context,
+            query_as_of,
+            stats,
+        )
+        .with_subscriber(optimizer_trace)
+        .await
     }
 
     pub fn sequence_explain_timestamp(
