@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::iter::once;
 use std::pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -30,7 +31,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::CommentObjectId;
 use mz_stash::objects::proto;
-use mz_stash::Stash;
+use mz_stash::{AppendBatch, Stash, StashError, TypedCollection};
 use mz_storage_types::sources::Timeline;
 
 use crate::initialize::DEPLOY_GENERATION;
@@ -43,8 +44,8 @@ use crate::objects::{
     SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::transaction::{
-    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, transaction,
-    Transaction,
+    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
+    TransactionBatch,
 };
 use crate::{
     initialize, BootstrapArgs, Error, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
@@ -160,7 +161,7 @@ impl Connection {
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !conn.stash.is_readonly() {
-            let mut txn = match transaction(&mut conn.stash).await {
+            let mut txn = match conn.transaction().await {
                 Ok(txn) => txn,
                 Err(e) => {
                     return Err((conn.stash, e));
@@ -741,13 +742,212 @@ impl Connection {
     }
 
     /// Creates a new [`Transaction`].
+    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
-        transaction(&mut self.stash).await
+        let (
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        ) = self
+            .stash
+            .with_transaction(|tx| {
+                Box::pin(async move {
+                    // Peek the catalog collections in any order and a single transaction.
+                    futures::try_join!(
+                        tx.peek_one(tx.collection(DATABASES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(COMMENTS_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
+                        tx.peek_one(
+                            tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
+                                .await?,
+                        ),
+                        tx.peek_one(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CONFIG_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SETTING_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
+                        tx.peek_one(
+                            tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
+                                .await?
+                        ),
+                        tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
+                    )
+                })
+            })
+            .await?;
+
+        Transaction::new(
+            self,
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        )
     }
 
     /// Confirms that this [`Connection`] is connected as the stash leader.
     pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
         Ok(self.stash.confirm_leadership().await?)
+    }
+
+    pub(crate) async fn commit(&mut self, txn_batch: TransactionBatch) -> Result<(), Error> {
+        async fn add_batch<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
+            batches: &mut Vec<AppendBatch>,
+            typed: &'tx TypedCollection<K, V>,
+            changes: &[(K, V, mz_stash::Diff)],
+        ) -> Result<(), StashError>
+        where
+            K: mz_stash::Data + 'tx,
+            V: mz_stash::Data + 'tx,
+        {
+            if changes.is_empty() {
+                return Ok(());
+            }
+            let collection = typed.from_tx(tx).await?;
+            let mut batch = collection.make_batch_tx(tx).await?;
+            for (k, v, diff) in changes {
+                collection.append_to_batch(&mut batch, k, v, *diff);
+            }
+            batches.push(batch);
+            Ok(())
+        }
+
+        // The with_transaction fn below requires a Fn that can be cloned,
+        // meaning anything it closes over must be Clone. TransactionBatch
+        // implements Clone, thus, the Arcs here aren't strictly necessary.
+        // However, using an Arc means that we never clone the TransactionBatch
+        // (which would happen at least one time when the txn starts), and
+        // instead only clone the Arc.
+        let txn_batch = Arc::new(txn_batch);
+
+        self.stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let mut batches = Vec::new();
+
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &DATABASES_COLLECTION,
+                        &txn_batch.databases,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &txn_batch.schemas).await?;
+                    add_batch(&tx, &mut batches, &ITEM_COLLECTION, &txn_batch.items).await?;
+                    add_batch(&tx, &mut batches, &COMMENTS_COLLECTION, &txn_batch.comments).await?;
+                    add_batch(&tx, &mut batches, &ROLES_COLLECTION, &txn_batch.roles).await?;
+                    add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &txn_batch.clusters).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &CLUSTER_REPLICA_COLLECTION,
+                        &txn_batch.cluster_replicas,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
+                        &txn_batch.introspection_sources,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &ID_ALLOCATOR_COLLECTION,
+                        &txn_batch.id_allocator,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &CONFIG_COLLECTION, &txn_batch.configs).await?;
+                    add_batch(&tx, &mut batches, &SETTING_COLLECTION, &txn_batch.settings).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &TIMESTAMP_COLLECTION,
+                        &txn_batch.timestamps,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_GID_MAPPING_COLLECTION,
+                        &txn_batch.system_gid_mapping,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_CONFIGURATION_COLLECTION,
+                        &txn_batch.system_configurations,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &DEFAULT_PRIVILEGES_COLLECTION,
+                        &txn_batch.default_privileges,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SYSTEM_PRIVILEGES_COLLECTION,
+                        &txn_batch.system_privileges,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &AUDIT_LOG_COLLECTION,
+                        &txn_batch.audit_log_updates,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &STORAGE_USAGE_COLLECTION,
+                        &txn_batch.storage_usage_updates,
+                    )
+                    .await?;
+                    tx.append(batches).await?;
+
+                    Ok(())
+                })
+            })
+            .await?;
+
+        Ok(())
     }
 }
 
