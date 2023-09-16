@@ -20,8 +20,9 @@ use crate::objects::{
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    BootstrapArgs, Connection, Error, ReplicaLocation, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, DATABASE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -141,7 +142,7 @@ fn default_logging_config() -> ReplicaLogging {
 /// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
 /// them atomically.
 pub struct Transaction<'a> {
-    conn: &'a mut Connection,
+    durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -167,7 +168,7 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     pub fn new(
-        conn: &mut Connection,
+        durable_catalog: &'a mut dyn DurableCatalogState,
         databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
         schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
         roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
@@ -192,7 +193,7 @@ impl<'a> Transaction<'a> {
         system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     ) -> Result<Transaction, Error> {
         Ok(Transaction {
-            conn,
+            durable_catalog,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
             schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
                 a.database_id == b.database_id && a.name == b.name
@@ -1075,7 +1076,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
-        self.conn.commit(txn_batch).await
+        self.durable_catalog.commit_transaction(txn_batch).await
     }
 }
 
