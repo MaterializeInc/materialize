@@ -53,7 +53,7 @@ use mz_sql::plan::{
     SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::{plan, rbac};
@@ -2157,10 +2157,14 @@ impl Coordinator {
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
 
-        let notices = check_log_reads(catalog, cluster, &source_ids, &mut target_replica)?;
-        if session.vars().enable_per_replica_notice() {
-            session.add_notices(notices);
-        }
+        let notices = check_log_reads(
+            catalog,
+            cluster,
+            &source_ids,
+            &mut target_replica,
+            session.vars(),
+        )?;
+        session.add_notices(notices);
 
         let validity = PlanValidity {
             transient_revision: catalog.transient_revision(),
@@ -2738,10 +2742,15 @@ impl Coordinator {
         // Determine the frontier of updates to subscribe *from*.
         // Updates greater or equal to this frontier will be produced.
         let depends_on = from.depends_on();
-        let notices = check_log_reads(self.catalog(), cluster, &depends_on, &mut target_replica)?;
-        if ctx.session().vars().enable_per_replica_notice() {
-            ctx.session_mut().add_notices(notices);
-        }
+        let notices = check_log_reads(
+            self.catalog(),
+            cluster,
+            &depends_on,
+            &mut target_replica,
+            session.vars(),
+        )?;
+        ctx.session_mut().add_notices(notices);
+
         let id_bundle = self
             .index_oracle(cluster_id)
             .sufficient_collections(&depends_on);
@@ -5243,15 +5252,17 @@ impl Coordinator {
 /// Checks whether we should emit diagnostic
 /// information associated with reading per-replica sources.
 ///
-/// If an unrecoverable error is found (today: an
-/// untargeted read on a cluster with a non-1 number of replicas), return that.
-/// Otherwise, return a list of associated notices (today: we always emit exactly one notice if
-/// there are any per-replica log dependencies, and none otherwise.)
+/// If an unrecoverable error is found (today: an untargeted read on a
+/// cluster with a non-1 number of replicas), return that.  Otherwise,
+/// return a list of associated notices (today: we always emit exactly
+/// one notice if there are any per-replica log dependencies and if
+/// `enable_per_replica_notice` is set, and none otherwise.)
 fn check_log_reads(
     catalog: &Catalog,
     cluster: &Cluster,
     source_ids: &BTreeSet<GlobalId>,
     target_replica: &mut Option<ReplicaId>,
+    vars: &SessionVars,
 ) -> Result<impl IntoIterator<Item = AdapterNotice>, AdapterError>
 where
 {
@@ -5285,7 +5296,11 @@ where
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }
 
-    Ok(Some(AdapterNotice::PerReplicaLogRead { log_names }))
+    Ok(if vars.enable_per_replica_notice() {
+        Some(AdapterNotice::PerReplicaLogRead { log_names })
+    } else {
+        None
+    })
 }
 
 /// Return a [`SourceSinkClusterConfig`] based on the possibly altered
