@@ -1749,6 +1749,13 @@ impl HirRelationExpr {
 
         result
     }
+
+    /// True iff the expression contains a `UnmaterializableFunc::MzNow`.
+    pub fn contains_temporal(&self) -> bool {
+        let mut contains = false;
+        self.visit_children(&mut |e: &HirScalarExpr| contains = contains || e.contains_temporal());
+        contains
+    }
 }
 
 impl CollectionPlan for HirRelationExpr {
@@ -2528,6 +2535,16 @@ impl HirScalarExpr {
 
     pub fn is_literal_null(&self) -> bool {
         Some(Datum::Null) == self.as_literal()
+    }
+
+    pub fn contains_temporal(&self) -> bool {
+        let mut contains = false;
+        let _ = self.visit_post(&mut |e| {
+            if let HirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
+                contains = true;
+            }
+        });
+        contains
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {

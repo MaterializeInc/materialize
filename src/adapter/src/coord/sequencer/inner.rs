@@ -75,7 +75,6 @@ use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
@@ -2977,17 +2976,59 @@ impl Coordinator {
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let pipeline_result = {
-            self.explain_query_optimizer_pipeline(
-                &optimizer_trace,
-                raw_plan,
-                broken,
-                target_cluster,
+        let catalog = self.catalog();
+        let cluster_id = catalog
+            .resolve_target_cluster(target_cluster, ctx.session())?
+            .id;
+        let source_ids = raw_plan.depends_on();
+        let id_bundle = self
+            .index_oracle(cluster_id)
+            .sufficient_collections(&source_ids);
+
+        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
+            && raw_plan.contains_temporal()
+        {
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
+            timeline_context = TimelineContext::TimestampDependent;
+        }
+
+        // Acquire a timestamp (necessary for loading statistics).
+        let timestamp_context = self
+            .sequence_peek_timestamp(
                 ctx.session_mut(),
-                &row_set_finishing,
-            )
-            .await
-        };
+                &QueryWhen::Immediately,
+                cluster_id,
+                timeline_context,
+                &id_bundle,
+                &source_ids,
+                None, // no real-time recency
+            )?
+            .timestamp_context;
+        let query_as_of = timestamp_context.antichain();
+
+        // Load cardinality statistics.
+        let stats = self
+            .statistics_oracle(ctx.session(), &source_ids, query_as_of.clone(), true)
+            .await?;
+
+        let pipeline_result = tracing::dispatcher::with_default(
+            &tracing::dispatcher::Dispatch::from(&optimizer_trace),
+            || {
+                self.explain_query_optimizer_pipeline(
+                    raw_plan,
+                    broken,
+                    cluster_id,
+                    timestamp_context,
+                    query_as_of,
+                    ctx.session_mut(),
+                    stats,
+                    &row_set_finishing,
+                )
+            },
+        );
 
         let (used_indexes, fast_path_plan, dataflow_metainfo) = match pipeline_result {
             Ok((used_indexes, fast_path_plan, dataflow_metainfo)) => {
@@ -3058,23 +3099,17 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn explain_query_optimizer_pipeline_part1(
+    fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
-        target_cluster: TargetCluster,
+        cluster_id: mz_storage_types::instances::StorageInstanceId,
+        timestamp_context: TimestampContext<Timestamp>,
+        query_as_of: Antichain<Timestamp>,
         session: &mut Session,
-    ) -> Result<
-        (
-            DataflowDescription<OptimizedMirRelationExpr>,
-            mz_storage_types::instances::StorageInstanceId,
-            BTreeSet<GlobalId>,
-            TimestampContext<Timestamp>,
-            Antichain<Timestamp>,
-            bool,
-        ),
-        AdapterError,
-    > {
+        stats: Box<dyn StatisticsOracle>,
+        finishing: &Option<RowSetFinishing>,
+    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
         use mz_repr::explain::trace_plan;
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
@@ -3098,11 +3133,8 @@ impl Coordinator {
             }
         }
 
-        let catalog = self.catalog();
-        let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
         // Set parameter values for optimizing one-shot SELECT queries.
         let explainee_id = GlobalId::Explain;
-        let is_oneshot = true;
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
@@ -3117,24 +3149,7 @@ impl Coordinator {
             raw_plan.optimize_and_lower(&OptimizerConfig {})
         })?;
 
-        let mut timeline_context =
-            self.validate_timeline_context(decorrelated_plan.depends_on())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && decorrelated_plan.contains_temporal()
-        {
-            // If the source IDs are timestamp independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timestamp dependent. This is
-            // required because `source_ids` doesn't contain functions.
-            timeline_context = TimelineContext::TimestampDependent;
-        }
-
-        let source_ids = decorrelated_plan.depends_on();
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
-
         // Execute the `optimize/local` stage.
-
         let optimized_plan = catch_unwind(no_errors, "local", || {
             tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
@@ -3161,65 +3176,6 @@ impl Coordinator {
             |s| prep_scalar_expr(state, s, style),
         )?;
 
-        // Acquire a timestamp (necessary for loading statistics).
-        let timestamp_context = self
-            .sequence_peek_timestamp(
-                session,
-                &QueryWhen::Immediately,
-                cluster_id,
-                timeline_context,
-                &id_bundle,
-                &source_ids,
-                None, // no real-time recency
-            )?
-            .timestamp_context;
-        let query_as_of = timestamp_context.antichain();
-
-        Ok((
-            dataflow,
-            cluster_id,
-            source_ids,
-            timestamp_context,
-            query_as_of,
-            is_oneshot,
-        ))
-    }
-
-    #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn explain_query_optimizer_pipeline_part2(
-        &mut self,
-        no_errors: bool,
-        session: &mut Session,
-        finishing: &Option<RowSetFinishing>,
-        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        cluster_id: mz_storage_types::instances::StorageInstanceId,
-        timestamp_context: TimestampContext<Timestamp>,
-        query_as_of: Antichain<Timestamp>,
-        stats: Box<dyn StatisticsOracle>,
-    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
-        use mz_repr::explain::trace_plan;
-
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
-        }
-
         // Execute the `optimize/global` stage.
         let dataflow_metainfo = catch_unwind(no_errors, "global", || {
             mz_transform::optimize_dataflow(
@@ -3231,14 +3187,14 @@ impl Coordinator {
 
         // Collect the list of indexes used by the dataflow at this point
         let mut used_indexes = UsedIndexes::new(
-                    dataflow
-                        .index_imports
-                        .iter()
-                        .map(|(id, _index_import)| {
-                            (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                        })
-                        .collect(),
-                );
+            dataflow
+                .index_imports
+                .iter()
+                .map(|(id, _index_import)| {
+                    (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                })
+                .collect(),
+        );
 
         // Determine if fast path plan will be used for this explainee.
         let fast_path_plan = {
@@ -3280,39 +3236,6 @@ impl Coordinator {
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
         Ok((used_indexes, fast_path_plan, dataflow_metainfo))
-    }
-
-    async fn explain_query_optimizer_pipeline(
-        &mut self,
-        optimizer_trace: &OptimizerTrace,
-        raw_plan: mz_sql::plan::HirRelationExpr,
-        no_errors: bool,
-        target_cluster: TargetCluster,
-        session: &mut Session,
-        finishing: &Option<RowSetFinishing>,
-    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
-        let (dataflow, cluster_id, source_ids, timestamp_context, query_as_of, is_oneshot) = self
-            .explain_query_optimizer_pipeline_part1(raw_plan, no_errors, target_cluster, session)
-            .with_subscriber(optimizer_trace)
-            .await?;
-
-        // Load cardinality statistics.
-        let stats = self
-            .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
-            .await?;
-
-        self.explain_query_optimizer_pipeline_part2(
-            no_errors,
-            session,
-            finishing,
-            dataflow,
-            cluster_id,
-            timestamp_context,
-            query_as_of,
-            stats,
-        )
-        .with_subscriber(optimizer_trace)
-        .await
     }
 
     pub fn sequence_explain_timestamp(
@@ -5161,33 +5084,17 @@ impl Coordinator {
         .await;
 
         match cached_stats {
-            Ok(stats) => {
-                ::tracing::info!(
-                    is_oneshot = is_oneshot,
-                    "optimizer statistics collection completed for {}/{} tables",
-                    stats.cache.len(),
-                    source_ids.len(),
-                );
-                Ok(Box::new(stats))
-            }
+            Ok(stats) => Ok(Box::new(stats)),
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
-                ::tracing::info!(
+                warn!(
                     is_oneshot = is_oneshot,
-                    "optimizer statistics collection for {} tables timed out after {}ms",
-                    source_ids.len(),
+                    "optimizer statistics collection timed out after {}ms",
                     timeout.as_millis()
                 );
 
                 Ok(Box::new(EmptyStatisticsOracle))
             }
-            Err(mz_ore::future::TimeoutError::Inner(e)) => {
-                ::tracing::info!(
-                    is_oneshot = is_oneshot,
-                    "optimizer statistics collection for {} tables failed {e:?}",
-                    source_ids.len()
-                );
-                Err(AdapterError::Storage(e))
-            }
+            Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
         }
     }
 }

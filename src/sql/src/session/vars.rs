@@ -1225,7 +1225,7 @@ const OPTIMIZER_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
 
 const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("optimizer_oneshot_stats_timeout"),
-    value: &Duration::from_millis(20),
+    value: &Duration::from_millis(10),
     description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
     applied to oneshot queries, like SELECT (Materialize).",
     internal: true,
