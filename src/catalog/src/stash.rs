@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::iter::once;
+use std::num::NonZeroI64;
 use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +26,7 @@ use mz_ore::retry::Retry;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject,
@@ -48,11 +50,11 @@ use crate::transaction::{
     TransactionBatch,
 };
 use crate::{
-    initialize, BootstrapArgs, Error, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
-    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
-    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
-    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
-    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    initialize, BootstrapArgs, DurableCatalogState, Error, ReadOnlyDurableCatalogState,
+    AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
+    CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
+    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
+    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CLUSTER_ID_ALLOC_KEY,
     SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
     SYSTEM_REPLICA_ID_ALLOC_KEY, TIMESTAMP_COLLECTION, USER_CLUSTER_ID_ALLOC_KEY,
     USER_REPLICA_ID_ALLOC_KEY,
@@ -948,6 +950,180 @@ impl Connection {
             .await?;
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ReadOnlyDurableCatalogState for Connection {
+    async fn is_initialized(&self) -> Result<bool, Error> {
+        Connection::is_initialized(self).await
+    }
+
+    fn is_read_only(&self) -> bool {
+        Connection::is_read_only(self)
+    }
+
+    fn epoch(&mut self) -> Option<NonZeroI64> {
+        self.stash.epoch()
+    }
+
+    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
+        Connection::get_catalog_content_version(self).await
+    }
+
+    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
+        Connection::load_clusters(self).await
+    }
+
+    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
+        Connection::load_cluster_replicas(self).await
+    }
+
+    async fn get_databases(&mut self) -> Result<Vec<Database>, Error> {
+        Connection::load_databases(self).await
+    }
+
+    async fn get_schemas(&mut self) -> Result<Vec<Schema>, Error> {
+        Connection::load_schemas(self).await
+    }
+
+    async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, Error> {
+        Ok(self
+            .load_system_gids()
+            .await?
+            .into_iter()
+            .map(
+                |((schema_name, object_type, object_name), (id, fingerprint))| {
+                    SystemObjectMapping {
+                        schema_name,
+                        object_type,
+                        object_name,
+                        id,
+                        fingerprint,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    async fn get_introspection_source_indexes(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> Result<BTreeMap<String, GlobalId>, Error> {
+        Connection::load_introspection_source_index_gids(self, cluster_id).await
+    }
+
+    async fn get_roles(&mut self) -> Result<Vec<Role>, Error> {
+        Connection::load_roles(self).await
+    }
+
+    async fn get_default_privileges(
+        &mut self,
+    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+        Connection::load_default_privileges(self).await
+    }
+
+    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+        Connection::load_system_privileges(self).await
+    }
+
+    async fn get_system_configurations(&mut self) -> Result<BTreeMap<String, String>, Error> {
+        Connection::load_system_configuration(self).await
+    }
+
+    async fn get_comments(
+        &mut self,
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+        Connection::load_comments(self).await
+    }
+
+    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, Timestamp>, Error> {
+        Connection::get_all_persisted_timestamps(self).await
+    }
+
+    async fn get_timestamp(&mut self, timeline: &Timeline) -> Result<Option<Timestamp>, Error> {
+        Connection::try_get_persisted_timestamp(self, timeline).await
+    }
+
+    async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, Error> {
+        Ok(Connection::load_audit_log(self).await?.collect())
+    }
+
+    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
+        Connection::get_next_id(self, id_type).await
+    }
+
+    async fn dump(&self) -> Result<String, Error> {
+        Connection::dump(self).await
+    }
+}
+
+#[async_trait]
+impl DurableCatalogState for Connection {
+    async fn transaction(&mut self) -> Result<Transaction, Error> {
+        Connection::transaction(self).await
+    }
+
+    async fn commit_transaction(&mut self, txn_batch: TransactionBatch) -> Result<(), Error> {
+        Connection::commit(self, txn_batch).await
+    }
+
+    async fn confirm_leadership(&mut self) -> Result<(), Error> {
+        Connection::confirm_leadership(self).await
+    }
+
+    async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+        Connection::set_connect_timeout(self, connect_timeout).await
+    }
+
+    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
+        Connection::set_catalog_content_version(self, new_version).await
+    }
+
+    async fn get_and_prune_storage_usage(
+        &mut self,
+        retention_period: Option<Duration>,
+        boot_ts: Timestamp,
+    ) -> Result<Vec<VersionedStorageUsage>, Error> {
+        Connection::get_and_prune_storage_usage(self, retention_period, boot_ts).await
+    }
+
+    async fn set_system_items(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error> {
+        Connection::set_system_object_mapping(self, mappings).await
+    }
+
+    async fn set_introspection_source_indexes(
+        &mut self,
+        mappings: Vec<(ClusterId, &str, GlobalId)>,
+    ) -> Result<(), Error> {
+        Connection::set_introspection_source_index_gids(self, mappings).await
+    }
+
+    async fn set_replica_config(
+        &mut self,
+        replica_id: ReplicaId,
+        cluster_id: ClusterId,
+        name: String,
+        config: ReplicaConfig,
+        owner_id: RoleId,
+    ) -> Result<(), Error> {
+        Connection::set_replica_config(self, replica_id, cluster_id, name, config, owner_id).await
+    }
+
+    async fn persist_timestamp(
+        &mut self,
+        timeline: &Timeline,
+        timestamp: Timestamp,
+    ) -> Result<(), Error> {
+        Connection::persist_timestamp(self, timeline, timestamp).await
+    }
+
+    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
+        Connection::set_deploy_generation(self, deploy_generation).await
+    }
+
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+        Connection::allocate_id(self, id_type, amount).await
     }
 }
 

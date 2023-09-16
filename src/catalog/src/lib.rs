@@ -234,10 +234,11 @@ pub trait ReadOnlyDurableCatalogState {
     /// Returns (index-name, global-id).
     async fn get_introspection_source_indexes(
         &mut self,
+        cluster_id: ClusterId,
     ) -> Result<BTreeMap<String, GlobalId>, Error>;
 
     /// Get all roles.
-    async fn get_roles(&mut self) -> Result<Vec<Schema>, Error>;
+    async fn get_roles(&mut self) -> Result<Vec<Role>, Error>;
 
     /// Get all default privileges.
     async fn get_default_privileges(
@@ -267,7 +268,7 @@ pub trait ReadOnlyDurableCatalogState {
     ) -> Result<Option<mz_repr::Timestamp>, Error>;
 
     /// Get all audit log events.
-    async fn get_audit_log(&mut self) -> Result<Vec<VersionedEvent>, Error>;
+    async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, Error>;
 
     /// Get the next ID of `id_type`, without allocating it.
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error>;
@@ -295,7 +296,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn open(&mut self) -> Result<(), Error>;*/
 
     /// Creates a new durable catalog state transaction.
-    async fn transaction(&mut self) -> Transaction;
+    async fn transaction(&mut self) -> Result<Transaction, Error>;
 
     /// Commits a durable catalog state transaction.
     async fn commit_transaction(&mut self, txn_batch: TransactionBatch) -> Result<(), Error>;
@@ -320,7 +321,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ) -> Result<Vec<VersionedStorageUsage>, Error>;
 
     /// Persist system items.
-    fn set_system_items(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error>;
+    async fn set_system_items(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error>;
 
     /// Persist introspection source indexes.
     ///
