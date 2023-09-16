@@ -1254,11 +1254,11 @@ impl Coordinator {
     fn validate_dropped_role_ownership(
         &self,
         session: &Session,
-        dropped_roles: &BTreeMap<RoleId, &str>,
+        dropped_roles: &BTreeMap<RoleId, String>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
             privileges: &PrivilegeMap,
-            dropped_roles: &BTreeMap<RoleId, &str>,
+            dropped_roles: &BTreeMap<RoleId, String>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
             object_id: &SystemObjectId,
             catalog: &ConnCatalog,
@@ -1488,7 +1488,7 @@ impl Coordinator {
     }
 
     fn sequence_drop_common(
-        &self,
+        &mut self,
         session: &mut Session,
         ids: Vec<ObjectId>,
     ) -> Result<DropOps, AdapterError> {
@@ -1520,6 +1520,17 @@ impl Coordinator {
                     }
                 }
                 ObjectId::Cluster(id) => {
+                    for id in self
+                        .catalog()
+                        .get_cluster(*id)
+                        .log_indexes
+                        .values()
+                        .cloned()
+                        .collect_vec()
+                    {
+                        self.drop_compute_read_policy(&id);
+                    }
+
                     if let Some(active_id) = self
                         .catalog()
                         .active_cluster(session)
@@ -1534,7 +1545,7 @@ impl Coordinator {
                 ObjectId::Role(id) => {
                     let role = self.catalog().get_role(id);
                     let name = role.name();
-                    dropped_roles.insert(*id, name);
+                    dropped_roles.insert(*id, name.to_string());
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
                         role_revokes.insert((*group_id, *id, *grantor_id));
