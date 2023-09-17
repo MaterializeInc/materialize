@@ -180,7 +180,7 @@ pub struct BootstrapArgs {
 #[async_trait]
 pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Reports if the catalog state has been initialized.
-    async fn is_initialized(&self) -> Result<bool, Error>;
+    async fn is_initialized(&mut self) -> Result<bool, Error>;
 
     // TODO(jkosh44) add and implement open methods to be implementation agnostic.
     /*   /// Checks to see if opening the catalog would be
@@ -286,8 +286,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
-    /// Dumps the entire catalog contents in human readable JSON.
-    async fn dump(&self) -> Result<String, Error>;
+    // TODO(jkosh44) Implement this for the catalog debug tool.
+    /*    /// Dumps the entire catalog contents in human readable JSON.
+    async fn dump(&self) -> Result<String, Error>;*/
 }
 
 /// A read-write API for the durable catalog state.
@@ -348,7 +349,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ) -> Result<(), Error>;
 
     /// Persist new global timestamp for a timeline.
-    async fn persist_timestamp(
+    async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,

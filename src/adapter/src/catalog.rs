@@ -3622,7 +3622,7 @@ impl Catalog {
             if !storage.is_read_only() {
                 // IMPORTANT: we durably record the new timestamp before using it.
                 storage
-                    .persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                    .set_timestamp(&Timeline::EpochMilliseconds, boot_ts)
                     .await?;
             }
 
@@ -5322,7 +5322,7 @@ impl Catalog {
     ) -> Result<(), Error> {
         self.storage()
             .await
-            .persist_timestamp(timeline, timestamp)
+            .set_timestamp(timeline, timestamp)
             .await
             .err_into()
     }
