@@ -163,7 +163,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
-    storage: Arc<tokio::sync::Mutex<mz_catalog::Connection>>,
+    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::DurableCatalogState>>>,
     transient_revision: u64,
 }
 
@@ -3615,7 +3615,7 @@ impl Catalog {
         let boot_ts = {
             let mut storage = catalog.storage().await;
             let previous_ts = storage
-                .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
+                .get_timestamp(&Timeline::EpochMilliseconds)
                 .await?
                 .expect("missing EpochMilliseconds timeline");
             let boot_ts = timeline::monotonic_now(config.now, previous_ts);
@@ -3631,7 +3631,7 @@ impl Catalog {
 
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
-        let databases = catalog.storage().await.load_databases().await?;
+        let databases = catalog.storage().await.get_databases().await?;
         for mz_catalog::Database {
             id,
             name,
@@ -3658,7 +3658,7 @@ impl Catalog {
                 .insert(name.clone(), id.clone());
         }
 
-        let schemas = catalog.storage().await.load_schemas().await?;
+        let schemas = catalog.storage().await.get_schemas().await?;
         for mz_catalog::Schema {
             id,
             name,
@@ -3705,7 +3705,7 @@ impl Catalog {
             schemas_by_name.insert(name.clone(), id);
         }
 
-        let roles = catalog.storage().await.load_roles().await?;
+        let roles = catalog.storage().await.get_roles().await?;
         for mz_catalog::Role {
             id,
             name,
@@ -3727,7 +3727,7 @@ impl Catalog {
             );
         }
 
-        let default_privileges = catalog.storage().await.load_default_privileges().await?;
+        let default_privileges = catalog.storage().await.get_default_privileges().await?;
         for (default_privilege_object, default_privilege) in default_privileges {
             catalog
                 .state
@@ -3735,7 +3735,7 @@ impl Catalog {
                 .grant(default_privilege_object, default_privilege);
         }
 
-        let system_privileges = catalog.storage().await.load_system_privileges().await?;
+        let system_privileges = catalog.storage().await.get_system_privileges().await?;
         catalog.state.system_privileges.grant_all(system_privileges);
 
         catalog
@@ -3752,7 +3752,7 @@ impl Catalog {
         mz_repr::VARIABLE_LENGTH_ROW_ENCODING
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
-        let comments = catalog.storage().await.load_comments().await?;
+        let comments = catalog.storage().await.get_comments().await?;
         for (object_id, sub_component, comment) in comments {
             catalog
                 .state
@@ -3770,7 +3770,23 @@ impl Catalog {
 
         catalog.load_builtin_types().await?;
 
-        let persisted_builtin_ids = catalog.storage().await.load_system_gids().await?;
+        let persisted_builtin_ids: BTreeMap<_, _> = catalog
+            .storage()
+            .await
+            .get_system_items()
+            .await?
+            .into_iter()
+            .map(|mapping| {
+                (
+                    (
+                        mapping.schema_name,
+                        mapping.object_type,
+                        mapping.object_name,
+                    ),
+                    (mapping.id, mapping.fingerprint),
+                )
+            })
+            .collect();
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
@@ -3958,7 +3974,7 @@ impl Catalog {
             }
         }
 
-        let clusters = catalog.storage().await.load_clusters().await?;
+        let clusters = catalog.storage().await.get_clusters().await?;
         let mut cluster_azs = BTreeMap::new();
         for mz_catalog::Cluster {
             id,
@@ -3972,7 +3988,7 @@ impl Catalog {
             let introspection_source_index_gids = catalog
                 .storage()
                 .await
-                .load_introspection_source_index_gids(id)
+                .get_introspection_source_indexes(id)
                 .await?;
 
             let AllocatedBuiltinSystemIds {
@@ -3992,7 +4008,7 @@ impl Catalog {
             catalog
                 .storage()
                 .await
-                .set_introspection_source_index_gids(
+                .set_introspection_source_indexes(
                     new_indexes
                         .iter()
                         .map(|(log, index_id)| (id, log.name, *index_id))
@@ -4015,7 +4031,7 @@ impl Catalog {
             );
         }
 
-        let replicas = catalog.storage().await.load_cluster_replicas().await?;
+        let replicas = catalog.storage().await.get_cluster_replicas().await?;
         for mz_catalog::ClusterReplica {
             cluster_id,
             replica_id,
@@ -4125,7 +4141,7 @@ impl Catalog {
         catalog
             .storage()
             .await
-            .set_system_object_mapping(new_system_id_mappings)
+            .set_system_items(new_system_id_mappings)
             .await?;
 
         let last_seen_version = catalog
@@ -4289,7 +4305,7 @@ impl Catalog {
                 _ => unreachable!("all operators must be scalar functions"),
             }
         }
-        let audit_logs = catalog.storage().await.load_audit_log().await?;
+        let audit_logs = catalog.storage().await.get_audit_logs().await?;
         for event in audit_logs {
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
@@ -4300,7 +4316,7 @@ impl Catalog {
         let storage_usage_events = catalog
             .storage()
             .await
-            .fetch_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+            .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
             .await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
@@ -4342,7 +4358,7 @@ impl Catalog {
         system_parameter_sync_config: Option<SystemParameterSyncConfig>,
         boot_ts: mz_repr::Timestamp,
     ) -> Result<(), AdapterError> {
-        let system_config = self.storage().await.load_system_configuration().await?;
+        let system_config = self.storage().await.get_system_configurations().await?;
 
         for (name, value) in &system_parameter_defaults {
             match self
@@ -4457,7 +4473,23 @@ impl Catalog {
     /// resolve all references.
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_builtin_types(&mut self) -> Result<(), Error> {
-        let persisted_builtin_ids = self.storage().await.load_system_gids().await?;
+        let persisted_builtin_ids: BTreeMap<_, _> = self
+            .storage()
+            .await
+            .get_system_items()
+            .await?
+            .into_iter()
+            .map(|mapping| {
+                (
+                    (
+                        mapping.schema_name,
+                        mapping.object_type,
+                        mapping.object_name,
+                    ),
+                    (mapping.id, mapping.fingerprint),
+                )
+            })
+            .collect();
 
         let AllocatedBuiltinSystemIds {
             all_builtins,
@@ -4540,7 +4572,7 @@ impl Catalog {
             .collect();
         self.storage()
             .await
-            .set_system_object_mapping(new_system_id_mappings)
+            .set_system_items(new_system_id_mappings)
             .await?;
 
         Ok(())
@@ -5078,7 +5110,7 @@ impl Catalog {
                 "false"
             };
         let (catalog, _, _, _) = Catalog::open(Config {
-            storage,
+            storage: Box::new(storage),
             unsafe_mode: true,
             all_features: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -5165,7 +5197,7 @@ impl Catalog {
         Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, mz_catalog::Connection> {
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, Box<dyn mz_catalog::DurableCatalogState>> {
         self.storage.lock().await
     }
 
@@ -5261,11 +5293,7 @@ impl Catalog {
     pub async fn get_all_persisted_timestamps(
         &self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        self.storage()
-            .await
-            .get_all_persisted_timestamps()
-            .await
-            .err_into()
+        self.storage().await.get_timestamps().await.err_into()
     }
 
     /// Get the next system replica id without allocating it.

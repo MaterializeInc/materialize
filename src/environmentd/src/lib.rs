@@ -493,7 +493,7 @@ impl Listeners {
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             dataflow_client: controller,
-            storage: adapter_storage,
+            storage: Box::new(adapter_storage),
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,

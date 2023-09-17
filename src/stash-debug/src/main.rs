@@ -482,7 +482,7 @@ impl Usage {
         let secrets_reader = Arc::new(InMemorySecretsController::new());
 
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage,
+            storage: Box::new(storage),
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,

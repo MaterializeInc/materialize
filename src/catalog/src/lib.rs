@@ -82,7 +82,7 @@
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Debug, Formatter};
 use std::num::NonZeroI64;
 use std::time::Duration;
 
@@ -178,7 +178,7 @@ pub struct BootstrapArgs {
 
 /// A read only API for the durable catalog state.
 #[async_trait]
-pub trait ReadOnlyDurableCatalogState {
+pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Reports if the catalog state has been initialized.
     async fn is_initialized(&self) -> Result<bool, Error>;
 
@@ -197,6 +197,9 @@ pub trait ReadOnlyDurableCatalogState {
     /// If the catalog is uninitialized or requires a migrations, then
     /// it will fail to open in read only mode.
     async fn open_read_only(&mut self) -> Result<(), Error>;*/
+
+    /// Returns true if the catalog is opened in read only mode, false otherwise.
+    fn is_read_only(&self) -> bool;
 
     /// Returns the epoch of the current durable catalog state. The epoch acts as
     /// a fencing token to prevent split brain issues across two

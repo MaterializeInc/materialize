@@ -193,11 +193,11 @@ impl Connection {
         Ok(conn)
     }
 
-    pub async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
+    async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
         self.stash.set_connect_timeout(connect_timeout).await;
     }
 
-    pub fn is_read_only(&self) -> bool {
+    fn is_read_only(&self) -> bool {
         self.stash.is_readonly()
     }
 
@@ -226,17 +226,17 @@ impl Connection {
             .map_err(|e| e.into())
     }
 
-    pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
+    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
         self.get_setting("catalog_content_version").await
     }
 
-    pub async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
+    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
         self.set_setting("catalog_content_version", new_version)
             .await
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_databases(&mut self) -> Result<Vec<Database>, Error> {
+    async fn load_databases(&mut self) -> Result<Vec<Database>, Error> {
         let entries = DATABASES_COLLECTION.peek_one(&mut self.stash).await?;
         let databases = entries
             .into_iter()
@@ -253,7 +253,7 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_schemas(&mut self) -> Result<Vec<Schema>, Error> {
+    async fn load_schemas(&mut self) -> Result<Vec<Schema>, Error> {
         let entries = SCHEMAS_COLLECTION.peek_one(&mut self.stash).await?;
         let schemas = entries
             .into_iter()
@@ -271,7 +271,7 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_roles(&mut self) -> Result<Vec<Role>, Error> {
+    async fn load_roles(&mut self) -> Result<Vec<Role>, Error> {
         let entries = ROLES_COLLECTION.peek_one(&mut self.stash).await?;
         let roles = entries
             .into_iter()
@@ -288,7 +288,7 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
+    async fn load_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
         let entries = CLUSTER_COLLECTION.peek_one(&mut self.stash).await?;
         let clusters = entries
             .into_iter()
@@ -307,7 +307,7 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
+    async fn load_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
         let entries = CLUSTER_REPLICA_COLLECTION.peek_one(&mut self.stash).await?;
         let replicas = entries
             .into_iter()
@@ -327,7 +327,7 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
+    async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
         let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
         let logs: Vec<_> = entries
             .into_keys()
@@ -341,7 +341,7 @@ impl Connection {
     /// Loads storage usage events and permanently deletes from the stash those
     /// that happened more than the retention period ago from boot_ts.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn fetch_and_prune_storage_usage(
+    async fn fetch_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
@@ -383,7 +383,7 @@ impl Connection {
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_system_gids(
+    async fn load_system_gids(
         &mut self,
     ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error> {
         let entries = SYSTEM_GID_MAPPING_COLLECTION
@@ -404,7 +404,7 @@ impl Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_introspection_source_index_gids(
+    async fn load_introspection_source_index_gids(
         &mut self,
         cluster_id: ClusterId,
     ) -> Result<BTreeMap<String, GlobalId>, Error> {
@@ -433,7 +433,7 @@ impl Connection {
 
     /// Load the persisted default privileges.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_default_privileges(
+    async fn load_default_privileges(
         &mut self,
     ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
         Ok(DEFAULT_PRIVILEGES_COLLECTION
@@ -457,7 +457,7 @@ impl Connection {
 
     /// Load the persisted system privileges.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+    async fn load_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
         Ok(SYSTEM_PRIVILEGES_COLLECTION
             .peek_one(&mut self.stash)
             .await?
@@ -475,7 +475,7 @@ impl Connection {
 
     /// Load the persisted server configurations.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
+    async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
         SYSTEM_CONFIGURATION_COLLECTION
             .peek_one(&mut self.stash)
             .await?
@@ -486,7 +486,7 @@ impl Connection {
 
     /// Load all comments.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn load_comments(
+    async fn load_comments(
         &mut self,
     ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
         let comments = COMMENTS_COLLECTION
@@ -503,7 +503,7 @@ impl Connection {
     /// Persist mapping from system objects to global IDs and fingerprints.
     ///
     /// Panics if provided id is not a system id.
-    pub async fn set_system_object_mapping(
+    async fn set_system_object_mapping(
         &mut self,
         mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), Error> {
@@ -539,7 +539,7 @@ impl Connection {
     }
 
     /// Panics if provided id is not a system id
-    pub async fn set_introspection_source_index_gids(
+    async fn set_introspection_source_index_gids(
         &mut self,
         mappings: Vec<(ClusterId, &str, GlobalId)>,
     ) -> Result<(), Error> {
@@ -572,7 +572,7 @@ impl Connection {
 
     /// Set the configuration of a replica.
     /// This accepts only one item, as we currently use this only for the default cluster
-    pub async fn set_replica_config(
+    async fn set_replica_config(
         &mut self,
         replica_id: ReplicaId,
         cluster_id: ClusterId,
@@ -594,43 +594,43 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
         let id = self.allocate_id("system", amount).await?;
 
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
-    pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+    async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
         let id = self.allocate_id("user", 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
 
-    pub async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, Error> {
+    async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, Error> {
         let id = self.allocate_id(SYSTEM_CLUSTER_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ClusterId::System(id))
     }
 
-    pub async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
+    async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
         let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ClusterId::User(id))
     }
 
-    pub async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, Error> {
+    async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, Error> {
         let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ReplicaId::User(id))
     }
 
     /// Get the next system replica id without allocating it.
-    pub async fn get_next_system_replica_id(&mut self) -> Result<u64, Error> {
+    async fn get_next_system_replica_id(&mut self) -> Result<u64, Error> {
         self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
     }
 
     /// Get the next user replica id without allocating it.
-    pub async fn get_next_user_replica_id(&mut self) -> Result<u64, Error> {
+    async fn get_next_user_replica_id(&mut self) -> Result<u64, Error> {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
@@ -673,7 +673,7 @@ impl Connection {
     /// Gets a global timestamp for a timeline that has been persisted to disk.
     ///
     /// Returns `None` if no persisted timestamp for the specified timeline exists.
-    pub async fn try_get_persisted_timestamp(
+    async fn try_get_persisted_timestamp(
         &mut self,
         timeline: &Timeline,
     ) -> Result<Option<mz_repr::Timestamp>, Error> {
@@ -690,7 +690,7 @@ impl Connection {
     }
 
     /// Get all global timestamps that has been persisted to disk.
-    pub async fn get_all_persisted_timestamps(
+    async fn get_all_persisted_timestamps(
         &mut self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
         let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
@@ -707,7 +707,7 @@ impl Connection {
 
     /// Persist new global timestamp for a timeline to disk.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn persist_timestamp(
+    async fn persist_timestamp(
         &mut self,
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
@@ -726,7 +726,7 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn persist_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
+    async fn persist_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
         CONFIG_COLLECTION
             .upsert_key(
                 &mut self.stash,
@@ -745,7 +745,7 @@ impl Connection {
 
     /// Creates a new [`Transaction`].
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-    pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
+    async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
         let (
             databases,
             schemas,
@@ -818,11 +818,11 @@ impl Connection {
     }
 
     /// Confirms that this [`Connection`] is connected as the stash leader.
-    pub async fn confirm_leadership(&mut self) -> Result<(), Error> {
+    async fn confirm_leadership(&mut self) -> Result<(), Error> {
         Ok(self.stash.confirm_leadership().await?)
     }
 
-    pub(crate) async fn commit(&mut self, txn_batch: TransactionBatch) -> Result<(), Error> {
+    async fn commit(&mut self, txn_batch: TransactionBatch) -> Result<(), Error> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
@@ -957,6 +957,10 @@ impl Connection {
 impl ReadOnlyDurableCatalogState for Connection {
     async fn is_initialized(&self) -> Result<bool, Error> {
         Connection::is_initialized(self).await
+    }
+
+    fn is_read_only(&self) -> bool {
+        Connection::is_read_only(self)
     }
 
     fn is_read_only(&self) -> bool {
