@@ -26,7 +26,10 @@ use mz_audit_log::{
     VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_catalog::{BootstrapArgs, SystemObjectMapping, Transaction};
+use mz_catalog::{
+    BootstrapArgs, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
+    SystemObjectMapping, Transaction,
+};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -86,7 +89,7 @@ use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Stash, StashFactory};
+use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection, ReferencedConnection,
@@ -5058,47 +5061,72 @@ impl Catalog {
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
-        Stash::with_debug_stash(move |stash| async move {
-            let catalog = Self::open_debug_stash(stash, now)
-                .await
-                .expect("unable to open debug stash");
-            f(catalog).await
-        })
-        .await
-        .expect("unable to open debug stash")
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let catalog = Self::open_debug_stash_catalog_factory(&debug_stash_factory, now)
+            .await
+            .expect("unable to open debug stash");
+        f(catalog).await
     }
 
-    /// Opens a debug postgres catalog at `url`.
-    ///
-    /// If specified, `schema` will set the connection's `search_path` to `schema`.
+    /// Opens a debug stash backed catalog using `debug_stash_factory`.
     ///
     /// See [`Catalog::with_debug`].
-    pub async fn open_debug_postgres(
+    pub async fn open_debug_stash_catalog_factory(
+        debug_stash_factory: &DebugStashFactory,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
+        let mut openable_storage =
+            mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
+        let storage = openable_storage
+            .open(now.clone(), &Self::debug_bootstrap_args(), None)
+            .await?;
+        Self::open_debug_stash_catalog(storage, now).await
+    }
+
+    /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_stash_catalog_url(
         url: String,
-        schema: Option<String>,
+        schema: String,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
         let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
         let factory = StashFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, schema, tls).await?;
-        Self::open_debug_stash(stash, now).await
+        let stash_config = StashConfig {
+            stash_factory: factory,
+            stash_url: url,
+            schema: Some(schema),
+            tls,
+        };
+        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let storage = openable_storage
+            .open(now.clone(), &Self::debug_bootstrap_args(), None)
+            .await?;
+        Self::open_debug_stash_catalog(storage, now).await
     }
 
-    /// Opens a debug catalog from a stash.
-    pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
+    /// Opens a read only debug stash backed catalog defined by `stash_config`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_stash_catalog_config(
+        stash_config: StashConfig,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
+        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let storage = openable_storage
+            .open_read_only(now.clone(), &Self::debug_bootstrap_args())
+            .await?;
+        Self::open_debug_stash_catalog(storage, now).await
+    }
+
+    async fn open_debug_stash_catalog(
+        storage: impl DurableCatalogState + 'static,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = mz_catalog::Connection::open(
-            stash,
-            now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
-                builtin_cluster_replica_size: "1".into(),
-                bootstrap_role: None,
-            },
-            None,
-        )
-        .await?;
+        let storage = Box::new(storage);
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let variable_length_row_encoding =
@@ -5108,7 +5136,7 @@ impl Catalog {
                 "false"
             };
         let (catalog, _, _, _) = Catalog::open(Config {
-            storage: Box::new(storage),
+            storage,
             unsafe_mode: true,
             all_features: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -5138,6 +5166,14 @@ impl Catalog {
         })
         .await?;
         Ok(catalog)
+    }
+
+    fn debug_bootstrap_args() -> BootstrapArgs {
+        BootstrapArgs {
+            default_cluster_replica_size: "1".into(),
+            builtin_cluster_replica_size: "1".into(),
+            bootstrap_role: None,
+        }
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
@@ -9513,10 +9549,10 @@ mod tests {
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
         {
-            let stash = debug_stash_factory.open_debug().await;
-            let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let mut catalog =
+                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -9535,10 +9571,10 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 2);
         }
         {
-            let stash = debug_stash_factory.open_debug().await;
-            let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
         }
@@ -10348,7 +10384,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             let catalog = catalog.for_system_session();
             let scx = &mut StatementContext::new(None, &catalog);
 
@@ -10366,8 +10402,6 @@ mod tests {
                 r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
                 mz_sql::normalize::create_statement(scx, stmt).expect(""),
             );
-
-            async {}
         })
         .await;
     }
@@ -10391,10 +10425,12 @@ mod tests {
         let debug_stash_factory = DebugStashFactory::new().await;
         let id = GlobalId::User(1);
         {
-            let stash = debug_stash_factory.open_debug().await;
-            let mut catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_stash_catalog_factory(
+                &debug_stash_factory,
+                SYSTEM_TIME.clone(),
+            )
+            .await
+            .expect("unable to open debug catalog");
             let item = catalog
                 .state()
                 .parse_view_item(create_sql)
@@ -10422,10 +10458,12 @@ mod tests {
                 .expect("failed to transact");
         }
         {
-            let stash = debug_stash_factory.open_debug().await;
-            let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_stash_catalog_factory(
+                &debug_stash_factory,
+                SYSTEM_TIME.clone(),
+            )
+            .await
+            .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -10517,47 +10555,43 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
-        let debug_stash_factory = DebugStashFactory::new().await;
-        let stash = debug_stash_factory.open_debug().await;
-        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-            .await
-            .expect("unable to open debug catalog");
-        let catalog = catalog.for_system_session();
+        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+            let catalog = catalog.for_system_session();
 
-        assert_eq!(
-            mz_sql::catalog::ObjectType::ClusterReplica,
-            catalog.get_object_type(&ObjectId::ClusterReplica((
-                ClusterId::User(1),
-                ReplicaId::User(1)
-            )))
-        );
-        assert_eq!(
-            mz_sql::catalog::ObjectType::Role,
-            catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
-        );
+            assert_eq!(
+                mz_sql::catalog::ObjectType::ClusterReplica,
+                catalog.get_object_type(&ObjectId::ClusterReplica((
+                    ClusterId::User(1),
+                    ReplicaId::User(1)
+                )))
+            );
+            assert_eq!(
+                mz_sql::catalog::ObjectType::Role,
+                catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
+            );
+        })
+        .await;
     }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
-        let debug_stash_factory = DebugStashFactory::new().await;
-        let stash = debug_stash_factory.open_debug().await;
-        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-            .await
-            .expect("unable to open debug catalog");
-        let catalog = catalog.for_system_session();
+        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+            let catalog = catalog.for_system_session();
 
-        assert_eq!(
-            None,
-            catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
-                ClusterId::User(1),
-                ReplicaId::User(1),
-            ))))
-        );
-        assert_eq!(
-            None,
-            catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
-        );
+            assert_eq!(
+                None,
+                catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
+                    ClusterId::User(1),
+                    ReplicaId::User(1),
+                ))))
+            );
+            assert_eq!(
+                None,
+                catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
+            );
+        })
+        .await;
     }
 
     // Connect to a running Postgres server and verify that our builtin

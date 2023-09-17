@@ -853,19 +853,6 @@ pub async fn initialize(
     Ok(())
 }
 
-pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, StashError> {
-    let config = CONFIG_COLLECTION.from_tx(tx).await?;
-    let value = tx
-        .peek_key_one(
-            config,
-            &proto::ConfigKey {
-                key: DEPLOY_GENERATION.into(),
-            },
-        )
-        .await?;
-    Ok(value.map(|v| v.value))
-}
-
 /// Defines the default config for a Cluster.
 fn default_cluster_config(args: &BootstrapArgs) -> proto::ClusterConfig {
     proto::ClusterConfig {

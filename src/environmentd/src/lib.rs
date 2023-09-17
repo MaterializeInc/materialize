@@ -95,7 +95,9 @@ use anyhow::{anyhow, bail, Context};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{initialize, BootstrapArgs};
+use mz_catalog::{
+    BootstrapArgs, OpenableDurableCatalogState, ReadOnlyDurableCatalogState, StashConfig,
+};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -363,51 +365,42 @@ impl Listeners {
             server::serve(internal_http_conns, internal_http_server)
         });
 
+        let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
+            stash_factory: config.controller.postgres_factory.clone(),
+            stash_url: config.adapter_stash_url.clone(),
+            schema: None,
+            tls: tls.clone(),
+        });
+
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
             };
             tracing::info!("Requested deploy generation {deploy_generation}");
-            let mut stash = match config
-                .controller
-                .postgres_factory
-                .open_savepoint(config.adapter_stash_url.clone(), tls.clone())
-                .await
-            {
-                Ok(stash) => stash,
-                Err(e) => {
-                    if e.can_recover_with_write_mode() {
-                        tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
-                        break 'leader_promotion;
-                    } else {
-                        return Err(e.into());
-                    }
-                }
-            };
+            if !openable_adapter_storage.is_initialized().await? {
+                tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                break 'leader_promotion;
+            }
             // TODO: once all stashes have a deploy_generation, don't need to handle the Option
-            let stash_generation = stash
-                .with_transaction(move |tx| {
-                    Box::pin(async move { initialize::deploy_generation(&tx).await })
-                })
-                .await?;
+            let stash_generation = openable_adapter_storage.get_deployment_generation().await?;
             tracing::info!("Found stash generation {stash_generation:?}");
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = mz_catalog::Connection::open(
-                    stash,
-                    config.now.clone(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: config
-                            .bootstrap_default_cluster_replica_size
-                            .clone(),
-                        builtin_cluster_replica_size: config
-                            .bootstrap_builtin_cluster_replica_size
-                            .clone(),
-                        bootstrap_role: config.bootstrap_role.clone(),
-                    },
-                    None,
-                )
-                .await
+                if let Err(e) = openable_adapter_storage
+                    .open_check(
+                        config.now.clone(),
+                        &BootstrapArgs {
+                            default_cluster_replica_size: config
+                                .bootstrap_default_cluster_replica_size
+                                .clone(),
+                            builtin_cluster_replica_size: config
+                                .bootstrap_builtin_cluster_replica_size
+                                .clone(),
+                            bootstrap_role: config.bootstrap_role.clone(),
+                        },
+                        None,
+                    )
+                    .await
                 {
                     return Err(
                         anyhow!(e).context("Stash upgrade would have failed with this error")
@@ -433,11 +426,21 @@ impl Listeners {
             }
         }
 
-        let stash = config
-            .controller
-            .postgres_factory
-            .open(config.adapter_stash_url.clone(), None, tls)
-            .await?;
+        let mut adapter_storage = Box::new(
+            openable_adapter_storage
+                .open(
+                    config.now.clone(),
+                    &BootstrapArgs {
+                        default_cluster_replica_size: config
+                            .bootstrap_default_cluster_replica_size
+                            .clone(),
+                        builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
+                        bootstrap_role: config.bootstrap_role,
+                    },
+                    config.deploy_generation,
+                )
+                .await?,
+        );
 
         // Load the adapter catalog from disk.
         if !config
@@ -447,20 +450,9 @@ impl Listeners {
         {
             bail!("bootstrap default cluster replica size is unknown");
         }
-        let envd_epoch = stash
+        let envd_epoch = adapter_storage
             .epoch()
             .expect("a real environmentd should always have an epoch number");
-        let adapter_storage = mz_catalog::Connection::open(
-            stash,
-            config.now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
-                builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
-                bootstrap_role: config.bootstrap_role,
-            },
-            config.deploy_generation,
-        )
-        .await?;
 
         // Initialize storage usage client.
         let storage_usage_client = StorageUsageClient::open(
@@ -493,7 +485,7 @@ impl Listeners {
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             dataflow_client: controller,
-            storage: Box::new(adapter_storage),
+            storage: adapter_storage,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,

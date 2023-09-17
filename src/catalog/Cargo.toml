@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1.68"
+derivative = "2.2.0"
 futures = "0.3.25"
 itertools = "0.10.5"
 once_cell = "1.16.0"
