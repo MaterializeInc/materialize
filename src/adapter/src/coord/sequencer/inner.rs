@@ -128,6 +128,8 @@ struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
+    /// List of ids which we have to drop from the compute read policy
+    to_drop_from_compute_read_policy: Vec<GlobalId>,
 }
 
 // A bundle of values returned from create_source_inner
@@ -1232,6 +1234,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
+            to_drop_from_compute_read_policy,
         } = self.sequence_drop_common(session, drop_ids)?;
 
         self.catalog_transact(Some(session), ops).await?;
@@ -1248,17 +1251,20 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
+        for id in to_drop_from_compute_read_policy {
+            self.drop_compute_read_policy(&id);
+        }
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
 
     fn validate_dropped_role_ownership(
         &self,
         session: &Session,
-        dropped_roles: &BTreeMap<RoleId, String>,
+        dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
             privileges: &PrivilegeMap,
-            dropped_roles: &BTreeMap<RoleId, String>,
+            dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
             object_id: &SystemObjectId,
             catalog: &ConnCatalog,
@@ -1465,6 +1471,7 @@ impl Coordinator {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
+            to_drop_from_compute_read_policy,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
@@ -1484,11 +1491,14 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
+        for id in to_drop_from_compute_read_policy {
+            self.drop_compute_read_policy(&id);
+        }
         Ok(ExecuteResponse::DroppedOwned)
     }
 
     fn sequence_drop_common(
-        &mut self,
+        &self,
         session: &mut Session,
         ids: Vec<ObjectId>,
     ) -> Result<DropOps, AdapterError> {
@@ -1504,7 +1514,7 @@ impl Coordinator {
         // Dropping a database or a schema will revoke all default roles associated with that
         // database or schema.
         let mut default_privilege_revokes = BTreeSet::new();
-
+        let mut to_drop_from_compute_read_policy = Vec::new();
         for id in &ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1520,16 +1530,13 @@ impl Coordinator {
                     }
                 }
                 ObjectId::Cluster(id) => {
-                    for id in self
-                        .catalog()
-                        .get_cluster(*id)
-                        .log_indexes
-                        .values()
-                        .cloned()
-                        .collect_vec()
-                    {
-                        self.drop_compute_read_policy(&id);
-                    }
+                    to_drop_from_compute_read_policy.extend(
+                        self.catalog()
+                            .get_cluster(*id)
+                            .log_indexes
+                            .values()
+                            .cloned(),
+                    );
 
                     if let Some(active_id) = self
                         .catalog()
@@ -1545,7 +1552,7 @@ impl Coordinator {
                 ObjectId::Role(id) => {
                     let role = self.catalog().get_role(id);
                     let name = role.name();
-                    dropped_roles.insert(*id, name.to_string());
+                    dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
                         role_revokes.insert((*group_id, *id, *grantor_id));
@@ -1613,6 +1620,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
+            to_drop_from_compute_read_policy,
         })
     }
 
@@ -4211,6 +4219,7 @@ impl Coordinator {
                     mut ops,
                     dropped_active_db,
                     dropped_active_cluster,
+                    to_drop_from_compute_read_policy,
                 } = self.sequence_drop_common(session, drops)?;
 
                 assert!(
@@ -4235,6 +4244,10 @@ impl Coordinator {
                     .alter_collection(id, ingestion)
                     .await
                     .expect("altering collection after txn must succeed");
+
+                for id in to_drop_from_compute_read_policy {
+                    self.drop_compute_read_policy(&id);
+                }
             }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,
