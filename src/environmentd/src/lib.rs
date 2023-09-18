@@ -504,6 +504,7 @@ impl Listeners {
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
             Some(SystemParameterSyncConfig::new(
                 config.environment_id.clone(),
+                &BUILD_INFO,
                 &config.metrics_registry,
                 config.now.clone(),
                 ld_sdk_key,
