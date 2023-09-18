@@ -1644,7 +1644,7 @@ impl Coordinator {
         // Advance all tables to the current timestamp
         debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
-            timestamp: _,
+            timestamp: write_ts,
             advance_to,
         } = self.get_local_write_ts().await;
         let appends = entries
@@ -1659,6 +1659,7 @@ impl Coordinator {
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap_or_terminate("cannot fail to append");
+        self.apply_local_write(write_ts).await;
 
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
