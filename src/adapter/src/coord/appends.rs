@@ -204,6 +204,7 @@ impl Coordinator {
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
         notify_permit: Option<NotifyPermit>,
     ) {
+        tracing::info!("running group commit");
         let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
         {
             // If the caller passed in the write lock, then we can execute a group commit.
@@ -339,6 +340,7 @@ impl Coordinator {
             result
         };
         if should_block {
+            tracing::info!("blocking on group commit");
             // We may panic here if the storage controller has shut down, because we cannot
             // correctly return control, nor can we simply hang here.
             // TODO: Clean shutdown.
@@ -348,12 +350,15 @@ impl Coordinator {
                 .unwrap_or_terminate("cannot fail to apply appends");
             self.group_commit_apply(timestamp, responses, write_lock_guard)
                 .await;
+            tracing::info!("done blocking on group commit");
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(
                 || "group_commit_apply",
                 async move {
+                    tracing::info!("running group commit async");
                     if let Ok(response) = append_fut.await {
+                        tracing::info!("done running group commit async");
                         response.unwrap_or_terminate("cannot fail to apply appends");
                         if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
                             timestamp,
