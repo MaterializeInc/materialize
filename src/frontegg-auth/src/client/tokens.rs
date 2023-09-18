@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::task;
+use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::client::{InflightRequest, InflightResponse};
 use crate::{Client, Error};
 
 impl Client {
@@ -19,16 +22,59 @@ impl Client {
         secret: Uuid,
         admin_api_token_url: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        let res = self
-            .client
-            .post(admin_api_token_url)
-            .json(&ApiTokenArgs { client_id, secret })
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ApiTokenResponse>()
-            .await?;
-        Ok(res)
+        let args = ApiTokenArgs { client_id, secret };
+        let rx = {
+            let mut inflight_requests = self.inflight_requests.lock().expect("not poisened");
+            match inflight_requests.get_mut(&InflightRequest::SecretForToken(args.clone())) {
+                Some(senders) => {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    senders.push(tx);
+                    rx
+                }
+                None => {
+                    let client = self.client.clone();
+                    let url = admin_api_token_url.to_string();
+                    let args_ = args.clone();
+                    let inflight = self.inflight_requests.clone();
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+
+                    inflight_requests.insert(InflightRequest::SecretForToken(args), vec![tx]);
+
+                    task::spawn(|| "exchange_client_secret_for_token", async move {
+                        let result = async {
+                            let resp = client
+                                .post(&url)
+                                .json(&args_)
+                                .send()
+                                .await?
+                                .error_for_status()?
+                                .json::<ApiTokenResponse>()
+                                .await?;
+                            Ok::<_, Error>(resp)
+                        }
+                        .await;
+                        let mut inflight = inflight.lock().expect("not poisened");
+                        let waiters = inflight
+                            .remove(&InflightRequest::SecretForToken(args_))
+                            .expect("exist");
+                        for tx in waiters {
+                            let result = result.clone();
+                            // Does not matter if listener went away.
+                            let _ = tx.send(InflightResponse::SecretForToken(result));
+                        }
+                    });
+                    rx
+                }
+            }
+        };
+
+        let Ok(InflightResponse::SecretForToken(result)) = rx.await else {
+            return Err(Error::Internal(Arc::new(anyhow::anyhow!(
+                "waiting failure!"
+            ))));
+        };
+
+        result
     }
 
     /// Exchanges a client id and secret for a jwt token.
@@ -50,7 +96,7 @@ impl Client {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTokenResponse {
     pub expires: String,
@@ -59,7 +105,7 @@ pub struct ApiTokenResponse {
     pub refresh_token: String,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTokenArgs {
     pub client_id: Uuid,

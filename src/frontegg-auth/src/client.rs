@@ -7,17 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use mz_ore::collections::HashMap;
+use tokio::sync::oneshot;
 
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
+
+use crate::{ApiTokenArgs, ApiTokenResponse, Error};
 
 pub mod tokens;
 
 #[derive(Clone, Debug)]
 pub struct Client {
     pub client: reqwest_middleware::ClientWithMiddleware,
+    inflight_requests: Arc<Mutex<HashMap<InflightRequest, InflightRequestHandle>>>,
 }
+
+type InflightRequestHandle = Vec<oneshot::Sender<InflightResponse>>;
 
 impl Default for Client {
     fn default() -> Self {
@@ -44,6 +53,21 @@ impl Client {
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
             .build();
 
-        Self { client }
+        let inflight_requests = Arc::new(Mutex::new(HashMap::new()));
+
+        Self {
+            client,
+            inflight_requests,
+        }
     }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+enum InflightRequest {
+    SecretForToken(ApiTokenArgs),
+}
+
+#[derive(Debug)]
+enum InflightResponse {
+    SecretForToken(Result<ApiTokenResponse, Error>),
 }
