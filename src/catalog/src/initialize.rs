@@ -27,6 +27,7 @@ use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION, USER_VERSION_KEY};
 use mz_storage_types::sources::Timeline;
 
+use crate::builtin::BUILTIN_ROLES;
 use crate::objects::{
     DefaultPrivilegesKey, DefaultPrivilegesValue, SystemPrivilegesKey, SystemPrivilegesValue,
 };
@@ -168,9 +169,8 @@ pub async fn initialize(
         None
     };
 
-    let roles = options
-        .builtin_roles
-        .iter()
+    let roles = BUILTIN_ROLES
+        .into_iter()
         .map(|role| {
             (
                 proto::RoleKey {

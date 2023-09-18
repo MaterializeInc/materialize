@@ -125,7 +125,6 @@ use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
-use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
     ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
@@ -147,6 +146,7 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
+use mz_catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -1209,9 +1209,10 @@ impl Coordinator {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = Some(self.catalog().resolve_builtin_storage_collection(
-            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-        ));
+        let source_status_collection_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY),
+        );
 
         let mut collections_to_create = Vec::new();
 

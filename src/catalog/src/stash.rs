@@ -167,7 +167,7 @@ impl Connection {
                 }
             };
 
-            match add_new_builtin_clusters_migration(&mut txn, bootstrap_args) {
+            match add_new_builtin_clusters_migration(&mut txn) {
                 Ok(()) => {}
                 Err(e) => {
                     return Err((conn.stash, e));
