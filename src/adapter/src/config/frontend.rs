@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
+use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
 use tokio::time;
@@ -48,7 +49,7 @@ impl SystemParameterFrontend {
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         Ok(Self {
             ld_client: ld_client(sync_config).await?,
-            ld_ctx: ld_ctx(&sync_config.env_id)?,
+            ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
             ld_key_map: sync_config.ld_key_map.clone(),
             ld_metrics: sync_config.metrics.clone(),
             now_fn: sync_config.now_fn.clone(),
@@ -141,29 +142,67 @@ async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client
     Ok(ld_client)
 }
 
-fn ld_ctx(env_id: &EnvironmentId) -> Result<ld::Context, anyhow::Error> {
+fn ld_ctx(
+    env_id: &EnvironmentId,
+    build_info: &'static BuildInfo,
+) -> Result<ld::Context, anyhow::Error> {
+    // Register multiple contexts for this client.
+    //
+    // Unfortunately, it seems that the order in which conflicting targeting
+    // rules are applied depends on the definition order of feature flag
+    // variations rather than on the order in which context are registered with
+    // the multi-context builder.
+    let mut ctx_builder = ld::MultiContextBuilder::new();
+
     if env_id.cloud_provider() != &CloudProvider::Local {
-        ld::ContextBuilder::new(env_id.to_string())
-            .kind("environment")
-            .set_string("cloud_provider", env_id.cloud_provider().to_string())
-            .set_string("cloud_provider_region", env_id.cloud_provider_region())
-            .set_string("organization_id", env_id.organization_id().to_string())
-            .set_string("ordinal", env_id.ordinal().to_string())
-            .build()
-            .map_err(|e| anyhow::anyhow!(e))
+        ctx_builder.add_context(
+            ld::ContextBuilder::new(env_id.to_string())
+                .kind("environment")
+                .set_string("cloud_provider", env_id.cloud_provider().to_string())
+                .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                .set_string("organization_id", env_id.organization_id().to_string())
+                .set_string("ordinal", env_id.ordinal().to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
+        ctx_builder.add_context(
+            ld::ContextBuilder::new(env_id.organization_id().to_string())
+                .kind("organization")
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     } else {
-        // If cloud_provider is 'local', use an anonymous user with a custom
-        // email and set the organization_id to `uuid::Uuid::nil()`, as
-        // otherwise we will create a lot of additional contexts (which are
-        // the billable entity for LaunchDarkly).
-        ld::ContextBuilder::new("anonymous-dev@materialize.com")
-            .anonymous(true) // exclude this user from the dashboard
-            .kind("environment")
-            .set_string("cloud_provider", env_id.cloud_provider().to_string())
-            .set_string("cloud_provider_region", env_id.cloud_provider_region())
-            .set_string("organization_id", uuid::Uuid::nil().to_string())
-            .set_string("ordinal", env_id.ordinal().to_string())
+        // If cloud_provider is 'local', use anonymous `environment` and
+        // `organization` contexts with fixed keys, as otherwise we will create
+        // a lot of additional contexts (which are the billable entity for
+        // LaunchDarkly).
+        ctx_builder.add_context(
+            ld::ContextBuilder::new("anonymous-dev@materialize.com")
+                .anonymous(true) // exclude this user from the dashboard
+                .kind("environment")
+                .set_string("cloud_provider", env_id.cloud_provider().to_string())
+                .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                .set_string("organization_id", uuid::Uuid::nil().to_string())
+                .set_string("ordinal", env_id.ordinal().to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
+        ctx_builder.add_context(
+            ld::ContextBuilder::new(uuid::Uuid::nil().to_string())
+                .anonymous(true) // exclude this user from the dashboard
+                .kind("organization")
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
+    };
+
+    ctx_builder.add_context(
+        ld::ContextBuilder::new(build_info.sha)
+            .kind("build")
+            .set_string("semver_version", build_info.semver_version().to_string())
             .build()
-            .map_err(|e| anyhow::anyhow!(e))
-    }
+            .map_err(|e| anyhow::anyhow!(e))?,
+    );
+
+    ctx_builder.build().map_err(|e| anyhow::anyhow!(e))
 }
