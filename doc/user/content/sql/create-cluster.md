@@ -201,7 +201,7 @@ As an example, consider the following sequence of events:
 
 Time                | Event
 --------------------|---------------------------------------------------------
-2023-08-29 3:45:00  | `CREATE CLUSTER c (SIZE 'medium', REPLICATION FACTOR 2)`
+2023-08-29 3:45:00  | `CREATE CLUSTER c SIZE 'medium', REPLICATION FACTOR 2`
 2023-08-29 3:45:45  | `ALTER CLUSTER c SET (REPLICATION FACTOR 1)`
 2023-08-29 3:47:15  | `DROP CLUSTER c`
 
