@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
@@ -560,7 +560,7 @@ impl crate::coord::Coordinator {
                     let reason = match &res {
                         PeekResponseUnary::Rows(rows) => StatementEndedExecutionReason::Success {
                             rows_returned: Some(u64::cast_from(rows.len())),
-                            execution_strategy: Some(StatementExecutionStrategy::FastPath),
+                            execution_strategy: Some(StatementExecutionStrategy::PersistFastPath),
                         },
                         PeekResponseUnary::Error(e) => {
                             StatementEndedExecutionReason::Errored { error: e.clone() }
@@ -568,12 +568,11 @@ impl crate::coord::Coordinator {
                         PeekResponseUnary::Canceled => StatementEndedExecutionReason::Canceled,
                     };
 
-                    let tx_send = internal_cmd_tx.send(Message::RetireExecute {
+                    if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
                         data: ctx_extra,
                         reason,
-                    });
-                    if tx_send.is_err() {
-                        return PeekResponseUnary::Canceled;
+                    }) {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
 
                     res
