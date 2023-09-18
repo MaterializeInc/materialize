@@ -27,6 +27,7 @@ impl Client {
             let mut inflight_requests = self.inflight_requests.lock().expect("not poisened");
             match inflight_requests.get_mut(&InflightRequest::SecretForToken(args.clone())) {
                 Some(senders) => {
+                    tracing::warn!("reusing request!");
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     senders.push(tx);
                     rx
@@ -39,6 +40,8 @@ impl Client {
                     let (tx, rx) = tokio::sync::oneshot::channel();
 
                     inflight_requests.insert(InflightRequest::SecretForToken(args), vec![tx]);
+
+                    tracing::warn!("spawning new request!");
 
                     task::spawn(|| "exchange_client_secret_for_token", async move {
                         let result = async {
