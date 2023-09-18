@@ -56,7 +56,7 @@ CREATE SOURCE my_segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url).
-Copy and store it temporarily for the following steps. Otherwise, you can query it here: [`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources).
+Copy and store it. You will need it for the next steps. Otherwise, you can query it here: [`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources).
 
 In the code, you will notice a `CHECK` statement. It defines how to validate each request. At the time of writing, Segment
 validates requests by signing them with an HMAC in the `X-Signature` request header. The HMAC is a
@@ -97,11 +97,13 @@ A webhook destination in Segment requires a [data mapping](https://segment.com/b
     Headers             | -
     Data                | `$event`
     Enable Batching     | `No`.
+
 4. Click **Test Mapping** and validate the webhook is working.
+
 5. After a succesful test, click **Save**.
 
   {{< note >}}
-  If **Test Mapping** fails in and throws a *"failed to validate the request"* error, it means te shared secret is not right. To fix the error, follow this steps:
+  If **Test Mapping** fails in and throws a *"failed to validate the request"* error, it means the shared secret is not right. To fix this, follow this steps:
  1. In **Segment**, go to your webhook destination created in the **Step 4**.
  2. Click **Settings**.
  3. In **Shared Secret**, enter the secret created in the **Step 2**.
@@ -110,22 +112,95 @@ A webhook destination in Segment requires a [data mapping](https://segment.com/b
 
 ## Step 5. Parse Incoming Data
 
-Create a materialized view to parse the incoming events from Segment:
+Create a view to parse incoming events from Segment. You have the option to either build your own parser view by [pasting your event JSON here](/transform-data/json/), or use any of the following templates for the most common types of Segment:
+
+{{< tabs >}}
+
+{{< tab "Page">}}
+```sql
+CREATE VIEW parse_segment AS SELECT
+    body->>'anonymousId' AS anonymousId,
+    body->>'channel' AS channel,
+    body->'context'->>'ip' AS context_ip,
+    body->'context'->>'userAgent' AS context_userAgent,
+    (body->'integrations'->>'All')::bool AS integrations_All,
+    (body->'integrations'->>'Mixpanel')::bool AS integrations_Mixpanel,
+    (body->'integrations'->>'Salesforce')::bool AS integrations_Salesforce,
+    body->>'messageId' AS messageId,
+    body->>'name' AS name,
+    body->'properties'->>'title' AS properties_title,
+    body->'properties'->>'url' AS properties_url,
+    (body->>'receivedAt')::timestamp AS receivedAt,
+    (body->>'sentAt')::timestamp AS sentAt,
+    (body->>'timestamp')::timestamp AS timestamp,
+    body->>'type' AS type,
+    body->>'userId' AS userId,
+    (body->>'version')::timestamp AS version
+FROM my_segment_source;
+```
+{{< /tab >}}
+
+{{< tab "Track">}}
 
 ```sql
-CREATE VIEW segment_source_parsed AS
-  SELECT
-      body->>'email' AS email,
-      body->>'event' AS event,
-      body->>'messageId' AS message_id,
-      body->>'properties' AS properties,
-      body->>'timestamp' AS ts,
-      body->>'type' AS event_type,
-      body->>'userId' AS user_id
-  FROM my_segment_source;
+CREATE VIEW parse_segment AS SELECT
+    body->>'anonymousId' AS anonymousId,
+    body->'context'->'library'->>'name' AS context_library_name,
+    (body->'context'->'library'->>'version')::timestamp AS context_library_version,
+    body->'context'->'page'->>'path' AS context_page_path,
+    body->'context'->'page'->>'referrer' AS context_page_referrer,
+    body->'context'->'page'->>'search' AS context_page_search,
+    body->'context'->'page'->>'title' AS context_page_title,
+    body->'context'->'page'->>'url' AS context_page_url,
+    body->'context'->>'userAgent' AS context_userAgent,
+    body->'context'->>'ip' AS context_ip,
+    body->>'event' AS event,
+    body->>'messageId' AS messageId,
+    body->'properties'->>'title' AS properties_title,
+    (body->>'receivedAt')::timestamp AS receivedAt,
+    (body->>'sentAt')::timestamp AS sentAt,
+    (body->>'timestamp')::timestamp AS timestamp,
+    body->>'type' AS type,
+    body->>'userId' AS userId,
+    (body->>'originalTimestamp')::timestamp AS originalTimestamp
+FROM my_segment_source;
 ```
 
-This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `email`, `event`, `type`, and `userId`.
+{{< /tab >}}
+
+{{< tab "Identity">}}
+```sql
+CREATE VIEW parse_segment AS SELECT
+    body->>'anonymousId' AS anonymousId,
+    body->>'channel' AS channel,
+    body->'context'->>'ip' AS context_ip,
+    body->'context'->>'userAgent' AS context_userAgent,
+    (body->'integrations'->>'All')::bool AS integrations_All,
+    (body->'integrations'->>'Mixpanel')::bool AS integrations_Mixpanel,
+    (body->'integrations'->>'Salesforce')::bool AS integrations_Salesforce,
+    body->>'messageId' AS messageId,
+    (body->>'receivedAt')::timestamp AS receivedAt,
+    (body->>'sentAt')::timestamp AS sentAt,
+    (body->>'timestamp')::timestamp AS timestamp,
+    body->'traits'->>'name' AS traits_name,
+    body->'traits'->>'email' AS traits_email,
+    body->'traits'->>'plan' AS traits_plan,
+    (body->'traits'->>'logins')::numeric AS traits_logins,
+    body->'traits'->'address'->>'street' AS traits_address_street,
+    body->'traits'->'address'->>'city' AS traits_address_city,
+    body->'traits'->'address'->>'state' AS traits_address_state,
+    (body->'traits'->'address'->>'postalCode')::timestamp AS traits_address_postalCode,
+    body->'traits'->'address'->>'country' AS traits_address_country,
+    body->>'type' AS type,
+    body->>'userId' AS userId,
+    (body->>'version')::timestamp AS version
+FROM my_segment_source;
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+
+This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `type` or `userId`.
 
 Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
 `DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#duplicated-and-partial-events).
