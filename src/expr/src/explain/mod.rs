@@ -66,13 +66,20 @@ pub struct PushdownInfo<'a> {
     pub pushdown: Vec<&'a MirScalarExpr>,
 }
 
-impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'_> {
+impl<'a, C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'a> {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        let Self { pushdown } = self;
+        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+    }
+}
+
+impl<'a, C: AsMut<Indent>> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<'a>> {
+    fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
+        let PushdownInfo { pushdown } = self.expr;
 
         if !pushdown.is_empty() {
-            let separated = separated(" AND ", pushdown);
-            writeln!(f, "{}pushdown=({})", ctx.as_mut(), separated)?;
+            let pushdown = pushdown.iter().map(|e| HumanizedExpr::new(*e, self.cols));
+            let pushdown = separated(" AND ", pushdown);
+            writeln!(f, "{}pushdown=({})", ctx.as_mut(), pushdown)?;
         }
 
         Ok(())
