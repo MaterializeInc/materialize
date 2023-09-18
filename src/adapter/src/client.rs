@@ -149,14 +149,14 @@ impl Client {
     ///
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn startup(
+    // #[tracing::instrument(level = "debug", skip(self))]
+    pub fn startup(
         &self,
         session: Session,
         // keys of settings that were set on statup, and thus should not be
         // overridden by defaults.
         set_setting_keys: Vec<String>,
-    ) -> Result<SessionClient, AdapterError> {
+    ) -> impl Future<Output = Result<SessionClient, AdapterError>> + Send + '_ {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -186,56 +186,58 @@ impl Client {
             span: tracing::Span::current(),
         });
 
-        // When startup fails, no need to call terminate (handle_startup does this). Delay creating
-        // the client until after startup to sidestep the panic in its `Drop` implementation.
-        let response = rx.await.expect("sender dropped")?;
+        async move {
+            // When startup fails, no need to call terminate (handle_startup does this). Delay creating
+            // the client until after startup to sidestep the panic in its `Drop` implementation.
+            let response = rx.await.expect("sender dropped")?;
 
-        // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
-        // handle termination.
-        let mut client = SessionClient {
-            inner: Some(self.clone()),
-            session: Some(session),
-            cancel_tx,
-            cancel_rx,
-            timeouts: Timeout::new(),
-            environment_id: self.environment_id.clone(),
-            segment_client: self.segment_client.clone(),
-        };
+            // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
+            // handle termination.
+            let mut client = SessionClient {
+                inner: Some(self.clone()),
+                session: Some(session),
+                cancel_tx,
+                cancel_rx,
+                timeouts: Timeout::new(),
+                environment_id: self.environment_id.clone(),
+                segment_client: self.segment_client.clone(),
+            };
 
-        let StartupResponse {
-            role_id,
-            set_vars,
-            write_notify,
-            catalog,
-        } = response;
+            let StartupResponse {
+                role_id,
+                set_vars,
+                write_notify,
+                catalog,
+            } = response;
 
-        // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
-        // for the writes here, as opposed to during the Startup command, because we don't want to
-        // block the coordinator on a Builtin Table write.
-        write_notify.await;
+            // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
+            // for the writes here, as opposed to during the Startup command, because we don't want to
+            // block the coordinator on a Builtin Table write.
+            write_notify.await;
 
-        client.session().initialize_role_metadata(role_id);
-        for (name, val) in set_vars {
+            client.session().initialize_role_metadata(role_id);
+            for (name, val) in set_vars {
+                client
+                    .session()
+                    .vars_mut()
+                    .set(None, &name, VarInput::Flat(&val), false)
+                    .expect("constrained to be valid");
+            }
             client
                 .session()
                 .vars_mut()
-                .set(None, &name, VarInput::Flat(&val), false)
-                .expect("constrained to be valid");
-        }
-        client
-            .session()
-            .vars_mut()
-            .end_transaction(EndTransactionAction::Commit);
+                .end_transaction(EndTransactionAction::Commit);
 
-        let catalog = catalog.for_session(client.session());
-        if catalog.active_database().is_none() {
-            let db = client.session().vars().database().into();
-            client
-                .session()
-                .add_notice(AdapterNotice::UnknownSessionDatabase(db));
-        }
+            let catalog = catalog.for_session(client.session());
+            if catalog.active_database().is_none() {
+                let db = client.session().vars().database().into();
+                client
+                    .session()
+                    .add_notice(AdapterNotice::UnknownSessionDatabase(db));
+            }
 
-        Ok(client)
+            Ok(client)
+        }
     }
 
     /// Cancels the query currently running on the specified connection.

@@ -305,11 +305,16 @@ where
     //   noticed by users, though, since with frontegg enabled unknown users are
     //   always created.
     buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
+
+    // Send a request to the Coordinator to start the session, this will begin the work. We await
+    // it below after we flush the connection.
+    let adapter_client_future = adapter_client.startup(session, setting_keys);
+
     conn.send_all(buf).await?;
     conn.flush().await?;
 
     // Register session with adapter.
-    let mut adapter_client = match adapter_client.startup(session, setting_keys).await {
+    let mut adapter_client = match adapter_client_future.await {
         Ok(adapter_client) => adapter_client,
         Err(e) => {
             return conn
