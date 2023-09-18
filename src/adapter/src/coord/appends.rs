@@ -274,6 +274,8 @@ impl Coordinator {
             (None, pending_writes)
         };
 
+        tracing::info!(num_writes = pending_writes.len(), "group_commit_initiate");
+
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method or if this was triggered from DDL. We will still commit the
         // write without waiting for `now()` to advance. This is ok because the next batch of writes
