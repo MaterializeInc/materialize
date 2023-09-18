@@ -26,7 +26,7 @@ To achieve this, we need to adjust managed clusters and billing logic.
 
 At the moment, a managed cluster only contains replicas that conform to the spec of the cluster, but it cannot have replicas outside its definition.
 We change managed clusters to allow both the set of managed replicas, and additional replicas that are not covered by the configuration of the cluster.
-We achieve this by adding a `managed` flag to replicas to differentiate those that are part of the managed configuration and those that are manually configured, and adjust the logic around managed cluster to take this flag into account.
+We achieve this by adding a `internal` flag to replicas to differentiate those that are part of the managed configuration and those that are manually configured, and adjust the logic around managed cluster to take this flag into account.
 
 Additional replicas that are not managed must not use names that might collide with the names of managed replicas.
 For this reason, they cannot be named `rX` where `X` is any number.
@@ -38,14 +38,18 @@ The query needs to take to use the size of a replica into account, unless a repl
 
 ### Detailed description
 
-We extend the syntax to create replicas with a `BILLED AS` option:
+We extend the syntax to create replicas with a `BILLED AS` and `INTERNAL` option:
 
 ```sql
-CREATE CLUSTER REPLICA clsname.unbilled_replica SIZE 'xlarge', BILLED AS 'free';
- 
-CREATE CLUSTER REPLICA clsname.r2 SIZE 'xlarge', BILLED AS 'free';
+CREATE CLUSTER REPLICA clsname.unbilled_replica SIZE 'xlarge', BILLED AS 'free', INTERNAL;
+
+CREATE CLUSTER REPLICA clsname.r2 SIZE 'xlarge', BILLED AS 'free', INTERNAL;
 ERROR: The cluster name 'r2' is reserved for managed replicas.
 ```
+
+The properties mean:
+* `BILLED AS` determines the size at which a replica should be billed instead of its actual size,
+* `INTERNAL` indicates that a replica is created by Materialize and should never be part of a managed cluster.
 
 This syntax is restricted to privileged users, such as Materialize's support user, and cannot be accessed by the customer.
 
@@ -53,22 +57,23 @@ When an unprivileged user tries to create the billing property, they'll receive 
 
 ```sql
 CREATE CLUSTER REPLICA clsname.unbilled_replica SIZE 'xlarge', BILLED AS 'free';
-ERROR: BILLED AS not permitted for non-system users.
+ERROR: BILLED AS and INTERNAL not permitted for non-system users.
 HINT: Contact support for billing-related inquiries.
 ```
 
-We extend the definition of replicas to include a `managed` flag.
-The flag is `true` if the replica is managed by the managed cluster, and `false` if it is a manually-create replica.
-This requires us to store the managed status in the catalog's stash.
-In the catalog, it'll show up as:
+We introduce an internal `mz_managed_cluster_replicas` table that lists replicas managed by managed clusters.
+Joining this table with all replicas allows users to determine which replicas are part of their configuration and which ones are managed by Materialize.
 ```sql
-SELECT id, name, managed FROM mz_cluster_replicas;
-id      name        managed
-u123    r1          false
-u234    unbilled    true
+SELECT id FROM mz_internal.mz_managed_cluster_replicas;
+id
+u123
+u234
 ```
 
-The owner of a cluster can drop replicas with a billing property, but cannot alter it.
+The internal and billing properties can be derived from the audit log, but are not otherwise presented.
+The reason for this is that we consider overriding billing information a rare situation that customers do not interact with directly.
+
+The owner of a cluster can drop replicas with a billing or internal property, but cannot alter it.
 (In general, we only support changing the owner and name of a replica, but no other option.)
 
 ## Alternative 2: Replica sets
