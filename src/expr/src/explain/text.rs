@@ -185,11 +185,20 @@ where
     C: AsMut<Indent>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+    }
+}
+
+impl<'a, C> DisplayText<C> for HumanizedExpr<'a, MapFilterProject>
+where
+    C: AsMut<Indent>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         let (scalars, predicates, outputs, input_arity) = (
-            &self.expressions,
-            &self.predicates,
-            &self.projection,
-            &self.input_arity,
+            &self.expr.expressions,
+            &self.expr.predicates,
+            &self.expr.projection,
+            &self.expr.input_arity,
         );
 
         // render `project` field iff not the identity projection
@@ -199,13 +208,14 @@ where
         }
         // render `filter` field iff predicates are present
         if !predicates.is_empty() {
-            let predicates = predicates.iter().map(|(_, p)| p);
+            let predicates = predicates.iter().map(|(_, p)| self.child(p));
             let predicates = separated(" AND ", predicates);
             writeln!(f, "{}filter=({})", ctx.as_mut(), predicates)?;
         }
         // render `map` field iff scalars are present
         if !scalars.is_empty() {
-            let scalars = CompactScalarSeq(scalars);
+            let scalars = HumanizedExpr::seq(scalars, self.cols);
+            let scalars = separated(", ", scalars);
             writeln!(f, "{}map=({})", ctx.as_mut(), scalars)?;
         }
 
