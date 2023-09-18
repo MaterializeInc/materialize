@@ -73,6 +73,7 @@ pub enum Command {
         uuid: Uuid,
         application_name: String,
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
+        span: tracing::Span,
     },
 
     Execute {

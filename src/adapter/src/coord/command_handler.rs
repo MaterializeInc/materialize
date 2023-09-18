@@ -68,7 +68,11 @@ impl Coordinator {
                 uuid,
                 application_name,
                 notice_tx,
+                span,
             } => {
+                let span = span
+                    .in_scope(|| tracing::debug_span!("message_command (startup)").or_current());
+
                 // Note: We purposefully do not use a ClientTransmitter here because startup
                 // handles errors and cleanup of sessions itself.
                 self.handle_startup(
@@ -82,6 +86,7 @@ impl Coordinator {
                     application_name,
                     notice_tx,
                 )
+                .instrument(span)
                 .await;
             }
 

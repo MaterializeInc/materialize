@@ -183,6 +183,7 @@ impl Client {
             uuid,
             application_name,
             notice_tx,
+            span: tracing::Span::current(),
         });
 
         // When startup fails, no need to call terminate (handle_startup does this). Delay creating
