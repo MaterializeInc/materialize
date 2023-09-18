@@ -201,21 +201,24 @@ pub enum PeekPlan<T = mz_repr::Timestamp> {
     SlowPath(PeekDataflowPlan<T>),
 }
 
-fn permute_oneshot_mfp_around_index(
-    mfp: mz_expr::MapFilterProject,
-    key: &[MirScalarExpr],
-) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
-    // Convert `mfp` to an executable, non-temporal plan.
-    // It should be non-temporal, as OneShot preparation populates `mz_now`.
-    let mut safe_mfp = mfp
-        .clone()
-        .into_plan()
+/// Convert `mfp` to an executable, non-temporal plan.
+/// It should be non-temporal, as OneShot preparation populates `mz_now`.
+fn mfp_to_safe_plan(mfp: mz_expr::MapFilterProject) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+    mfp.into_plan()
         .map_err(|e| AdapterError::Unstructured(::anyhow::anyhow!(e)))?
         .into_nontemporal()
         .map_err(|_e| {
             AdapterError::Unstructured(::anyhow::anyhow!("OneShot plan has temporal constraints"))
-        })?;
-    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, mfp.input_arity);
+        })
+}
+
+fn permute_oneshot_mfp_around_index(
+    mfp: mz_expr::MapFilterProject,
+    key: &[MirScalarExpr],
+) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+    let input_arity = mfp.input_arity;
+    let mut safe_mfp = mfp_to_safe_plan(mfp)?;
+    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
     safe_mfp.permute(permute, key.len() + thinning.len());
     Ok(safe_mfp)
 }
@@ -298,16 +301,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
                         }
                     }
                     // If there is no arrangement, consider peeking the persist shard directly
-                    let safe_mfp = mfp
-                        .clone()
-                        .into_plan()
-                        .map_err(|e| AdapterError::Unstructured(::anyhow::anyhow!(e)))?
-                        .into_nontemporal()
-                        .map_err(|_e| {
-                            AdapterError::Unstructured(::anyhow::anyhow!(
-                                "OneShot plan has temporal constraints"
-                            ))
-                        })?;
+                    let safe_mfp = mfp_to_safe_plan(mfp)?;
                     let (_m, filters, _p) = safe_mfp.as_map_filter_project();
                     let small_finish = match &finishing {
                         None => false,
@@ -635,15 +629,7 @@ impl crate::coord::Coordinator {
                 let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
                 map_filter_project
                     .permute(index_permutation, index_key.len() + index_thinned_arity);
-                let map_filter_project = map_filter_project
-                    .into_plan()
-                    .map_err(|e| crate::error::AdapterError::Unstructured(::anyhow::anyhow!(e)))?
-                    .into_nontemporal()
-                    .map_err(|_e| {
-                        crate::error::AdapterError::Unstructured(::anyhow::anyhow!(
-                            "OneShot plan has temporal constraints"
-                        ))
-                    })?;
+                let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
                 (
                     (
                         index_id, // transient identifier produced by `dataflow_plan`.
