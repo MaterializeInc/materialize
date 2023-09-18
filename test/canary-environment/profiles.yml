@@ -10,6 +10,17 @@
 canary_environment:
   outputs:
 
+    prod:
+      type: materialize
+      threads: 1
+      host: "{{ env_var('MATERIALIZE_PROD_SANDBOX_HOSTNAME') }}"
+      port: 6875
+      user: "{{ env_var('MATERIALIZE_PROD_SANDBOX_USERNAME') }}"
+      password: "{{env_var('MATERIALIZE_PROD_SANDBOX_APP_PASSWORD')}}"
+      dbname: qa_canary_environment
+      schema: public
+      autocommit: True
+
     dev:
       type: materialize
       threads: 1
@@ -21,4 +32,4 @@ canary_environment:
       schema: public
       autocommit: True
 
-  target: dev
+  target: prod
