@@ -4406,6 +4406,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "stacker",
+ "static_assertions",
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",

@@ -124,6 +124,9 @@ pub mod metrics;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod netio;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
+#[cfg(feature = "async")]
+pub mod notify;
 pub mod now;
 pub mod option;
 pub mod panic;
