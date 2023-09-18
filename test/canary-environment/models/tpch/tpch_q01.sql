@@ -10,7 +10,7 @@
 -- TPC-H Query #Q18, chosen for the workload for its GROUP BY clause
 
 -- depends_on: {{ ref('tpch') }}
-{{ config(materialized='materializedview', indexes=[{'default': True}]) }}
+{{ config(materialized='materializedview', cluster='qa_canary_environment_compute', indexes=[{'default': True}]) }}
 
 SELECT
     l_returnflag,
