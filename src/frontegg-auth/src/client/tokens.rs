@@ -35,7 +35,7 @@ impl Client {
                     let client = self.client.clone();
                     let url = admin_api_token_url.to_string();
                     let args_ = args.clone();
-                    let inflight = self.inflight_requests.clone();
+                    let inflight = Arc::clone(&self.inflight_requests);
                     let (tx, rx) = tokio::sync::oneshot::channel();
 
                     inflight_requests.insert(InflightRequest::SecretForToken(args), vec![tx]);
