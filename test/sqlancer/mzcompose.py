@@ -12,8 +12,12 @@ import random
 from threading import Thread
 
 from materialize import spawn
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     # Auto-restart so we can keep testing even after we ran into a panic

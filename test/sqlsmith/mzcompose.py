@@ -15,8 +15,12 @@ from datetime import datetime
 from threading import Thread
 from typing import Any
 
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.materialized import Materialized
 
 if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
     TOTAL_MEMORY = 12
@@ -69,8 +73,6 @@ known_errors = [
     "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
-    "aggregate functions are not allowed in",  # https://github.com/MaterializeInc/materialize/issues/21295
-    "nested aggregate functions are not allowed",  # https://github.com/MaterializeInc/materialize/issues/21295
     "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
@@ -154,8 +156,6 @@ known_errors = [
     "out of valid range",
     '" does not exist',  # role does not exist
     "csv_extract number of columns too large",
-    "coalesce types text and oid cannot be matched",  # with ACL-related functions
-    "coalesce types oid and text cannot be matched",  # with ACL-related functions
 ]
 
 

@@ -14,6 +14,7 @@
 /.github                            @benesch
 /bin
 /ci                                 @MaterializeInc/testing
+/ci/test/lint-deps.toml             @danhhz @benesch
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
@@ -26,6 +27,7 @@
 /src/avro-derive                    @umanwizard
 /src/build-id                       @umanwizard
 /src/build-info                     @benesch
+/src/catalog                        @MaterializeInc/adapter
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/compute @MaterializeInc/storage
@@ -93,6 +95,7 @@
 /src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
+/src/storage-controller             @MaterializeInc/storage
 /src/storage-operators              @MaterializeInc/storage
 /src/storage-types                  @MaterializeInc/storage
 /src/test-macro                     @MaterializeInc/testing

@@ -33,6 +33,7 @@ pub use mz_sql::session::vars::{
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
@@ -118,16 +119,19 @@ impl<T: TimestampManipulation> Session<T> {
     // binding a statement directly to a portal without creating an
     // intermediate prepared statement. Thus, for those cases, a
     // mechanism for generating the logging metadata directly is needed.
-    pub(crate) fn mint_logging(&self, sql: String) -> Arc<QCell<PreparedStatementLoggingInfo>> {
+    pub(crate) fn mint_logging(
+        &self,
+        sql: String,
+        redacted_sql: String,
+        now: EpochMillis,
+    ) -> Arc<QCell<PreparedStatementLoggingInfo>> {
         Arc::new(QCell::new(
             &self.qcell_owner,
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
+                redacted_sql,
                 session_id: self.uuid,
-                prepared_at: Utc::now()
-                    .timestamp_millis()
-                    .try_into()
-                    .expect("sane system time"),
+                prepared_at: now,
                 name: "".to_string(),
                 accounted: false,
             },
@@ -479,6 +483,10 @@ impl<T: TimestampManipulation> Session<T> {
         catalog_revision: u64,
         now: EpochMillis,
     ) {
+        let redacted_sql = stmt
+            .as_ref()
+            .map(|stmt| stmt.to_ast_string_redacted())
+            .unwrap_or(String::default());
         let statement = PreparedStatement {
             stmt,
             desc,
@@ -487,6 +495,7 @@ impl<T: TimestampManipulation> Session<T> {
                 &self.qcell_owner,
                 PreparedStatementLoggingInfo::StillToLog {
                     sql,
+                    redacted_sql,
                     name: name.clone(),
                     prepared_at: now,
                     session_id: self.uuid,

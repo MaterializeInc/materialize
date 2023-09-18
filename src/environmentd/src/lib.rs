@@ -93,10 +93,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
-use mz_adapter::catalog::storage::{stash, BootstrapArgs};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::{initialize, BootstrapArgs};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -388,13 +388,13 @@ impl Listeners {
             // TODO: once all stashes have a deploy_generation, don't need to handle the Option
             let stash_generation = stash
                 .with_transaction(move |tx| {
-                    Box::pin(async move { stash::deploy_generation(&tx).await })
+                    Box::pin(async move { initialize::deploy_generation(&tx).await })
                 })
                 .await?;
             tracing::info!("Found stash generation {stash_generation:?}");
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = mz_adapter::catalog::storage::Connection::open(
+                if let Err(e) = mz_catalog::Connection::open(
                     stash,
                     config.now.clone(),
                     &BootstrapArgs {
@@ -463,7 +463,7 @@ impl Listeners {
         let envd_epoch = stash
             .epoch()
             .expect("a real environmentd should always have an epoch number");
-        let adapter_storage = mz_adapter::catalog::storage::Connection::open(
+        let adapter_storage = mz_catalog::Connection::open(
             stash,
             config.now.clone(),
             &BootstrapArgs {

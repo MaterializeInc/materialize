@@ -30,7 +30,7 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, ErrorKind};
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
@@ -38,7 +38,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{ExecuteContext, ExecuteResponseKind};
+use crate::{catalog, ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -676,9 +676,9 @@ impl Coordinator {
                 table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
             }
             None => {
-                return Err(AdapterError::SqlCatalog(CatalogError::UnknownItem(
-                    id.to_string(),
-                )))
+                return Err(AdapterError::Catalog(catalog::Error {
+                    kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
+                }))
             }
         };
 

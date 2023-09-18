@@ -188,16 +188,16 @@ renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name               type   size
-------------------------------
-renamed_mz_data    kafka     ${arg.default-storage-size}
-mz_data_progress   progress  <null>
+name               type   size                            cluster
+-----------------------------------------------------------------
+mz_data_progress   progress  <null>                       <null>
+renamed_mz_data    kafka     ${arg.default-storage-size}  materialize_public_mz_data
 
 # Sink was successfully renamed
 > SHOW SINKS
-name               type   size
-------------------------------
-renamed_sink       kafka  ${arg.default-storage-size}
+name               type   size                            cluster
+-----------------------------------------------------------------
+renamed_sink       kafka  ${arg.default-storage-size}     materialize_public_sink1
 
 # View was successfully renamed
 > SHOW VIEWS

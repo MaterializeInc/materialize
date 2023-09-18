@@ -1702,25 +1702,23 @@ GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
+Explained Query:
+  ReadStorage materialize.public.t
 
-simple conn=child,user=child
+EOF
+COMPLETE 1
+
+simple multiline,conn=child,user=child
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
+Explained Query:
+  ReadStorage materialize.public.t
 
-simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE t TO joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE t FROM joe;
-----
-COMPLETE 0
+EOF
+COMPLETE 1
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM joe;
@@ -1779,68 +1777,26 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW "materialize.public.v"
+Explained Query:
+  ReadStorage materialize.public.t
 
-simple conn=child,user=child
+EOF
+COMPLETE 1
+
+simple multiline,conn=child,user=child
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW "materialize.public.v"
+Explained Query:
+  ReadStorage materialize.public.t
+
+EOF
+COMPLETE 1
 
 simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE v TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=child,user=child
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON SCHEMA materialize.public TO view_owner;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
-
-simple conn=child,user=child
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
-
-simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE t TO view_owner;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE t FROM view_owner;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE v FROM joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE USAGE ON SCHEMA materialize.public FROM joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM view_owner;
+REVOKE CREATE ON SCHEMA materialize.public FROM view_owner;
 ----
 COMPLETE 0
 
@@ -1951,12 +1907,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;

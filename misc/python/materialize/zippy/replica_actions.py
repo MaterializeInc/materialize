@@ -10,7 +10,7 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import ReplicaExists, ReplicaSizeType
@@ -30,6 +30,7 @@ class DropDefaultReplica(Action):
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            ALTER CLUSTER default SET (MANAGED = false)
             DROP CLUSTER REPLICA default.r1
             """
             )

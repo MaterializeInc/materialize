@@ -31,6 +31,11 @@ use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
+use mz_storage_client::client::{
+    CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    StorageResponse,
+};
+use mz_storage_client::metrics::RehydratingStorageClientMetrics;
 use mz_storage_types::parameters::StorageParameters;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -39,12 +44,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
-
-use crate::client::{
-    CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
-    StorageResponse,
-};
-use crate::metrics::RehydratingStorageClientMetrics;
 
 /// A storage client that replays the command stream on failure.
 ///

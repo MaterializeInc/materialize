@@ -158,7 +158,8 @@ support for these modules.
 | ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/#sql-clients) for more details. Some backslash meta-commands are not yet supported {{% gh 9721 %}}.
 | DBeaver      | {{< supportLevel production >}}  | Connect using the [Materialize database driver](/integrations/sql-clients/#dbeaver).                                                                                                                                                                                              |             |
-| DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |             |
+| DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |
+| PopSQL       | {{< supportLevel beta >}}        | Connect using a [Materialize connection](https://docs.popsql.com/docs/connecting-to-materialize). |
 | pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                | [](#notify) |
 | TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
 
@@ -239,14 +240,15 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service   | Support level                    | Notes                                                                               |             |
 | --------- | -------------------------------- | ----------------------------------------------------------------------------------- | ----------- |
-| Census    | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                  | [](#notify) |
-| Hightouch | {{< supportLevel in-progress >}} | Connect using a [PostgreSQL source](https://hightouch.io/docs/sources/postgresql/). | [](#notify) |
+| Census    | {{< supportLevel alpha >}}       | Connect using the [Materialize source](https://docs.getcensus.com/sources/materialize). See the [Census integration page](/manage/reverse-etl/census/) for more details.                 | |
+| Hightouch | {{< supportLevel in-progress >}} | Connect using the [Materialize source](https://hightouch.com/integrations/sources/materialize). | [](#notify) |
 
 ### Data collaboration
 
 | Service | Support level              | Notes                                                                                                                                |             |
 | ------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| Hex     | {{< supportLevel alpha >}} | Connect using a [PostgreSQL connection](https://learn.hex.tech/docs/connect-to-data/data-connections/overview#add-a-new-connection). | [](#notify) |
+| Deepnote   | {{< supportLevel production >}} | Connect using the [Materialize connection](https://deepnote.com/docs/materialize). See the [Deepnote integration page](https://materialize.com/docs/serve-results/deepnote/).                            |
+| Hex     | {{< supportLevel beta >}}  | Connect using the [Materialize connection](https://learn.hex.tech/docs/connect-to-data/data-connections/overview). |                 |
 | Retool  | {{< supportLevel alpha >}} | Connect using the [PostgreSQL integration](https://retool.com/integrations/postgresql).                                              | [](#notify) |
 
 👋 _Is there another tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._

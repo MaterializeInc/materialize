@@ -95,131 +95,154 @@ where
     let value_fields = datums
         .into_iter()
         .zip(names_types)
-        .map(|(datum, (name, typ))| (name.to_string(), TypedDatum::new(datum, typ).json()))
+        .map(|(datum, (name, typ))| {
+            (
+                name.to_string(),
+                TypedDatum::new(datum, typ).json(&JsonNumberPolicy::KeepAsNumber),
+            )
+        })
         .collect();
     serde_json::Value::Object(value_fields)
 }
 
+/// Policies for how to handle Numbers in JSON.
+#[derive(Debug)]
+pub enum JsonNumberPolicy {
+    /// Do not change Numbers.
+    KeepAsNumber,
+    /// Convert Numbers to their String representation. Useful for JavaScript consumers that may
+    /// interpret some numbers incorrectly.
+    ConvertNumberToString,
+}
+
 pub trait ToJson {
     /// Transforms this value to a JSON value.
-    fn json(self) -> serde_json::Value;
+    fn json(self, number_policy: &JsonNumberPolicy) -> serde_json::Value;
 }
 
 impl ToJson for TypedDatum<'_> {
-    fn json(self) -> serde_json::Value {
+    fn json(self, number_policy: &JsonNumberPolicy) -> serde_json::Value {
         let TypedDatum { datum, typ } = self;
         if typ.nullable && datum.is_null() {
-            serde_json::Value::Null
-        } else {
-            match &typ.scalar_type {
-                ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
-                ScalarType::Bool => json!(datum.unwrap_bool()),
-                ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
-                ScalarType::Int16 => json!(datum.unwrap_int16()),
-                ScalarType::Int32 => json!(datum.unwrap_int32()),
-                ScalarType::Int64 => json!(datum.unwrap_int64()),
-                ScalarType::UInt16 => json!(datum.unwrap_uint16()),
-                ScalarType::UInt32
-                | ScalarType::Oid
-                | ScalarType::RegClass
-                | ScalarType::RegProc
-                | ScalarType::RegType => {
-                    json!(datum.unwrap_uint32())
-                }
-                ScalarType::UInt64 => json!(datum.unwrap_uint64()),
-                ScalarType::Float32 => json!(datum.unwrap_float32()),
-                ScalarType::Float64 => json!(datum.unwrap_float64()),
-                ScalarType::Numeric { .. } => {
-                    json!(datum.unwrap_numeric().0.to_standard_notation_string())
-                }
-                // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
-                ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
-                ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
-                ScalarType::Timestamp => serde_json::Value::String(format!(
-                    "{:?}",
-                    datum.unwrap_timestamp().to_naive().timestamp_millis()
-                )),
-                ScalarType::TimestampTz => serde_json::Value::String(format!(
-                    "{:?}",
-                    datum.unwrap_timestamptz().to_naive().timestamp_millis()
-                )),
-                ScalarType::Interval => {
-                    serde_json::Value::String(format!("{}", datum.unwrap_interval()))
-                }
-                ScalarType::Bytes => json!(datum.unwrap_bytes()),
-                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
-                    json!(datum.unwrap_str())
-                }
-                ScalarType::Char { length } => {
-                    let s = char::format_str_pad(datum.unwrap_str(), *length);
-                    serde_json::Value::String(s)
-                }
-                ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
-                ScalarType::Uuid => json!(datum.unwrap_uuid()),
-                ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
-                    let list = match typ.scalar_type {
-                        ScalarType::Array(_) | ScalarType::Int2Vector => {
-                            datum.unwrap_array().elements()
-                        }
-                        ScalarType::List { .. } => datum.unwrap_list(),
-                        _ => unreachable!(),
-                    };
-                    let values = list
-                        .into_iter()
-                        .map(|datum| {
-                            TypedDatum::new(
-                                datum,
-                                &ColumnType {
-                                    nullable: true,
-                                    scalar_type: ty.unwrap_collection_element_type().clone(),
-                                },
-                            )
-                            .json()
-                        })
-                        .collect();
-                    serde_json::Value::Array(values)
-                }
-                ScalarType::Record { fields, .. } => {
-                    let list = datum.unwrap_list();
-                    let fields: Map<String, serde_json::Value> = fields
-                        .iter()
-                        .zip(&list)
-                        .map(|((name, typ), datum)| {
-                            let name = name.to_string();
-                            let datum = TypedDatum::new(datum, typ);
-                            let value = datum.json();
-                            (name, value)
-                        })
-                        .collect();
-                    fields.into()
-                }
-                ScalarType::Map { value_type, .. } => {
-                    let map = datum.unwrap_map();
-                    let elements = map
-                        .into_iter()
-                        .map(|(key, datum)| {
-                            let value = TypedDatum::new(
-                                datum,
-                                &ColumnType {
-                                    nullable: true,
-                                    scalar_type: (**value_type).clone(),
-                                },
-                            )
-                            .json();
-                            (key.to_string(), value)
-                        })
-                        .collect();
-                    serde_json::Value::Object(elements)
-                }
-                ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
-                ScalarType::Range { .. } => {
-                    // Ranges' interiors are not expected to be types whose
-                    // string representations are misleading/wrong, e.g.
-                    // records.
-                    json!(datum.unwrap_range().to_string())
-                }
-                ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
+            return serde_json::Value::Null;
+        }
+        let value = match &typ.scalar_type {
+            ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
+            ScalarType::Bool => json!(datum.unwrap_bool()),
+            ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
+            ScalarType::Int16 => json!(datum.unwrap_int16()),
+            ScalarType::Int32 => json!(datum.unwrap_int32()),
+            ScalarType::Int64 => json!(datum.unwrap_int64()),
+            ScalarType::UInt16 => json!(datum.unwrap_uint16()),
+            ScalarType::UInt32
+            | ScalarType::Oid
+            | ScalarType::RegClass
+            | ScalarType::RegProc
+            | ScalarType::RegType => {
+                json!(datum.unwrap_uint32())
             }
+            ScalarType::UInt64 => json!(datum.unwrap_uint64()),
+            ScalarType::Float32 => json!(datum.unwrap_float32()),
+            ScalarType::Float64 => json!(datum.unwrap_float64()),
+            ScalarType::Numeric { .. } => {
+                json!(datum.unwrap_numeric().0.to_standard_notation_string())
+            }
+            // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
+            ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
+            ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
+            ScalarType::Timestamp => serde_json::Value::String(format!(
+                "{:?}",
+                datum.unwrap_timestamp().to_naive().timestamp_millis()
+            )),
+            ScalarType::TimestampTz => serde_json::Value::String(format!(
+                "{:?}",
+                datum.unwrap_timestamptz().to_naive().timestamp_millis()
+            )),
+            ScalarType::Interval => {
+                serde_json::Value::String(format!("{}", datum.unwrap_interval()))
+            }
+            ScalarType::Bytes => json!(datum.unwrap_bytes()),
+            ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+                json!(datum.unwrap_str())
+            }
+            ScalarType::Char { length } => {
+                let s = char::format_str_pad(datum.unwrap_str(), *length);
+                serde_json::Value::String(s)
+            }
+            ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
+            ScalarType::Uuid => json!(datum.unwrap_uuid()),
+            ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
+                let list = match typ.scalar_type {
+                    ScalarType::Array(_) | ScalarType::Int2Vector => {
+                        datum.unwrap_array().elements()
+                    }
+                    ScalarType::List { .. } => datum.unwrap_list(),
+                    _ => unreachable!(),
+                };
+                let values = list
+                    .into_iter()
+                    .map(|datum| {
+                        TypedDatum::new(
+                            datum,
+                            &ColumnType {
+                                nullable: true,
+                                scalar_type: ty.unwrap_collection_element_type().clone(),
+                            },
+                        )
+                        .json(number_policy)
+                    })
+                    .collect();
+                serde_json::Value::Array(values)
+            }
+            ScalarType::Record { fields, .. } => {
+                let list = datum.unwrap_list();
+                let fields: Map<String, serde_json::Value> = fields
+                    .iter()
+                    .zip(&list)
+                    .map(|((name, typ), datum)| {
+                        let name = name.to_string();
+                        let datum = TypedDatum::new(datum, typ);
+                        let value = datum.json(number_policy);
+                        (name, value)
+                    })
+                    .collect();
+                fields.into()
+            }
+            ScalarType::Map { value_type, .. } => {
+                let map = datum.unwrap_map();
+                let elements = map
+                    .into_iter()
+                    .map(|(key, datum)| {
+                        let value = TypedDatum::new(
+                            datum,
+                            &ColumnType {
+                                nullable: true,
+                                scalar_type: (**value_type).clone(),
+                            },
+                        )
+                        .json(number_policy);
+                        (key.to_string(), value)
+                    })
+                    .collect();
+                serde_json::Value::Object(elements)
+            }
+            ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
+            ScalarType::Range { .. } => {
+                // Ranges' interiors are not expected to be types whose
+                // string representations are misleading/wrong, e.g.
+                // records.
+                json!(datum.unwrap_range().to_string())
+            }
+            ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
+        };
+        // We don't need to recurse into map or object here because those already recursively call
+        // .json() with the number policy to generate the member Values.
+        match (number_policy, value) {
+            (JsonNumberPolicy::KeepAsNumber, value) => value,
+            (JsonNumberPolicy::ConvertNumberToString, serde_json::Value::Number(n)) => {
+                serde_json::Value::String(n.to_string())
+            }
+            (JsonNumberPolicy::ConvertNumberToString, value) => value,
         }
     }
 }

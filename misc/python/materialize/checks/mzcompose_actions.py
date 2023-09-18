@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.mzcompose.services import Clusterd, Materialized
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.util import MzVersion
 
 if TYPE_CHECKING:
@@ -164,7 +165,7 @@ class UseClusterdCompute(MzcomposeAction):
 
         c.sql(
             f"""
-
+            ALTER CLUSTER default SET (MANAGED = false);
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
                 {storage_addresses},
@@ -244,8 +245,9 @@ class DropCreateDefaultReplica(MzcomposeAction):
 
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
+            ALTER CLUSTER default SET (MANAGED = false);
+            DROP CLUSTER REPLICA default.r1;
+            CREATE CLUSTER REPLICA default.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",

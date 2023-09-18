@@ -104,6 +104,9 @@ impl Coordinator {
             Message::PeekStageReady { ctx, stage } => {
                 self.sequence_peek_stage(ctx, stage).await;
             }
+            Message::DrainStatementLog => {
+                self.drain_statement_log().await;
+            }
         }
     }
 

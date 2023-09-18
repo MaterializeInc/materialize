@@ -145,8 +145,6 @@ pub enum AdapterError {
     Canceled,
     /// An idle session in a transaction has timed out.
     IdleInTransactionSessionTimeout,
-    /// An error occurred in a SQL catalog operation.
-    SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-subscribe mode.
     SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
@@ -300,7 +298,6 @@ impl AdapterError {
                     .to_string(),
             ),
             AdapterError::Catalog(c) => c.hint(),
-            AdapterError::SqlCatalog(e) => e.hint(),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
@@ -409,7 +406,6 @@ impl AdapterError {
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UnallowedOnCluster { .. } => {
@@ -577,7 +573,6 @@ impl fmt::Display for AdapterError {
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
-            AdapterError::SqlCatalog(e) => e.fmt(f),
             AdapterError::SubscribeOnlyTransaction => {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
@@ -689,6 +684,12 @@ impl From<catalog::Error> for AdapterError {
     }
 }
 
+impl From<mz_catalog::Error> for AdapterError {
+    fn from(e: mz_catalog::Error) -> Self {
+        catalog::Error::from(e).into()
+    }
+}
+
 impl From<EvalError> for AdapterError {
     fn from(e: EvalError) -> AdapterError {
         AdapterError::Eval(e)
@@ -706,7 +707,7 @@ impl From<ExplainError> for AdapterError {
 
 impl From<mz_sql::catalog::CatalogError> for AdapterError {
     fn from(e: mz_sql::catalog::CatalogError) -> AdapterError {
-        AdapterError::SqlCatalog(e)
+        AdapterError::Catalog(catalog::Error::from(e))
     }
 }
 

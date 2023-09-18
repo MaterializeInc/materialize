@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TypeVar, Union
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 
 
 class Capability:

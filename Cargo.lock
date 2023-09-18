@@ -3087,15 +3087,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lol_alloc"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36aabc32b791f1a506e0bb90e0fa03e983500549d7b1f2dad45b5fc20ef45974"
-dependencies = [
- "spin 0.9.8",
-]
-
-[[package]]
 name = "loom"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3370,11 +3361,14 @@ dependencies = [
  "reqwest",
  "rpassword",
  "security-framework",
+ "semver",
  "serde",
  "serde-aux",
  "serde_json",
  "tabled",
+ "termcolor",
  "thiserror",
+ "time",
  "tokio",
  "toml",
  "toml_edit",
@@ -3405,6 +3399,7 @@ dependencies = [
  "maplit",
  "mz-audit-log",
  "mz-build-info",
+ "mz-catalog",
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-cluster-client",
@@ -3572,6 +3567,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-catalog"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "itertools",
+ "mz-audit-log",
+ "mz-compute-client",
+ "mz-controller",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "mz-sql",
+ "mz-sql-parser",
+ "mz-stash",
+ "mz-storage-types",
+ "proptest",
+ "proptest-derive",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-ccsr"
 version = "0.0.0"
 dependencies = [
@@ -3696,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3864,6 +3882,7 @@ dependencies = [
  "mz-service",
  "mz-stash",
  "mz-storage-client",
+ "mz-storage-controller",
  "once_cell",
  "regex",
  "serde",
@@ -3887,7 +3906,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3919,6 +3938,7 @@ dependencies = [
  "mz-alloc",
  "mz-aws-secrets-controller",
  "mz-build-info",
+ "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
  "mz-expr",
@@ -4445,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4973,13 +4993,11 @@ name = "mz-sql-lexer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "lol_alloc",
  "mz-ore",
  "phf",
  "phf_codegen",
  "serde",
  "uncased",
- "wasm-bindgen",
  "workspace-hack",
 ]
 
@@ -5118,12 +5136,13 @@ dependencies = [
  "clap",
  "mz-adapter",
  "mz-build-info",
+ "mz-catalog",
  "mz-ore",
  "mz-postgres-util",
  "mz-secrets",
  "mz-sql",
  "mz-stash",
- "mz-storage-client",
+ "mz-storage-controller",
  "once_cell",
  "prost",
  "serde_json",
@@ -5221,25 +5240,19 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "bytes",
  "chrono",
  "derivative",
  "differential-dataflow",
- "futures",
  "http",
  "itertools",
- "mz-build-info",
  "mz-ccsr",
  "mz-cluster-client",
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-client",
- "mz-persist-types",
- "mz-postgres-util",
  "mz-proto",
  "mz-repr",
  "mz-service",
- "mz-stash",
  "mz-storage-types",
  "mz-timely-util",
  "once_cell",
@@ -5254,10 +5267,44 @@ dependencies = [
  "static_assertions",
  "timely",
  "tokio",
- "tokio-postgres",
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-storage-controller"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "differential-dataflow",
+ "futures",
+ "itertools",
+ "mz-build-info",
+ "mz-cluster-client",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-postgres-util",
+ "mz-proto",
+ "mz-repr",
+ "mz-service",
+ "mz-stash",
+ "mz-storage-client",
+ "mz-storage-types",
+ "proptest",
+ "prost",
+ "serde",
+ "serde_json",
+ "timely",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
  "tracing",
  "workspace-hack",
 ]
@@ -6888,7 +6935,7 @@ dependencies = [
  "cc",
  "libc",
  "once_cell",
- "spin 0.5.2",
+ "spin",
  "untrusted",
  "web-sys",
  "winapi",
@@ -7581,15 +7628,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
 name = "ssh-key"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7857,9 +7895,9 @@ dependencies = [
 
 [[package]]
 name = "termcolor"
-version = "1.1.3"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab24d30b911b2376f3a13cc2cd443142f0c81dda04c118693e35b3835757755"
+checksum = "be55cf8942feac5c765c2c993422806843c9a9a45d4d5c407ad6dd2ea95eb9b6"
 dependencies = [
  "winapi-util",
 ]

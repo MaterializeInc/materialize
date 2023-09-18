@@ -259,25 +259,25 @@ contains: must not specify DETAILS option in CREATE SOURCE
   );
 
 > SHOW SOURCES
-array_types_table     subsource <null>
-conflict_table        subsource <null>
-create                subsource <null>
-escaped_text_table    subsource <null>
-large_text            subsource <null>
-multipart_pk          subsource <null>
-mz_source             postgres  ${arg.default-storage-size}
-mz_source_progress    progress  <null>
-no_replica_identity   subsource <null>
-nonpk_table           subsource <null>
-nulls_table           subsource <null>
-pk_table              subsource <null>
-"space table"         subsource <null>
-trailing_space_nopk   subsource <null>
-trailing_space_pk     subsource <null>
-"\"literal_quotes\""  subsource <null>
-types_table           subsource <null>
-utf8_table            subsource <null>
-таблица               subsource <null>
+array_types_table     subsource <null>  <null>
+conflict_table        subsource <null>  <null>
+create                subsource <null>  <null>
+escaped_text_table    subsource <null>  <null>
+large_text            subsource <null>  <null>
+multipart_pk          subsource <null>  <null>
+mz_source             postgres  ${arg.default-storage-size}  materialize_public_mz_source
+mz_source_progress    progress  <null>  <null>
+no_replica_identity   subsource <null>  <null>
+nonpk_table           subsource <null>  <null>
+nulls_table           subsource <null>  <null>
+pk_table              subsource <null>  <null>
+"space table"         subsource <null>  <null>
+trailing_space_nopk   subsource <null>  <null>
+trailing_space_pk     subsource <null>  <null>
+"\"literal_quotes\""  subsource <null>  <null>
+types_table           subsource <null>  <null>
+utf8_table            subsource <null>  <null>
+таблица               subsource <null>  <null>
 
 > SELECT lsn > 0 FROM mz_source_progress
 true
@@ -675,10 +675,10 @@ contains:TEXT COLUMNS can only refer to tables being added to source
   );
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource <null>
-enum_source             postgres  ${arg.default-storage-size}
-enum_source_progress    progress  <null>
-enum_table              subsource <null>
+another_enum_table      subsource <null> <null>
+enum_source             postgres  ${arg.default-storage-size} materialize_public_enum_source
+enum_source_progress    progress  <null> <null>
+enum_table              subsource <null> <null>
 
 > SELECT * FROM enum_table
 var0
@@ -720,9 +720,9 @@ INSERT INTO pk_table VALUES (99999);
   );
 
 > SHOW SOURCES
-another_source          postgres  ${arg.default-storage-size}
-another_source_progress progress  <null>
-another_table           subsource <null>
+another_source          postgres  ${arg.default-storage-size} materialize_public_another_source
+another_source_progress progress  <null> <null>
+another_table           subsource <null> <null>
 
 > DROP SOURCE another_source
 

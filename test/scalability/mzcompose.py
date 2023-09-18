@@ -10,6 +10,7 @@
 import argparse
 import pathlib
 import sys
+import threading
 import time
 from concurrent import futures
 from math import floor, sqrt
@@ -19,8 +20,9 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres  # noqa: F401
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -37,10 +39,23 @@ from materialize.scalability.workloads_test import *  # noqa: F401 F403
 SERVICES = [Materialized(image="materialize/materialized:latest"), Postgres()]
 
 
+def initialize_worker(local: threading.local, lock: threading.Lock):
+    """Give each other worker thread a unique ID"""
+    lock.acquire()
+    global next_worker_id
+    local.worker_id = next_worker_id
+    next_worker_id = next_worker_id + 1
+    lock.release()
+
+
 def execute_operation(
-    args: tuple[Workload, int, Operation, Cursor, int, int]
+    args: tuple[Workload, int, threading.local, list[Cursor], Operation]
 ) -> dict[str, Any]:
-    workload, concurrency, operation, cursor, i1, i2 = args
+    workload, concurrency, local, cursor_pool, operation = args
+    assert (
+        len(cursor_pool) >= local.worker_id + 1
+    ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {local.worker_id}"
+    cursor = cursor_pool[local.worker_id]
 
     start = time.time()
     operation.execute(cursor)
@@ -90,18 +105,24 @@ def run_with_concurrency(
     print(f"Benchmarking workload {type(workload)} at concurrency {concurrency} ...")
     operations = workload.operations()
 
+    global next_worker_id
+    next_worker_id = 0
+    local = threading.local()
+    lock = threading.Lock()
+
     start = time.time()
-    with futures.ThreadPoolExecutor(concurrency) as executor:
+    with futures.ThreadPoolExecutor(
+        concurrency, initializer=initialize_worker, initargs=(local, lock)
+    ) as executor:
         measurements = executor.map(
             execute_operation,
             [
                 (
                     workload,
                     concurrency,
+                    local,
+                    cursor_pool,
                     operations[i % len(operations)],
-                    cursor_pool[i % concurrency],
-                    i,
-                    i % concurrency,
                 )
                 for i in range(count)
             ],
@@ -261,7 +282,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         endpoint: Endpoint | None = None
         if target == "local":
             endpoint = MaterializeLocal()
-        if target == "remote":
+        elif target == "remote":
             endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
         elif target == "postgres":
             endpoint = PostgresContainer(composition=c)

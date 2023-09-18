@@ -15,16 +15,14 @@ from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorPar
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Debezium,
-    Materialized,
-    Postgres,
-    Redpanda,
-)
-from materialize.mzcompose.services import Testdrive as TestdriveService
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
 
 SERVICES = [
     Cockroach(
@@ -99,18 +97,29 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    scenarios = (
-        [globals()[args.scenario]] if args.scenario else Scenario.__subclasses__()
-    )
+    if args.scenario:
+        assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
+        scenarios = [globals()[args.scenario]]
+    else:
+        scenarios = Scenario.__subclasses__()
 
-    checks = (
-        [globals()[check] for check in args.check]
-        if args.check
-        else Check.__subclasses__()
-    )
+    if args.check:
+        for check in args.check:
+            assert check in globals(), f"check {check} does not exist"
+            assert issubclass(
+                globals()[check], Check
+            ), f"{check} is not a Check. Maybe you meant to specify a Scenario via --scenario ?"
+
+        checks = [globals()[check] for check in args.check]
+    else:
+        checks = Check.__subclasses__()
 
     executor = MzcomposeExecutor(composition=c)
     for scenario_class in scenarios:
+        assert issubclass(
+            scenario_class, Scenario
+        ), f"{scenario_class} is not a Scenario. Maybe you meant to specify a Check via --check ?"
+
         print(f"Testing scenario {scenario_class}...")
 
         executor_class = (

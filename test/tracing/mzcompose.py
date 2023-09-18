@@ -10,8 +10,9 @@ import time
 
 import requests
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Clusterd, Materialized
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(

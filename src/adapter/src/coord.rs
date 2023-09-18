@@ -127,8 +127,8 @@ use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
+    ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -235,6 +235,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+    DrainStatementLog,
 }
 
 impl Message {
@@ -261,6 +262,7 @@ impl Message {
             RetireExecute { .. } => "retire_execute",
             ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
             PeekStageReady { .. } => "peek_stage_ready",
+            DrainStatementLog => "drain_statement_log",
         }
     }
 }
@@ -510,7 +512,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection,
+    pub storage: mz_catalog::Connection,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -1862,6 +1864,7 @@ impl Coordinator {
         });
 
         self.schedule_storage_usage_collection();
+        self.spawn_statement_logging_task();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         // Report if the handling of a single message takes longer than this threshold.

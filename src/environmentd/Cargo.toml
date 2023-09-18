@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -36,6 +36,7 @@ mz-alloc = { path = "../alloc" }
 mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
 mz-adapter = { path = "../adapter" }
+mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
 mz-expr = { path = "../expr" }

@@ -32,6 +32,7 @@ use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
 use mz_sql::session::vars::VarInput;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use mz_transform::Optimizer;
 use prometheus::Histogram;
@@ -463,7 +464,9 @@ impl SessionClient {
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
         let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        let logging = self.session().mint_logging(sql);
+        let now = self.now();
+        let redacted_sql = stmt.to_ast_string_redacted();
+        let logging = self.session().mint_logging(sql, redacted_sql, now);
         self.session().set_portal(
             name,
             desc,

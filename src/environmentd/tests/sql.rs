@@ -1301,19 +1301,11 @@ fn test_explain_timestamp_json() {
 // 2. Acquires read holds for all objects within the same time domain
 // 3. Errors during a write-only transaction
 // 4. Errors when an object outside the chosen time domain is referenced
+//
+// GitHub issue # 18950
 #[mz_ore::test]
-fn test_github_18950() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
-    let now = {
-        let nowfn = Arc::clone(&nowfn);
-        NowFn::from(move || (nowfn.lock().unwrap())())
-    };
-
-    let config = util::Config::default()
-        .workers(2)
-        .with_now(now)
-        .unsafe_mode();
+fn test_transactional_explain_timestamps() {
+    let config = util::Config::default().workers(2).unsafe_mode();
 
     let server = util::start_server(config).unwrap();
 
@@ -1342,7 +1334,7 @@ fn test_github_18950() {
     client_reads.batch_execute("BEGIN").unwrap();
     let mut query_timestamp = None;
 
-    for i in 1..5 {
+    for _ in 1..5 {
         let row = client_reads
             .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
             .unwrap();
@@ -1368,8 +1360,6 @@ fn test_github_18950() {
         // Ensure `t1`'s read frontier remains <= the query timestamp
         assert!(*explain_t1_read_frontier <= query_timestamp.unwrap());
 
-        // Increase now by 2s each iteration
-        *nowfn.lock().unwrap() = NowFn::from(move || 2000 * i);
         // Inserting tends to cause sources to compact, so this should ideally
         // strengthen the assertion above that `t1`'s read frontier should
         // not advance during the txn
