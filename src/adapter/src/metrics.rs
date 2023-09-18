@@ -92,7 +92,7 @@ impl Metrics {
             )),
             persist_peek_seconds: registry.register(metric!(
                 name: "mz_persist_peek_seconds",
-                help: "The total number of canceled peeks since process start.",
+                help: "Time spent in (experimental) Persist fast-path peeks.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
             linearize_message_seconds: registry.register(metric!(
