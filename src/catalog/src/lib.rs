@@ -215,6 +215,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     fn epoch(&mut self) -> Option<NonZeroI64>;
 
     /// Returns the version of Materialize that last wrote to the catalog.
+    ///
+    /// If the catalog is uninitialized this will return None.
     async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error>;
 
     /// Get all clusters.
