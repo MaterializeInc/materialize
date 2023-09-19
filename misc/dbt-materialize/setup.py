@@ -39,7 +39,7 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres~=1.5.0"],
+    install_requires=["dbt-postgres>=1.5,<1.7"],
     extras_require={
         "dev": ["dbt-tests-adapter~=1.5.0"],
     },
