@@ -128,8 +128,6 @@ struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
-    /// List of ids which we have to drop from the compute read policy
-    to_drop_from_compute_read_policy: Vec<GlobalId>,
 }
 
 // A bundle of values returned from create_source_inner
@@ -1234,7 +1232,6 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-            to_drop_from_compute_read_policy,
         } = self.sequence_drop_common(session, drop_ids)?;
 
         self.catalog_transact(Some(session), ops).await?;
@@ -1250,9 +1247,6 @@ impl Coordinator {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
                 name: session.vars().cluster().to_string(),
             });
-        }
-        for id in to_drop_from_compute_read_policy {
-            self.drop_compute_read_policy(&id);
         }
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
@@ -1471,7 +1465,6 @@ impl Coordinator {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
-            to_drop_from_compute_read_policy,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
@@ -1490,9 +1483,6 @@ impl Coordinator {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
                 name: session.vars().cluster().to_string(),
             });
-        }
-        for id in to_drop_from_compute_read_policy {
-            self.drop_compute_read_policy(&id);
         }
         Ok(ExecuteResponse::DroppedOwned)
     }
@@ -1514,7 +1504,6 @@ impl Coordinator {
         // Dropping a database or a schema will revoke all default roles associated with that
         // database or schema.
         let mut default_privilege_revokes = BTreeSet::new();
-        let mut to_drop_from_compute_read_policy = Vec::new();
         for id in &ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1530,14 +1519,6 @@ impl Coordinator {
                     }
                 }
                 ObjectId::Cluster(id) => {
-                    to_drop_from_compute_read_policy.extend(
-                        self.catalog()
-                            .get_cluster(*id)
-                            .log_indexes
-                            .values()
-                            .cloned(),
-                    );
-
                     if let Some(active_id) = self
                         .catalog()
                         .active_cluster(session)
@@ -1620,7 +1601,6 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
-            to_drop_from_compute_read_policy,
         })
     }
 
@@ -4219,7 +4199,6 @@ impl Coordinator {
                     mut ops,
                     dropped_active_db,
                     dropped_active_cluster,
-                    to_drop_from_compute_read_policy,
                 } = self.sequence_drop_common(session, drops)?;
 
                 assert!(
@@ -4244,10 +4223,6 @@ impl Coordinator {
                     .alter_collection(id, ingestion)
                     .await
                     .expect("altering collection after txn must succeed");
-
-                for id in to_drop_from_compute_read_policy {
-                    self.drop_compute_read_policy(&id);
-                }
             }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,

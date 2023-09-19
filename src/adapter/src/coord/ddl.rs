@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -442,6 +443,16 @@ impl Coordinator {
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
+                    for id in self
+                        .catalog()
+                        .get_cluster(cluster_id)
+                        .log_indexes
+                        .values()
+                        .cloned()
+                        .collect_vec()
+                    {
+                        self.drop_compute_read_policy(&id);
+                    }
                 }
             }
 
