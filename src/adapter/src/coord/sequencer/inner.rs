@@ -3129,7 +3129,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    #[tracing::instrument(level = "info", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
@@ -3171,7 +3171,7 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(Level::INFO, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
@@ -3198,12 +3198,12 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(no_errors, "local", || {
-            tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
+            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
                 if let Ok(ref optimized_plan) = optimized_plan {
                     trace_plan(optimized_plan.as_inner());
                 }
-                optimized_plan.map_err(Into::into)
+                optimized_plan.map_err(AdapterError::from)
             })
         })?;
 
