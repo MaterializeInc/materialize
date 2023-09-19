@@ -4476,7 +4476,7 @@ derive_unary!(
     CastIntervalToString,
     CastIntervalToTime,
     CastTimestampToDate,
-    CastTimestampToTimestamp,
+    AdjustTimestampPrecision,
     CastTimestampToTimestampTz,
     CastTimestampToString,
     CastTimestampToTime,
@@ -5226,12 +5226,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastIntervalToString(_) => CastIntervalToString(()),
             UnaryFunc::CastIntervalToTime(_) => CastIntervalToTime(()),
             UnaryFunc::CastTimestampToDate(_) => CastTimestampToDate(()),
-            UnaryFunc::CastTimestampToTimestamp(func) => {
-                CastTimestampToTimestamp(mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+            UnaryFunc::AdjustTimestampPrecision(func) => Kind::AdjustTimestampPrecision(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
                     from: func.from.map(|p| p.into_proto()),
                     to: func.to.map(|p| p.into_proto()),
-                })
-            }
+                },
+            ),
             UnaryFunc::CastTimestampToTimestampTz(func) => CastTimestampToTimestampTz(
                 mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
                     from: func.from.map(|p| p.into_proto()),
@@ -5650,7 +5650,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastIntervalToString(()) => Ok(impls::CastIntervalToString.into()),
                 CastIntervalToTime(()) => Ok(impls::CastIntervalToTime.into()),
                 CastTimestampToDate(()) => Ok(impls::CastTimestampToDate.into()),
-                CastTimestampToTimestamp(precisions) => Ok(impls::CastTimestampToTimestamp {
+                AdjustTimestampPrecision(precisions) => Ok(impls::AdjustTimestampPrecision {
                     from: precisions.from.into_rust()?,
                     to: precisions.to.into_rust()?,
                 }

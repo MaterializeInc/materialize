@@ -126,8 +126,8 @@ message ProtoUnaryFunc {
         mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
         repeated ProtoMirScalarExpr cast_exprs = 2;
     }
-    reserved 5, 6, 15, 104, 111, 115, 212;
-    // max field number
+    reserved 5, 6, 15, 104, 111, 115, 212, 306;
+    // next field number 316
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
@@ -241,7 +241,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_interval_to_time = 109;
         google.protobuf.Empty cast_timestamp_to_date = 110;
         mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_to_timestamp_tz = 311;
-        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_to_timestamp = 306;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions adjust_timestamp_precision = 315;
         google.protobuf.Empty cast_timestamp_to_string = 112;
         google.protobuf.Empty cast_timestamp_to_time = 113;
         google.protobuf.Empty cast_timestamp_tz_to_date = 114;
