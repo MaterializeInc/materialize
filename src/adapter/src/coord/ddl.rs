@@ -771,10 +771,10 @@ impl Coordinator {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        let status_id =
-            Some(self.catalog().resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
-            ));
+        let status_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
+        );
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean

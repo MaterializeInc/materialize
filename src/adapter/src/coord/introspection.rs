@@ -26,12 +26,12 @@ use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, Subsc
 use mz_sql::rbac;
 use smallvec::SmallVec;
 
-use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::AdapterError;
+use mz_catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.

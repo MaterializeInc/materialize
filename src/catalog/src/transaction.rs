@@ -7,15 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::builtin::{BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS};
 use crate::objects::{
-    AuditLogKey, BuiltinLog, Cluster, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, ConfigKey, ConfigValue, Database,
-    DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey,
-    GidMappingValue, IdAllocKey, IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role,
-    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
+    CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema,
+    SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TimestampKey, TimestampValue,
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
@@ -49,10 +50,7 @@ use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-pub(crate) fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-    bootstrap_args: &BootstrapArgs,
-) -> Result<(), Error> {
+pub(crate) fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -60,7 +58,7 @@ pub(crate) fn add_new_builtin_clusters_migration(
         .map(|value| value.name)
         .collect();
 
-    for builtin_cluster in &bootstrap_args.builtin_clusters {
+    for builtin_cluster in BUILTIN_CLUSTERS {
         if !cluster_names.contains(builtin_cluster.name) {
             let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
             let id = ClusterId::System(id);
@@ -101,7 +99,7 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
                 acc
             });
 
-    for builtin_replica in &bootstrap_args.builtin_cluster_replicas {
+    for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
         let cluster_id = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
@@ -365,7 +363,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -386,7 +384,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
     ) -> Result<(), Error> {
@@ -406,7 +404,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -426,7 +424,7 @@ impl<'a> Transaction<'a> {
 
         for (builtin, index_id) in introspection_source_indexes {
             let index_id = if let GlobalId::System(id) = index_id {
-                *id
+                id
             } else {
                 panic!("non-system id provided")
             };

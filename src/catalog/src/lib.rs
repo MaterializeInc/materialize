@@ -89,9 +89,8 @@ use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::StashError;
 
 pub use crate::objects::{
-    BuiltinCluster, BuiltinClusterReplica, BuiltinLog, BuiltinRole, Cluster, ClusterConfig,
-    ClusterReplica, ClusterVariant, ClusterVariantManaged, Database, Item, ReplicaConfig,
-    ReplicaLocation, Role, Schema, SystemObjectMapping,
+    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Database, Item,
+    ReplicaConfig, ReplicaLocation, Role, Schema, SystemObjectMapping,
 };
 pub use crate::stash::{Connection, ALL_COLLECTIONS};
 pub use crate::transaction::Transaction;
@@ -107,6 +106,7 @@ pub use initialize::{
 mod stash;
 mod transaction;
 
+pub mod builtin;
 pub mod initialize;
 pub mod objects;
 
@@ -160,9 +160,6 @@ pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
-    pub builtin_clusters: Vec<BuiltinCluster>,
-    pub builtin_cluster_replicas: Vec<BuiltinClusterReplica>,
-    pub builtin_roles: Vec<BuiltinRole>,
 }
 
 pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
