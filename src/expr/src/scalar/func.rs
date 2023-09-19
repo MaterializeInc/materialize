@@ -4482,7 +4482,7 @@ derive_unary!(
     CastTimestampToTime,
     CastTimestampTzToDate,
     CastTimestampTzToTimestamp,
-    CastTimestampTzToTimestampTz,
+    AdjustTimestampTzPrecision,
     CastTimestampTzToString,
     CastTimestampTzToTime,
     CastPgLegacyCharToString,
@@ -5241,7 +5241,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastTimestampToString(_) => CastTimestampToString(()),
             UnaryFunc::CastTimestampToTime(_) => CastTimestampToTime(()),
             UnaryFunc::CastTimestampTzToDate(_) => CastTimestampTzToDate(()),
-            UnaryFunc::CastTimestampTzToTimestampTz(func) => CastTimestampTzToTimestampTz(
+            UnaryFunc::AdjustTimestampTzPrecision(func) => Kind::AdjustTimestampTzPrecision(
                 mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
                     from: func.from.map(|p| p.into_proto()),
                     to: func.to.map(|p| p.into_proto()),
@@ -5668,13 +5668,11 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     to: precisions.to.into_rust()?,
                 }
                 .into()),
-                CastTimestampTzToTimestampTz(precisions) => {
-                    Ok(impls::CastTimestampTzToTimestampTz {
-                        from: precisions.from.into_rust()?,
-                        to: precisions.to.into_rust()?,
-                    }
-                    .into())
+                AdjustTimestampTzPrecision(precisions) => Ok(impls::AdjustTimestampTzPrecision {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
                 }
+                .into()),
                 CastTimestampTzToString(()) => Ok(impls::CastTimestampTzToString.into()),
                 CastTimestampTzToTime(()) => Ok(impls::CastTimestampTzToTime.into()),
                 CastPgLegacyCharToString(()) => Ok(impls::CastPgLegacyCharToString.into()),

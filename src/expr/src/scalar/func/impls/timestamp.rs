@@ -217,12 +217,12 @@ impl fmt::Display for CastTimestampTzToTimestamp {
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampTzToTimestampTz {
+pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
+impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
     type Input = CheckedTimestamp<DateTime<Utc>>;
     type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
@@ -254,9 +254,9 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
     }
 }
 
-impl fmt::Display for CastTimestampTzToTimestampTz {
+impl fmt::Display for AdjustTimestampTzPrecision {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_with_time_zone_to_timestamp_with_time_zone")
+        f.write_str("adjust_timestamp_with_time_zone_precision")
     }
 }
 
