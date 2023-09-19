@@ -118,6 +118,7 @@ use mz_catalog::builtin::{
     BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_INTROSPECTION_CLUSTER,
     MZ_SYSTEM_CLUSTER,
 };
+use mz_catalog::objects::{SystemObjectDescription, SystemObjectUniqueIdentifier};
 
 mod builtin_table_updates;
 mod config;
@@ -3776,16 +3777,7 @@ impl Catalog {
             .get_system_items()
             .await?
             .into_iter()
-            .map(|mapping| {
-                (
-                    (
-                        mapping.schema_name,
-                        mapping.object_type,
-                        mapping.object_name,
-                    ),
-                    (mapping.id, mapping.fingerprint),
-                )
-            })
+            .map(|mapping| (mapping.description, mapping.unique_identifier))
             .collect();
         let AllocatedBuiltinSystemIds {
             all_builtins,
@@ -3798,11 +3790,11 @@ impl Catalog {
                     .collect(),
                 |builtin| {
                     persisted_builtin_ids
-                        .get(&(
-                            builtin.schema().to_string(),
-                            builtin.catalog_item_type(),
-                            builtin.name().to_string(),
-                        ))
+                        .get(&SystemObjectDescription {
+                            schema_name: builtin.schema().to_string(),
+                            object_type: builtin.catalog_item_type(),
+                            object_name: builtin.name().to_string(),
+                        })
                         .cloned()
                 },
             )
@@ -4001,7 +3993,10 @@ impl Catalog {
                         .get(log.name)
                         .cloned()
                         // We migrate introspection sources later so we can hardcode the fingerprint as ""
-                        .map(|id| (id, "".to_string()))
+                        .map(|id| SystemObjectUniqueIdentifier {
+                            id,
+                            fingerprint: "".to_string(),
+                        })
                 })
                 .await?;
 
@@ -4131,11 +4126,15 @@ impl Catalog {
         let new_system_id_mappings = new_builtins
             .iter()
             .map(|(builtin, id)| SystemObjectMapping {
-                schema_name: builtin.schema().to_string(),
-                object_type: builtin.catalog_item_type(),
-                object_name: builtin.name().to_string(),
-                id: *id,
-                fingerprint: builtin.fingerprint(),
+                description: SystemObjectDescription {
+                    schema_name: builtin.schema().to_string(),
+                    object_type: builtin.catalog_item_type(),
+                    object_name: builtin.name().to_string(),
+                },
+                unique_identifier: SystemObjectUniqueIdentifier {
+                    id: *id,
+                    fingerprint: builtin.fingerprint(),
+                },
             })
             .collect();
         catalog
@@ -4479,16 +4478,7 @@ impl Catalog {
             .get_system_items()
             .await?
             .into_iter()
-            .map(|mapping| {
-                (
-                    (
-                        mapping.schema_name,
-                        mapping.object_type,
-                        mapping.object_name,
-                    ),
-                    (mapping.id, mapping.fingerprint),
-                )
-            })
+            .map(|mapping| (mapping.description, mapping.unique_identifier))
             .collect();
 
         let AllocatedBuiltinSystemIds {
@@ -4498,11 +4488,11 @@ impl Catalog {
         } = self
             .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
-                    .get(&(
-                        typ.schema.to_string(),
-                        CatalogItemType::Type,
-                        typ.name.to_string(),
-                    ))
+                    .get(&SystemObjectDescription {
+                        schema_name: typ.schema.to_string(),
+                        object_type: CatalogItemType::Type,
+                        object_name: typ.name.to_string(),
+                    })
                     .cloned()
             })
             .await?;
@@ -4563,11 +4553,15 @@ impl Catalog {
         let new_system_id_mappings = new_builtins
             .iter()
             .map(|(typ, id)| SystemObjectMapping {
-                schema_name: typ.schema.to_string(),
-                object_type: CatalogItemType::Type,
-                object_name: typ.name.to_string(),
-                id: *id,
-                fingerprint: typ.fingerprint(),
+                description: SystemObjectDescription {
+                    schema_name: typ.schema.to_string(),
+                    object_type: CatalogItemType::Type,
+                    object_name: typ.name.to_string(),
+                },
+                unique_identifier: SystemObjectUniqueIdentifier {
+                    id: *id,
+                    fingerprint: typ.fingerprint(),
+                },
             })
             .collect();
         self.storage()
@@ -4720,11 +4714,15 @@ impl Catalog {
                 migration_metadata.migrated_system_object_mappings.insert(
                     id,
                     SystemObjectMapping {
-                        schema_name: schema_name.to_string(),
-                        object_type: entry.item_type(),
-                        object_name: entry.name.item.clone(),
-                        id: new_id,
-                        fingerprint: fingerprint.clone(),
+                        description: SystemObjectDescription {
+                            schema_name: schema_name.to_string(),
+                            object_type: entry.item_type(),
+                            object_name: entry.name.item.clone(),
+                        },
+                        unique_identifier: SystemObjectUniqueIdentifier {
+                            id: new_id,
+                            fingerprint: fingerprint.clone(),
+                        },
                     },
                 );
             }
@@ -5210,7 +5208,7 @@ impl Catalog {
     ) -> Result<AllocatedBuiltinSystemIds<T>, Error>
     where
         T: Copy + Fingerprint,
-        F: Fn(&T) -> Option<(GlobalId, String)>,
+        F: Fn(&T) -> Option<SystemObjectUniqueIdentifier>,
     {
         let new_builtin_amount = builtins
             .iter()
@@ -5233,7 +5231,10 @@ impl Catalog {
         let mut migrated_builtins = Vec::new();
         for builtin in &builtins {
             match builtin_lookup(builtin) {
-                Some((id, old_fingerprint)) => {
+                Some(SystemObjectUniqueIdentifier {
+                    id,
+                    fingerprint: old_fingerprint,
+                }) => {
                     all_builtins.push((*builtin, id));
                     let new_fingerprint = builtin.fingerprint();
                     if old_fingerprint != new_fingerprint {

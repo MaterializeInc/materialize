@@ -312,6 +312,19 @@ pub struct Item {
     pub privileges: Vec<MzAclItem>,
 }
 
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+pub struct SystemObjectDescription {
+    pub schema_name: String,
+    pub object_type: CatalogItemType,
+    pub object_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemObjectUniqueIdentifier {
+    pub id: GlobalId,
+    pub fingerprint: String,
+}
+
 /// Functions can share the same name as any other catalog item type
 /// within a given schema.
 /// For example, a function can have the same name as a type, e.g.
@@ -321,11 +334,8 @@ pub struct Item {
 /// to be unique.
 #[derive(Debug, Clone)]
 pub struct SystemObjectMapping {
-    pub schema_name: String,
-    pub object_type: CatalogItemType,
-    pub object_name: String,
-    pub id: GlobalId,
-    pub fingerprint: String,
+    pub description: SystemObjectDescription,
+    pub unique_identifier: SystemObjectUniqueIdentifier,
 }
 
 // Structs used internally to represent on disk-state.

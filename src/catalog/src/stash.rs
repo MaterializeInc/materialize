@@ -42,7 +42,8 @@ use crate::objects::{
     CommentValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, StorageUsageKey,
-    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
+    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
@@ -224,10 +225,6 @@ impl ReadOnlyDurableCatalogState for Connection {
         self.stash.is_initialized().await.err_into()
     }
 
-    fn is_read_only(&self) -> bool {
-        self.stash.is_readonly()
-    }
-
     fn epoch(&mut self) -> Option<NonZeroI64> {
         self.stash.epoch()
     }
@@ -320,11 +317,15 @@ impl ReadOnlyDurableCatalogState for Connection {
             .map(RustType::from_proto)
             .map_ok(
                 |(k, v): (GidMappingKey, GidMappingValue)| SystemObjectMapping {
-                    schema_name: k.schema_name,
-                    object_type: k.object_type,
-                    object_name: k.object_name,
-                    id: GlobalId::System(v.id),
-                    fingerprint: v.fingerprint,
+                    description: SystemObjectDescription {
+                        schema_name: k.schema_name,
+                        object_type: k.object_type,
+                        object_name: k.object_name,
+                    },
+                    unique_identifier: SystemObjectUniqueIdentifier {
+                        id: GlobalId::System(v.id),
+                        fingerprint: v.fingerprint,
+                    },
                 },
             )
             .collect::<Result<_, _>>()?;
@@ -499,6 +500,10 @@ impl ReadOnlyDurableCatalogState for Connection {
 
 #[async_trait]
 impl DurableCatalogState for Connection {
+    fn is_read_only(&self) -> bool {
+        self.stash.is_readonly()
+    }
+
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
     async fn transaction(&mut self) -> Result<Transaction, Error> {
         let (
@@ -768,20 +773,20 @@ impl DurableCatalogState for Connection {
         let mappings = mappings
             .into_iter()
             .map(|mapping| {
-                let id = if let GlobalId::System(id) = mapping.id {
+                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
                     id
                 } else {
                     panic!("non-system id provided")
                 };
                 (
                     GidMappingKey {
-                        schema_name: mapping.schema_name,
-                        object_type: mapping.object_type,
-                        object_name: mapping.object_name,
+                        schema_name: mapping.description.schema_name,
+                        object_type: mapping.description.object_type,
+                        object_name: mapping.description.object_name,
                     },
                     GidMappingValue {
                         id,
-                        fingerprint: mapping.fingerprint,
+                        fingerprint: mapping.unique_identifier.fingerprint,
                     },
                 )
             })

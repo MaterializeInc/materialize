@@ -198,9 +198,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// it will fail to open in read only mode.
     async fn open_read_only(&mut self) -> Result<(), Error>;*/
 
-    /// Returns true if the catalog is opened in read only mode, false otherwise.
-    fn is_read_only(&self) -> bool;
-
     /// Returns the epoch of the current durable catalog state. The epoch acts as
     /// a fencing token to prevent split brain issues across two
     /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
@@ -300,6 +297,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /*/// Opens the catalog in a writeable mode. Initializes the
     /// catalog, if it is uninitialized, and executes migrations.
     async fn open(&mut self) -> Result<(), Error>;*/
+
+    /// Returns true if the catalog is opened in read only mode, false otherwise.
+    fn is_read_only(&self) -> bool;
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, Error>;

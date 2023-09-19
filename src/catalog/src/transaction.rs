@@ -807,14 +807,14 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), Error> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
-                let id = if let GlobalId::System(id) = mapping.id {
+                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
                     id
                 } else {
                     panic!("non-system id provided")
                 };
                 Some(GidMappingValue {
                     id,
-                    fingerprint: mapping.fingerprint.clone(),
+                    fingerprint: mapping.unique_identifier.fingerprint.clone(),
                 })
             } else {
                 None
