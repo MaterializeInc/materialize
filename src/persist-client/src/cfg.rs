@@ -115,7 +115,7 @@ pub struct PersistConfig {
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// Configurations that can be dynamically updated.
-    pub(crate) dynamic: Arc<DynamicConfig>,
+    pub dynamic: Arc<DynamicConfig>,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
@@ -133,9 +133,6 @@ pub struct PersistConfig {
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
-    /// Length of time after a reader's last operation after which the reader
-    /// may be expired.
-    pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
     /// Timeout per connection attempt to Persist PubSub service.
@@ -179,6 +176,7 @@ impl PersistConfig {
                 ),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
+                reader_lease_duration: RwLock::new(Self::DEFAULT_READ_LEASE_DURATION),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(
                     30 * Self::DEFAULT_ROLLUP_THRESHOLD,
@@ -215,7 +213,6 @@ impl PersistConfig {
             compaction_yield_after_n_updates: 100_000,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: 60 * Duration::from_secs(60),
-            reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
             pubsub_connect_max_backoff: Duration::from_secs(60),
@@ -417,6 +414,7 @@ pub struct DynamicConfig {
     consensus_tcp_user_timeout: RwLock<Duration>,
     consensus_connection_pool_ttl: RwLock<Duration>,
     consensus_connection_pool_ttl_stagger: RwLock<Duration>,
+    reader_lease_duration: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
     stats_audit_percent: AtomicUsize,
@@ -596,6 +594,18 @@ impl DynamicConfig {
             .consensus_tcp_user_timeout
             .read()
             .expect("lock poisoned")
+    }
+
+    /// Length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub fn reader_lease_duration(&self) -> Duration {
+        *self.reader_lease_duration.read().expect("lock poisoned")
+    }
+
+    /// Set the length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub fn set_reader_lease_duration(&self, d: Duration) {
+        *self.reader_lease_duration.write().expect("lock poisoned") = d;
     }
 
     /// The maximum number of concurrent blob deletes during garbage collection.
