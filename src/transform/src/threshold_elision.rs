@@ -18,7 +18,7 @@
 use mz_expr::visit::{Visit, Visitor, VisitorMut};
 use mz_expr::MirRelationExpr;
 
-use crate::attribute::{DerivedAttributes, NonNegative, RequiredAttributes, SubtreeSize};
+use crate::attribute::{DerivedAttributes, DerivedAttributesBuilder, NonNegative, SubtreeSize};
 use crate::TransformCtx;
 
 /// Remove Threshold operators that have no effect.
@@ -45,14 +45,14 @@ impl crate::Transform for ThresholdElision {
 }
 
 struct ThresholdElisionAction {
-    deriver: DerivedAttributes,
+    deriver: DerivedAttributes<'static>,
 }
 
 impl Default for ThresholdElisionAction {
     fn default() -> Self {
-        let mut builder = RequiredAttributes::default();
-        builder.require::<NonNegative>();
-        builder.require::<SubtreeSize>();
+        let mut builder = DerivedAttributesBuilder::default();
+        builder.require(NonNegative::default());
+        builder.require(SubtreeSize::default());
         Self {
             deriver: builder.finish(),
         }

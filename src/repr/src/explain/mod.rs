@@ -38,7 +38,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, Indent};
+use mz_ore::str::{bracketed, separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -179,6 +179,8 @@ pub struct ExplainConfig {
     pub filter_pushdown: bool,
     /// Show cardinality information.
     pub cardinality: bool,
+    /// Show inferred column names.
+    pub column_names: bool,
 }
 
 impl Default for ExplainConfig {
@@ -197,6 +199,7 @@ impl Default for ExplainConfig {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
         }
     }
 }
@@ -209,6 +212,7 @@ impl ExplainConfig {
             || self.types
             || self.keys
             || self.cardinality
+            || self.column_names
     }
 }
 
@@ -235,6 +239,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             types: flags.remove("types"),
             filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
             cardinality: flags.remove("cardinality"),
+            column_names: flags.remove("column_names"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -517,6 +522,7 @@ pub struct Attributes {
     pub types: Option<String>,
     pub keys: Option<String>,
     pub cardinality: Option<String>,
+    pub column_names: Option<Vec<String>>,
 }
 
 impl fmt::Display for Attributes {
@@ -539,6 +545,10 @@ impl fmt::Display for Attributes {
         }
         if let Some(cardinality) = &self.cardinality {
             builder.field("cardinality", cardinality);
+        }
+        if let Some(column_names) = &self.column_names {
+            let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
+            builder.field("column_names", &column_names);
         }
         builder.finish()
     }
@@ -748,6 +758,7 @@ mod tests {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
         };
         let context = ExplainContext {
             env,
