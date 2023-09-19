@@ -779,7 +779,7 @@ impl Coordinator {
         self.cancel_pending_peeks(conn.conn_id());
         self.end_session_for_statement_logging(conn.uuid());
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        self.buffer_builtin_table_updates(vec![update]);
+        self.send_builtin_table_updates(vec![update]).await;
     }
 
     fn handle_append_webhook(

@@ -55,7 +55,7 @@ pub(crate) enum BuiltinTableUpdateSource {
     /// Update was triggered by some DDL.
     DDL,
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
-    Background(oneshot::Sender<()>),
+    Background(Option<oneshot::Sender<()>>),
 }
 
 /// A pending write transaction that will be committing during the next group commit.
@@ -95,6 +95,17 @@ impl PendingWriteTxn {
             PendingWriteTxn::System { source, .. } => match source {
                 BuiltinTableUpdateSource::DDL => true,
                 BuiltinTableUpdateSource::Background(_) => false,
+            },
+        }
+    }
+
+    /// Returns true if this transaction has an external request waiting on its completion.
+    fn has_waiter(&self) -> bool {
+        match self {
+            PendingWriteTxn::User { .. } => false,
+            PendingWriteTxn::System { source, .. } => match source {
+                BuiltinTableUpdateSource::Background(waiter) => waiter.is_some(),
+                BuiltinTableUpdateSource::DDL => false,
             },
         }
     }
@@ -161,7 +172,13 @@ impl Coordinator {
     pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
         let timestamp = self.peek_local_write_ts();
         let now = Timestamp::from((self.catalog().config().now)());
-        if timestamp > now {
+
+        // We want to allow system writes that have external requests waiting on them, through as
+        // quickly as possible.
+        let contains_waiting_system_write =
+            self.pending_writes.iter().any(|write| write.has_waiter());
+
+        if timestamp > now && !contains_waiting_system_write {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
@@ -294,7 +311,7 @@ impl Coordinator {
                             .push((update.row, update.diff));
                     }
                     // Once the write completes we notify any waiters.
-                    if let BuiltinTableUpdateSource::Background(tx) = source {
+                    if let BuiltinTableUpdateSource::Background(Some(tx)) = source {
                         notifies.push(tx);
                     }
                 }
@@ -418,7 +435,7 @@ impl Coordinator {
         let (tx, rx) = oneshot::channel();
         self.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Background(tx),
+            source: BuiltinTableUpdateSource::Background(Some(tx)),
         });
         self.trigger_group_commit();
         Box::pin(rx.map(|_| ()))
@@ -433,10 +450,9 @@ impl Coordinator {
     /// DO NOT call this for DDL which needs the system tables updated immediately.
     #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
     pub(crate) fn buffer_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let (tx, _rx) = oneshot::channel();
         self.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Background(tx),
+            source: BuiltinTableUpdateSource::Background(None),
         });
     }
 
