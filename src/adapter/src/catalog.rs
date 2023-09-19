@@ -4701,8 +4701,13 @@ impl Catalog {
 
             // Push drop commands.
             match entry.item() {
-                CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                    migration_metadata.previous_source_ids.push(id)
+                CatalogItem::Table(_) => migration_metadata.previous_source_ids.push(id),
+                CatalogItem::Source(source) => {
+                    if matches!(source.data_source, DataSourceDesc::Introspection(_)) {
+                        panic!("Cannot migrate storage managed collection: {entry:?}");
+                    } else {
+                        migration_metadata.previous_source_ids.push(id);
+                    }
                 }
                 CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
                 CatalogItem::MaterializedView(_) => {
