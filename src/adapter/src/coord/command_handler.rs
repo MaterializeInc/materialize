@@ -267,7 +267,7 @@ impl Coordinator {
 
                 // Note: Do NOT await the notify here, we pass this back to whatever requested the
                 // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.submit_builtin_table_updates(vec![update]);
+                let notify = self.send_builtin_table_updates_notify(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,

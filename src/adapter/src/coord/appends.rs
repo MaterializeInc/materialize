@@ -54,8 +54,11 @@ pub(crate) struct DeferredPlan {
 pub(crate) enum BuiltinTableUpdateSource {
     /// Update was triggered by some DDL.
     DDL,
+    /// Update was triggered by something we don't want to block on but should notify the caller
+    /// when it's complete.
+    Async(oneshot::Sender<()>),
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
-    Background(Option<oneshot::Sender<()>>),
+    Background,
 }
 
 /// A pending write transaction that will be committing during the next group commit.
@@ -94,7 +97,7 @@ impl PendingWriteTxn {
             PendingWriteTxn::User { .. } => false,
             PendingWriteTxn::System { source, .. } => match source {
                 BuiltinTableUpdateSource::DDL => true,
-                BuiltinTableUpdateSource::Background(_) => false,
+                BuiltinTableUpdateSource::Async(_) | BuiltinTableUpdateSource::Background => false,
             },
         }
     }
@@ -104,8 +107,8 @@ impl PendingWriteTxn {
         match self {
             PendingWriteTxn::User { .. } => false,
             PendingWriteTxn::System { source, .. } => match source {
-                BuiltinTableUpdateSource::Background(waiter) => waiter.is_some(),
-                BuiltinTableUpdateSource::DDL => false,
+                BuiltinTableUpdateSource::Async(_) => true,
+                BuiltinTableUpdateSource::Background | BuiltinTableUpdateSource::DDL => false,
             },
         }
     }
@@ -311,7 +314,7 @@ impl Coordinator {
                             .push((update.row, update.diff));
                     }
                     // Once the write completes we notify any waiters.
-                    if let BuiltinTableUpdateSource::Background(Some(tx)) = source {
+                    if let BuiltinTableUpdateSource::Async(tx) = source {
                         notifies.push(tx);
                     }
                 }
@@ -426,21 +429,6 @@ impl Coordinator {
         self.trigger_group_commit();
     }
 
-    /// Submit a write to be executed during the next group commit and triggers a group commit.
-    /// Returns a Future that resolves when the write has completed.
-    pub(crate) fn submit_builtin_table_updates<'a>(
-        &'a mut self,
-        updates: Vec<BuiltinTableUpdate>,
-    ) -> BoxFuture<'static, ()> {
-        let (tx, rx) = oneshot::channel();
-        self.pending_writes.push(PendingWriteTxn::System {
-            updates,
-            source: BuiltinTableUpdateSource::Background(Some(tx)),
-        });
-        self.trigger_group_commit();
-        Box::pin(rx.map(|_| ()))
-    }
-
     /// Submit a write to a system table be executed during the next group commit. This method does
     /// not trigger a group commit.
     ///
@@ -452,7 +440,7 @@ impl Coordinator {
     pub(crate) fn buffer_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         self.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Background(None),
+            source: BuiltinTableUpdateSource::Background,
         });
     }
 
@@ -473,6 +461,22 @@ impl Coordinator {
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.
         self.advance_timelines_interval.reset();
+    }
+
+    /// Submits a write to be executed during the next group commit and triggers a group commit.
+    ///
+    /// Returns a Future that resolves when the write has completed.
+    pub(crate) fn send_builtin_table_updates_notify<'a>(
+        &'a mut self,
+        updates: Vec<BuiltinTableUpdate>,
+    ) -> BoxFuture<'static, ()> {
+        let (tx, rx) = oneshot::channel();
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Async(tx),
+        });
+        self.trigger_group_commit();
+        Box::pin(rx.map(|_| ()))
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting
