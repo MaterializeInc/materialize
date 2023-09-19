@@ -61,7 +61,7 @@ impl Coordinator {
             }
         }
         for (gid, _) in &self.compute_read_capabilities {
-            if self.catalog().try_get_entry(gid).is_none() {
+            if !gid.is_transient() && self.catalog().try_get_entry(gid).is_none() {
                 read_capabilities_inconsistencies
                     .push(ReadCapabilitiesInconsistency::Compute(gid.clone()));
             }
