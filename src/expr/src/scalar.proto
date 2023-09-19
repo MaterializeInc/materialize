@@ -126,7 +126,8 @@ message ProtoUnaryFunc {
         mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
         repeated ProtoMirScalarExpr cast_exprs = 2;
     }
-    reserved 5, 6, 15, 104, 111, 115;
+    reserved 5, 6, 15, 104, 111, 115, 212;
+    // max field number
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
@@ -344,7 +345,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty exp_numeric = 209;
         google.protobuf.Empty sleep = 210;
         google.protobuf.Empty panic = 211;
-        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 212;
+        mz_repr.adt.numeric.ProtoNumericMaxScale adjust_numeric_scale = 314;
         google.protobuf.Empty pg_column_size = 213;
         google.protobuf.Empty mz_row_size = 214;
         google.protobuf.Empty mz_type_name = 215;

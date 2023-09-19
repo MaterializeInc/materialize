@@ -4586,7 +4586,7 @@ derive_unary!(
     ExpNumeric,
     Sleep,
     Panic,
-    RescaleNumeric,
+    AdjustNumericScale,
     PgColumnSize,
     MzRowSize,
     MzTypeName,
@@ -5000,7 +5000,7 @@ impl Arbitrary for UnaryFunc {
             ExpNumeric::arbitrary().prop_map_into().boxed(),
             Sleep::arbitrary().prop_map_into().boxed(),
             Panic::arbitrary().prop_map_into().boxed(),
-            RescaleNumeric::arbitrary().prop_map_into().boxed(),
+            AdjustNumericScale::arbitrary().prop_map_into().boxed(),
             PgColumnSize::arbitrary().prop_map_into().boxed(),
             MzRowSize::arbitrary().prop_map_into().boxed(),
             MzTypeName::arbitrary().prop_map_into().boxed(),
@@ -5375,7 +5375,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::ExpNumeric(_) => ExpNumeric(()),
             UnaryFunc::Sleep(_) => Sleep(()),
             UnaryFunc::Panic(_) => Panic(()),
-            UnaryFunc::RescaleNumeric(func) => RescaleNumeric(func.0.into_proto()),
+            UnaryFunc::AdjustNumericScale(func) => AdjustNumericScale(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
@@ -5834,8 +5834,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 ExpNumeric(()) => Ok(impls::ExpNumeric.into()),
                 Sleep(()) => Ok(impls::Sleep.into()),
                 Panic(()) => Ok(impls::Panic.into()),
-                RescaleNumeric(max_scale) => {
-                    Ok(impls::RescaleNumeric(max_scale.into_rust()?).into())
+                AdjustNumericScale(max_scale) => {
+                    Ok(impls::AdjustNumericScale(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
