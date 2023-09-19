@@ -134,6 +134,10 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
         &self,
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        // If the from and to precisions are same, then this is effectively a no-op.
+        // Adding a soft_assert to flag such instances.
+        mz_ore::soft_assert!(self.to != self.from);
+
         let updated = a.round_to_precision(self.to)?;
         Ok(updated)
     }
@@ -143,6 +147,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
     }
 
     fn preserves_uniqueness(&self) -> bool {
+        // If the from and to precisions are same, then this is effectively a no-op.
+        // Adding a soft_assert to flag such instances.
         mz_ore::soft_assert!(self.to != self.from);
 
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
@@ -232,6 +238,10 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
         &self,
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        // If the from and to precisions are same, then this is effectively a no-op.
+        // Adding a soft_assert to flag such instances.
+        mz_ore::soft_assert!(self.to != self.from);
+
         let updated = a.round_to_precision(self.to)?;
         Ok(updated)
     }
@@ -241,6 +251,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
     }
 
     fn preserves_uniqueness(&self) -> bool {
+        // If the from and to precisions are same, then this is effectively a no-op.
+        // Adding a soft_assert to flag such instances.
         mz_ore::soft_assert!(self.to != self.from);
 
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
