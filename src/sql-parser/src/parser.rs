@@ -564,6 +564,15 @@ impl<'a> Parser<'a> {
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => Ok(Expr::Value(self.parse_interval_value()?)),
+            // having timestamps separately here because errors are swallowed by the maybe! block
+            Token::Keyword(TIMESTAMP) | Token::Keyword(TIMESTAMPTZ) => {
+                self.prev_token();
+                let data_type = self.parse_data_type()?;
+                Ok(Expr::Cast {
+                    expr: Box::new(Expr::Value(Value::String(self.parse_literal_string()?))),
+                    data_type,
+                })
+            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
@@ -5155,14 +5164,28 @@ impl<'a> Parser<'a> {
                     }
                 }
                 TIMESTAMP => {
+                    let typ_mod = self.parse_timestamp_precision()?;
                     if self.parse_keyword(WITH) {
                         self.expect_keywords(&[TIME, ZONE])?;
-                        other("timestamptz")
+                        RawDataType::Other {
+                            name: RawItemName::Name(UnresolvedItemName::unqualified("timestamptz")),
+                            typ_mod,
+                        }
                     } else {
                         if self.parse_keyword(WITHOUT) {
                             self.expect_keywords(&[TIME, ZONE])?;
                         }
-                        other("timestamp")
+                        RawDataType::Other {
+                            name: RawItemName::Name(UnresolvedItemName::unqualified("timestamp")),
+                            typ_mod,
+                        }
+                    }
+                }
+                TIMESTAMPTZ => {
+                    let typ_mod = self.parse_timestamp_precision()?;
+                    RawDataType::Other {
+                        name: RawItemName::Name(UnresolvedItemName::unqualified("timestamptz")),
+                        typ_mod,
                     }
                 }
 
@@ -5220,6 +5243,22 @@ impl<'a> Parser<'a> {
             let typ_mod = self.parse_comma_separated(Parser::parse_literal_int)?;
             self.expect_token(&Token::RParen)?;
             Ok(typ_mod)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    // parses the precision in timestamp(<precision>) and timestamptz(<precision>)
+    fn parse_timestamp_precision(&mut self) -> Result<Vec<i64>, ParserError> {
+        if self.consume_token(&Token::LParen) {
+            let typ_mod = self.parse_literal_uint()?.try_into().map_err(|_| {
+                self.error(
+                    self.index,
+                    "number too large to fit in target type".to_string(),
+                )
+            })?;
+            self.expect_token(&Token::RParen)?;
+            Ok(vec![typ_mod])
         } else {
             Ok(vec![])
         }

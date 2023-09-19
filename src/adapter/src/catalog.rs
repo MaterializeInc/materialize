@@ -11195,8 +11195,8 @@ mod tests {
                         | ScalarType::Numeric { .. }
                         | ScalarType::Date
                         | ScalarType::Time
-                        | ScalarType::Timestamp
-                        | ScalarType::TimestampTz
+                        | ScalarType::Timestamp { .. }
+                        | ScalarType::TimestampTz { .. }
                         | ScalarType::Interval
                         | ScalarType::PgLegacyChar
                         | ScalarType::Bytes

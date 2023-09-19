@@ -753,9 +753,9 @@ query T multiline
 EXPLAIN WITH(types, no_fast_path) SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
 ----
 Explained Query:
-  Project (#2, #3) // { types: "(timestamp?, timestamp)" }
-    Map ((#0 - 00:00:01), (#1 - 00:00:01)) // { types: "(timestamp?, timestamp, timestamp?, timestamp)" }
-      ReadStorage materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
+  Project (#2, #3) // { types: "(timestamp without time zone?, timestamp without time zone)" }
+    Map ((#0 - 00:00:01), (#1 - 00:00:01)) // { types: "(timestamp without time zone?, timestamp without time zone, timestamp without time zone?, timestamp without time zone)" }
+      ReadStorage materialize.public.ts_table // { types: "(timestamp without time zone?, timestamp without time zone)" }
 
 EOF
 
@@ -764,8 +764,8 @@ EXPLAIN WITH(types, no_fast_path) SELECT col_null - col_not_null, col_not_null -
 ----
 Explained Query:
   Project (#2, #3) // { types: "(interval?, interval?)" }
-    Map ((#0 - #1), (#1 - #0)) // { types: "(timestamp?, timestamp, interval?, interval?)" }
-      ReadStorage materialize.public.ts_table // { types: "(timestamp?, timestamp)" }
+    Map ((#0 - #1), (#1 - #0)) // { types: "(timestamp without time zone?, timestamp without time zone, interval?, interval?)" }
+      ReadStorage materialize.public.ts_table // { types: "(timestamp without time zone?, timestamp without time zone)" }
 
 EOF
 

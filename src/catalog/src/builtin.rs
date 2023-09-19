@@ -1956,7 +1956,10 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("reason", ScalarType::String.nullable(true))
-        .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
+        .with_column(
+            "updated_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
     is_retained_metrics_object: true,
 });
 
@@ -1982,7 +1985,10 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| Buil
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
-        .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
+        .with_column(
+            "last_heartbeat",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 
@@ -1995,7 +2001,10 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("details", ScalarType::Jsonb.nullable(false))
         .with_column("user", ScalarType::String.nullable(true))
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 
@@ -2100,7 +2109,7 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         .with_column("size_bytes", ScalarType::UInt64.nullable(false))
         .with_column(
             "collection_timestamp",
-            ScalarType::TimestampTz.nullable(false),
+            ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
 });
@@ -2186,7 +2195,10 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("session_id", ScalarType::UInt32.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("created_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "created_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
         .with_column(
             "referenced_object_ids",
             ScalarType::List {
@@ -2204,7 +2216,10 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
-        .with_column("connected_at", ScalarType::TimestampTz.nullable(false)),
+        .with_column(
+            "connected_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 
