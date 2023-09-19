@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -125,6 +124,7 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
+        let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
             match op {
@@ -199,6 +199,13 @@ impl Coordinator {
                 }
                 catalog::Op::DropObject(ObjectId::Cluster(id)) => {
                     clusters_to_drop.push(*id);
+                    log_indexes_to_drop.extend(
+                        self.catalog()
+                            .get_cluster(*id)
+                            .log_indexes
+                            .values()
+                            .cloned(),
+                    );
                 }
                 catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
                     // Drop the cluster replica itself.
@@ -440,19 +447,14 @@ impl Coordinator {
                     self.drop_replica(cluster_id, replica_id).await;
                 }
             }
+            if !log_indexes_to_drop.is_empty() {
+                for id in log_indexes_to_drop {
+                    self.drop_compute_read_policy(&id);
+                }
+            }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
-                    for id in self
-                        .catalog()
-                        .get_cluster(cluster_id)
-                        .log_indexes
-                        .values()
-                        .cloned()
-                        .collect_vec()
-                    {
-                        self.drop_compute_read_policy(&id);
-                    }
                 }
             }
 
