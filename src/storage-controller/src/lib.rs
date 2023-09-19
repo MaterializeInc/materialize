@@ -256,9 +256,12 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
     }
 }
 
-/// Controller state maintained for each storage instance.
+/// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+{
+    /// The build information for this process.
+    build_info: &'static BuildInfo,
     /// A function that returns the current time.
     now: NowFn,
     /// The fencing token for this instance of the controller.
@@ -313,17 +316,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
     config: StorageParameters,
-}
-
-/// A storage controller for a storage instance.
-#[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
-{
-    /// The build information for this process.
-    build_info: &'static BuildInfo,
-    /// The state for the storage controller.
-    /// TODO(benesch): why is this a separate struct?
-    state: StorageControllerState<T>,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -341,109 +333,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Frontiers that have been recorded in the `Frontiers` collection, kept to be able to retract
     /// old rows.
     recorded_frontiers: BTreeMap<(GlobalId, Option<ReplicaId>), Antichain<T>>,
-}
-
-impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
-    StorageControllerState<T>
-{
-    pub(crate) async fn new(
-        postgres_url: String,
-        tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-        now: NowFn,
-        factory: &StashFactory,
-        envd_epoch: NonZeroI64,
-    ) -> Self {
-        let tls = mz_postgres_util::make_tls(
-            &tokio_postgres::config::Config::from_str(&postgres_url)
-                .expect("invalid postgres url for storage stash"),
-        )
-        .expect("could not make storage TLS connection");
-        let mut stash = factory
-            .open(postgres_url, None, tls)
-            .await
-            .expect("could not connect to postgres storage stash");
-
-        // Ensure all collections are initialized, otherwise they cannot
-        // be read.
-        async fn maybe_get_init_batch<'tx, K, V>(
-            tx: &'tx mz_stash::Transaction<'tx>,
-            typed: &TypedCollection<K, V>,
-        ) -> Option<AppendBatch>
-        where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
-        {
-            let collection = tx
-                .collection::<K, V>(typed.name())
-                .await
-                .expect("named collection must exist");
-            if !collection
-                .is_initialized(tx)
-                .await
-                .expect("collection known to exist")
-            {
-                Some(
-                    collection
-                        .make_batch_tx(tx)
-                        .await
-                        .expect("stash operation must succeed"),
-                )
-            } else {
-                None
-            }
-        }
-
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    // Query all collections in parallel. Makes for triplicated
-                    // names, but runs quick.
-                    let (metadata_collection, metadata_export, shard_finalization) = futures::join!(
-                        maybe_get_init_batch(&tx, &METADATA_COLLECTION),
-                        maybe_get_init_batch(&tx, &METADATA_EXPORT),
-                        maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
-                    );
-                    let batches: Vec<AppendBatch> =
-                        [metadata_collection, metadata_export, shard_finalization]
-                            .into_iter()
-                            .filter_map(|b| b)
-                            .collect();
-
-                    tx.append(batches).await
-                })
-            })
-            .await
-            .expect("stash operation must succeed");
-
-        let persist_table_worker = persist_handles::PersistTableWriteWorker::new(tx.clone());
-        let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new(tx);
-        let collection_manager_write_handle = persist_monotonic_worker.clone();
-
-        let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
-
-        Self {
-            collections: BTreeMap::default(),
-            exports: BTreeMap::default(),
-            stash,
-            persist_table_worker,
-            persist_monotonic_worker,
-            persist_read_handles: persist_handles::PersistReadWorker::new(),
-            stashed_response: None,
-            pending_compaction_commands: vec![],
-            collection_manager,
-            introspection_ids: BTreeMap::new(),
-            introspection_tokens: BTreeMap::new(),
-            now,
-            envd_epoch,
-            source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
-            sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
-            clients: BTreeMap::new(),
-            replicas: BTreeMap::new(),
-            initialized: false,
-            config: StorageParameters::default(),
-        }
-    }
 }
 
 #[async_trait(?Send)]
@@ -464,8 +353,8 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
-        self.state.initialized = true;
-        for client in self.state.clients.values_mut() {
+        self.initialized = true;
+        for client in self.clients.values_mut() {
             client.send(StorageCommand::InitializationComplete);
         }
     }
@@ -473,15 +362,14 @@ where
     fn update_configuration(&mut self, config_params: StorageParameters) {
         config_params.persist.apply(self.persist.cfg());
 
-        for client in self.state.clients.values_mut() {
+        for client in self.clients.values_mut() {
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
         }
-        self.state.config.update(config_params);
+        self.config.update(config_params);
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
-        self.state
-            .collections
+        self.collections
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
@@ -490,8 +378,7 @@ where
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError> {
-        self.state
-            .collections
+        self.collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
@@ -499,29 +386,27 @@ where
     fn collections(
         &self,
     ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_> {
-        Box::new(self.state.collections.iter())
+        Box::new(self.collections.iter())
     }
 
     fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool) {
         let mut client = RehydratingStorageClient::new(
             self.build_info,
             self.metrics.for_instance(id),
-            self.state.envd_epoch,
-            self.state.config.grpc_client.clone(),
+            self.envd_epoch,
+            self.config.grpc_client.clone(),
             variable_length_row_encoding,
         );
-        if self.state.initialized {
+        if self.initialized {
             client.send(StorageCommand::InitializationComplete);
         }
-        client.send(StorageCommand::UpdateConfiguration(
-            self.state.config.clone(),
-        ));
-        let old_client = self.state.clients.insert(id, client);
+        client.send(StorageCommand::UpdateConfiguration(self.config.clone()));
+        let old_client = self.clients.insert(id, client);
         assert!(old_client.is_none(), "storage instance {id} already exists");
     }
 
     fn drop_instance(&mut self, id: StorageInstanceId) {
-        let client = self.state.clients.remove(&id);
+        let client = self.clients.remove(&id);
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
@@ -532,24 +417,22 @@ where
         location: ClusterReplicaLocation,
     ) {
         let client = self
-            .state
             .clients
             .get_mut(&instance_id)
             .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
         client.connect(location);
 
-        self.state.replicas.insert(instance_id, replica_id);
+        self.replicas.insert(instance_id, replica_id);
     }
 
     fn drop_replica(&mut self, instance_id: StorageInstanceId, _replica_id: ReplicaId) {
         let client = self
-            .state
             .clients
             .get_mut(&instance_id)
             .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
         client.reset();
 
-        self.state.replicas.remove(&instance_id);
+        self.replicas.remove(&instance_id);
     }
 
     // Add new migrations below and precede them with a short summary of the
@@ -569,7 +452,7 @@ where
         _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Collection migrations look something like this:
-        // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+        // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.stash).await?;
         // do_migration(&mut durable_metadata)?;
         // self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
         //     .await;
@@ -621,7 +504,7 @@ where
         // the time spent waiting for stash.
         METADATA_COLLECTION
             .insert_without_overwrite(
-                &mut self.state.stash,
+                &mut self.stash,
                 entries
                     .into_iter()
                     .map(|(key, val)| (key.into_proto(), val.into_proto())),
@@ -630,7 +513,7 @@ where
 
         let mut durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> =
             METADATA_COLLECTION
-                .peek_one(&mut self.state.stash)
+                .peek_one(&mut self.stash)
                 .await?
                 .into_iter()
                 .map(RustType::from_proto)
@@ -742,7 +625,7 @@ where
         {
             // We hold this lock for a very short amount of time, just doing some hashmap inserts
             // and unbounded channel sends.
-            let mut source_statistics = self.state.source_statistics.lock().expect("poisoned");
+            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for (id, description, write, since_handle, metadata) in to_register {
                 let data_shard_since = since_handle.since().clone();
 
@@ -757,11 +640,11 @@ where
                 match description.data_source {
                     DataSource::Introspection(_) | DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                        self.state.persist_monotonic_worker.register(id, write);
+                        self.persist_monotonic_worker.register(id, write);
                     }
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
-                        self.state.persist_table_worker.register(id, write);
+                        self.persist_table_worker.register(id, write);
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Progress
@@ -770,9 +653,9 @@ where
                         debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     }
                 }
-                self.state.persist_read_handles.register(id, since_handle);
+                self.persist_read_handles.register(id, since_handle);
 
-                self.state.collections.insert(id, collection_state);
+                self.collections.insert(id, collection_state);
 
                 if let DataSource::Ingestion(i) = &description.data_source {
                     source_statistics.insert(id, statistics::StatsInitState(BTreeMap::new()));
@@ -841,14 +724,13 @@ where
                     let description = self.enrich_ingestion(id, ingestion)?;
 
                     // Fetch the client for this ingestion's instance.
-                    let client = self
-                        .state
-                        .clients
-                        .get_mut(&description.instance_id)
-                        .ok_or_else(|| StorageError::IngestionInstanceMissing {
-                            storage_instance_id: description.instance_id,
-                            ingestion_id: id,
-                        })?;
+                    let client =
+                        self.clients
+                            .get_mut(&description.instance_id)
+                            .ok_or_else(|| StorageError::IngestionInstanceMissing {
+                                storage_instance_id: description.instance_id,
+                                ingestion_id: id,
+                            })?;
                     let augmented_ingestion = RunIngestionCommand {
                         id,
                         description,
@@ -858,13 +740,13 @@ where
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
-                    let prev = self.state.introspection_ids.insert(i, id);
+                    let prev = self.introspection_ids.insert(i, id);
                     assert!(
                         prev.is_none(),
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.state.collection_manager.register_collection(id);
+                    self.collection_manager.register_collection(id);
 
                     match i {
                         IntrospectionType::ShardMapping => {
@@ -881,13 +763,13 @@ where
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
-                                self.state.collection_manager.clone(),
-                                Arc::clone(&self.state.source_statistics),
+                                self.collection_manager.clone(),
+                                Arc::clone(&self.source_statistics),
                             );
 
                             // Make sure this is dropped when the controller is
                             // dropped, so that the internal task will stop.
-                            self.state.introspection_tokens.insert(id, scraper_token);
+                            self.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::StorageSinkStatistics => {
                             // Set the collection to empty.
@@ -896,13 +778,13 @@ where
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
-                                self.state.collection_manager.clone(),
-                                Arc::clone(&self.state.sink_statistics),
+                                self.collection_manager.clone(),
+                                Arc::clone(&self.sink_statistics),
                             );
 
                             // Make sure this is dropped when the controller is
                             // dropped, so that the internal task will stop.
-                            self.state.introspection_tokens.insert(id, scraper_token);
+                            self.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory => {
                             self.partially_truncate_status_history(
@@ -929,7 +811,7 @@ where
                 }
                 DataSource::Webhook => {
                     // Register the collection so our manager knows about it.
-                    self.state.collection_manager.register_collection(id);
+                    self.collection_manager.register_collection(id);
                 }
                 DataSource::Progress | DataSource::Other(_) => {}
             }
@@ -988,7 +870,6 @@ where
 
         // Fetch the client for this ingestion's instance.
         let client = self
-            .state
             .clients
             .get_mut(&description.instance_id)
             .expect("verified exists");
@@ -1003,8 +884,7 @@ where
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError> {
-        self.state
-            .exports
+        self.exports
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
@@ -1013,8 +893,7 @@ where
         &mut self,
         id: GlobalId,
     ) -> Result<&mut ExportState<Self::Timestamp>, StorageError> {
-        self.state
-            .exports
+        self.exports
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
     }
@@ -1138,7 +1017,7 @@ where
 
             let value = MetadataExportFetcher::get_stash_collection()
                 .insert_key_without_overwrite(
-                    &mut self.state.stash,
+                    &mut self.stash,
                     id.into_proto(),
                     DurableExportMetadata {
                         initial_as_of: description.sink.as_of.clone(),
@@ -1159,7 +1038,7 @@ where
                 "create_exports: creating sink"
             );
 
-            self.state.exports.insert(
+            self.exports.insert(
                 id,
                 ExportState::new(
                     description.clone(),
@@ -1194,7 +1073,6 @@ where
 
             // Fetch the client for this exports's cluster.
             let client = self
-                .state
                 .clients
                 .get_mut(&description.instance_id)
                 .ok_or_else(|| StorageError::ExportInstanceMissing {
@@ -1202,8 +1080,7 @@ where
                     export_id: id,
                 })?;
 
-            self.state
-                .sink_statistics
+            self.sink_statistics
                 .lock()
                 .expect("poisoned")
                 .insert(id, statistics::StatsInitState(BTreeMap::new()));
@@ -1267,11 +1144,11 @@ where
             }
         }
 
-        Ok(self.state.persist_table_worker.append(commands))
+        Ok(self.persist_table_worker.append(commands))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
-        self.state.collection_manager.monotonic_appender(id)
+        self.collection_manager.monotonic_appender(id)
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
@@ -1306,10 +1183,7 @@ where
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
-        self.state
-            .persist_read_handles
-            .snapshot_stats(id, as_of)
-            .await
+        self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1507,22 +1381,19 @@ where
             }
         }
 
-        self.state
-            .persist_read_handles
+        self.persist_read_handles
             .downgrade(persist_compaction_commands);
 
         for (id, (frontier, cluster_id)) in worker_compaction_commands {
             // Acquiring a client for a storage instance requires await, so we
             // instead stash these for later and process when we can.
-            self.state
-                .pending_compaction_commands
+            self.pending_compaction_commands
                 .push((id, frontier, cluster_id));
         }
     }
 
     async fn ready(&mut self) {
         let mut clients = self
-            .state
             .clients
             .values_mut()
             .map(|client| client.response_stream())
@@ -1539,11 +1410,11 @@ where
             Some((_id, m)) = clients.next() => m,
         };
 
-        self.state.stashed_response = Some(msg);
+        self.stashed_response = Some(msg);
     }
 
     async fn process(&mut self) -> Result<(), anyhow::Error> {
-        match self.state.stashed_response.take() {
+        match self.stashed_response.take() {
             None => (),
             Some(StorageResponse::FrontierUppers(updates)) => {
                 self.update_write_frontiers(&updates);
@@ -1562,10 +1433,10 @@ where
                         //
                         // At most one of these workers will have the handle,
                         // but it's safe to drop from both.
-                        self.state.persist_table_worker.drop_handle(*id);
-                        self.state.persist_monotonic_worker.drop_handle(*id);
+                        self.persist_table_worker.drop_handle(*id);
+                        self.persist_monotonic_worker.drop_handle(*id);
 
-                        self.state.collections.remove(id).map(
+                        self.collections.remove(id).map(
                             |CollectionState {
                                  collection_metadata: CollectionMetadata { data_shard, .. },
                                  ..
@@ -1581,7 +1452,7 @@ where
 
                 METADATA_COLLECTION
                     .delete_keys(
-                        &mut self.state.stash,
+                        &mut self.stash,
                         ids.into_iter()
                             .map(|id| RustType::into_proto(&id))
                             .collect(),
@@ -1589,7 +1460,7 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                if self.state.config.finalize_shards {
+                if self.config.finalize_shards {
                     info!("triggering shard finalization due to dropped storage object");
                     self.finalize_shards().await;
                 } else {
@@ -1605,7 +1476,7 @@ where
                 // We don't overwrite removed objects, as we may have received a late
                 // `StatisticsUpdates` while we were shutting down the storage object.
                 {
-                    let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
+                    let mut shared_stats = self.source_statistics.lock().expect("poisoned");
                     for stat in source_stats {
                         statistics::StatsInitState::set_if_not_removed(
                             shared_stats.get_mut(&stat.id),
@@ -1616,7 +1487,7 @@ where
                 }
 
                 {
-                    let mut shared_stats = self.state.sink_statistics.lock().expect("poisoned");
+                    let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
                     for stat in sink_stats {
                         statistics::StatsInitState::set_if_not_removed(
                             shared_stats.get_mut(&stat.id),
@@ -1640,17 +1511,17 @@ where
 
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
-        for (id, frontier, cluster_id) in self.state.pending_compaction_commands.drain(..) {
+        for (id, frontier, cluster_id) in self.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
             // TODO(aljoscha): What's up with this TODO?
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
-            let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
+            let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
 
             if cluster_id.is_some() && frontier.is_empty() {
-                if self.state.collections.get(&id).is_some() {
+                if self.collections.get(&id).is_some() {
                     pending_source_drops.push(id);
-                } else if self.state.exports.get(&id).is_some() {
+                } else if self.exports.get(&id).is_some() {
                     pending_sink_drops.push(id);
                 } else {
                     panic!("Reference to absent collection {id}");
@@ -1658,14 +1529,11 @@ where
             }
 
             // Check if the collection is for a Webhook source, unregister if so.
-            let collection = self.state.collections.get(&id);
+            let collection = self.collections.get(&id);
             if let Some(CollectionState { description, .. }) = collection {
                 if description.data_source == DataSource::Webhook && frontier.is_empty() {
                     // Unregister our collection from the manager so writes should no longer occur.
-                    self.state
-                        .collection_manager
-                        .unregsiter_collection(id)
-                        .await;
+                    self.collection_manager.unregsiter_collection(id).await;
 
                     pending_source_drops.push(id);
                     // Normally `clusterd` will emit this StorageResponse when it knows we can
@@ -1680,7 +1548,7 @@ where
             // Sources can have subsources, which don't have associated clusters, which
             // is why this operates differently than sinks.
             if frontier.is_empty() {
-                if self.state.collections.get(&id).is_some() {
+                if self.collections.get(&id).is_some() {
                     source_statistics_to_drop.push(id);
                 }
             }
@@ -1706,11 +1574,10 @@ where
         // The locks are held for a short time, only while we do some hash map removals.
 
         let source_status_history_id =
-            self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+            self.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
-            let status_row =
-                healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
+            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.now)(), None);
             updates.push((status_row, 1));
         }
 
@@ -1718,21 +1585,20 @@ where
             .await;
 
         {
-            let mut source_statistics = self.state.source_statistics.lock().expect("poisoned");
+            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
                 source_statistics.remove(&id);
             }
         }
 
         // Record the drop status for all pending sink drops.
-        let sink_status_history_id =
-            self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
+        let sink_status_history_id = self.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
         {
-            let mut sink_statistics = self.state.sink_statistics.lock().expect("poisoned");
+            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
                 let status_row =
-                    healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
+                    healthcheck::pack_status_row(id, "dropped", None, (self.now)(), None);
                 updates.push((status_row, 1));
 
                 sink_statistics.remove(&id);
@@ -1783,16 +1649,16 @@ where
             if !external_ids.contains(&object_id) {
                 let replica_id = collection
                     .cluster_id()
-                    .and_then(|c| self.state.replicas.get(&c))
+                    .and_then(|c| self.replicas.get(&c))
                     .copied();
                 let frontier = collection.write_frontier.clone();
                 frontiers.insert((object_id, replica_id), frontier);
             }
         }
-        for (object_id, export) in &self.state.exports {
+        for (object_id, export) in &self.exports {
             if !external_ids.contains(object_id) {
                 let cluster_id = export.cluster_id();
-                let replica_id = self.state.replicas.get(&cluster_id).copied();
+                let replica_id = self.replicas.get(&cluster_id).copied();
                 let frontier = export.write_frontier.clone();
                 frontiers.insert((*object_id, replica_id), frontier);
             }
@@ -1831,7 +1697,7 @@ where
         }
 
         self.append_to_managed_collection(
-            self.state.introspection_ids[&IntrospectionType::Frontiers],
+            self.introspection_ids[&IntrospectionType::Frontiers],
             updates,
         )
         .await;
@@ -1842,9 +1708,9 @@ where
         prepared_statement_history_updates: Vec<Row>,
         session_history_updates: Vec<Row>,
     ) {
-        let mseh_id = self.state.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.state.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.state.introspection_ids[&IntrospectionType::SessionHistory];
+        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
+        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
+        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
 
         self.append_to_managed_collection(mseh_id, statement_execution_history_updates)
             .await;
@@ -1919,22 +1785,103 @@ where
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
-        postgres_factory: &StashFactory,
+        factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
+        let tls = mz_postgres_util::make_tls(
+            &tokio_postgres::config::Config::from_str(&postgres_url)
+                .expect("invalid postgres url for storage stash"),
+        )
+        .expect("could not make storage TLS connection");
+        let mut stash = factory
+            .open(postgres_url, None, tls)
+            .await
+            .expect("could not connect to postgres storage stash");
+
+        // Ensure all collections are initialized, otherwise they cannot
+        // be read.
+        async fn maybe_get_init_batch<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
+            typed: &TypedCollection<K, V>,
+        ) -> Option<AppendBatch>
+        where
+            K: mz_stash::Data,
+            V: mz_stash::Data,
+        {
+            let collection = tx
+                .collection::<K, V>(typed.name())
+                .await
+                .expect("named collection must exist");
+            if !collection
+                .is_initialized(tx)
+                .await
+                .expect("collection known to exist")
+            {
+                Some(
+                    collection
+                        .make_batch_tx(tx)
+                        .await
+                        .expect("stash operation must succeed"),
+                )
+            } else {
+                None
+            }
+        }
+
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    // Query all collections in parallel. Makes for triplicated
+                    // names, but runs quick.
+                    let (metadata_collection, metadata_export, shard_finalization) = futures::join!(
+                        maybe_get_init_batch(&tx, &METADATA_COLLECTION),
+                        maybe_get_init_batch(&tx, &METADATA_EXPORT),
+                        maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
+                    );
+                    let batches: Vec<AppendBatch> =
+                        [metadata_collection, metadata_export, shard_finalization]
+                            .into_iter()
+                            .filter_map(|b| b)
+                            .collect();
+
+                    tx.append(batches).await
+                })
+            })
+            .await
+            .expect("stash operation must succeed");
+
+        let persist_table_worker = persist_handles::PersistTableWriteWorker::new(tx.clone());
+        let persist_monotonic_worker =
+            persist_handles::PersistMonotonicWriteWorker::new(tx.clone());
+        let collection_manager_write_handle = persist_monotonic_worker.clone();
+
+        let collection_manager =
+            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
+
         Self {
             build_info,
-            state: StorageControllerState::new(
-                postgres_url,
-                tx.clone(),
-                now,
-                postgres_factory,
-                envd_epoch,
-            )
-            .await,
+            collections: BTreeMap::default(),
+            exports: BTreeMap::default(),
+            stash,
+            persist_table_worker,
+            persist_monotonic_worker,
+            persist_read_handles: persist_handles::PersistReadWorker::new(),
+            stashed_response: None,
+            pending_compaction_commands: vec![],
+            collection_manager,
+            introspection_ids: BTreeMap::new(),
+            introspection_tokens: BTreeMap::new(),
+            now,
+            envd_epoch,
+            source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            clients: BTreeMap::new(),
+            replicas: BTreeMap::new(),
+            initialized: false,
+            config: StorageParameters::default(),
             internal_response_sender: tx,
             internal_response_queue: rx,
             persist_location,
@@ -1965,8 +1912,7 @@ where
 
     /// Iterate over collections that have not been dropped.
     fn active_collections(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
-        self.state
-            .collections
+        self.collections
             .iter()
             .filter(|(_id, c)| !c.is_dropped())
             .map(|(id, c)| (*id, c))
@@ -2088,7 +2034,7 @@ where
                 .since()
                 .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
-            let our_epoch = self.state.envd_epoch;
+            let our_epoch = self.envd_epoch;
 
             loop {
                 let current_epoch: PersistEpoch = handle.opaque().clone();
@@ -2130,7 +2076,7 @@ where
             *reconciled_updates.entry(row).or_default() += diff;
         }
 
-        match self.state.collections[&id].write_frontier.as_option() {
+        match self.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
@@ -2161,8 +2107,7 @@ where
     /// # Panics
     /// - If `id` is not registered as a managed collection.
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        self.state
-            .collection_manager
+        self.collection_manager
             .append_to_collection(id, updates)
             .await;
     }
@@ -2173,21 +2118,21 @@ where
     ///
     /// # Panics
     /// - If `IntrospectionType::ShardMapping` is not associated with a
-    /// `GlobalId` in `self.state.introspection_ids`.
+    /// `GlobalId` in `self.introspection_ids`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.state.introspection_ids[&IntrospectionType::ShardMapping];
+        let id = self.introspection_ids[&IntrospectionType::ShardMapping];
 
         let mut row_buf = Row::default();
-        let mut updates = Vec::with_capacity(self.state.collections.len());
+        let mut updates = Vec::with_capacity(self.collections.len());
         for (
             global_id,
             CollectionState {
                 collection_metadata: CollectionMetadata { data_shard, .. },
                 ..
             },
-        ) in self.state.collections.iter()
+        ) in self.collections.iter()
         {
             let mut packer = row_buf.packer();
             packer.push(Datum::from(global_id.to_string().as_str()));
@@ -2224,23 +2169,22 @@ where
     /// real world, we can disable it by turning off the
     /// `TRUNCATE_STATEMENT_LOG` variable.
     async fn partially_truncate_statement_log(&mut self) {
-        if !self.state.config.truncate_statement_log {
+        if !self.config.truncate_statement_log {
             tracing::info!("Not garbage-collecting statement log, due to config parameter.");
             return;
         }
-        let now = (self.state.now)();
+        let now = (self.now)();
         let cutoff = to_datetime(now)
             - chrono::Duration::seconds(
-                self.state
-                    .config
+                self.config
                     .statement_logging_retention_time_seconds
                     .try_into()
                     .expect("sane config value"),
             );
-        let mseh_id = self.state.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.state.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.state.introspection_ids[&IntrospectionType::SessionHistory];
-        let mseh_ts = match self.state.collections[&mseh_id]
+        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
+        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
+        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
+        let mseh_ts = match self.collections[&mseh_id]
             .write_frontier
             .elements()
             .iter()
@@ -2251,7 +2195,7 @@ where
             // or don't need to truncate (respectively).
             _ => return,
         };
-        let mpsh_ts = match self.state.collections[&mpsh_id]
+        let mpsh_ts = match self.collections[&mpsh_id]
             .write_frontier
             .elements()
             .iter()
@@ -2262,7 +2206,7 @@ where
             // or don't need to truncate (respectively).
             _ => return,
         };
-        let msh_ts = match self.state.collections[&msh_id]
+        let msh_ts = match self.collections[&msh_id]
             .write_frontier
             .elements()
             .iter()
@@ -2403,17 +2347,15 @@ where
     async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
         let keep_n = match collection {
             IntrospectionType::SourceStatusHistory => {
-                self.state.config.keep_n_source_status_history_entries
+                self.config.keep_n_source_status_history_entries
             }
-            IntrospectionType::SinkStatusHistory => {
-                self.state.config.keep_n_sink_status_history_entries
-            }
+            IntrospectionType::SinkStatusHistory => self.config.keep_n_sink_status_history_entries,
             _ => unreachable!(),
         };
 
-        let id = self.state.introspection_ids[&collection];
+        let id = self.introspection_ids[&collection];
 
-        let rows = match self.state.collections[&id].write_frontier.as_option() {
+        let rows = match self.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
@@ -2491,7 +2433,7 @@ where
     /// [`Self::initialize_shard_mapping`].
     ///
     /// # Panics
-    /// - If `self.state.collections` does not have an entry for `global_id`.
+    /// - If `self.collections` does not have an entry for `global_id`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
@@ -2501,11 +2443,7 @@ where
     {
         mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
-        let id = match self
-            .state
-            .introspection_ids
-            .get(&IntrospectionType::ShardMapping)
-        {
+        let id = match self.introspection_ids.get(&IntrospectionType::ShardMapping) {
             Some(id) => *id,
             _ => return,
         };
@@ -2515,9 +2453,7 @@ where
         let mut row_buf = Row::default();
 
         for global_id in global_ids {
-            let shard_id = self.state.collections[&global_id]
-                .collection_metadata
-                .data_shard;
+            let shard_id = self.collections[&global_id].collection_metadata.data_shard;
 
             let mut packer = row_buf.packer();
             packer.push(Datum::from(global_id.to_string().as_str()));
@@ -2592,7 +2528,7 @@ where
         // Update the on-disk representation.
         METADATA_COLLECTION
             .upsert(
-                &mut self.state.stash,
+                &mut self.stash,
                 upsert_state.into_iter().map(|s| RustType::into_proto(&s)),
             )
             .await
@@ -2646,10 +2582,10 @@ where
 
             match collection_desc.data_source {
                 DataSource::Introspection(_) | DataSource::Webhook => {
-                    self.state.persist_monotonic_worker.update(id, write);
+                    self.persist_monotonic_worker.update(id, write);
                 }
                 DataSource::Other(DataSourceOther::TableWrites) => {
-                    self.state.persist_table_worker.update(id, write);
+                    self.persist_table_worker.update(id, write);
                 }
                 DataSource::Ingestion(_)
                 | DataSource::Progress
@@ -2658,7 +2594,7 @@ where
                     // No-op.
                 }
             }
-            self.state.persist_read_handles.update(id, since_handle);
+            self.persist_read_handles.update(id, since_handle);
         }
     }
 
@@ -2666,7 +2602,6 @@ where
     #[allow(dead_code)]
     async fn finalize_shards(&mut self) {
         let shards = self
-            .state
             .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
@@ -2762,12 +2697,12 @@ where
         mut ingestion: IngestionDescription,
     ) -> Result<(), StorageError> {
         // Check that the client exists.
-        self.state.clients.get(&ingestion.instance_id).ok_or(
-            StorageError::IngestionInstanceMissing {
+        self.clients
+            .get(&ingestion.instance_id)
+            .ok_or(StorageError::IngestionInstanceMissing {
                 storage_instance_id: ingestion.instance_id,
                 ingestion_id: id,
-            },
-        )?;
+            })?;
 
         // Take a cloned copy of the description because we are going to treat it as a "scratch
         // space".
