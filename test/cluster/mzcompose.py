@@ -2365,8 +2365,9 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         dt = datetime.fromtimestamp(since / 1000.0)
         diff = now - dt
 
+        # This env was just created, so the since should be recent.
         assert (
-            diff.days >= 30
+            diff.days < 30
         ), f"{name} greater than expected (since={since}, diff={diff})"
 
     c.down(destroy_volumes=True)
@@ -2380,9 +2381,15 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
+    # The env has been up for less than 30d, so the since should not have
+    # changed.
     table_since2, index_since2 = collect_sinces()
-    validate_since(table_since2, "table_since2")
-    validate_since(index_since2, "index_since2")
+    assert (
+        table_since1 == table_since2
+    ), f"table sinces did not match {table_since1} vs {table_since2})"
+    assert (
+        index_since1 == index_since2
+    ), f"index sinces did not match {index_since1} vs {index_since2})"
 
 
 def workflow_test_concurrent_connections(c: Composition) -> None:

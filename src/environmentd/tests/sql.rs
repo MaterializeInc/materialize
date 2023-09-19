@@ -96,7 +96,7 @@ use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
-use mz_ore::retry::{Retry, RetryResult};
+use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
@@ -1455,27 +1455,9 @@ fn test_utilization_hold() {
                 .execute(&format!("SET cluster={cluster}"), &[])
                 .unwrap();
 
-            // Hack: we think there might be an issue where sinces
-            // can briefly be zero on startup, which breaks our logic here.
-            //
-            // So just spin until it's not zero.
-            // TODO[btv] - Get rid of this loop if that bug is ever fixed
-            let explain = Retry::default()
-                .initial_backoff(Duration::from_secs(1))
-                .factor(1.0)
-                .max_tries(10)
-                .retry(|_| {
-                    let row = client.query_one(explain_q, &[]).unwrap();
-                    let explain: String = row.get(0);
-                    let explain: TimestampExplanation<Timestamp> =
-                        serde_json::from_str(&explain).unwrap();
-                    if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
-                        RetryResult::RetryableErr(())
-                    } else {
-                        RetryResult::Ok(explain)
-                    }
-                })
-                .expect("Since never became non-zero");
+            let row = client.query_one(explain_q, &[]).unwrap();
+            let explain: String = row.get(0);
+            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
@@ -1492,8 +1474,9 @@ fn test_utilization_hold() {
                 .since
                 .into_option()
                 .expect("The since must be finite");
-
-            assert!(since.less_equal(&past_since));
+            // Plus 10 to allow for a small number of write timestamps to be
+            // consumed.
+            assert!(since.less_equal(&past_since.checked_add(10).unwrap()));
             // Assert we aren't lagging by more than 30 days + 1 second.
             // If we ever make the since granularity configurable, this line will
             // need to be changed.

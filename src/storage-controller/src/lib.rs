@@ -465,6 +465,7 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
+        register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
@@ -581,7 +582,9 @@ where
         // this stream cannot all have exclusive access.
         let this = &*self;
         let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError>| async move {
+            .map(|data: Result<_, StorageError>| {
+                let register_ts = register_ts.clone();
+                async move {
                 let (id, description, metadata) = data?;
 
                 // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
@@ -591,7 +594,7 @@ where
                     id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
                 );
 
-                let (write, since_handle) = this
+                let (write, mut since_handle) = this
                     .open_data_handles(
                         &id,
                         metadata.data_shard,
@@ -601,8 +604,32 @@ where
                     )
                     .await;
 
+                // Present tables as springing into existence at the register_ts by advancing
+                // the since. Otherwise, we could end up in a situation where a table with a
+                // long compaction window appears to exist before the environment (and this the
+                // table) existed.
+                //
+                // We could potentially also do the same thing for other sources, in particular
+                // storage's internal sources and perhaps others, but leave them for now.
+                match description.data_source {
+                    DataSource::Introspection(_)
+                    | DataSource::Webhook
+                    | DataSource::Ingestion(_)
+                    | DataSource::Progress
+                    | DataSource::Other(DataSourceOther::Compute)
+                    | DataSource::Other(DataSourceOther::Source) => {},
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
+                        if since_handle.since().elements() == &[T::minimum()] {
+                            info!("advancing {} to initial since of {:?}", id, register_ts);
+                            let token = since_handle.opaque().clone();
+                            let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
+                        }
+                    }
+                }
+
                 Ok::<_, StorageError>((id, description, write, since_handle, metadata))
-            })
+            }})
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
             // HERE BE DRAGONS:

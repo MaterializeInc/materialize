@@ -267,8 +267,14 @@ pub trait StorageController: Debug + Send {
     /// This method is NOT idempotent; It can fail between processing of different
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
+    ///
+    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// might later give non-tables the same treatment, but hold off on that initially.) Callers
+    /// must provide a Some if any of the collections is a table. A None may be given if none of the
+    /// collections are a table (i.e. all materialized views, sources, etc).
     async fn create_collections(
         &mut self,
+        register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
