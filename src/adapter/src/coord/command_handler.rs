@@ -781,7 +781,7 @@ impl Coordinator {
 
         // Queue the builtin table update, we don't need to wait for it to complete.
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        let _ = self.send_builtin_table_updates_notify(vec![update]);
+        self.send_builtin_table_updates_notify(vec![update]);
     }
 
     fn handle_append_webhook(
