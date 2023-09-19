@@ -38,7 +38,14 @@ use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
 };
 
-use crate::catalog::builtin::{
+use crate::catalog::{
+    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
+    Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
+    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+};
+use crate::coord::ConnMeta;
+use crate::subscribe::ActiveSubscribe;
+use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
     MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
@@ -50,13 +57,6 @@ use crate::catalog::builtin::{
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
-use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
-    Database, DefaultPrivilegeObject, Error, ErrorKind, Func, Index, MaterializedView, Sink,
-    StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
-};
-use crate::coord::ConnMeta;
-use crate::subscribe::ActiveSubscribe;
 
 /// An update to a built-in table.
 #[derive(Debug)]

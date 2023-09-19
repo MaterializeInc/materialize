@@ -17,7 +17,7 @@ pub fn handle_define(catalog: &mut TestCatalog, input: &str) -> String {
     // Parse the relation, returning early on parse error.
     let result = match try_parse_def(catalog, input) {
         Ok(def) => match def {
-            Def::Source { name, typ } => match catalog.insert(&name, typ, true) {
+            Def::Source { name, cols, typ } => match catalog.insert(&name, cols, typ, true) {
                 Ok(id) => format!("Source defined as {id}"),
                 Err(err) => err,
             },

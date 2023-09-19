@@ -3577,14 +3577,19 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-ore",
+ "mz-pgrepr",
  "mz-proto",
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-storage-client",
  "mz-storage-types",
+ "once_cell",
  "proptest",
  "proptest-derive",
+ "serde",
+ "serde_json",
  "tracing",
  "workspace-hack",
 ]
@@ -5528,13 +5533,12 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-repr",
- "num-derive",
  "num-traits",
  "ordered-float",
+ "paste",
  "proc-macro2",
  "serde_json",
  "tracing",
- "typemap_rev",
  "workspace-hack",
 ]
 
@@ -5651,17 +5655,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26873667bbbb7c5182d4a37c1add32cdf09f841af72da53318fdb81543c15085"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "num-derive"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "876a53fff98e03a936a674b29568b0e605f06b29372c2489ff4de23f1949743d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.107",
 ]
 
 [[package]]
@@ -8563,12 +8556,6 @@ dependencies = [
  "quote",
  "syn 1.0.107",
 ]
-
-[[package]]
-name = "typemap_rev"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74b08b0c1257381af16a5c3605254d529d3e7e109f3c62befc5d168968192998"
 
 [[package]]
 name = "typenum"

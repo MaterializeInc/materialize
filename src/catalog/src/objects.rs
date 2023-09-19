@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -47,13 +46,6 @@ pub struct Role {
     pub name: String,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
-}
-
-#[derive(Clone, Debug)]
-pub struct BuiltinRole {
-    pub id: RoleId,
-    pub name: &'static str,
-    pub attributes: RoleAttributes,
 }
 
 #[derive(Debug, Clone)]
@@ -143,12 +135,6 @@ pub struct ClusterVariantManaged {
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct BuiltinCluster {
-    pub name: &'static str,
-    pub privileges: &'static [MzAclItem],
 }
 
 #[derive(Debug, Clone)]
@@ -317,12 +303,6 @@ pub struct ComputeReplicaLogging {
     pub interval: Option<Duration>,
 }
 
-#[derive(Clone, Debug)]
-pub struct BuiltinClusterReplica {
-    pub name: &'static str,
-    pub cluster_name: &'static str,
-}
-
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
@@ -346,13 +326,6 @@ pub struct SystemObjectMapping {
     pub object_name: String,
     pub id: GlobalId,
     pub fingerprint: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct BuiltinLog {
-    pub variant: LogVariant,
-    pub name: &'static str,
-    pub schema: &'static str,
 }
 
 // Structs used internally to represent on disk-state.

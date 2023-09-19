@@ -224,7 +224,7 @@ impl Coordinator {
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
-                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
@@ -4419,7 +4419,7 @@ impl Coordinator {
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
-                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {

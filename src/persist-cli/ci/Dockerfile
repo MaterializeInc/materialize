@@ -7,18 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    bzip2 \
-    curl \
-    git \
-    gnuplot \
-    openjdk-11-jre
-
-RUN mkdir -p /usr/local/share/java \
-    && curl -fsSL https://github.com/jepsen-io/maelstrom/releases/download/v0.2.1/maelstrom.tar.bz2 \
-        | tar -xj --strip-components=2 -C /usr/local/share/java maelstrom/lib/maelstrom.jar
+MZFROM maelstrom-persist-base
 
 COPY persistcli /usr/local/bin/persistcli
 

@@ -7,25 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::builtin::{BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS};
 use crate::objects::{
-    AuditLogKey, BuiltinLog, Cluster, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, ConfigKey, ConfigValue, Database,
-    DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey,
-    GidMappingValue, IdAllocKey, IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role,
-    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
+    CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema,
+    SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TimestampKey, TimestampValue,
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    builtin_cluster_replica_config, BootstrapArgs, Error, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
-    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
-    CONFIG_COLLECTION, DATABASES_COLLECTION, DATABASE_ID_ALLOC_KEY, DEFAULT_PRIVILEGES_COLLECTION,
-    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
-    SCHEMA_ID_ALLOC_KEY, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, TIMESTAMP_COLLECTION, USER_ROLE_ID_ALLOC_KEY,
+    builtin_cluster_replica_config, BootstrapArgs, Connection, Error, DATABASE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -33,7 +30,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership,
 };
@@ -44,15 +41,11 @@ use mz_sql::names::{
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::objects::proto;
-use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_stash::TableTransaction;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
-pub(crate) fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-    bootstrap_args: &BootstrapArgs,
-) -> Result<(), Error> {
+pub(crate) fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -60,7 +53,7 @@ pub(crate) fn add_new_builtin_clusters_migration(
         .map(|value| value.name)
         .collect();
 
-    for builtin_cluster in &bootstrap_args.builtin_clusters {
+    for builtin_cluster in BUILTIN_CLUSTERS {
         if !cluster_names.contains(builtin_cluster.name) {
             let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
             let id = ClusterId::System(id);
@@ -101,7 +94,7 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
                 acc
             });
 
-    for builtin_replica in &bootstrap_args.builtin_cluster_replicas {
+    for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
         let cluster_id = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
@@ -125,90 +118,10 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
     Ok(())
 }
 
-#[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-pub(crate) async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
-    let (
-        databases,
-        schemas,
-        roles,
-        items,
-        comments,
-        clusters,
-        cluster_replicas,
-        introspection_sources,
-        id_allocator,
-        configs,
-        settings,
-        timestamps,
-        system_gid_mapping,
-        system_configurations,
-        default_privileges,
-        system_privileges,
-    ) = stash
-        .with_transaction(|tx| {
-            Box::pin(async move {
-                // Peek the catalog collections in any order and a single transaction.
-                futures::try_join!(
-                    tx.peek_one(tx.collection(DATABASES_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(COMMENTS_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
-                    tx.peek_one(
-                        tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
-                            .await?,
-                    ),
-                    tx.peek_one(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(CONFIG_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SETTING_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
-                    tx.peek_one(
-                        tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
-                            .await?
-                    ),
-                    tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
-                    tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
-                )
-            })
-        })
-        .await?;
-
-    Ok(Transaction {
-        stash,
-        databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
-        schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
-            a.database_id == b.database_id && a.name == b.name
-        })?,
-        items: TableTransaction::new(items, |a: &ItemValue, b| {
-            a.schema_id == b.schema_id && a.name == b.name
-        })?,
-        comments: TableTransaction::new(comments, |a: &CommentValue, b| a.comment == b.comment)?,
-        roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
-        clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
-        cluster_replicas: TableTransaction::new(cluster_replicas, |a: &ClusterReplicaValue, b| {
-            a.cluster_id == b.cluster_id && a.name == b.name
-        })?,
-        introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
-        id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
-        configs: TableTransaction::new(configs, |_a, _b| false)?,
-        settings: TableTransaction::new(settings, |_a, _b| false)?,
-        timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
-        system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
-        system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
-        default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
-        system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
-        audit_log_updates: Vec::new(),
-        storage_usage_updates: Vec::new(),
-    })
-}
-
 /// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
 /// them atomically.
 pub struct Transaction<'a> {
-    stash: &'a mut Stash,
+    conn: &'a mut Connection,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -233,6 +146,63 @@ pub struct Transaction<'a> {
 }
 
 impl<'a> Transaction<'a> {
+    pub fn new(
+        conn: &mut Connection,
+        databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+        schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+        roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+        items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+        comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
+        clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+        cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+        introspection_sources: BTreeMap<
+            proto::ClusterIntrospectionSourceIndexKey,
+            proto::ClusterIntrospectionSourceIndexValue,
+        >,
+        id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+        configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+        settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
+        timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+        system_gid_mapping: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+        system_configurations: BTreeMap<
+            proto::ServerConfigurationKey,
+            proto::ServerConfigurationValue,
+        >,
+        default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+        system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+    ) -> Result<Transaction, Error> {
+        Ok(Transaction {
+            conn,
+            databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
+            schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
+                a.database_id == b.database_id && a.name == b.name
+            })?,
+            items: TableTransaction::new(items, |a: &ItemValue, b| {
+                a.schema_id == b.schema_id && a.name == b.name
+            })?,
+            comments: TableTransaction::new(comments, |a: &CommentValue, b| {
+                a.comment == b.comment
+            })?,
+            roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
+            clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
+            cluster_replicas: TableTransaction::new(
+                cluster_replicas,
+                |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
+            )?,
+            introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
+            id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
+            configs: TableTransaction::new(configs, |_a, _b| false)?,
+            settings: TableTransaction::new(settings, |_a, _b| false)?,
+            timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
+            system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
+            system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
+            default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
+            system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
+            audit_log_updates: Vec::new(),
+            storage_usage_updates: Vec::new(),
+        })
+    }
+
     pub fn loaded_items(&self) -> Vec<Item> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
@@ -365,7 +335,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -386,7 +356,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
     ) -> Result<(), Error> {
@@ -406,7 +376,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
-        introspection_source_indexes: Vec<(BuiltinLog, &GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -426,7 +396,7 @@ impl<'a> Transaction<'a> {
 
         for (builtin, index_id) in introspection_source_indexes {
             let index_id = if let GlobalId::System(id) = index_id {
-                *id
+                id
             } else {
                 panic!("non-system id provided")
             };
@@ -1065,130 +1035,65 @@ impl<'a> Transaction<'a> {
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
-        self.commit_inner().await
+        let txn_batch = TransactionBatch {
+            databases: self.databases.pending(),
+            schemas: self.schemas.pending(),
+            items: self.items.pending(),
+            comments: self.comments.pending(),
+            roles: self.roles.pending(),
+            clusters: self.clusters.pending(),
+            cluster_replicas: self.cluster_replicas.pending(),
+            introspection_sources: self.introspection_sources.pending(),
+            id_allocator: self.id_allocator.pending(),
+            configs: self.configs.pending(),
+            settings: self.settings.pending(),
+            timestamps: self.timestamps.pending(),
+            system_gid_mapping: self.system_gid_mapping.pending(),
+            system_configurations: self.system_configurations.pending(),
+            default_privileges: self.default_privileges.pending(),
+            system_privileges: self.system_privileges.pending(),
+            audit_log_updates: self.audit_log_updates,
+            storage_usage_updates: self.storage_usage_updates,
+        };
+        self.conn.commit(txn_batch).await
     }
+}
 
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn commit_inner(self) -> Result<(), Error> {
-        async fn add_batch<'tx, K, V>(
-            tx: &'tx mz_stash::Transaction<'tx>,
-            batches: &mut Vec<AppendBatch>,
-            typed: &'tx TypedCollection<K, V>,
-            changes: &[(K, V, mz_stash::Diff)],
-        ) -> Result<(), StashError>
-        where
-            K: mz_stash::Data + 'tx,
-            V: mz_stash::Data + 'tx,
-        {
-            if changes.is_empty() {
-                return Ok(());
-            }
-            let collection = typed.from_tx(tx).await?;
-            let mut batch = collection.make_batch_tx(tx).await?;
-            for (k, v, diff) in changes {
-                collection.append_to_batch(&mut batch, k, v, *diff);
-            }
-            batches.push(batch);
-            Ok(())
-        }
-
-        // The with_transaction fn below requires a Fn that can be cloned,
-        // meaning anything it closes over must be Clone. The .pending() here
-        // return Vecs. Thus, the Arcs here aren't strictly necessary because
-        // Vecs are Clone. However, using an Arc means that we never clone the
-        // Vec (which would happen at least one time when the txn starts), and
-        // instead only clone the Arc.
-        let databases = Arc::new(self.databases.pending());
-        let schemas = Arc::new(self.schemas.pending());
-        let items = Arc::new(self.items.pending());
-        let comments = Arc::new(self.comments.pending());
-        let roles = Arc::new(self.roles.pending());
-        let clusters = Arc::new(self.clusters.pending());
-        let cluster_replicas = Arc::new(self.cluster_replicas.pending());
-        let introspection_sources = Arc::new(self.introspection_sources.pending());
-        let id_allocator = Arc::new(self.id_allocator.pending());
-        let configs = Arc::new(self.configs.pending());
-        let settings = Arc::new(self.settings.pending());
-        let timestamps = Arc::new(self.timestamps.pending());
-        let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
-        let system_configurations = Arc::new(self.system_configurations.pending());
-        let default_privileges = Arc::new(self.default_privileges.pending());
-        let system_privileges = Arc::new(self.system_privileges.pending());
-        let audit_log_updates = Arc::new(self.audit_log_updates);
-        let storage_usage_updates = Arc::new(self.storage_usage_updates);
-
-        self.stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let mut batches = Vec::new();
-
-                    add_batch(&tx, &mut batches, &DATABASES_COLLECTION, &databases).await?;
-                    add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &schemas).await?;
-                    add_batch(&tx, &mut batches, &ITEM_COLLECTION, &items).await?;
-                    add_batch(&tx, &mut batches, &COMMENTS_COLLECTION, &comments).await?;
-                    add_batch(&tx, &mut batches, &ROLES_COLLECTION, &roles).await?;
-                    add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &clusters).await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_REPLICA_COLLECTION,
-                        &cluster_replicas,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-                        &introspection_sources,
-                    )
-                    .await?;
-                    add_batch(&tx, &mut batches, &ID_ALLOCATOR_COLLECTION, &id_allocator).await?;
-                    add_batch(&tx, &mut batches, &CONFIG_COLLECTION, &configs).await?;
-                    add_batch(&tx, &mut batches, &SETTING_COLLECTION, &settings).await?;
-                    add_batch(&tx, &mut batches, &TIMESTAMP_COLLECTION, &timestamps).await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_GID_MAPPING_COLLECTION,
-                        &system_gid_mapping,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_CONFIGURATION_COLLECTION,
-                        &system_configurations,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &DEFAULT_PRIVILEGES_COLLECTION,
-                        &default_privileges,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_PRIVILEGES_COLLECTION,
-                        &system_privileges,
-                    )
-                    .await?;
-                    add_batch(&tx, &mut batches, &AUDIT_LOG_COLLECTION, &audit_log_updates).await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &STORAGE_USAGE_COLLECTION,
-                        &storage_usage_updates,
-                    )
-                    .await?;
-                    tx.append(batches).await?;
-
-                    Ok(())
-                })
-            })
-            .await?;
-
-        Ok(())
-    }
+/// Describes a set of changes to apply as the result of a catalog transaction.
+#[derive(Debug, Clone)]
+pub(crate) struct TransactionBatch {
+    pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
+    pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
+    pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
+    pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
+    pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
+    pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
+    pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
+    pub(crate) introspection_sources: Vec<(
+        proto::ClusterIntrospectionSourceIndexKey,
+        proto::ClusterIntrospectionSourceIndexValue,
+        Diff,
+    )>,
+    pub(crate) id_allocator: Vec<(proto::IdAllocKey, proto::IdAllocValue, Diff)>,
+    pub(crate) configs: Vec<(proto::ConfigKey, proto::ConfigValue, Diff)>,
+    pub(crate) settings: Vec<(proto::SettingKey, proto::SettingValue, Diff)>,
+    pub(crate) timestamps: Vec<(proto::TimestampKey, proto::TimestampValue, Diff)>,
+    pub(crate) system_gid_mapping: Vec<(proto::GidMappingKey, proto::GidMappingValue, Diff)>,
+    pub(crate) system_configurations: Vec<(
+        proto::ServerConfigurationKey,
+        proto::ServerConfigurationValue,
+        Diff,
+    )>,
+    pub(crate) default_privileges: Vec<(
+        proto::DefaultPrivilegesKey,
+        proto::DefaultPrivilegesValue,
+        Diff,
+    )>,
+    pub(crate) system_privileges: Vec<(
+        proto::SystemPrivilegesKey,
+        proto::SystemPrivilegesValue,
+        Diff,
+    )>,
+    pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
+    pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }
