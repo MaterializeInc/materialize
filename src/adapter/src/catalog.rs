@@ -10324,7 +10324,7 @@ mod tests {
                     migration_metadata
                         .migrated_system_object_mappings
                         .values()
-                        .map(|mapping| mapping.object_name.clone())
+                        .map(|mapping| mapping.description.object_name.clone())
                         .collect::<BTreeSet<_>>(),
                     test_case
                         .expected_migrated_system_object_mappings
