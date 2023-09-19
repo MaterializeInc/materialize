@@ -159,6 +159,7 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
             multiplier: config.persist_next_listen_batch_retryer_multiplier(),
             clamp: config.persist_next_listen_batch_retryer_clamp(),
         }),
+        reader_lease_duration: Some(config.persist_reader_lease_duration()),
         stats_audit_percent: Some(config.persist_stats_audit_percent()),
         stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
         stats_filter_enabled: Some(config.persist_stats_filter_enabled()),

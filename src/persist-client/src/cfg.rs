@@ -115,7 +115,7 @@ pub struct PersistConfig {
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// Configurations that can be dynamically updated.
-    pub(crate) dynamic: Arc<DynamicConfig>,
+    pub dynamic: Arc<DynamicConfig>,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
@@ -133,9 +133,6 @@ pub struct PersistConfig {
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
-    /// Length of time after a reader's last operation after which the reader
-    /// may be expired.
-    pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
     /// Timeout per connection attempt to Persist PubSub service.
@@ -179,6 +176,7 @@ impl PersistConfig {
                 ),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
+                reader_lease_duration: RwLock::new(Self::DEFAULT_READ_LEASE_DURATION),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(
                     30 * Self::DEFAULT_ROLLUP_THRESHOLD,
@@ -215,7 +213,6 @@ impl PersistConfig {
             compaction_yield_after_n_updates: 100_000,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: 60 * Duration::from_secs(60),
-            reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
             pubsub_connect_max_backoff: Duration::from_secs(60),
@@ -340,7 +337,7 @@ impl PersistConfig {
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
     // ProtoReaderState migration.
-    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
+    pub const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
 
     // TODO: Get rid of this in favor of using PersistParameters at the
     // relevant callsites.
@@ -417,6 +414,7 @@ pub struct DynamicConfig {
     consensus_tcp_user_timeout: RwLock<Duration>,
     consensus_connection_pool_ttl: RwLock<Duration>,
     consensus_connection_pool_ttl_stagger: RwLock<Duration>,
+    reader_lease_duration: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
     stats_audit_percent: AtomicUsize,
@@ -598,6 +596,18 @@ impl DynamicConfig {
             .expect("lock poisoned")
     }
 
+    /// Length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub fn reader_lease_duration(&self) -> Duration {
+        *self.reader_lease_duration.read().expect("lock poisoned")
+    }
+
+    /// Set the length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub fn set_reader_lease_duration(&self, d: Duration) {
+        *self.reader_lease_duration.write().expect("lock poisoned") = d;
+    }
+
     /// The maximum number of concurrent blob deletes during garbage collection.
     pub fn gc_blob_delete_concurrency_limit(&self) -> usize {
         self.gc_blob_delete_concurrency_limit
@@ -756,6 +766,8 @@ pub struct PersistParameters {
     pub consensus_connection_pool_ttl_stagger: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
+    /// Configures [`DynamicConfig::reader_lease_duration`].
+    pub reader_lease_duration: Option<Duration>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
     /// Configures [`PersistConfig::storage_sink_minimum_batch_updates`].
@@ -793,6 +805,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
             consensus_connection_pool_ttl: self_consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger: self_consensus_connection_pool_ttl_stagger,
+            reader_lease_duration: self_reader_lease_duration,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
@@ -814,6 +827,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
             consensus_connection_pool_ttl: other_consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger: other_consensus_connection_pool_ttl_stagger,
+            reader_lease_duration: other_reader_lease_duration,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
@@ -847,6 +861,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_consensus_connection_pool_ttl_stagger {
             *self_consensus_connection_pool_ttl_stagger = Some(v);
+        }
+        if let Some(v) = other_reader_lease_duration {
+            *self_reader_lease_duration = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -898,6 +915,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout,
             consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger,
+            reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -918,6 +936,7 @@ impl PersistParameters {
             && consensus_tcp_user_timeout.is_none()
             && consensus_connection_pool_ttl.is_none()
             && consensus_connection_pool_ttl_stagger.is_none()
+            && reader_lease_duration.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
@@ -947,6 +966,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout,
             consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger,
+            reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -1009,6 +1029,10 @@ impl PersistParameters {
                 .write()
                 .expect("lock poisoned");
             *stagger = *consensus_connection_pool_ttl_stagger;
+        }
+        if let Some(reader_lease_duration) = reader_lease_duration {
+            cfg.dynamic
+                .set_reader_lease_duration(*reader_lease_duration);
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -1092,6 +1116,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connection_pool_ttl_stagger: self
                 .consensus_connection_pool_ttl_stagger
                 .into_proto(),
+            reader_lease_duration: self.reader_lease_duration.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -1120,6 +1145,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connection_pool_ttl_stagger: proto
                 .consensus_connection_pool_ttl_stagger
                 .into_rust()?,
+            reader_lease_duration: proto.reader_lease_duration.into_rust()?,
+
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates

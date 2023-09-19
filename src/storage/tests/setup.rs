@@ -200,7 +200,9 @@ where
             let decode_metrics = DecodeMetrics::register_with(&metrics_registry);
 
             let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-            persistcfg.reader_lease_duration = std::time::Duration::from_secs(60 * 15);
+            persistcfg
+                .dynamic
+                .set_reader_lease_duration(Duration::from_secs(60 * 15));
             persistcfg.now = SYSTEM_TIME.clone();
 
             let persist_location = mz_persist_client::PersistLocation {
