@@ -3447,6 +3447,7 @@ dependencies = [
  "serde_json",
  "serde_plain",
  "smallvec",
+ "static_assertions",
  "thiserror",
  "timely",
  "tokio",

@@ -132,7 +132,7 @@ use crate::catalog::{
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterSyncConfig;
-use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
@@ -196,7 +196,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate(Span),
+    GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -205,6 +205,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
+        /// Operations waiting on this group commit to finish.
+        Vec<oneshot::Sender<()>>,
+        /// Permit which limits how many group commits we run at once.
+        Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -914,6 +918,8 @@ pub struct Coordinator {
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    /// Notification that triggers a group commit.
+    group_commit_tx: appends::GroupCommitNotifier,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
@@ -1814,6 +1820,7 @@ impl Coordinator {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        group_commit_rx: appends::GroupCommitWaiter,
     ) {
         // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
@@ -1895,6 +1902,12 @@ impl Coordinator {
                 () = self.controller.ready() => {
                     Message::ControllerReady
                 }
+                // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                permit = group_commit_rx.ready() => {
+                    let span = info_span!(parent: None, "group_commit_notify");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span, Some(permit))
+                },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
@@ -1915,7 +1928,7 @@ impl Coordinator {
                 _ = self.advance_timelines_interval.tick() => {
                     let span = info_span!(parent: None, "advance_timelines_interval");
                     span.follows_from(Span::current());
-                    Message::GroupCommitInitiate(span)
+                    Message::GroupCommitInitiate(span, None)
                 },
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
@@ -2034,6 +2047,7 @@ pub async fn serve(
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let (group_commit_tx, group_commit_rx) = appends::notifier();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
@@ -2131,6 +2145,7 @@ pub async fn serve(
                 ),
                 catalog: Arc::new(catalog),
                 internal_cmd_tx,
+                group_commit_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
@@ -2179,7 +2194,12 @@ pub async fn serve(
                 .send(bootstrap)
                 .expect("bootstrap_rx is not dropped until it receives this message");
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
+                handle.block_on(coord.serve(
+                    internal_cmd_rx,
+                    strict_serializable_reads_rx,
+                    cmd_rx,
+                    group_commit_rx,
+                ));
             }
         })
         .expect("failed to create coordinator thread");

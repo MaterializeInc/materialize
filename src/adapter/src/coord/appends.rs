@@ -14,12 +14,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_storage_client::client::Update;
-use tokio::sync::OwnedMutexGuard;
+use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
@@ -48,12 +50,12 @@ pub(crate) struct DeferredPlan {
 }
 
 /// Describes what action triggered an update to a builtin table.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum BuiltinTableUpdateSource {
     /// Update was triggered by some DDL.
     DDL,
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
-    Background,
+    Background(oneshot::Sender<()>),
 }
 
 /// A pending write transaction that will be committing during the next group commit.
@@ -92,7 +94,7 @@ impl PendingWriteTxn {
             PendingWriteTxn::User { .. } => false,
             PendingWriteTxn::System { source, .. } => match source {
                 BuiltinTableUpdateSource::DDL => true,
-                BuiltinTableUpdateSource::Background => false,
+                BuiltinTableUpdateSource::Background(_) => false,
             },
         }
     }
@@ -144,9 +146,7 @@ macro_rules! guard_write_critical_section {
 impl Coordinator {
     /// Send a message to the Coordinate to start a group commit.
     pub(crate) fn trigger_group_commit(&mut self) {
-        self.internal_cmd_tx
-            .send(Message::GroupCommitInitiate(Span::current()))
-            .expect("sending to self.internal_cmd_tx cannot fail");
+        self.group_commit_tx.notify();
         // Avoid excessive `Message::GroupCommitInitiate` by resetting the periodic table
         // advancement. The group commit triggered by the message above will already advance all
         // tables.
@@ -158,7 +158,7 @@ impl Coordinator {
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn try_group_commit(&mut self) {
+    pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
         let timestamp = self.peek_local_write_ts();
         let now = Timestamp::from((self.catalog().config().now)());
         if timestamp > now {
@@ -174,7 +174,7 @@ impl Coordinator {
                     tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
                     let result =
-                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current()));
+                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current(), permit));
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
@@ -182,7 +182,7 @@ impl Coordinator {
                 .instrument(Span::current()),
             );
         } else {
-            self.group_commit_initiate(None).await;
+            self.group_commit_initiate(None, permit).await;
         }
     }
 
@@ -202,6 +202,7 @@ impl Coordinator {
     pub(crate) async fn group_commit_initiate(
         &mut self,
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        permit: Option<GroupCommitPermit>,
     ) {
         let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
         {
@@ -260,6 +261,7 @@ impl Coordinator {
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         let should_block = pending_writes.iter().any(|write| write.should_block());
+        let mut notifies = Vec::new();
         for pending_write_txn in pending_writes {
             match pending_write_txn {
                 PendingWriteTxn::User {
@@ -284,12 +286,16 @@ impl Coordinator {
                     }
                     responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
-                PendingWriteTxn::System { updates, .. } => {
+                PendingWriteTxn::System { updates, source } => {
                     for update in updates {
                         appends
                             .entry(update.id)
                             .or_default()
                             .push((update.row, update.diff));
+                    }
+                    // Once the write completes we notify any waiters.
+                    if let BuiltinTableUpdateSource::Background(tx) = source {
+                        notifies.push(tx);
                     }
                 }
             }
@@ -330,7 +336,7 @@ impl Coordinator {
                 .await
                 .expect("One-shot dropped while waiting synchronously")
                 .unwrap_or_terminate("cannot fail to apply appends");
-            self.group_commit_apply(timestamp, responses, write_lock_guard)
+            self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -343,6 +349,8 @@ impl Coordinator {
                             timestamp,
                             responses,
                             write_lock_guard,
+                            notifies,
+                            permit,
                         )) {
                             warn!("Server closed with non-responded writes, {e}");
                         }
@@ -371,11 +379,16 @@ impl Coordinator {
         timestamp: Timestamp,
         responses: Vec<CompletedClientTransmitter>,
         _write_lock_guard: Option<OwnedMutexGuard<()>>,
+        notifies: Vec<oneshot::Sender<()>>,
+        _permit: Option<GroupCommitPermit>,
     ) {
         self.apply_local_write(timestamp).await;
         for response in responses {
             let (ctx, result) = response.finalize();
             ctx.retire(result);
+        }
+        for tx in notifies {
+            let _ = tx.send(());
         }
 
         // Advancing timelines will update all timeline read holds, and update the read timestamps
@@ -396,6 +409,21 @@ impl Coordinator {
         self.trigger_group_commit();
     }
 
+    /// Submit a write to be executed during the next group commit and triggers a group commit.
+    /// Returns a Future that resolves when the write has completed.
+    pub(crate) fn submit_builtin_table_updates<'a>(
+        &'a mut self,
+        updates: Vec<BuiltinTableUpdate>,
+    ) -> BoxFuture<'static, ()> {
+        let (tx, rx) = oneshot::channel();
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Background(tx),
+        });
+        self.trigger_group_commit();
+        Box::pin(rx.map(|_| ()))
+    }
+
     /// Submit a write to a system table be executed during the next group commit. This method does
     /// not trigger a group commit.
     ///
@@ -405,9 +433,10 @@ impl Coordinator {
     /// DO NOT call this for DDL which needs the system tables updated immediately.
     #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
     pub(crate) fn buffer_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+        let (tx, _rx) = oneshot::channel();
         self.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Background,
+            source: BuiltinTableUpdateSource::Background(tx),
         });
     }
 
@@ -424,7 +453,7 @@ impl Coordinator {
             updates,
             source: BuiltinTableUpdateSource::DDL,
         });
-        self.group_commit_initiate(None).await;
+        self.group_commit_initiate(None, None).await;
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.
         self.advance_timelines_interval.reset();
@@ -464,3 +493,77 @@ impl Coordinator {
         })
     }
 }
+
+/// Returns two sides of a "channel" that can be used to notify the coordinator when we want a
+/// group commit to be run.
+pub fn notifier() -> (GroupCommitNotifier, GroupCommitWaiter) {
+    let notify = Arc::new(Notify::new());
+    let in_progress = Arc::new(Semaphore::new(1));
+
+    let notifier = GroupCommitNotifier {
+        notify: Arc::clone(&notify),
+    };
+    let waiter = GroupCommitWaiter {
+        notify,
+        in_progress,
+    };
+
+    (notifier, waiter)
+}
+
+/// A handle that allows us to notify the coordinator that a group commit should be run at some
+/// point in the future.
+#[derive(Debug, Clone)]
+pub struct GroupCommitNotifier {
+    /// Tracks if there are any outstanding group commits.
+    notify: Arc<Notify>,
+}
+
+impl GroupCommitNotifier {
+    /// Notifies the [`GroupCommitWaiter`] that we'd like a group commit to be run.
+    pub fn notify(&self) {
+        self.notify.notify_one()
+    }
+}
+
+/// A handle that returns a future when a group commit needs to be run, and one is not currently
+/// being run.
+#[derive(Debug)]
+pub struct GroupCommitWaiter {
+    /// Tracks if there are any outstanding group commits.
+    notify: Arc<Notify>,
+    /// Distributes permits which tracks in progress group commits.
+    in_progress: Arc<Semaphore>,
+}
+static_assertions::assert_not_impl_all!(GroupCommitWaiter: Clone);
+
+impl GroupCommitWaiter {
+    /// Returns a permit for a group commit, once a permit is available _and_ there someone
+    /// requested a group commit to be run.
+    ///
+    /// # Cancel Safety
+    ///
+    /// * Waiting on the returned Future is cancel safe because we acquire an in-progress permit
+    ///   before waiting for notifications. If the Future gets dropped after acquiring a permit but
+    ///   before a group commit is queued, we'll release the permit which can be acquired by the
+    ///   next caller.
+    ///
+    pub async fn ready(&self) -> GroupCommitPermit {
+        let permit = Semaphore::acquire_owned(Arc::clone(&self.in_progress))
+            .await
+            .expect("semaphore should not close");
+
+        // Note: We must wait for notifies _after_ waiting for a permit to be acquired for cancel
+        // safety.
+        self.notify.notified().await;
+
+        GroupCommitPermit(permit)
+    }
+}
+
+/// A permit to run a group commit, this must be kept alive for the entire duration of the commit.
+///
+/// Note: We sometimes want to throttle how many group commits are running at once, which this
+/// permit allows us to do.
+#[derive(Debug)]
+pub struct GroupCommitPermit(OwnedSemaphorePermit);
