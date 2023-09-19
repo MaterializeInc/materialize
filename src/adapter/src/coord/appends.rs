@@ -56,7 +56,7 @@ pub(crate) enum BuiltinTableUpdateSource {
     DDL,
     /// Update was triggered by something we don't want to block on but should notify the caller
     /// when it's complete.
-    Async(oneshot::Sender<()>),
+    AsyncSystem(oneshot::Sender<()>),
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
     Background,
 }
@@ -97,17 +97,19 @@ impl PendingWriteTxn {
             PendingWriteTxn::User { .. } => false,
             PendingWriteTxn::System { source, .. } => match source {
                 BuiltinTableUpdateSource::DDL => true,
-                BuiltinTableUpdateSource::Async(_) | BuiltinTableUpdateSource::Background => false,
+                BuiltinTableUpdateSource::AsyncSystem(_) | BuiltinTableUpdateSource::Background => {
+                    false
+                }
             },
         }
     }
 
     /// Returns true if this transaction has an external request waiting on its completion.
-    fn has_waiter(&self) -> bool {
+    fn is_async_system(&self) -> bool {
         match self {
             PendingWriteTxn::User { .. } => false,
             PendingWriteTxn::System { source, .. } => match source {
-                BuiltinTableUpdateSource::Async(_) => true,
+                BuiltinTableUpdateSource::AsyncSystem(_) => true,
                 BuiltinTableUpdateSource::Background | BuiltinTableUpdateSource::DDL => false,
             },
         }
@@ -176,12 +178,15 @@ impl Coordinator {
         let timestamp = self.peek_local_write_ts();
         let now = Timestamp::from((self.catalog().config().now)());
 
-        // We want to allow system writes that have external requests waiting on them, through as
-        // quickly as possible.
-        let contains_waiting_system_write =
-            self.pending_writes.iter().any(|write| write.has_waiter());
+        // We write to system tables asychronously, i.e. Coordinator completes but there is still
+        // outstanding work, when starting a new connection. We always want to allow these writes
+        // to go through to prevent connections from being blocked, hence this special case.
+        let contains_async_system_write = self
+            .pending_writes
+            .iter()
+            .any(|write| write.is_async_system());
 
-        if timestamp > now && !contains_waiting_system_write {
+        if timestamp > now && !contains_async_system_write {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
@@ -314,7 +319,7 @@ impl Coordinator {
                             .push((update.row, update.diff));
                     }
                     // Once the write completes we notify any waiters.
-                    if let BuiltinTableUpdateSource::Async(tx) = source {
+                    if let BuiltinTableUpdateSource::AsyncSystem(tx) = source {
                         notifies.push(tx);
                     }
                 }
@@ -473,7 +478,7 @@ impl Coordinator {
         let (tx, rx) = oneshot::channel();
         self.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Async(tx),
+            source: BuiltinTableUpdateSource::AsyncSystem(tx),
         });
         self.trigger_group_commit();
         Box::pin(rx.map(|_| ()))

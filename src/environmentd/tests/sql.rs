@@ -2795,6 +2795,9 @@ fn test_mz_sessions() {
         );
     }
 
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
+
     assert_eq!(
         foo_client
             .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
@@ -2836,6 +2839,9 @@ fn test_mz_sessions() {
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client

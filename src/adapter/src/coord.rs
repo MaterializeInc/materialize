@@ -206,6 +206,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
         /// Operations waiting on this group commit to finish.
+        ///
+        /// Note: this differs from the [`CompletedClientTransmitter`]s above because those are
+        /// used to send a response to a request, which indicates the Coordinator has finished all
+        /// of it's work, but these represent auxiliary work that still needs to be done, e.g.
+        /// waiting for a write to Persist to complete.
         Vec<oneshot::Sender<()>>,
         /// Permit which limits how many group commits we run at once.
         Option<GroupCommitPermit>,
