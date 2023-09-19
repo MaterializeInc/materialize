@@ -40,7 +40,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::Update;
+use crate::client::TimestamplessUpdate;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
@@ -356,7 +356,9 @@ pub trait StorageController: Debug + Send {
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     fn append_table(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        write_ts: Self::Timestamp,
+        advance_to: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to

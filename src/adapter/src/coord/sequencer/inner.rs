@@ -593,10 +593,10 @@ impl Coordinator {
                 // Advance the new table to a timestamp higher than the current read timestamp so
                 // that the table is immediately readable.
                 let upper = since_ts.step_forward();
-                let appends = vec![(table_id, Vec::new(), upper)];
+                let appends = vec![(table_id, Vec::new())];
                 self.controller
                     .storage
-                    .append_table(appends)
+                    .append_table(since_ts, upper, appends)
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")

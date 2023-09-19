@@ -1664,11 +1664,11 @@ impl Coordinator {
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new(), advance_to))
+            .map(|entry| (entry.id(), Vec::new()))
             .collect();
         self.controller
             .storage
-            .append_table(appends)
+            .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")

@@ -110,7 +110,8 @@ use mz_stash::objects::proto;
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_storage_client::client::{
     CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+    TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, CreateExportToken, DataSource, DataSourceOther,
@@ -1133,18 +1134,22 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     fn append_table(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        write_ts: Self::Timestamp,
+        advance_to: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        for (id, updates, batch_upper) in commands.iter() {
-            for update in updates.iter() {
-                if !update.timestamp.less_than(batch_upper) {
+        for (id, updates) in commands.iter() {
+            if !updates.is_empty() {
+                if !write_ts.less_than(&advance_to) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }
         }
 
-        Ok(self.persist_table_worker.append(commands))
+        Ok(self
+            .persist_table_worker
+            .append(write_ts, advance_to, commands))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
