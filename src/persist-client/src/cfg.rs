@@ -337,7 +337,7 @@ impl PersistConfig {
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
     // ProtoReaderState migration.
-    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
+    pub const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
 
     // TODO: Get rid of this in favor of using PersistParameters at the
     // relevant callsites.
@@ -766,6 +766,8 @@ pub struct PersistParameters {
     pub consensus_connection_pool_ttl_stagger: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
+    /// Configures [`DynamicConfig::reader_lease_duration`].
+    pub reader_lease_duration: Option<Duration>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
     /// Configures [`PersistConfig::storage_sink_minimum_batch_updates`].
@@ -803,6 +805,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
             consensus_connection_pool_ttl: self_consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger: self_consensus_connection_pool_ttl_stagger,
+            reader_lease_duration: self_reader_lease_duration,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
@@ -824,6 +827,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
             consensus_connection_pool_ttl: other_consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger: other_consensus_connection_pool_ttl_stagger,
+            reader_lease_duration: other_reader_lease_duration,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
@@ -857,6 +861,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_consensus_connection_pool_ttl_stagger {
             *self_consensus_connection_pool_ttl_stagger = Some(v);
+        }
+        if let Some(v) = other_reader_lease_duration {
+            *self_reader_lease_duration = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -908,6 +915,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout,
             consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger,
+            reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -928,6 +936,7 @@ impl PersistParameters {
             && consensus_tcp_user_timeout.is_none()
             && consensus_connection_pool_ttl.is_none()
             && consensus_connection_pool_ttl_stagger.is_none()
+            && reader_lease_duration.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
@@ -957,6 +966,7 @@ impl PersistParameters {
             consensus_tcp_user_timeout,
             consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger,
+            reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -1019,6 +1029,10 @@ impl PersistParameters {
                 .write()
                 .expect("lock poisoned");
             *stagger = *consensus_connection_pool_ttl_stagger;
+        }
+        if let Some(reader_lease_duration) = reader_lease_duration {
+            cfg.dynamic
+                .set_reader_lease_duration(*reader_lease_duration);
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -1102,6 +1116,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connection_pool_ttl_stagger: self
                 .consensus_connection_pool_ttl_stagger
                 .into_proto(),
+            reader_lease_duration: self.reader_lease_duration.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -1130,6 +1145,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connection_pool_ttl_stagger: proto
                 .consensus_connection_pool_ttl_stagger
                 .into_rust()?,
+            reader_lease_duration: proto.reader_lease_duration.into_rust()?,
+
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates
