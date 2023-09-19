@@ -7,8 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM maelstrom-persist-base
-
-COPY persistcli /usr/local/bin/persistcli
-
-ENTRYPOINT ["java", "-Djava.awt.headless=true", "-jar", "/usr/local/share/java/maelstrom.jar", "test", "-w", "txn-list-append", "--bin=/usr/local/bin/persistcli"]
+name: maelstrom-persist-base
