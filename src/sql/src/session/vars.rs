@@ -595,6 +595,14 @@ const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
+const PERSIST_READER_LEASE_DURATION: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_reader_lease_duration"),
+    value: &PersistConfig::DEFAULT_READ_LEASE_DURATION,
+    description: "The time after which we'll clean up stale read leases",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl_stagger`].
 const PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_consensus_connection_pool_ttl_stagger"),
@@ -2282,6 +2290,7 @@ impl SystemVars {
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
             .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
+            .with_var(&PERSIST_READER_LEASE_DURATION)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
@@ -2771,6 +2780,10 @@ impl SystemVars {
     /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
     pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+    }
+
+    pub fn persist_reader_lease_duration(&self) -> Duration {
+        *self.expect_value(&PERSIST_READER_LEASE_DURATION)
     }
 
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
@@ -4574,6 +4587,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
         || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
+        || name == PERSIST_READER_LEASE_DURATION.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
