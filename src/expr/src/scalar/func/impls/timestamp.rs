@@ -143,6 +143,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
     }
 
     fn preserves_uniqueness(&self) -> bool {
+        mz_ore::soft_assert!(self.to != self.from);
+
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
@@ -239,6 +241,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
     }
 
     fn preserves_uniqueness(&self) -> bool {
+        mz_ore::soft_assert!(self.to != self.from);
+
         let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
         // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
