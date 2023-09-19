@@ -1557,6 +1557,11 @@ SELECT timestamp '95143-12-31 17:59:59.123456789+00' = timestamp(6) '95143-12-31
 ----
 true
 
+query B
+SELECT timestamp(5) '95143-12-31 17:59:59.1235+00' = timestamp(4) '95143-12-31 17:59:59.123456789+00';
+----
+true
+
 query error Expected literal unsigned integer
 SELECT timestamp(-1) '95143-12-31 23:59:59.123456789+06';
 
