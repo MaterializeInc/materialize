@@ -14,14 +14,12 @@ from materialize.mzcompose.service import (
 
 
 class Dbt(Service):
-    def __init__(self, name: str = "dbt") -> None:
+    def __init__(self, name: str = "dbt", environment: list[str] = []) -> None:
         super().__init__(
             name=name,
             config={
                 "mzbuild": "dbt-materialize",
-                "environment": [
-                    "TMPDIR=/share/tmp",
-                ],
+                "environment": environment + ["TMPDIR=/share/tmp"],
                 "volumes": [
                     ".:/workdir",
                     "secrets:/secrets",

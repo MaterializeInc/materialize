@@ -12,7 +12,7 @@
 -- to ensure the result updates frequently
 
 -- depends_on: {{ ref('tpch') }}
-{{ config(materialized='materializedview', indexes=[{'default': True}]) }}
+{{ config(materialized='materializedview', cluster='qa_canary_environment_compute', indexes=[{'default': True}]) }}
 
 SELECT
     c_name,
