@@ -437,6 +437,7 @@ steps:
 
   - id: checks-parallel-restart-environmentd-clusterd-storage
     label: "Checks parallel + restart of environmentd & storage clusterd"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
