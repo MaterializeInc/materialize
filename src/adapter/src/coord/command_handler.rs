@@ -778,8 +778,10 @@ impl Coordinator {
             .dec();
         self.cancel_pending_peeks(conn.conn_id());
         self.end_session_for_statement_logging(conn.uuid());
+
+        // Queue the builtin table update, we don't need to wait for it to complete.
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        self.send_builtin_table_updates(vec![update]).await;
+        let _ = self.send_builtin_table_updates_notify(vec![update]);
     }
 
     fn handle_append_webhook(
