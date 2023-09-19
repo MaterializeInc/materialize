@@ -5383,6 +5383,10 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
+    pub fn get_mz_introspections_cluster_id(&self) -> &ClusterId {
+        &self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER).id
+    }
+
     /// Resolves a [`Cluster`] for a TargetCluster.
     pub fn resolve_target_cluster(
         &self,

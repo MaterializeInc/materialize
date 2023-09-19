@@ -1316,6 +1316,11 @@ fn test_transactional_explain_timestamps() {
         .batch_execute("CREATE TABLE t1 (i1 int)")
         .unwrap();
 
+    client_writes.batch_execute("CREATE SCHEMA s").unwrap();
+    client_writes
+        .batch_execute("CREATE TABLE s.t2 (i2 int)")
+        .unwrap();
+
     // Verify execution during a write-only txn fails
     client_writes.batch_execute("BEGIN").unwrap();
     client_writes
@@ -1370,10 +1375,7 @@ fn test_transactional_explain_timestamps() {
 
     // Errors when an object outside the chosen time domain is referenced
     let error = client_reads
-        .query_one(
-            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;",
-            &[],
-        )
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM s.t2;", &[])
         .unwrap_err();
 
     assert!(format!("{}", error)

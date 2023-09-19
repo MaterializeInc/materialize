@@ -9,14 +9,6 @@
 
 mode cockroach
 
-# Since mz_now() is a custom function, the postgres client will look it up in the catalog on
-# first use. If the first use happens to be in a transaction, then we can get unexpected time
-# domain errors. This is an annoying hack to load the information in the postgres client before
-# we start any transactions.
-query T rowsort
-SELECT mz_now() LIMIT 0
-----
-
 statement ok
 CREATE TABLE t (i INT);
 
@@ -74,8 +66,7 @@ SELECT * FROM t;
 statement ok
 ROLLBACK
 
-# Test that user table and system tables cannot be mixed in a transaction because they
-# belong to different timedomains.
+# Test that user table and system tables can be mixed in a transaction.
 
 statement ok
 BEGIN;
@@ -84,11 +75,11 @@ query I rowsort
 SELECT * FROM t
 ----
 
-query error Transactions can only reference objects in the same timedomain.
+statement ok
 SELECT * FROM mz_views
 
 statement ok
-ROLLBACK
+COMMIT
 
 # Test that timeline dependent queries can be included in transaction.
 
@@ -173,3 +164,30 @@ SELECT 1 FROM pg_attribute LIMIT 1
 
 statement ok
 COMMIT
+
+# Verify that system tables are always included in read txns, even if not
+# mentioned in the first query.
+simple
+BEGIN;
+SELECT * FROM t;
+SELECT n.nspname = ANY(current_schemas(true)), n.nspname, t.typname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON t.typnamespace = n.oid WHERE t.oid = 2249;
+COMMIT;
+----
+COMPLETE 0
+COMPLETE 0
+t,pg_catalog,record
+COMPLETE 1
+COMPLETE 0
+
+simple
+BEGIN;
+SELECT row(1, 2);
+SELECT n.nspname = ANY(current_schemas(true)), n.nspname, t.typname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON t.typnamespace = n.oid WHERE t.oid = 2249;
+COMMIT;
+----
+COMPLETE 0
+(1,2)
+COMPLETE 1
+t,pg_catalog,record
+COMPLETE 1
+COMPLETE 0

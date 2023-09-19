@@ -805,12 +805,16 @@ impl Coordinator {
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
 
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
+        // Always include all system schemas, if schemas is non-empty. System schemas are sometimes
+        // used by applications in followup queries.
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
                 &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
+            ),
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
@@ -820,12 +824,8 @@ impl Coordinator {
                 &ResolvedDatabaseSpecifier::Ambient,
                 &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
-            ),
         ];
-        if system_schemas.iter().any(|s| schemas.contains(s)) {
+        if !schemas.is_empty() {
             schemas.extend(system_schemas);
         }
 
@@ -840,6 +840,12 @@ impl Coordinator {
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(item_ids.iter());
+        // Queries may get auto-routed to the mz_introspection cluster, so we include indexes on
+        // that cluster.
+        let system_id_bundle = self
+            .index_oracle(*self.catalog().get_mz_introspections_cluster_id())
+            .sufficient_collections(item_ids.iter());
+        id_bundle.extend(&system_id_bundle);
 
         // Filter out ids from different timelines.
         for ids in [
