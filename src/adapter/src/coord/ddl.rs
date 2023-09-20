@@ -369,7 +369,8 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates).await;
+            self.send_builtin_table_updates_blocking(builtin_table_updates)
+                .await;
 
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {

@@ -205,8 +205,15 @@ impl Client {
         let StartupResponse {
             role_id,
             set_vars,
+            write_notify,
             catalog,
         } = response;
+
+        // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
+        // for the writes here, as opposed to during the Startup command, because we don't want to
+        // block the coordinator on a Builtin Table write.
+        write_notify.await;
+
         client.session().initialize_role_metadata(role_id);
         for (name, val) in set_vars {
             client
