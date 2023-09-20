@@ -144,6 +144,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         return TargetCluster::Active;
     }
 
+    // Auto-routing mid transaction can cause an abort due to an invalid timedomain.
+    if session.transaction().is_in_multi_statement_transaction() {
+        return TargetCluster::Active;
+    }
+
     // These dependencies are just existing dataflows that are referenced in the plan.
     let mut depends_on = depends_on.into_iter().peekable();
     let has_dependencies = depends_on.peek().is_some();
