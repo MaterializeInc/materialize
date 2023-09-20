@@ -118,7 +118,7 @@ where
 {
     #[allow(clippy::disallowed_methods)]
     task::Builder::new()
-        .name(nc().as_ref())
+        .name(&format!("{}:{}", Handle::current().id(), nc().as_ref()))
         .spawn(future)
         .expect("task spawning cannot fail")
 }
@@ -163,7 +163,7 @@ where
     Output: Send + 'static,
 {
     task::Builder::new()
-        .name(nc().as_ref())
+        .name(&format!("{}:{}", Handle::current().id(), nc().as_ref()))
         .spawn_blocking(function)
         .expect("task spawning cannot fail")
 }
