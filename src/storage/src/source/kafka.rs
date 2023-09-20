@@ -463,6 +463,16 @@ impl SourceRender for KafkaSourceConnection {
                                 let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(start_offset));
                                 let upper_offset = MzOffset::from(u64::try_from(upper).expect("invalid negative offset"));
                                 let part_upper_ts = Partitioned::with_partition(pid, upper_offset);
+
+                                // This is the moment at which we have discovered a new partition
+                                // and we need to make sure we produce its initial snapshot at a
+                                // single timestamp so that the source transitions from no data
+                                // from this partition to all the data of this partition. We do
+                                // this by initializing the data capability to the starting offset
+                                // and, importantly, the progress capability directly to the high
+                                // watermark. This jump of the progress capability ensures that
+                                // everything until the high watermark will be reclocked to a
+                                // single point.
                                 entry.insert(PartitionCapability {
                                     data: data_cap.delayed(&part_min_ts),
                                     progress: progress_cap.delayed(&part_upper_ts),
@@ -563,8 +573,10 @@ impl SourceRender for KafkaSourceConnection {
 
                         let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
                         part_cap.data.downgrade(&upper);
-                        // This can fail because the progress capability initially jumps ahead of
-                        // the data capability.
+                        // We use try_downgrade here because during the initial snapshot phase the
+                        // data capability is not beyond the progress capability and therefore a
+                        // normal downgrade would panic. Once it catches up though the data
+                        // capbility is what's pushing the progress capability forward.
                         let _ = part_cap.progress.try_downgrade(&upper);
                     }
                 }
