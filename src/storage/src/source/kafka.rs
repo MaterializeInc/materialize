@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
@@ -94,7 +95,14 @@ pub struct KafkaSourceReader {
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
     /// Per partition capabilities used to produce messages
-    partition_capabilities: BTreeMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
+    partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
+}
+
+struct PartitionCapability {
+    /// The capability of the data produced
+    data: Capability<Partitioned<PartitionId, MzOffset>>,
+    /// The capability of the progress stream
+    progress: Capability<Partitioned<PartitionId, MzOffset>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -132,15 +140,13 @@ impl SourceRender for KafkaSourceConnection {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();
+        let (_progress_output, progress_stream) = builder.new_output();
         let (mut health_output, health_stream) = builder.new_output();
 
-        let button = builder.build(move |mut capabilities| async move {
-            let health_cap = capabilities.pop().unwrap();
-            let mut data_cap = capabilities.pop().unwrap();
-            assert!(capabilities.is_empty());
+        let button = builder.build(move |caps| async move {
+            let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
-            // Start offsets is a map from partition to the next offset to read
-            // from.
+            // Start offsets is a map from partition to the next offset to read from.
             let mut start_offsets: BTreeMap<_, i64> = self
                 .start_offsets.clone()
                 .into_iter()
@@ -168,12 +174,17 @@ impl SourceRender for KafkaSourceConnection {
                         }
 
                         let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
-                        partition_capabilities.insert(*pid, data_cap.delayed(&part_ts));
+                        let part_cap = PartitionCapability {
+                            data: data_cap.delayed(&part_ts),
+                            progress: progress_cap.delayed(&part_ts),
+                        };
+                        partition_capabilities.insert(*pid, part_cap);
                     }
                 }
             }
             let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
+            progress_cap.downgrade(&future_ts);
 
             info!(
                 source_id = config.id.to_string(),
@@ -445,17 +456,36 @@ impl SourceRender for KafkaSourceConnection {
                         }
                     }
 
-                    for &pid in partitions.keys() {
+                    for (&pid, &upper) in &partitions {
                         if config.responsible_for(pid) {
                             reader.ensure_partition(pid);
-                            let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
-                            reader
-                                .partition_capabilities
-                                .entry(pid)
-                                .or_insert_with(|| data_cap.delayed(&part_min_ts));
+                            if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
+                                let start_offset = match reader.start_offsets.get(&pid) {
+                                    Some(&offset) => offset.try_into().unwrap(),
+                                    None => 0u64,
+                                };
+                                let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(start_offset));
+                                let upper_offset = MzOffset::from(u64::try_from(upper).expect("invalid negative offset"));
+                                let part_upper_ts = Partitioned::with_partition(pid, upper_offset);
+
+                                // This is the moment at which we have discovered a new partition
+                                // and we need to make sure we produce its initial snapshot at a
+                                // single timestamp so that the source transitions from no data
+                                // from this partition to all the data of this partition. We do
+                                // this by initializing the data capability to the starting offset
+                                // and, importantly, the progress capability directly to the high
+                                // watermark. This jump of the progress capability ensures that
+                                // everything until the high watermark will be reclocked to a
+                                // single point.
+                                entry.insert(PartitionCapability {
+                                    data: data_cap.delayed(&part_min_ts),
+                                    progress: progress_cap.delayed(&part_upper_ts),
+                                });
+                            }
                         }
                     }
                     data_cap.downgrade(&future_ts);
+                    progress_cap.downgrade(&future_ts);
                     prev_pid_info = Some(partitions);
                 }
 
@@ -485,7 +515,7 @@ impl SourceRender for KafkaSourceConnection {
                                 construct_source_message(&message, &reader.metadata_columns);
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid];
+                                let part_cap = &reader.partition_capabilities[pid].data;
                                 data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                         }
@@ -505,7 +535,7 @@ impl SourceRender for KafkaSourceConnection {
                         match message {
                             Ok(Some((msg, time, diff))) => {
                                 let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid];
+                                let part_cap = &reader.partition_capabilities[pid].data;
                                 data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                             Ok(None) => continue,
@@ -535,11 +565,24 @@ impl SourceRender for KafkaSourceConnection {
                 assert!(reader.partition_consumers.is_empty());
                 reader.partition_consumers = consumers;
 
-                for (pid, last_offset) in reader.last_offsets.iter() {
-                    let pid_upper = MzOffset::from(u64::try_from(*last_offset + 1).unwrap());
-                    let upper = Partitioned::with_partition(*pid, pid_upper);
-                    let part_cap = reader.partition_capabilities.get_mut(pid).unwrap();
-                    part_cap.downgrade(&upper);
+                let positions = reader.consumer.position().unwrap();
+                let topic_positions = positions.elements_for_topic(&reader.topic_name);
+                for position in topic_positions {
+                    // The offset begins in the `Offset::Invalid` state in which case we simply
+                    // skip this partition.
+                    if let Offset::Offset(offset) = position.offset() {
+                        let pid = position.partition();
+                        let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
+                        let upper = Partitioned::with_partition(pid, upper_offset);
+
+                        let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
+                        part_cap.data.downgrade(&upper);
+                        // We use try_downgrade here because during the initial snapshot phase the
+                        // data capability is not beyond the progress capability and therefore a
+                        // normal downgrade would panic. Once it catches up though the data
+                        // capbility is what's pushing the progress capability forward.
+                        let _ = part_cap.progress.try_downgrade(&upper);
+                    }
                 }
 
                 let status = reader.health_status.lock().unwrap().take();
@@ -564,7 +607,7 @@ impl SourceRender for KafkaSourceConnection {
 
         (
             stream.as_collection(),
-            None,
+            Some(progress_stream),
             health_stream,
             Rc::new(button.press_on_drop()),
         )
