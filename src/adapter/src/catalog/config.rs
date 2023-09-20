@@ -32,7 +32,7 @@ use crate::config::SystemParameterSyncConfig;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: mz_catalog::Connection,
+    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.

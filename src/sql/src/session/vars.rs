@@ -533,6 +533,14 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
+pub const MAX_COPY_FROM_SIZE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_copy_from_size"),
+    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
+    value: &1_073_741_824,
+    description: "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
+    internal: false,
+};
+
 pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("max_identifier_length"),
     value: &mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
@@ -592,6 +600,14 @@ const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_consensus_connection_pool_ttl"),
     value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL,
     description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
+    internal: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
+const PERSIST_READER_LEASE_DURATION: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_reader_lease_duration"),
+    value: &PersistConfig::DEFAULT_READ_LEASE_DURATION,
+    description: "The time after which we'll clean up stale read leases",
     internal: true,
 };
 
@@ -841,16 +857,6 @@ mod upsert_rocksdb {
         internal: true,
     };
 }
-
-/// Controls the connect_timeout setting when connecting to PG via replication.
-const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_connect_timeout"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_CONNECT_TIMEOUT,
-    description: "Sets the timeout applied to socket-level connection attempts for PG \
-    replication connections. (Materialize)",
-    internal: true,
-};
-
 static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
     Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
 static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
@@ -898,42 +904,61 @@ const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_connect_timeout"),
+    value: &mz_postgres_util::DEFAULT_CONNECT_TIMEOUT,
+    description: "Sets the timeout applied to socket-level connection attempts for PG \
+    replication connections. (Materialize)",
+    internal: true,
+};
+
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
-/// when connecting to PG via replication.
-const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
-    name: UncasedStr::new("pg_replication_keepalives_retries"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
+/// when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("pg_source_keepalives_retries"),
+    value: &mz_postgres_util::DEFAULT_KEEPALIVE_RETRIES,
     description:
         "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
-    a connection when connecting to PG via replication. (Materialize)",
+    a connection when connecting to PG via `mz_postgres_util`. (Materialize)",
     internal: true,
 };
 
 /// Sets the amount of idle time before a keepalive packet is sent on the connection when connecting
-/// to PG via replication.
-const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_keepalives_idle"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_IDLE,
+/// to PG via `mz_postgres_util`.
+const PG_SOURCE_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_keepalives_idle"),
+    value: &mz_postgres_util::DEFAULT_KEEPALIVE_IDLE,
     description:
         "Sets the amount of idle time before a keepalive packet is sent on the connection \
-    when connecting to PG via replication. (Materialize)",
+    when connecting to PG via `mz_postgres_util`. (Materialize)",
     internal: true,
 };
 
-/// Sets the time interval between TCP keepalive probes when connecting to PG via replication.
-const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_keepalives_interval"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_INTERVAL,
+/// Sets the time interval between TCP keepalive probes when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_keepalives_interval"),
+    value: &mz_postgres_util::DEFAULT_KEEPALIVE_INTERVAL,
     description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
     replication. (Materialize)",
     internal: true,
 };
 
-/// Sets the TCP user timeout when connecting to PG via replication.
-const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("pg_replication_tcp_user_timeout"),
-    value: &mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
-    description: "Sets the TCP user timeout when connecting to PG via replication. (Materialize)",
+/// Sets the TCP user timeout when connecting to PG via `mz_postgres_util`.
+const PG_SOURCE_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_tcp_user_timeout"),
+    value: &mz_postgres_util::DEFAULT_TCP_USER_TIMEOUT,
+    description:
+        "Sets the TCP user timeout when connecting to PG via `mz_postgres_util`. (Materialize)",
+    internal: true,
+};
+
+/// Sets the `statement_timeout` value to use during the snapshotting phase of
+/// PG sources.
+const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_statement_timeout"),
+    value: &mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
+    description: "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
     internal: true,
 };
 
@@ -1207,6 +1232,22 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+const OPTIMIZER_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("optimizer_stats_timeout"),
+    value: &Duration::from_millis(250),
+    description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
+    applied to non-oneshot, i.e., long-lasting queries, like CREATE MATERIALIZED VIEW (Materialize).",
+    internal: true,
+};
+
+const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("optimizer_oneshot_stats_timeout"),
+    value: &Duration::from_millis(20),
+    description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
+    applied to oneshot queries, like SELECT (Materialize).",
+    internal: true,
+};
+
 static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
 pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
@@ -1456,7 +1497,7 @@ macro_rules! feature_flags {
     (@inner $name:expr, $feature_desc:literal) => {
         feature_flags!(@inner $name, $feature_desc, false);
     };
-    // Match `$name, $feature_desc, $value`, default `$internal` to false.
+    // Match `$name, $feature_desc, $value`, default `$internal` to true.
     (@inner $name:expr, $feature_desc:literal, $value:expr) => {
         feature_flags!(@inner $name, $feature_desc, $value, true);
     };
@@ -2108,7 +2149,7 @@ impl SessionVars {
         *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
     }
 
-    /// Returns the value of `enable_cardinality_estimates` configuration parameter.
+    /// Returns the value of `enable_session_cardinality_estimates` configuration parameter.
     pub fn enable_session_cardinality_estimates(&self) -> bool {
         *self.expect_value(&ENABLE_SESSION_CARDINALITY_ESTIMATES)
     }
@@ -2257,6 +2298,7 @@ impl SystemVars {
             .with_var(&MAX_SECRETS)
             .with_var(&MAX_ROLES)
             .with_var(&MAX_RESULT_SIZE)
+            .with_var(&MAX_COPY_FROM_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
@@ -2282,6 +2324,7 @@ impl SystemVars {
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
             .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
+            .with_var(&PERSIST_READER_LEASE_DURATION)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
@@ -2307,11 +2350,12 @@ impl SystemVars {
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
-            .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
-            .with_var(&PG_REPLICATION_KEEPALIVES_IDLE)
-            .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
-            .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
-            .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&PG_SOURCE_CONNECT_TIMEOUT)
+            .with_var(&PG_SOURCE_KEEPALIVES_IDLE)
+            .with_var(&PG_SOURCE_KEEPALIVES_INTERVAL)
+            .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
+            .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
+            .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -2350,7 +2394,9 @@ impl SystemVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
             .with_var(&TRUNCATE_STATEMENT_LOG)
-            .with_var(&STATEMENT_LOGGING_RETENTION);
+            .with_var(&STATEMENT_LOGGING_RETENTION)
+            .with_var(&OPTIMIZER_STATS_TIMEOUT)
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -2659,6 +2705,11 @@ impl SystemVars {
         *self.expect_value(&MAX_RESULT_SIZE)
     }
 
+    /// Returns the value of the `max_copy_from_size` configuration parameter.
+    pub fn max_copy_from_size(&self) -> u32 {
+        *self.expect_value(&MAX_COPY_FROM_SIZE)
+    }
+
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
     pub fn allowed_cluster_replica_sizes(&self) -> Vec<String> {
         self.expect_value(&ALLOWED_CLUSTER_REPLICA_SIZES)
@@ -2773,6 +2824,10 @@ impl SystemVars {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
     }
 
+    pub fn persist_reader_lease_duration(&self) -> Duration {
+        *self.expect_value(&PERSIST_READER_LEASE_DURATION)
+    }
+
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
         *self.expect_value(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -2788,29 +2843,34 @@ impl SystemVars {
         *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
     }
 
-    /// Returns the `pg_replication_connect_timeout` configuration parameter.
-    pub fn pg_replication_connect_timeout(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_CONNECT_TIMEOUT)
+    /// Returns the `pg_source_connect_timeout` configuration parameter.
+    pub fn pg_source_connect_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_CONNECT_TIMEOUT)
     }
 
-    /// Returns the `pg_replication_keepalives_retries` configuration parameter.
-    pub fn pg_replication_keepalives_retries(&self) -> u32 {
-        *self.expect_value(&PG_REPLICATION_KEEPALIVES_RETRIES)
+    /// Returns the `pg_source_keepalives_retries` configuration parameter.
+    pub fn pg_source_keepalives_retries(&self) -> u32 {
+        *self.expect_value(&PG_SOURCE_KEEPALIVES_RETRIES)
     }
 
-    /// Returns the `pg_replication_keepalives_idle` configuration parameter.
-    pub fn pg_replication_keepalives_idle(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_KEEPALIVES_IDLE)
+    /// Returns the `pg_source_keepalives_idle` configuration parameter.
+    pub fn pg_source_keepalives_idle(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_KEEPALIVES_IDLE)
     }
 
-    /// Returns the `pg_replication_keepalives_interval` configuration parameter.
-    pub fn pg_replication_keepalives_interval(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_KEEPALIVES_INTERVAL)
+    /// Returns the `pg_source_keepalives_interval` configuration parameter.
+    pub fn pg_source_keepalives_interval(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_KEEPALIVES_INTERVAL)
     }
 
-    /// Returns the `pg_replication_tcp_user_timeout` configuration parameter.
-    pub fn pg_replication_tcp_user_timeout(&self) -> Duration {
-        *self.expect_value(&PG_REPLICATION_TCP_USER_TIMEOUT)
+    /// Returns the `pg_source_tcp_user_timeout` configuration parameter.
+    pub fn pg_source_tcp_user_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_TCP_USER_TIMEOUT)
+    }
+
+    /// Returns the `pg_source_snapshot_statement_timeout` configuration parameter.
+    pub fn pg_source_snapshot_statement_timeout(&self) -> Duration {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -3070,6 +3130,16 @@ impl SystemVars {
     /// Returns the `statement_logging_retention` configuration parameter.
     pub fn statement_logging_retention(&self) -> Duration {
         *self.expect_value(&STATEMENT_LOGGING_RETENTION)
+    }
+
+    /// Returns the `optimizer_stats_timeout` configuration parameter.
+    pub fn optimizer_stats_timeout(&self) -> Duration {
+        *self.expect_value(&OPTIMIZER_STATS_TIMEOUT)
+    }
+
+    /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
+    pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
+        *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
     }
 }
 
@@ -3941,15 +4011,11 @@ impl Value for Duration {
             }
         };
 
-        let d = if d == 0 {
-            Duration::from_secs(u64::MAX)
-        } else {
-            f(d.checked_mul(m).ok_or(VarError::InvalidParameterValue {
-                parameter: param.into(),
-                values: vec![s.to_string()],
-                reason: "expected value to fit in u64".to_string(),
-            })?)
-        };
+        let d = f(d.checked_mul(m).ok_or(VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: vec![s.to_string()],
+            reason: "expected value to fit in u64".to_string(),
+        })?);
         Ok(d)
     }
 
@@ -3998,7 +4064,7 @@ fn test_value_duration() {
         }
     }
     inner("1", Duration::from_millis(1), Some("1ms"));
-    inner("0", Duration::from_secs(u64::MAX), None);
+    inner("0", Duration::from_secs(0), Some("0s"));
     inner("1ms", Duration::from_millis(1), None);
     inner("1000ms", Duration::from_millis(1000), Some("1s"));
     inner("1001ms", Duration::from_millis(1001), None);
@@ -4017,8 +4083,7 @@ fn test_value_duration() {
     inner("  1   s ", Duration::from_secs(1), None);
     inner("1s ", Duration::from_secs(1), None);
     inner("   1s", Duration::from_secs(1), None);
-    inner("0s", Duration::from_secs(u64::MAX), Some("0"));
-    inner("0d", Duration::from_secs(u64::MAX), Some("0"));
+    inner("0d", Duration::from_secs(0), Some("0s"));
     inner(
         "18446744073709551615",
         Duration::from_millis(u64::MAX),
@@ -4532,11 +4597,12 @@ pub fn is_compute_config_var(name: &str) -> bool {
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub fn is_storage_config_var(name: &str) -> bool {
-    name == PG_REPLICATION_CONNECT_TIMEOUT.name()
-        || name == PG_REPLICATION_KEEPALIVES_IDLE.name()
-        || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
-        || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
-        || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+    name == PG_SOURCE_CONNECT_TIMEOUT.name()
+        || name == PG_SOURCE_KEEPALIVES_IDLE.name()
+        || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
+        || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
+        || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
+        || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
@@ -4574,6 +4640,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
         || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
+        || name == PERSIST_READER_LEASE_DURATION.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()

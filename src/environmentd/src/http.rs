@@ -33,7 +33,7 @@ use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{Request, StatusCode};
+use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
@@ -164,6 +164,12 @@ impl HttpServer {
                 routing::post(webhook::handle_webhook),
             )
             .with_state(adapter_client)
+            .layer(
+                CorsLayer::new()
+                    .allow_methods(Method::POST)
+                    .allow_origin(AllowOrigin::mirror_request())
+                    .allow_headers(Any),
+            )
             .layer(
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_load_error))

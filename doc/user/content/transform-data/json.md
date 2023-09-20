@@ -146,7 +146,7 @@ function formSql(selectItems, viewName, sourceName, objectType) {
 
     let selects = selectItems.map(([name, cast, parents]) => {
         // Note: The first "parent" is the JSON column.
-        const formattedName = [...parents.slice(1), name].join("_");
+        const formattedName = [...parents.slice(1), name].join("_").toLowerCase();
 
         const parentPath = [parents[0], ...parents.slice(1).map((p) => `'${p}'`)].join("->");
         const formattedPath = parentPath.concat(`->>'${name}'`);

@@ -146,8 +146,10 @@ impl Value {
             (Datum::AclItem(ai), ScalarType::AclItem) => Some(Value::AclItem(ai)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
-            (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
-            (Datum::TimestampTz(ts), ScalarType::TimestampTz) => Some(Value::TimestampTz(ts)),
+            (Datum::Timestamp(ts), ScalarType::Timestamp { .. }) => Some(Value::Timestamp(ts)),
+            (Datum::TimestampTz(ts), ScalarType::TimestampTz { .. }) => {
+                Some(Value::TimestampTz(ts))
+            }
             (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),

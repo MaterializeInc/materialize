@@ -70,13 +70,8 @@ impl<'a> DataflowDescription<Plan> {
             .source_imports
             .iter_mut()
             .filter_map(|(id, (source_desc, _))| {
-                source_desc.arguments.operators.as_ref().map(|op| {
-                    let id = context
-                        .humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| id.to_string());
-                    ExplainSource::new(id, op, context)
-                })
+                let op = source_desc.arguments.operators.as_ref();
+                op.map(|op| ExplainSource::new(*id, op, context.config.filter_pushdown))
             })
             .collect::<Vec<_>>();
 
@@ -143,13 +138,8 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             .source_imports
             .iter_mut()
             .filter_map(|(id, (source_desc, _))| {
-                source_desc.arguments.operators.as_ref().map(|op| {
-                    let id = context
-                        .humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| id.to_string());
-                    ExplainSource::new(id, op, context)
-                })
+                let op = source_desc.arguments.operators.as_ref();
+                op.map(|op| ExplainSource::new(*id, op, context.config.filter_pushdown))
             })
             .collect::<Vec<_>>();
 

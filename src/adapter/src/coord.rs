@@ -125,7 +125,6 @@ use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
-use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
     ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
@@ -133,7 +132,7 @@ use crate::catalog::{
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterSyncConfig;
-use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
@@ -147,6 +146,7 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
+use mz_catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -197,7 +197,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate(Span),
+    GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -206,6 +206,15 @@ pub enum Message<T = mz_repr::Timestamp> {
         Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
+        /// Operations waiting on this group commit to finish.
+        ///
+        /// Note: this differs from the [`CompletedClientTransmitter`]s above because those are
+        /// used to send a response to a request, which indicates the Coordinator has finished all
+        /// of it's work, but these represent auxiliary work that still needs to be done, e.g.
+        /// waiting for a write to Persist to complete.
+        Vec<oneshot::Sender<()>>,
+        /// Permit which limits how many group commits we run at once.
+        Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -513,7 +522,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: mz_catalog::Connection,
+    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -915,6 +924,8 @@ pub struct Coordinator {
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    /// Notification that triggers a group commit.
+    group_commit_tx: appends::GroupCommitNotifier,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
@@ -1210,9 +1221,10 @@ impl Coordinator {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = Some(self.catalog().resolve_builtin_storage_collection(
-            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-        ));
+        let source_status_collection_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY),
+        );
 
         let mut collections_to_create = Vec::new();
 
@@ -1645,7 +1657,7 @@ impl Coordinator {
         // Advance all tables to the current timestamp
         debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
-            timestamp: _,
+            timestamp: write_ts,
             advance_to,
         } = self.get_local_write_ts().await;
         let appends = entries
@@ -1660,6 +1672,7 @@ impl Coordinator {
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap_or_terminate("cannot fail to append");
+        self.apply_local_write(write_ts).await;
 
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
@@ -1691,7 +1704,8 @@ impl Coordinator {
         }
 
         debug!("coordinator init: sending builtin table updates");
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.send_builtin_table_updates_blocking(builtin_table_updates)
+            .await;
 
         // Signal to the storage controller that it is now free to reconcile its
         // state with what it has learned from the adapter.
@@ -1813,6 +1827,7 @@ impl Coordinator {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        group_commit_rx: appends::GroupCommitWaiter,
     ) {
         // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
@@ -1894,6 +1909,12 @@ impl Coordinator {
                 () = self.controller.ready() => {
                     Message::ControllerReady
                 }
+                // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                permit = group_commit_rx.ready() => {
+                    let span = info_span!(parent: None, "group_commit_notify");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span, Some(permit))
+                },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
@@ -1914,7 +1935,7 @@ impl Coordinator {
                 _ = self.advance_timelines_interval.tick() => {
                     let span = info_span!(parent: None, "advance_timelines_interval");
                     span.follows_from(Span::current());
-                    Message::GroupCommitInitiate(span)
+                    Message::GroupCommitInitiate(span, None)
                 },
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
@@ -2033,6 +2054,7 @@ pub async fn serve(
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let (group_commit_tx, group_commit_rx) = appends::notifier();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
@@ -2130,6 +2152,7 @@ pub async fn serve(
                 ),
                 catalog: Arc::new(catalog),
                 internal_cmd_tx,
+                group_commit_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
@@ -2178,7 +2201,12 @@ pub async fn serve(
                 .send(bootstrap)
                 .expect("bootstrap_rx is not dropped until it receives this message");
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
+                handle.block_on(coord.serve(
+                    internal_cmd_rx,
+                    strict_serializable_reads_rx,
+                    cmd_rx,
+                    group_commit_rx,
+                ));
             }
         })
         .expect("failed to create coordinator thread");

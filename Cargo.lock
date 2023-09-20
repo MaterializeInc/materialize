@@ -3087,15 +3087,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lol_alloc"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36aabc32b791f1a506e0bb90e0fa03e983500549d7b1f2dad45b5fc20ef45974"
-dependencies = [
- "spin 0.9.8",
-]
-
-[[package]]
 name = "loom"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3456,6 +3447,7 @@ dependencies = [
  "serde_json",
  "serde_plain",
  "smallvec",
+ "static_assertions",
  "thiserror",
  "timely",
  "tokio",
@@ -3579,6 +3571,7 @@ dependencies = [
 name = "mz-catalog"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "futures",
  "itertools",
  "mz-audit-log",
@@ -3586,14 +3579,20 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-ore",
+ "mz-pgrepr",
  "mz-proto",
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-storage-client",
  "mz-storage-types",
+ "once_cell",
+ "postgres-openssl",
  "proptest",
  "proptest-derive",
+ "serde",
+ "serde_json",
  "tracing",
  "workspace-hack",
 ]
@@ -3723,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3915,7 +3914,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4474,7 +4473,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.69.0-dev"
+version = "0.70.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4977,6 +4976,7 @@ dependencies = [
  "mz-tracing",
  "once_cell",
  "paste",
+ "postgres_array",
  "proptest",
  "proptest-derive",
  "prost",
@@ -5002,13 +5002,11 @@ name = "mz-sql-lexer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "lol_alloc",
  "mz-ore",
  "phf",
  "phf_codegen",
  "serde",
  "uncased",
- "wasm-bindgen",
  "workspace-hack",
 ]
 
@@ -5539,13 +5537,12 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-repr",
- "num-derive",
  "num-traits",
  "ordered-float",
+ "paste",
  "proc-macro2",
  "serde_json",
  "tracing",
- "typemap_rev",
  "workspace-hack",
 ]
 
@@ -5662,17 +5659,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26873667bbbb7c5182d4a37c1add32cdf09f841af72da53318fdb81543c15085"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "num-derive"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "876a53fff98e03a936a674b29568b0e605f06b29372c2489ff4de23f1949743d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.107",
 ]
 
 [[package]]
@@ -6946,7 +6932,7 @@ dependencies = [
  "cc",
  "libc",
  "once_cell",
- "spin 0.5.2",
+ "spin",
  "untrusted",
  "web-sys",
  "winapi",
@@ -7637,15 +7623,6 @@ name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
-
-[[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
-]
 
 [[package]]
 name = "ssh-key"
@@ -8583,12 +8560,6 @@ dependencies = [
  "quote",
  "syn 1.0.107",
 ]
-
-[[package]]
-name = "typemap_rev"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74b08b0c1257381af16a5c3605254d529d3e7e109f3c62befc5d168968192998"
 
 [[package]]
 name = "typenum"

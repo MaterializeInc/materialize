@@ -13,7 +13,7 @@ use mz_expr::MirRelationExpr;
 
 use crate::attribute::arity::Arity;
 use crate::attribute::subtree_size::SubtreeSize;
-use crate::attribute::{Attribute, DerivedAttributes, RequiredAttributes};
+use crate::attribute::{Attribute, DerivedAttributes, DerivedAttributesBuilder};
 
 /// Compute the unique keys of each subtree of a [MirRelationExpr] from the
 /// bottom-up.
@@ -49,12 +49,12 @@ impl Attribute for UniqueKeys {
         self.results.push(subtree_keys);
     }
 
-    fn add_dependencies(builder: &mut RequiredAttributes)
+    fn add_dependencies(builder: &mut DerivedAttributesBuilder)
     where
         Self: Sized,
     {
-        builder.require::<Arity>();
-        builder.require::<SubtreeSize>();
+        builder.require(Arity::default());
+        builder.require(SubtreeSize::default());
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

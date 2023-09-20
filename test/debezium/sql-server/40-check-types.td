@@ -33,4 +33,4 @@ $ schema-registry-wait subject=sql-server.dbo.types_table-value
 
 
 > SELECT pg_typeof(decimal_col), pg_typeof(datetimeoffset_col), pg_typeof(datetime2_col), pg_typeof(smalldatetime_col), pg_typeof(bit_col) FROM types_table;
-numeric text bigint timestamp boolean
+numeric text bigint "timestamp without time zone" boolean

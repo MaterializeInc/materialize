@@ -72,8 +72,8 @@ class TestCurrentTimestamps(BaseCurrentTimestamps):
     def expected_schema(self):
         return {
             "current_timestamp": "timestamp with time zone",
-            "current_timestamp_in_utc_backcompat": "timestamp",
-            "current_timestamp_backcompat": "timestamp",
+            "current_timestamp_in_utc_backcompat": "timestamp without time zone",
+            "current_timestamp_backcompat": "timestamp without time zone",
         }
 
     pass

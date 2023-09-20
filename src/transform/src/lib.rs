@@ -135,9 +135,6 @@ use crate::dataflow::DataflowMetainfo;
 pub use dataflow::optimize_dataflow;
 use mz_ore::soft_assert;
 
-#[macro_use]
-extern crate num_derive;
-
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
 macro_rules! all {

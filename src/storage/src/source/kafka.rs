@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
@@ -16,6 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use chrono::NaiveDateTime;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -26,9 +28,12 @@ use mz_kafka_util::client::{
 use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
+use mz_storage_types::sources::{
+    KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
+};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 use mz_timely_util::order::Partitioned;
@@ -85,12 +90,19 @@ pub struct KafkaSourceReader {
     _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaPartitionMetrics,
-    /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
-    include_headers: bool,
+    /// The metadata columns requested by the user
+    metadata_columns: Vec<KafkaMetadataKind>,
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
     /// Per partition capabilities used to produce messages
-    partition_capabilities: BTreeMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
+    partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
+}
+
+struct PartitionCapability {
+    /// The capability of the data produced
+    data: Capability<Partitioned<PartitionId, MzOffset>>,
+    /// The capability of the progress stream
+    progress: Capability<Partitioned<PartitionId, MzOffset>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -128,15 +140,13 @@ impl SourceRender for KafkaSourceConnection {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();
+        let (_progress_output, progress_stream) = builder.new_output();
         let (mut health_output, health_stream) = builder.new_output();
 
-        let button = builder.build(move |mut capabilities| async move {
-            let health_cap = capabilities.pop().unwrap();
-            let mut data_cap = capabilities.pop().unwrap();
-            assert!(capabilities.is_empty());
+        let button = builder.build(move |caps| async move {
+            let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
-            // Start offsets is a map from partition to the next offset to read
-            // from.
+            // Start offsets is a map from partition to the next offset to read from.
             let mut start_offsets: BTreeMap<_, i64> = self
                 .start_offsets.clone()
                 .into_iter()
@@ -164,12 +174,17 @@ impl SourceRender for KafkaSourceConnection {
                         }
 
                         let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
-                        partition_capabilities.insert(*pid, data_cap.delayed(&part_ts));
+                        let part_cap = PartitionCapability {
+                            data: data_cap.delayed(&part_ts),
+                            progress: progress_cap.delayed(&part_ts),
+                        };
+                        partition_capabilities.insert(*pid, part_cap);
                     }
                 }
             }
             let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
+            progress_cap.downgrade(&future_ts);
 
             info!(
                 source_id = config.id.to_string(),
@@ -361,7 +376,7 @@ impl SourceRender for KafkaSourceConnection {
                 start_offsets,
                 stats_rx,
                 partition_info,
-                include_headers: self.include_headers.is_some(),
+                metadata_columns: self.metadata_columns.into_iter().map(|(_name, kind)| kind).collect(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
                     config.base_metrics.clone(),
@@ -441,17 +456,36 @@ impl SourceRender for KafkaSourceConnection {
                         }
                     }
 
-                    for &pid in partitions.keys() {
+                    for (&pid, &upper) in &partitions {
                         if config.responsible_for(pid) {
                             reader.ensure_partition(pid);
-                            let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
-                            reader
-                                .partition_capabilities
-                                .entry(pid)
-                                .or_insert_with(|| data_cap.delayed(&part_min_ts));
+                            if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
+                                let start_offset = match reader.start_offsets.get(&pid) {
+                                    Some(&offset) => offset.try_into().unwrap(),
+                                    None => 0u64,
+                                };
+                                let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(start_offset));
+                                let upper_offset = MzOffset::from(u64::try_from(upper).expect("invalid negative offset"));
+                                let part_upper_ts = Partitioned::with_partition(pid, upper_offset);
+
+                                // This is the moment at which we have discovered a new partition
+                                // and we need to make sure we produce its initial snapshot at a
+                                // single timestamp so that the source transitions from no data
+                                // from this partition to all the data of this partition. We do
+                                // this by initializing the data capability to the starting offset
+                                // and, importantly, the progress capability directly to the high
+                                // watermark. This jump of the progress capability ensures that
+                                // everything until the high watermark will be reclocked to a
+                                // single point.
+                                entry.insert(PartitionCapability {
+                                    data: data_cap.delayed(&part_min_ts),
+                                    progress: progress_cap.delayed(&part_upper_ts),
+                                });
+                            }
                         }
                     }
                     data_cap.downgrade(&future_ts);
+                    progress_cap.downgrade(&future_ts);
                     prev_pid_info = Some(partitions);
                 }
 
@@ -478,10 +512,10 @@ impl SourceRender for KafkaSourceConnection {
                         }
                         Ok(message) => {
                             let (message, ts) =
-                                construct_source_message(&message, reader.include_headers);
+                                construct_source_message(&message, &reader.metadata_columns);
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid];
+                                let part_cap = &reader.partition_capabilities[pid].data;
                                 data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                         }
@@ -501,7 +535,7 @@ impl SourceRender for KafkaSourceConnection {
                         match message {
                             Ok(Some((msg, time, diff))) => {
                                 let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid];
+                                let part_cap = &reader.partition_capabilities[pid].data;
                                 data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                             Ok(None) => continue,
@@ -531,11 +565,24 @@ impl SourceRender for KafkaSourceConnection {
                 assert!(reader.partition_consumers.is_empty());
                 reader.partition_consumers = consumers;
 
-                for (pid, last_offset) in reader.last_offsets.iter() {
-                    let pid_upper = MzOffset::from(u64::try_from(*last_offset + 1).unwrap());
-                    let upper = Partitioned::with_partition(*pid, pid_upper);
-                    let part_cap = reader.partition_capabilities.get_mut(pid).unwrap();
-                    part_cap.downgrade(&upper);
+                let positions = reader.consumer.position().unwrap();
+                let topic_positions = positions.elements_for_topic(&reader.topic_name);
+                for position in topic_positions {
+                    // The offset begins in the `Offset::Invalid` state in which case we simply
+                    // skip this partition.
+                    if let Offset::Offset(offset) = position.offset() {
+                        let pid = position.partition();
+                        let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
+                        let upper = Partitioned::with_partition(pid, upper_offset);
+
+                        let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
+                        part_cap.data.downgrade(&upper);
+                        // We use try_downgrade here because during the initial snapshot phase the
+                        // data capability is not beyond the progress capability and therefore a
+                        // normal downgrade would panic. Once it catches up though the data
+                        // capbility is what's pushing the progress capability forward.
+                        let _ = part_cap.progress.try_downgrade(&upper);
+                    }
                 }
 
                 let status = reader.health_status.lock().unwrap().take();
@@ -560,7 +607,7 @@ impl SourceRender for KafkaSourceConnection {
 
         (
             stream.as_collection(),
-            None,
+            Some(progress_stream),
             health_stream,
             Rc::new(button.press_on_drop()),
         )
@@ -668,7 +715,7 @@ impl KafkaSourceReader {
         self.partition_consumers.push(PartitionConsumer::new(
             partition_id,
             partition_queue,
-            self.include_headers,
+            self.metadata_columns.clone(),
         ));
         assert_eq!(
             self.consumer
@@ -831,20 +878,11 @@ impl KafkaSourceReader {
 
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
-    include_headers: bool,
+    metadata_columns: &[KafkaMetadataKind],
 ) -> (
     SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
     (PartitionId, MzOffset),
 ) {
-    let headers = match msg.headers() {
-        Some(headers) if include_headers => Some(
-            headers
-                .iter()
-                .map(|h| (h.key.into(), h.value.map(|v| v.to_vec())))
-                .collect::<Vec<_>>(),
-        ),
-        _ => None,
-    };
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
         panic!(
@@ -852,11 +890,52 @@ fn construct_source_message(
             msg.offset()
         );
     };
+
+    let mut metadata = Row::default();
+    let mut packer = metadata.packer();
+    for kind in metadata_columns {
+        match kind {
+            KafkaMetadataKind::Partition => packer.push(Datum::from(pid)),
+            KafkaMetadataKind::Offset => packer.push(Datum::UInt64(offset)),
+            KafkaMetadataKind::Timestamp => {
+                let ts = msg
+                    .timestamp()
+                    .to_millis()
+                    .expect("kafka sources always have upstream_time");
+
+                let d: Datum = NaiveDateTime::from_timestamp_millis(ts)
+                    .and_then(|dt| {
+                        let ct: Option<CheckedTimestamp<NaiveDateTime>> = dt.try_into().ok();
+                        ct
+                    })
+                    .into();
+                packer.push(d)
+            }
+            KafkaMetadataKind::Headers => {
+                packer.push_list_with(|r| {
+                    if let Some(headers) = msg.headers() {
+                        for header in headers.iter() {
+                            match header.value {
+                                Some(v) => r.push_list_with(|record_row| {
+                                    record_row.push(Datum::String(header.key));
+                                    record_row.push(Datum::Bytes(v));
+                                }),
+                                None => r.push_list_with(|record_row| {
+                                    record_row.push(Datum::String(header.key));
+                                    record_row.push(Datum::Null);
+                                }),
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     let msg = SourceMessage {
-        upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),
-        headers,
+        metadata,
     };
     (msg, (pid, offset.into()))
 }
@@ -867,8 +946,8 @@ struct PartitionConsumer {
     pid: PartitionId,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
-    /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
-    include_headers: bool,
+    /// Additional metadata columns requested by the user
+    metadata_columns: Vec<KafkaMetadataKind>,
 }
 
 impl PartitionConsumer {
@@ -876,12 +955,12 @@ impl PartitionConsumer {
     fn new(
         pid: PartitionId,
         partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
-        include_headers: bool,
+        metadata_columns: Vec<KafkaMetadataKind>,
     ) -> Self {
         PartitionConsumer {
             pid,
             partition_queue,
-            include_headers,
+            metadata_columns,
         }
     }
 
@@ -902,7 +981,7 @@ impl PartitionConsumer {
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
-                let (msg, ts) = construct_source_message(&msg, self.include_headers);
+                let (msg, ts) = construct_source_message(&msg, &self.metadata_columns);
                 assert_eq!(ts.0, self.pid);
                 Ok(Some((msg, ts)))
             }

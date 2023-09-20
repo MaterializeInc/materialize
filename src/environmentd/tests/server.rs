@@ -79,6 +79,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
+use std::io::Write as _;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -98,6 +99,7 @@ use mz_environmentd::WebSocketResponse;
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::{
@@ -106,6 +108,7 @@ use mz_ore::{
 };
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql_parser::ast::display::AstDisplay;
 use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
@@ -261,6 +264,7 @@ fn test_statement_logging_immediate() {
         "SHOW ALL",
         "SHOW application_name",
     ];
+    let constants: &[&str] = &["1", "2", "3", "hunter2", "my_application"];
 
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
@@ -278,7 +282,8 @@ SELECT
     mseh.finished_at,
     mseh.finished_status,
     mpsh.sql,
-    mpsh.prepared_at
+    mpsh.prepared_at,
+    mpsh.redacted_sql
 FROM
     mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
@@ -296,6 +301,7 @@ ORDER BY mseh.began_at;",
         finished_status: String,
         sql: String,
         prepared_at: DateTime<Utc>,
+        redacted_sql: String,
     }
     assert_eq!(sl.len(), successful_immediates.len());
     for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
@@ -306,6 +312,7 @@ ORDER BY mseh.began_at;",
             finished_status: r.get(3),
             sql: r.get(4),
             prepared_at: r.get(5),
+            redacted_sql: r.get(6),
         };
         assert_eq!(r.sample_rate, 1.0);
         assert_eq!(
@@ -319,7 +326,18 @@ ORDER BY mseh.began_at;",
         // both the start and end time, but the `NowFn` mechanism doesn't
         // appear to give us any way to do that. Instead, let's just check
         // that none of these statements took longer than 5s wall-clock time.
-        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5))
+        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5));
+        if !r.sql.is_empty() {
+            let expected_redacted = mz_sql::parse::parse(&r.sql)
+                .unwrap()
+                .into_element()
+                .ast
+                .to_ast_string_redacted();
+            assert_eq!(r.redacted_sql, expected_redacted);
+            for constant in constants {
+                assert!(!r.redacted_sql.contains(constant));
+            }
+        }
     }
 }
 
@@ -2966,4 +2984,53 @@ fn test_webhook_url_notice() {
         .expect("success");
     let body: String = row.get("body");
     assert_eq!(body, "request_foo");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn copy_from() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let mut system_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    system_client
+        .batch_execute("ALTER SYSTEM SET max_copy_from_size = 50")
+        .unwrap();
+    drop(system_client);
+
+    client
+        .execute("CREATE TABLE copy_from_test ( x text )", &[])
+        .expect("success");
+
+    let mut writer = client
+        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
+        .expect("success");
+    writer
+        .write_all(b"hello\nworld\n")
+        .expect("write all to succeed");
+    writer.finish().expect("success");
+
+    let rows = client
+        .query("SELECT * FROM copy_from_test", &[])
+        .expect("success");
+    assert_eq!(rows.len(), 2);
+
+    // This copy from is 53 bytes long, which is greater than our limit of 50.
+    let mut writer = client
+        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
+        .expect("success");
+    writer
+        .write_all(b"this\ncopy\nis\nlarger\nthan\nour\ngreatest\nsupported\nsize\n")
+        .expect("write all to succeed");
+    let result = writer.finish().unwrap_db_error();
+    assert_eq!(result.code(), &SqlState::INSUFFICIENT_RESOURCES);
+
+    let rows = client
+        .query("SELECT * FROM copy_from_test", &[])
+        .expect("success");
+    assert_eq!(rows.len(), 2);
 }

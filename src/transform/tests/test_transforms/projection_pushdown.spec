@@ -13,18 +13,18 @@
 # Define x source
 define
 DefSource name=x
-  - bigint
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
+  - c3: bigint
 ----
 Source defined as t0
 
 # Define y source
 define
 DefSource name=y
-  - bigint
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
+  - c3: bigint
 ----
 Source defined as t1
 

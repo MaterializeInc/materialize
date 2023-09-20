@@ -20,6 +20,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use futures::future::BoxFuture;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -186,12 +187,16 @@ pub struct Response<T> {
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
 /// The response to [`Client::startup`](crate::Client::startup).
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct StartupResponse {
     /// RoleId for the user.
     pub role_id: RoleId,
     /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
     pub set_vars: Vec<(String, String)>,
+    /// A future that completes when all necessary Builtin Table writes have completed.
+    #[derivative(Debug = "ignore")]
+    pub write_notify: BoxFuture<'static, ()>,
     pub catalog: Arc<Catalog>,
 }
 
@@ -235,6 +240,10 @@ impl GetVariablesResponse {
             vars.map(|var| (var.name().to_string(), var.value()))
                 .collect(),
         )
+    }
+
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.get(name).map(|s| s.as_str())
     }
 }
 

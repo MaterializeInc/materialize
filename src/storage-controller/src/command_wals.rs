@@ -55,7 +55,7 @@ where
     {
         SHARD_FINALIZATION
             .insert_without_overwrite(
-                &mut self.state.stash,
+                &mut self.stash,
                 entries.into_iter().map(|key| (key.into_proto(), ())),
             )
             .await
@@ -75,7 +75,7 @@ where
             .map(|s| RustType::into_proto(&s))
             .collect();
         SHARD_FINALIZATION
-            .delete_keys(&mut self.state.stash, proto_shards)
+            .delete_keys(&mut self.stash, proto_shards)
             .await
             .expect("must be able to write to stash")
     }
@@ -110,7 +110,6 @@ where
 
         // Get stash metadata.
         let (metadata, shard_finalization) = self
-            .state
             .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
@@ -178,7 +177,7 @@ where
                 .map(|id| RustType::into_proto(&id))
                 .collect();
             super::METADATA_COLLECTION
-                .delete_keys(&mut self.state.stash, proto_ids_to_drop)
+                .delete_keys(&mut self.stash, proto_ids_to_drop)
                 .await
                 .expect("stash operation must succeed");
         }

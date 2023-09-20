@@ -12,6 +12,7 @@ import re
 import time
 from copy import copy
 from datetime import datetime
+from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
@@ -85,6 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-replica-metrics",
         "test-compute-controller-metrics",
         "test-metrics-retention-across-restart",
+        "test-concurrent-connections",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -2381,3 +2383,45 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     table_since2, index_since2 = collect_sinces()
     validate_since(table_since2, "table_since2")
     validate_since(index_since2, "index_since2")
+
+
+def workflow_test_concurrent_connections(c: Composition) -> None:
+    """
+    Run many concurrent connections, measure their p50 and p99 latency, make
+    sure #21782 does not regress.
+    """
+    num_conns = 2000
+    runtimes: list[float] = [float("inf")] * num_conns
+
+    def worker(c: Composition, i: int) -> None:
+        start_time = time.time()
+        c.sql("SELECT 1")
+        end_time = time.time()
+        runtimes[i] = end_time - start_time
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql(
+        f"ALTER SYSTEM SET max_connections = {num_conns + 4};",
+        port=6877,
+        user="mz_system",
+    )
+
+    threads = []
+    for i in range(num_conns):
+        thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
+        threads.append(thread)
+
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    p = quantiles(runtimes, n=100)
+    print(
+        f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+    )
+    assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
+    assert p[98] < 1.5, f"p99 is {p[98]:.2f}s, should be less than 1.5s"

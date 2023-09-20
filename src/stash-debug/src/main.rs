@@ -87,7 +87,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use clap::Parser;
-use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::{self as catalog, BootstrapArgs};
@@ -359,7 +358,7 @@ impl Usage {
     fn names(&self) -> BTreeSet<String> {
         BTreeSet::from_iter(
             match self {
-                Self::Catalog => catalog::ALL_COLLECTIONS,
+                Self::Catalog => mz_catalog::ALL_COLLECTIONS,
                 Self::Storage => storage::ALL_COLLECTIONS,
             }
             .iter()
@@ -476,18 +475,6 @@ impl Usage {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
-                builtin_clusters: BUILTIN_CLUSTERS
-                    .into_iter()
-                    .map(|cluster| (*cluster).into())
-                    .collect(),
-                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
-                    .into_iter()
-                    .map(|replica| (*replica).into())
-                    .collect(),
-                builtin_roles: BUILTIN_ROLES
-                    .into_iter()
-                    .map(|role| (*role).into())
-                    .collect(),
             },
             None,
         )
@@ -495,7 +482,7 @@ impl Usage {
         let secrets_reader = Arc::new(InMemorySecretsController::new());
 
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage,
+            storage: Box::new(storage),
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,

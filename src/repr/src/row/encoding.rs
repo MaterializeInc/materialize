@@ -125,7 +125,10 @@ impl ColumnType {
             (true, Jsonb) => Some(f.call::<Option<crate::adt::jsonb::Jsonb>>()),
             (false, MzTimestamp) => Some(f.call::<crate::Timestamp>()),
             (true, MzTimestamp) => Some(f.call::<Option<crate::Timestamp>>()),
-            (_, Numeric { .. } | Time | Timestamp | TimestampTz | Interval | Uuid) => {
+            (
+                _,
+                Numeric { .. } | Time | Timestamp { .. } | TimestampTz { .. } | Interval | Uuid,
+            ) => {
                 if *nullable {
                     Some(f.call::<NullableProtoDatumToPersist>())
                 } else {

@@ -39,6 +39,7 @@ is_superuser                        off                     "Reports whether the
 max_aws_privatelink_connections     0                       "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
 max_clusters                        10                      "The maximum number of clusters in the region (Materialize)."
 max_connections                     1000                    "The maximum number of concurrent connections (Materialize)."
+max_copy_from_size                  1073741824              "The maximum size in bytes we buffer for COPY FROM statements (Materialize)."
 max_credit_consumption_rate         1024                    "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize)."
 max_databases                       1000                    "The maximum number of databases in the region (Materialize)."
 max_identifier_length               255                     "The maximum length of object identifiers in bytes (PostgreSQL)."

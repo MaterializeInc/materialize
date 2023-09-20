@@ -162,13 +162,6 @@ a b
 
 # test INCLUDE metadata
 
-! CREATE SOURCE non_dbz_data_metadata
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
-  INCLUDE TOPIC
-  ENVELOPE NONE
-contains:INCLUDE TOPIC not yet supported
-
 > CREATE SOURCE non_dbz_data_metadata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'

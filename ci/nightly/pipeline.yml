@@ -401,6 +401,7 @@ steps:
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -412,6 +413,7 @@ steps:
 
   - id: checks-parallel-restart-clusterd-compute
     label: "Checks parallel + restart compute clusterd"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -423,6 +425,7 @@ steps:
 
   - id: checks-parallel-restart-entire-mz
     label: "Checks parallel + restart of the entire Mz"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -445,6 +448,7 @@ steps:
 
   - id: checks-parallel-kill-clusterd-storage
     label: "Checks parallel + kill storage clusterd"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -456,6 +460,7 @@ steps:
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -807,7 +812,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
-          args: [--runtime=3000, --complexity=dml, --threads=16]
+          args: [--runtime=3000, --complexity=dml, --threads=8]
     # Allow retrying generally flaky tests even when they are green
     retry:
       manual:

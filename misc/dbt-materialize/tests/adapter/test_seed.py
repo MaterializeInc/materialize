@@ -55,7 +55,7 @@ seeds:
   - name: a_date
     tests:
     - column_type:
-        type: timestamp
+        type: timestamp without time zone
   - name: looks_like_a_date
     tests:
     - column_type:

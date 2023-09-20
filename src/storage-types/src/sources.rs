@@ -617,39 +617,36 @@ impl TotalOrder for MzOffset {}
 
 /// Which piece of metadata a column corresponds to
 #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum IncludedColumnSource {
+pub enum KafkaMetadataKind {
     Partition,
     Offset,
     Timestamp,
-    Topic,
     Headers,
 }
 
-impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
-    fn into_proto(&self) -> ProtoIncludedColumnSource {
-        use proto_included_column_source::Kind;
-        ProtoIncludedColumnSource {
+impl RustType<ProtoKafkaMetadataKind> for KafkaMetadataKind {
+    fn into_proto(&self) -> ProtoKafkaMetadataKind {
+        use proto_kafka_metadata_kind::Kind;
+        ProtoKafkaMetadataKind {
             kind: Some(match self {
-                IncludedColumnSource::Partition => Kind::Partition(()),
-                IncludedColumnSource::Offset => Kind::Offset(()),
-                IncludedColumnSource::Timestamp => Kind::Timestamp(()),
-                IncludedColumnSource::Topic => Kind::Topic(()),
-                IncludedColumnSource::Headers => Kind::Headers(()),
+                KafkaMetadataKind::Partition => Kind::Partition(()),
+                KafkaMetadataKind::Offset => Kind::Offset(()),
+                KafkaMetadataKind::Timestamp => Kind::Timestamp(()),
+                KafkaMetadataKind::Headers => Kind::Headers(()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoIncludedColumnSource) -> Result<Self, TryFromProtoError> {
-        use proto_included_column_source::Kind;
+    fn from_proto(proto: ProtoKafkaMetadataKind) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_metadata_kind::Kind;
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIncludedColumnSource::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaMetadataKind::kind"))?;
         Ok(match kind {
-            Kind::Partition(()) => IncludedColumnSource::Partition,
-            Kind::Offset(()) => IncludedColumnSource::Offset,
-            Kind::Timestamp(()) => IncludedColumnSource::Timestamp,
-            Kind::Topic(()) => IncludedColumnSource::Topic,
-            Kind::Headers(()) => IncludedColumnSource::Headers,
+            Kind::Partition(()) => KafkaMetadataKind::Partition,
+            Kind::Offset(()) => KafkaMetadataKind::Offset,
+            Kind::Timestamp(()) => KafkaMetadataKind::Timestamp,
+            Kind::Headers(()) => KafkaMetadataKind::Headers,
         })
     }
 }
@@ -690,29 +687,6 @@ impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
             Kind::None(()) => KeyEnvelope::None,
             Kind::Flattened(()) => KeyEnvelope::Flattened,
             Kind::Named(name) => KeyEnvelope::Named(name),
-        })
-    }
-}
-
-/// A column that was created via an `INCLUDE` expression
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct IncludedColumnPos {
-    pub name: String,
-    pub pos: usize,
-}
-
-impl RustType<ProtoIncludedColumnPos> for IncludedColumnPos {
-    fn into_proto(&self) -> ProtoIncludedColumnPos {
-        ProtoIncludedColumnPos {
-            name: self.name.clone(),
-            pos: self.pos.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoIncludedColumnPos) -> Result<Self, TryFromProtoError> {
-        Ok(IncludedColumnPos {
-            name: proto.name,
-            pos: usize::from_proto(proto.pos)?,
         })
     }
 }
@@ -1393,13 +1367,9 @@ pub trait SourceConnection: Debug + Clone + PartialEq {
     /// the catalog, if any.
     fn connection_id(&self) -> Option<GlobalId>;
 
-    /// Returns available metadata columns that this connection offers in (name, type) pairs in the
-    /// order specified by the user.
+    /// Returns metadata columns that this connection *instance* will produce once rendered. The
+    /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
-
-    /// The available metadata columns in the order specified by the user. This only identifies the
-    /// kinds of columns that this source offers without any further information.
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
 
     /// Determines if `self` is compatible with another `SourceConnection`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -1432,15 +1402,7 @@ pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
-    /// If present, include the timestamp as an output column of the source with the given name
-    pub include_timestamp: Option<IncludedColumnPos>,
-    /// If present, include the partition as an output column of the source with the given name.
-    pub include_partition: Option<IncludedColumnPos>,
-    /// If present, include the topic as an output column of the source with the given name.
-    pub include_topic: Option<IncludedColumnPos>,
-    /// If present, include the offset as an output column of the source with the given name.
-    pub include_offset: Option<IncludedColumnPos>,
-    pub include_headers: Option<IncludedColumnPos>,
+    pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
@@ -1454,11 +1416,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             start_offsets,
             group_id_prefix,
             environment_id,
-            include_timestamp,
-            include_partition,
-            include_topic,
-            include_offset,
-            include_headers,
+            metadata_columns,
         } = self;
 
         KafkaSourceConnection {
@@ -1468,11 +1426,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             start_offsets,
             group_id_prefix,
             environment_id,
-            include_timestamp,
-            include_partition,
-            include_topic,
-            include_offset,
-            include_headers,
+            metadata_columns,
         }
     }
 }
@@ -1523,65 +1477,39 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     }
 
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        let mut items = BTreeMap::new();
-        let header_typ = ScalarType::List {
-            element_type: Box::new(ScalarType::Record {
-                fields: vec![
-                    (
-                        "key".into(),
-                        ColumnType {
-                            nullable: false,
-                            scalar_type: ScalarType::String,
-                        },
-                    ),
-                    (
-                        "value".into(),
-                        ColumnType {
-                            nullable: false,
-                            scalar_type: ScalarType::Bytes,
-                        },
-                    ),
-                ],
-                custom_id: None,
-            }),
-            custom_id: None,
-        };
-        let metadata_columns = [
-            (&self.include_offset, ScalarType::UInt64),
-            (&self.include_partition, ScalarType::Int32),
-            (&self.include_timestamp, ScalarType::Timestamp),
-            (&self.include_topic, ScalarType::String),
-            (&self.include_headers, header_typ),
-        ];
-
-        for (include, ty) in metadata_columns {
-            if let Some(include) = include {
-                items.insert(include.pos + 1, (&*include.name, ty.nullable(false)));
-            }
-        }
-
-        items.into_values().collect()
-    }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        // create a sorted list of column types based on the order they were declared in sql
-        // TODO: should key be included in the sorted list? Breaking change, and it's
-        // already special (it commonly multiple columns embedded in it).
-        let mut items = BTreeMap::new();
-        let metadata_columns = [
-            (&self.include_offset, IncludedColumnSource::Offset),
-            (&self.include_partition, IncludedColumnSource::Partition),
-            (&self.include_timestamp, IncludedColumnSource::Timestamp),
-            (&self.include_topic, IncludedColumnSource::Topic),
-            (&self.include_headers, IncludedColumnSource::Headers),
-        ];
-        for (include, ty) in metadata_columns {
-            if let Some(include) = include {
-                items.insert(include.pos, ty);
-            }
-        }
-
-        items.into_values().collect()
+        self.metadata_columns
+            .iter()
+            .map(|(name, kind)| {
+                let typ = match kind {
+                    KafkaMetadataKind::Partition => ScalarType::Int32,
+                    KafkaMetadataKind::Offset => ScalarType::UInt64,
+                    KafkaMetadataKind::Timestamp => ScalarType::Timestamp { precision: None },
+                    KafkaMetadataKind::Headers => ScalarType::List {
+                        element_type: Box::new(ScalarType::Record {
+                            fields: vec![
+                                (
+                                    "key".into(),
+                                    ColumnType {
+                                        nullable: false,
+                                        scalar_type: ScalarType::String,
+                                    },
+                                ),
+                                (
+                                    "value".into(),
+                                    ColumnType {
+                                        nullable: false,
+                                        scalar_type: ScalarType::Bytes,
+                                    },
+                                ),
+                            ],
+                            custom_id: None,
+                        }),
+                        custom_id: None,
+                    },
+                };
+                (&**name, typ.nullable(false))
+            })
+            .collect()
     }
 }
 
@@ -1600,11 +1528,7 @@ where
             proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             any::<String>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
-            any::<Option<IncludedColumnPos>>(),
+            proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4),
         )
             .prop_map(
                 |(
@@ -1614,11 +1538,7 @@ where
                     start_offsets,
                     group_id_prefix,
                     environment_id,
-                    include_timestamp,
-                    include_partition,
-                    include_topic,
-                    include_offset,
-                    include_headers,
+                    metadata_columns,
                 )| KafkaSourceConnection {
                     connection,
                     connection_id,
@@ -1626,11 +1546,7 @@ where
                     start_offsets,
                     group_id_prefix,
                     environment_id,
-                    include_timestamp,
-                    include_partition,
-                    include_topic,
-                    include_offset,
-                    include_headers,
+                    metadata_columns,
                 },
             )
             .boxed()
@@ -1647,15 +1563,24 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
             group_id_prefix: self.group_id_prefix.clone(),
             environment_id: None,
             environment_name: Some(self.environment_id.into_proto()),
-            include_timestamp: self.include_timestamp.into_proto(),
-            include_partition: self.include_partition.into_proto(),
-            include_topic: self.include_topic.into_proto(),
-            include_offset: self.include_offset.into_proto(),
-            include_headers: self.include_headers.into_proto(),
+            metadata_columns: self
+                .metadata_columns
+                .iter()
+                .map(|(name, kind)| ProtoKafkaMetadataColumn {
+                    name: name.into_proto(),
+                    kind: Some(kind.into_proto()),
+                })
+                .collect(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
+        let mut metadata_columns = Vec::with_capacity(proto.metadata_columns.len());
+        for c in proto.metadata_columns {
+            let kind = c.kind.into_rust_if_some("ProtoKafkaMetadataColumn::kind")?;
+            metadata_columns.push((c.name, kind));
+        }
+
         Ok(KafkaSourceConnection {
             connection: proto
                 .connection
@@ -1674,11 +1599,7 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                     uuid.to_string()
                 }
             },
-            include_timestamp: proto.include_timestamp.into_rust()?,
-            include_partition: proto.include_partition.into_rust()?,
-            include_topic: proto.include_topic.into_rust()?,
-            include_offset: proto.include_offset.into_rust()?,
-            include_headers: proto.include_headers.into_rust()?,
+            metadata_columns,
         })
     }
 }
@@ -1720,7 +1641,6 @@ pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
     pub encoding: encoding::SourceDataEncoding<C>,
     pub envelope: SourceEnvelope,
-    pub metadata_columns: Vec<IncludedColumnSource>,
     pub timestamp_interval: Duration,
 }
 
@@ -1732,7 +1652,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
             connection,
             encoding,
             envelope,
-            metadata_columns,
             timestamp_interval,
         } = self;
 
@@ -1740,7 +1659,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
             connection: connection.into_inline_connection(&r),
             encoding: encoding.into_inline_connection(r),
             envelope,
-            metadata_columns,
             timestamp_interval,
         }
     }
@@ -1755,15 +1673,13 @@ impl Arbitrary for SourceDesc {
             any::<GenericSourceConnection>(),
             any::<encoding::SourceDataEncoding>(),
             any::<SourceEnvelope>(),
-            any::<Vec<IncludedColumnSource>>(),
             any::<Duration>(),
         )
             .prop_map(
-                |(connection, encoding, envelope, metadata_columns, timestamp_interval)| Self {
+                |(connection, encoding, envelope, timestamp_interval)| Self {
                     connection,
                     encoding,
                     envelope,
-                    metadata_columns,
                     timestamp_interval,
                 },
             )
@@ -1777,7 +1693,6 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: Some(self.connection.into_proto()),
             encoding: Some(self.encoding.into_proto()),
             envelope: Some(self.envelope.into_proto()),
-            metadata_columns: self.metadata_columns.into_proto(),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
@@ -1793,7 +1708,6 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             envelope: proto
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,
-            metadata_columns: proto.metadata_columns.into_rust()?,
             timestamp_interval: proto
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
@@ -1851,7 +1765,6 @@ impl<C: ConnectionAccess> SourceDesc<C> {
             connection,
             encoding,
             envelope,
-            metadata_columns,
             timestamp_interval,
         } = &self;
         connection.alter_compatible(id, &other.connection)?;
@@ -1860,7 +1773,6 @@ impl<C: ConnectionAccess> SourceDesc<C> {
             connection == &other.connection,
             encoding == &other.encoding,
             envelope == &other.envelope,
-            metadata_columns == &other.metadata_columns,
             timestamp_interval == &other.timestamp_interval,
         ];
 
@@ -1974,15 +1886,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.metadata_columns(),
             Self::LoadGenerator(conn) => conn.metadata_columns(),
             Self::TestScript(conn) => conn.metadata_columns(),
-        }
-    }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        match self {
-            Self::Kafka(conn) => conn.metadata_column_types(),
-            Self::Postgres(conn) => conn.metadata_column_types(),
-            Self::LoadGenerator(conn) => conn.metadata_column_types(),
-            Self::TestScript(conn) => conn.metadata_column_types(),
         }
     }
 
@@ -2120,10 +2023,6 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     }
 
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
-    }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
     }
 
@@ -2295,10 +2194,6 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        vec![]
-    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2392,7 +2287,10 @@ impl LoadGenerator {
                         .with_column("id", ScalarType::Int64.nullable(false))
                         .with_column("seller", ScalarType::Int64.nullable(false))
                         .with_column("item", ScalarType::String.nullable(false))
-                        .with_column("end_time", ScalarType::TimestampTz.nullable(false))
+                        .with_column(
+                            "end_time",
+                            ScalarType::TimestampTz { precision: None }.nullable(false),
+                        )
                         .with_key(vec![0]),
                 ),
                 (
@@ -2402,7 +2300,10 @@ impl LoadGenerator {
                         .with_column("buyer", ScalarType::Int64.nullable(false))
                         .with_column("auction_id", ScalarType::Int64.nullable(false))
                         .with_column("amount", ScalarType::Int32.nullable(false))
-                        .with_column("bid_time", ScalarType::TimestampTz.nullable(false))
+                        .with_column(
+                            "bid_time",
+                            ScalarType::TimestampTz { precision: None }.nullable(false),
+                        )
                         .with_key(vec![0]),
                 ),
             ],
@@ -2423,14 +2324,20 @@ impl LoadGenerator {
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("customer_id", ScalarType::Int64.nullable(false))
                             .with_column("campaign_id", ScalarType::Int64.nullable(false))
-                            .with_column("impression_time", ScalarType::TimestampTz.nullable(false))
+                            .with_column(
+                                "impression_time",
+                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                            )
                             .with_key(vec![0]),
                     ),
                     (
                         "clicks",
                         RelationDesc::empty()
                             .with_column("impression_id", ScalarType::Int64.nullable(false))
-                            .with_column("click_time", ScalarType::TimestampTz.nullable(false))
+                            .with_column(
+                                "click_time",
+                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                            )
                             .without_keys(),
                     ),
                     (
@@ -2438,8 +2345,14 @@ impl LoadGenerator {
                         RelationDesc::empty()
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("customer_id", ScalarType::Int64.nullable(false))
-                            .with_column("created_at", ScalarType::TimestampTz.nullable(false))
-                            .with_column("converted_at", ScalarType::TimestampTz.nullable(true))
+                            .with_column(
+                                "created_at",
+                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                            )
+                            .with_column(
+                                "converted_at",
+                                ScalarType::TimestampTz { precision: None }.nullable(true),
+                            )
                             .with_column("conversion_amount", ScalarType::Int64.nullable(true))
                             .with_key(vec![0]),
                     ),
@@ -2448,7 +2361,10 @@ impl LoadGenerator {
                         RelationDesc::empty()
                             .with_column("id", ScalarType::Int64.nullable(false))
                             .with_column("lead_id", ScalarType::Int64.nullable(false))
-                            .with_column("created_at", ScalarType::TimestampTz.nullable(false))
+                            .with_column(
+                                "created_at",
+                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                            )
                             .with_column("amount", ScalarType::Int64.nullable(false))
                             .with_key(vec![0]),
                     ),
@@ -2457,7 +2373,10 @@ impl LoadGenerator {
                         RelationDesc::empty()
                             .with_column("lead_id", ScalarType::Int64.nullable(false))
                             .with_column("experiment_bucket", ScalarType::String.nullable(false))
-                            .with_column("predicted_at", ScalarType::TimestampTz.nullable(false))
+                            .with_column(
+                                "predicted_at",
+                                ScalarType::TimestampTz { precision: None }.nullable(false),
+                            )
                             .with_column("score", ScalarType::Float64.nullable(false))
                             .without_keys(),
                     ),
@@ -2688,10 +2607,6 @@ impl SourceConnection for TestScriptSourceConnection {
     }
 
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        vec![]
-    }
-
-    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
     }
 }

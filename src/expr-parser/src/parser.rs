@@ -170,7 +170,7 @@ mod relation {
 
         let ident = input.parse::<syn::Ident>()?;
         match ctx.catalog.get(&ident.to_string()) {
-            Some((id, typ)) => Ok(MirRelationExpr::Get {
+            Some((id, _cols, typ)) => Ok(MirRelationExpr::Get {
                 id: Id::Global(*id),
                 typ: typ.clone(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
@@ -1236,6 +1236,7 @@ mod attributes {
 pub enum Def {
     Source {
         name: String,
+        cols: Vec<String>,
         typ: mz_repr::RelationType,
     },
 }
@@ -1272,16 +1273,31 @@ mod def {
         };
 
         let parse_inputs = ParseChildren::new(input, reduce.span().start());
-        let column_types = parse_inputs.parse_many(ctx, parse_def_source_column)?;
+        let (cols, column_types) = {
+            let source_columns = parse_inputs.parse_many(ctx, parse_def_source_column)?;
+            let mut column_names = vec![];
+            let mut column_types = vec![];
+            for (column_name, column_type) in source_columns {
+                column_names.push(column_name);
+                column_types.push(column_type);
+            }
+            (column_names, column_types)
+        };
 
         let typ = RelationType { column_types, keys };
 
-        Ok(Def::Source { name, typ })
+        Ok(Def::Source { name, cols, typ })
     }
 
-    fn parse_def_source_column(_ctx: CtxRef, input: ParseStream) -> syn::Result<ColumnType> {
+    fn parse_def_source_column(
+        _ctx: CtxRef,
+        input: ParseStream,
+    ) -> syn::Result<(String, ColumnType)> {
         input.parse::<syn::Token![-]>()?;
-        attributes::parse_column_type(input)
+        let column_name = input.parse::<syn::Ident>()?.to_string();
+        input.parse::<syn::Token![:]>()?;
+        let column_type = attributes::parse_column_type(input)?;
+        Ok((column_name, column_type))
     }
 
     syn::custom_keyword!(DefSource);

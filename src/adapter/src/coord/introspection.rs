@@ -26,12 +26,12 @@ use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, Subsc
 use mz_sql::rbac;
 use smallvec::SmallVec;
 
-use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::AdapterError;
+use mz_catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -248,21 +248,26 @@ pub fn user_privilege_hack(
         // **Special Cases**
         //
         // Generally we want to prevent the mz_support user from being able to
-        // access user objects. But there are a few special cases where we permit
-        // limited access, which are:
-        //   * SHOW CREATE ... commands, which are very useful for debugging, see
-        //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
-        //     details.
+        // access user objects. But there are a few special cases where we
+        // permit limited access, which are are very useful for debugging. More
+        // specifically:
+        //   * SHOW CREATE ... commands. See
+        //     <https://github.com/MaterializeInc/materialize/issues/18027> for
+        //     more details.
+        //   * EXPLAIN PLAN ... and EXPLAIN TIMESTAMP ... and commands. See
+        //     <https://github.com/MaterializeInc/materialize/issues/20478> for
+        //     more details.
         //
-        Plan::ShowCreate(_) | Plan::ShowColumns(_) => {
+        Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainTimestamp(_) => {
             return Ok(());
         }
 
         Plan::Subscribe(_)
         | Plan::Select(_)
         | Plan::CopyFrom(_)
-        | Plan::ExplainPlan(_)
-        | Plan::ExplainTimestamp(_)
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)

@@ -100,4 +100,4 @@ bird1:goose
   ENVELOPE UPSERT
 
 ! select * from upsert_nullkey
-contains: record with NULL key in UPSERT source in partition 0
+contains: record with NULL key in UPSERT source

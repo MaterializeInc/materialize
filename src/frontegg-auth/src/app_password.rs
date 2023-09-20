@@ -90,7 +90,7 @@ impl FromStr for AppPassword {
 }
 
 /// An error while parsing an [`AppPassword`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AppPasswordParseError;
 
 impl Error for AppPasswordParseError {}

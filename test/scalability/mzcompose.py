@@ -20,6 +20,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
+from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -36,6 +37,7 @@ from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
+RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 SERVICES = [Materialized(image="materialize/materialized:latest"), Postgres()]
 
 
@@ -186,11 +188,11 @@ def run_workload(
         df_details = pd.concat([df_details, df_detail])
 
         endpoint_name = endpoint.name()
-        pathlib.Path(f"results/{endpoint_name}").mkdir(parents=True, exist_ok=True)
+        pathlib.Path(RESULTS_DIR / endpoint_name).mkdir(parents=True, exist_ok=True)
 
-        df_totals.to_csv(f"results/{endpoint_name}/{type(workload).__name__}.csv")
+        df_totals.to_csv(RESULTS_DIR / endpoint_name / f"{type(workload).__name__}.csv")
         df_details.to_csv(
-            f"results/{endpoint_name}/{type(workload).__name__}_details.csv"
+            RESULTS_DIR / endpoint_name / f"{type(workload).__name__}_details.csv"
         )
 
 
@@ -311,7 +313,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     workload_names = [workload.__name__ for workload in workloads]
     df_workloads = pd.DataFrame(data={"workload": workload_names})
-    df_workloads.to_csv("results/workloads.csv")
+    df_workloads.to_csv(RESULTS_DIR / "workloads.csv")
 
     for workload in workloads:
         assert issubclass(workload, Workload), f"{workload} is not a Workload"

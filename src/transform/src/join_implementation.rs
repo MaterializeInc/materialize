@@ -28,7 +28,7 @@ use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::attribute::cardinality::{FactorizerVariable, SymExp};
-use crate::attribute::{Cardinality, RequiredAttributes};
+use crate::attribute::{Cardinality, DerivedAttributesBuilder};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{StatisticsOracle, TransformCtx, TransformError};
@@ -169,8 +169,8 @@ impl JoinImplementation {
             // Symbolic terms in the cardinality estimate
             let mut symbolics = std::collections::BTreeSet::new();
             for input in inputs.iter() {
-                let mut builder = RequiredAttributes::default();
-                builder.require::<Cardinality>();
+                let mut builder = DerivedAttributesBuilder::default();
+                builder.require(Cardinality::default());
                 let mut attributes = builder.finish();
 
                 input.visit(&mut attributes)?;

@@ -12,7 +12,7 @@
 use mz_expr::{Id, MirRelationExpr};
 
 use crate::attribute::subtree_size::SubtreeSize;
-use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
+use crate::attribute::{Attribute, DerivedAttributes, DerivedAttributesBuilder, Env};
 
 /// Traverses a [`MirRelationExpr`] tree and figures out whether for subtree
 /// the sum of all diffs up to a specific time for any record can be a
@@ -135,11 +135,11 @@ impl Attribute for NonNegative {
         self.env.handle_tasks(&self.results);
     }
 
-    fn add_dependencies(builder: &mut RequiredAttributes)
+    fn add_dependencies(builder: &mut DerivedAttributesBuilder)
     where
         Self: Sized,
     {
-        builder.require::<SubtreeSize>();
+        builder.require(SubtreeSize::default());
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

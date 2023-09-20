@@ -40,6 +40,10 @@ class MzStart(Action):
                 print_statement=False,
             )
 
+        c.sql(
+            "ALTER CLUSTER default SET (MANAGED = false)", user="mz_system", port=6877
+        )
+
     def provides(self) -> list[Capability]:
         return [MzIsRunning()]
 

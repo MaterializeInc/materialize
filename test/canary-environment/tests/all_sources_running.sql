@@ -9,7 +9,12 @@
 
 select *
 from mz_internal.mz_source_statuses
-where not (
+join mz_sources using (id)
+join mz_schemas on (schema_id = mz_schemas.id)
+join mz_databases on (database_id = mz_databases.id)
+where mz_databases.name = 'qa_canary_environment'
+and not (
   status = 'running' or
-  (type = 'progress' and status = 'created')
+  (mz_sources.type = 'progress' and status = 'created') or
+  (mz_sources.type = 'subsource' and status = 'starting')
 )
