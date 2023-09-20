@@ -2747,7 +2747,7 @@ impl Coordinator {
             cluster,
             &depends_on,
             &mut target_replica,
-            session.vars(),
+            ctx.session().vars(),
         )?;
         ctx.session_mut().add_notices(notices);
 
