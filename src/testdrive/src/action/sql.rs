@@ -11,9 +11,10 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context};
+use http::StatusCode;
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -136,26 +137,40 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::GrantRole { .. }
         | Statement::RevokePrivileges { .. }
         | Statement::RevokeRole { .. } => {
-            let inconsistencies = reqwest::get(&format!(
-                "http://{}/api/coordinator/check",
-                state.materialize_internal_http_addr,
-            ))
-            .await
-            .context("while getting response from coordinator check")?
-            .error_for_status()
-            .context("response from coordinator check returned an error")?
-            .text()
-            .await
-            .context("while getting text from coordinator check")?;
-            let inconsistencies: serde_json::Value = serde_json::from_str(&inconsistencies)
-                .with_context(|| {
-                    format!(
-                        "while parsing result from consistency check: {:?}",
-                        inconsistencies
-                    )
-                })?;
-            if inconsistencies != serde_json::json!("") {
-                bail!("Internal catalog inconsistencies {inconsistencies:#?}");
+            let response = Retry::default()
+                .max_duration(Duration::from_secs(3))
+                .clamp_backoff(Duration::from_millis(500))
+                .retry_async(|_| async {
+                    reqwest::get(&format!(
+                        "http://{}/api/coordinator/check",
+                        state.materialize_internal_http_addr,
+                    ))
+                    .await
+                    .context("while getting response from coordinator check")
+                })
+                .await?;
+            if response.status() == StatusCode::NOT_FOUND {
+                tracing::info!(
+                    "not performing coordinator check because the endpoint doesn't exist"
+                );
+            } else {
+                // 404 can happen if we're testing an older version of environmentd
+                let inconsistencies = response
+                    .error_for_status()
+                    .context("response from coordinator check returned an error")?
+                    .text()
+                    .await
+                    .context("while getting text from coordinator check")?;
+                let inconsistencies: serde_json::Value = serde_json::from_str(&inconsistencies)
+                    .with_context(|| {
+                        format!(
+                            "while parsing result from consistency check: {:?}",
+                            inconsistencies
+                        )
+                    })?;
+                if inconsistencies != serde_json::json!("") {
+                    bail!("Internal catalog inconsistencies {inconsistencies:#?}");
+                }
             }
 
             let catalog_state = state
