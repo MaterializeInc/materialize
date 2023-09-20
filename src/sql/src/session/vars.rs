@@ -1685,6 +1685,7 @@ feature_flags!(
         "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
         true
     ),
+    (enable_explain_broken, "EXPLAIN ... BROKEN <query> syntax"),
 );
 
 /// Represents the input to a variable.
