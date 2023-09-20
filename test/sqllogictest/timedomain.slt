@@ -66,7 +66,8 @@ SELECT * FROM t;
 statement ok
 ROLLBACK
 
-# Test that user table and system tables can be mixed in a transaction.
+# Test that user table and mz_catalog system tables cannot be mixed in a transaction because they
+# belong to different timedomains.
 
 statement ok
 BEGIN;
@@ -75,11 +76,13 @@ query I rowsort
 SELECT * FROM t
 ----
 
-statement ok
-SELECT * FROM mz_views
+# This may stop failing in the future if a view in pg_catalog starts to depend on this. In that case
+# just change this query to select from an object that isn't referenced from pg_catalog.
+query error Transactions can only reference objects in the same timedomain.
+SELECT * FROM mz_internal.mz_show_default_privileges
 
 statement ok
-COMMIT
+ROLLBACK
 
 # Test that timeline dependent queries can be included in transaction.
 
