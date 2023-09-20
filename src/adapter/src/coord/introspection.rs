@@ -145,7 +145,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     }
 
     // Auto-routing mid transaction can cause an abort due to an invalid timedomain.
-    if session.transaction().is_in_multi_statement_transaction() {
+    if session.transaction().is_in_multi_statement_transaction()
+        && session.transaction().contains_ops()
+    {
         return TargetCluster::Active;
     }
 
