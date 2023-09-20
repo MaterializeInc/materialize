@@ -812,7 +812,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
-          args: [--runtime=3000, --complexity=dml, --threads=16]
+          args: [--runtime=3000, --complexity=dml, --threads=8]
     # Allow retrying generally flaky tests even when they are green
     retry:
       manual:
