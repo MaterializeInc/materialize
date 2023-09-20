@@ -106,4 +106,4 @@ try bin/gen-completion check
 try bin/gen-lints
 try git diff --compact-summary --exit-code
 
-try_finish
+try_status_report
