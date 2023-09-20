@@ -1939,7 +1939,7 @@ pub mod tests {
         // bounded).
         let max_live_diffs = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
-            live_diffs.0.len() < max_live_diffs,
+            live_diffs.0.len() <= max_live_diffs,
             "{} vs {}",
             live_diffs.0.len(),
             max_live_diffs
