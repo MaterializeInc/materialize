@@ -25,7 +25,7 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{ColumnType, Diff, GlobalId, Row};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use crate::plan::proto_available_collections::ProtoColumnTypes;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
@@ -95,6 +96,10 @@ pub struct AvailableCollections {
     /// column permutation mapping
     #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
     pub arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+    /// The types of the columns in the raw form of the collection, if known. We
+    /// only capture types when necessary to support arrangement specialization,
+    /// so this only done for specific LIR operators during lowering.
+    pub types: Option<Vec<ColumnType>>,
 }
 
 /// A strategy that produces arrangements that are thinner than the default. That is
@@ -108,11 +113,24 @@ pub(crate) fn any_arranged_thin(
     )
 }
 
+impl RustType<ProtoColumnTypes> for Vec<ColumnType> {
+    fn into_proto(&self) -> ProtoColumnTypes {
+        ProtoColumnTypes {
+            types: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoColumnTypes) -> Result<Self, TryFromProtoError> {
+        proto.types.into_rust()
+    }
+}
+
 impl RustType<ProtoAvailableCollections> for AvailableCollections {
     fn into_proto(&self) -> ProtoAvailableCollections {
         ProtoAvailableCollections {
             raw: self.raw,
             arranged: self.arranged.into_proto(),
+            types: self.types.into_proto(),
         }
     }
 
@@ -121,6 +139,7 @@ impl RustType<ProtoAvailableCollections> for AvailableCollections {
             Self {
                 raw: x.raw,
                 arranged: x.arranged.into_rust()?,
+                types: x.types.into_rust()?,
             }
         })
     }
@@ -132,6 +151,7 @@ impl AvailableCollections {
         Self {
             raw: true,
             arranged: Vec::new(),
+            types: None,
         }
     }
 
@@ -147,6 +167,7 @@ impl AvailableCollections {
         Self {
             raw: false,
             arranged,
+            types: None,
         }
     }
 
@@ -1597,7 +1618,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
+                let types = input.typ().column_types;
                 let (input, mut input_keys) = Self::from_mir(input, arrangements, debug_info)?;
+                input_keys.types = Some(types);
+
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
                     .iter()
