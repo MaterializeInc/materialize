@@ -142,6 +142,8 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
             ))
             .await
             .context("while getting response from coordinator check")?
+            .error_for_status()
+            .context("response from coordinator check returned an error")?
             .text()
             .await
             .context("while getting text from coordinator check")?;
