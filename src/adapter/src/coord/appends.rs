@@ -178,9 +178,12 @@ impl Coordinator {
         let timestamp = self.peek_local_write_ts();
         let now = Timestamp::from((self.catalog().config().now)());
 
-        // We write to system tables asychronously, i.e. Coordinator completes but there is still
-        // outstanding work, when starting a new connection. We always want to allow these writes
-        // to go through to prevent connections from being blocked, hence this special case.
+        // HACK: This is a special case to allow writes to the mz_sessions table to proceed even
+        // if the timestamp oracle is ahead of the current walltime. We do this because there are
+        // some tests that mock the walltime, so it doesn't automatically advance, and updating
+        // those tests to advance the walltime while creating a connection is too much.
+        //
+        // TODO(parkmycar): Get rid of the check below when refactoring group commits.
         let contains_async_system_write = self
             .pending_writes
             .iter()
@@ -449,9 +452,13 @@ impl Coordinator {
         });
     }
 
-    /// Submit a write to a system table. This method will block until the write has been applied.
+    /// Submit a write to a system table. This method will block the Coordinator until the write
+    /// has been applied.
     #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
-    pub(crate) async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+    pub(crate) async fn send_builtin_table_updates_blocking(
+        &mut self,
+        updates: Vec<BuiltinTableUpdate>,
+    ) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes do not wait for a group commit, they explicitly trigger one. There is a
         // possibility that if a user is executing DDL at a rate faster than 1 query per
@@ -470,8 +477,9 @@ impl Coordinator {
 
     /// Submits a write to be executed during the next group commit and triggers a group commit.
     ///
-    /// Returns a Future that resolves when the write has completed.
-    pub(crate) fn send_builtin_table_updates_notify<'a>(
+    /// Returns a Future that resolves when the write has completed, does not block the
+    /// Coordinator.
+    pub(crate) fn send_builtin_table_updates_defer<'a>(
         &'a mut self,
         updates: Vec<BuiltinTableUpdate>,
     ) -> BoxFuture<'static, ()> {

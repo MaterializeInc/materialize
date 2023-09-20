@@ -1703,7 +1703,8 @@ impl Coordinator {
         }
 
         debug!("coordinator init: sending builtin table updates");
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.send_builtin_table_updates_blocking(builtin_table_updates)
+            .await;
 
         // Signal to the storage controller that it is now free to reconcile its
         // state with what it has learned from the adapter.

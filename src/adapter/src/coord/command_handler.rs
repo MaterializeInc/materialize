@@ -267,7 +267,7 @@ impl Coordinator {
 
                 // Note: Do NOT await the notify here, we pass this back to whatever requested the
                 // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.send_builtin_table_updates_notify(vec![update]);
+                let notify = self.send_builtin_table_updates_defer(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,
@@ -779,9 +779,11 @@ impl Coordinator {
         self.cancel_pending_peeks(conn.conn_id());
         self.end_session_for_statement_logging(conn.uuid());
 
-        // Queue the builtin table update, we don't need to wait for it to complete.
+        // Queue the builtin table update, but do not wait for it to complete. We explicitly do
+        // this to prevent blocking the Coordinator in the case that a lot of connections are
+        // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        self.send_builtin_table_updates_notify(vec![update]);
+        self.send_builtin_table_updates_defer(vec![update]);
     }
 
     fn handle_append_webhook(
