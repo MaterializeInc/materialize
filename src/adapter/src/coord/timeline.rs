@@ -9,6 +9,7 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::time::Duration;
@@ -802,37 +803,47 @@ impl Coordinator {
         for id in uses_ids {
             let entry = self.catalog().get_entry(id);
             let name = entry.name();
-            schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
+            schemas.insert((
+                Cow::Borrowed(&name.qualifiers.database_spec),
+                Cow::Borrowed(&name.qualifiers.schema_spec),
+            ));
         }
 
         // Always include all system schemas, if schemas is non-empty. System schemas are sometimes
         // used by applications in followup queries.
-        let system_schemas = [
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
-            ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
-            ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
-            ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
-            ),
-        ];
         if !schemas.is_empty() {
-            schemas.extend(system_schemas);
+            schemas.extend([
+                (
+                    Cow::Owned(ResolvedDatabaseSpecifier::Ambient),
+                    Cow::Owned(SchemaSpecifier::Id(
+                        self.catalog().get_mz_catalog_schema_id().clone(),
+                    )),
+                ),
+                (
+                    Cow::Owned(ResolvedDatabaseSpecifier::Ambient),
+                    Cow::Owned(SchemaSpecifier::Id(
+                        self.catalog().get_mz_internal_schema_id().clone(),
+                    )),
+                ),
+                (
+                    Cow::Owned(ResolvedDatabaseSpecifier::Ambient),
+                    Cow::Owned(SchemaSpecifier::Id(
+                        self.catalog().get_pg_catalog_schema_id().clone(),
+                    )),
+                ),
+                (
+                    Cow::Owned(ResolvedDatabaseSpecifier::Ambient),
+                    Cow::Owned(SchemaSpecifier::Id(
+                        self.catalog().get_information_schema_id().clone(),
+                    )),
+                ),
+            ]);
         }
 
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog().get_schema(db, schema, conn_id);
+            let schema = self.catalog().get_schema(&db, &schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
