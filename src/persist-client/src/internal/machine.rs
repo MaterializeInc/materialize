@@ -898,43 +898,47 @@ where
             machine.shard_id(),
             reader_id
         );
-        isolated_runtime.spawn_named(|| name, async move {
-            let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
+        let metrics = Arc::clone(&machine.applier.metrics);
+        isolated_runtime.spawn_named(
+            || name,
+            metrics.tasks.heartbeat_read.instrument_task(async move {
+                let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
+                loop {
+                    let before_sleep = Instant::now();
+                    tokio::time::sleep(sleep_duration).await;
 
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) went {}s between heartbeats",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
+                    let elapsed_since_before_sleeping = before_sleep.elapsed();
+                    if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                        warn!(
+                            "reader ({}) of shard ({}) went {}s between heartbeats",
+                            reader_id,
+                            machine.shard_id(),
+                            elapsed_since_before_sleeping.as_secs_f64()
+                        );
+                    }
+
+                    let before_heartbeat = Instant::now();
+                    let (_seqno, existed, maintenance) = machine
+                        .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
+                        .await;
+                    maintenance.start_performing(&machine, &gc);
+
+                    let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                    if elapsed_since_heartbeat > Duration::from_secs(60) {
+                        warn!(
+                            "reader ({}) of shard ({}) heartbeat call took {}s",
+                            reader_id,
+                            machine.shard_id(),
+                            elapsed_since_heartbeat.as_secs_f64(),
+                        );
+                    }
+
+                    if !existed {
+                        return;
+                    }
                 }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
-                    .await;
-                maintenance.start_performing(&machine, &gc);
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) heartbeat call took {}s",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
+            }),
+        )
     }
 }
 

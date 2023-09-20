@@ -32,6 +32,7 @@ use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
+use tokio_metrics::TaskMonitor;
 use tracing::instrument;
 
 use crate::internal::paths::BlobKey;
@@ -82,6 +83,8 @@ pub struct Metrics {
     pub pushdown: PushdownMetrics,
     /// Metrics for blob caching.
     pub blob_cache_mem: BlobMemCache,
+    /// Metrics for tokio tasks.
+    pub tasks: TasksMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -133,6 +136,7 @@ impl Metrics {
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
+            tasks: TasksMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -2292,6 +2296,56 @@ impl Consensus for MetricsConsensus {
             .truncated_count
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
+    }
+}
+
+#[derive(Debug)]
+pub struct TaskMetrics {
+    monitor: TaskMonitor,
+    // WIP figure out which of the rest of tokio's TaskMetrics are interesting
+    // and fill them in here.
+    _total_idle_duration: ComputedGauge,
+}
+
+impl TaskMetrics {
+    fn new(registry: &MetricsRegistry, name: &str) -> Self {
+        let monitor = TaskMonitor::new();
+        // TODO: Oof, it's brutal to do a `cumulative` call
+        // per-gauge-per-scrape. Should be fixable with a custom collector type.
+        // I think this would also be necessary to make a ComputedGaugeVec work:
+        // atm if TaskMetrics::new is called twice, it will panic.
+        let _total_idle_duration = {
+            let monitor = monitor.clone();
+            registry.register_computed_gauge(
+                metric!(
+                    name: "mz_persist_task_total_idle_duration",
+                    help: "WIP",
+                    const_labels: {"name" => name},
+                ),
+                move || monitor.cumulative().total_idle_duration.as_secs_f64(),
+            )
+        };
+        TaskMetrics {
+            monitor,
+            _total_idle_duration,
+        }
+    }
+
+    pub fn instrument_task<F>(&self, task: F) -> tokio_metrics::Instrumented<F> {
+        self.monitor.instrument(task)
+    }
+}
+
+#[derive(Debug)]
+pub struct TasksMetrics {
+    pub heartbeat_read: TaskMetrics,
+}
+
+impl TasksMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        TasksMetrics {
+            heartbeat_read: TaskMetrics::new(registry, "heartbeat_read"),
+        }
     }
 }
 
