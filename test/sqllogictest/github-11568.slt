@@ -38,11 +38,3 @@ begin;
 query II
 select * from t1
 ----
-
-# Additionally, verify that changing cluster mid transaction causes the indexes
-# to be unavailable.
-statement ok
-set cluster = c
-
-query error Transactions can only reference objects in the same timedomain.
-select * from t1

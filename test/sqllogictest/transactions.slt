@@ -799,3 +799,102 @@ simple
 SHOW SOURCES
 ----
 COMPLETE 0
+
+# Test that the cluster cannot change mid-transaction.
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+CREATE TABLE t (a INT)
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET cluster cannot be called in an active transaction
+SET CLUSTER TO c
+
+statement ok
+ROLLBACK
+
+# Test that the cluster is selected at the start of a transaction and doesn't change.
+
+## Auto-routing selects mz_introspection at the start of transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SHOW VIEWS
+
+query T multiline
+EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
+----
+Explained Query:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+    ArrangeBy keys=[[]]
+      Constant
+        total_rows (diffs absed): 100
+        first_rows:
+          - (1)
+          - (2)
+          - (3)
+          - (4)
+          - (5)
+          - (6)
+          - (7)
+          - (8)
+          - (9)
+          - (10)
+          - (11)
+          - (12)
+          - (13)
+          - (14)
+          - (15)
+          - (16)
+          - (17)
+          - (18)
+          - (19)
+          - (20)
+
+Used Indexes:
+  - mz_internal.mz_show_views_ind (*** full scan ***)
+
+EOF
+
+statement ok
+COMMIT
+
+## Auto-routing doesn't select mz_introspection in the middle of a transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t, mz_views
+
+query T multiline
+EXPLAIN SHOW VIEWS
+----
+            Optimized Plan
+---------------------------------------
+ Explained Query:                     +
+   Project (#3)                       +
+     Filter (#2 = "u3")               +
+       ReadStorage mz_catalog.mz_views+
+                                      +
+ Source mz_catalog.mz_views           +
+   filter=((#2 = "u3"))               +
+
+EOF
+
+statement ok
+COMMIT

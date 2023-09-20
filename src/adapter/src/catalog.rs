@@ -5423,6 +5423,9 @@ impl Catalog {
                 Ok(self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER))
             }
             TargetCluster::Active => self.active_cluster(session),
+            TargetCluster::Transaction(cluster_id) => self
+                .try_get_cluster(cluster_id)
+                .ok_or(AdapterError::ConcurrentClusterDrop),
         }
     }
 

@@ -81,6 +81,8 @@ pub enum AdapterError {
     },
     /// SET TRANSACTION ISOLATION LEVEL was called in the middle of a transaction.
     InvalidSetIsolationLevel,
+    /// SET cluster was called in the middle of a transaction.
+    InvalidSetCluster,
     /// No such storage instance size has been configured.
     InvalidStorageClusterSize {
         size: String,
@@ -99,6 +101,8 @@ pub enum AdapterError {
     },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// Transaction cluster was dropped in the middle of a transaction.
+    ConcurrentClusterDrop,
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable(String),
     /// The named operation cannot be run in a transaction.
@@ -382,10 +386,12 @@ impl AdapterError {
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidSetIsolationLevel => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterError::InvalidSetCluster => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -499,6 +505,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "SET TRANSACTION ISOLATION LEVEL must be called before any query"
             ),
+            AdapterError::InvalidSetCluster => {
+                write!(f, "SET cluster cannot be called in an active transaction")
+            }
             AdapterError::InvalidStorageClusterSize { size, .. } => {
                 write!(f, "unknown source size {size}")
             }
@@ -510,6 +519,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
+            }
+            AdapterError::ConcurrentClusterDrop => {
+                write!(f, "the transaction's active cluster has been dropped")
             }
             AdapterError::NoClusterReplicasAvailable(cluster) => {
                 write!(
