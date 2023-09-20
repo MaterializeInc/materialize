@@ -140,6 +140,7 @@ wrappers = [
   "fail",
   "findshlibs",
   "indicatif",
+  "insta",
   "launchdarkly-server-sdk",
   "launchdarkly-server-sdk-evaluation",
   "mysql_async",
