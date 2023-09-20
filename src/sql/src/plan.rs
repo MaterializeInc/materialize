@@ -1259,7 +1259,7 @@ pub struct View {
 #[derive(Clone, Debug)]
 pub struct MaterializedView {
     pub create_sql: String,
-    pub expr: mz_expr::MirRelationExpr,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
 }

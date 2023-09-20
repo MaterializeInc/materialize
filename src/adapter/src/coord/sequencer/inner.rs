@@ -947,7 +947,7 @@ impl Coordinator {
             materialized_view:
                 MaterializedView {
                     create_sql,
-                    expr: view_expr,
+                    expr: raw_expr,
                     column_names,
                     cluster_id,
                 },
@@ -971,7 +971,7 @@ impl Coordinator {
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
-        let expr_depends_on = view_expr.depends_on();
+        let expr_depends_on = raw_expr.depends_on();
         self.validate_timeline_context(expr_depends_on.iter().cloned())?;
         self.validate_system_column_references(ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
@@ -996,7 +996,8 @@ impl Coordinator {
         // Allocate a unique ID that can be used by the dataflow builder to
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
-        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+        let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
         let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
 
