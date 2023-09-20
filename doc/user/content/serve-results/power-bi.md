@@ -51,3 +51,20 @@ Errors like the following indicate that there is a problem with the connection s
 
 For more details and troubleshooting, check the
 [Power BI documentation](https://learn.microsoft.com/en-us/power-query/connectors/postgresql#troubleshooting).
+
+## Known limitations
+
+
+When you connect to Materialize from Power BI, you will get a list of your tables and views.
+
+However, [Power BI does not display materialized views](https://ideas.fabric.microsoft.com/ideas/idea/?ideaid=92420736-afdc-45b9-8962-743a53acfa66) in that list.
+
+To work around this Power BI limitation, you can create a view that selects from the materialized view, and then use the view in Power BI.
+
+For example, if you have a materialized view called `my_view`, you can create a view called `my_view_bi` with the following SQL:
+
+```sql
+CREATE VIEW my_view_bi AS SELECT * FROM my_view;
+```
+
+Then, in Power BI, you can use the `my_view_bi` view.
