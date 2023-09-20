@@ -1711,7 +1711,7 @@ impl<'a> VarInput<'a> {
 }
 
 /// An owned version of [`VarInput`].
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum OwnedVarInput {
     /// See [`VarInput::Flat`].
     Flat(String),
