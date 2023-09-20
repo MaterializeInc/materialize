@@ -75,8 +75,13 @@ class Generator:
 
 
 class Connections(Generator):
+    COUNT = 2000 # Higher for #21782
+
     @classmethod
     def body(cls) -> None:
+        # Prevent #21782 regression
+        print("$ set-sql-timeout duration=1s force=true")
+
         print("$ postgres-execute connection=mz_system")
         # three extra connections for mz_system, default connection, and one
         # since sqlparse 0.4.4
@@ -88,6 +93,9 @@ class Connections(Generator):
             )
         for i in cls.all():
             print(f"$ postgres-execute connection=conn{i}\nSELECT 1;\n")
+
+        # Reset timeout
+        print("$ set-sql-timeout duration=120s force=true")
 
 
 class Tables(Generator):
