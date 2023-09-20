@@ -19,16 +19,11 @@ impl Client {
         secret: Uuid,
         admin_api_token_url: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        let res = self
-            .client
-            .post(admin_api_token_url)
-            .json(&ApiTokenArgs { client_id, secret })
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ApiTokenResponse>()
+        let args = ApiTokenArgs { client_id, secret };
+        let result = self
+            .make_request(admin_api_token_url.to_string(), args)
             .await?;
-        Ok(res)
+        Ok(result)
     }
 
     /// Exchanges a client id and secret for a jwt token.
@@ -37,20 +32,22 @@ impl Client {
         refresh_url: &str,
         refresh_token: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        let res = self
-            .client
-            .post(refresh_url)
-            .json(&RefreshToken { refresh_token })
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ApiTokenResponse>()
-            .await?;
-        Ok(res)
+        let args = RefreshToken {
+            refresh_token: refresh_token.to_string(),
+        };
+        let result = self.make_request(refresh_url.to_string(), args).await?;
+        Ok(result)
     }
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiTokenArgs {
+    pub client_id: Uuid,
+    pub secret: Uuid,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTokenResponse {
     pub expires: String,
@@ -59,17 +56,19 @@ pub struct ApiTokenResponse {
     pub refresh_token: String,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ApiTokenArgs {
-    pub client_id: Uuid,
-    pub secret: Uuid,
+pub struct RefreshToken {
+    pub refresh_token: String,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RefreshToken<'a> {
-    pub refresh_token: &'a str,
+pub struct RefreshTokenResponse {
+    pub expires: String,
+    pub expires_in: i64,
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
 #[cfg(test)]
