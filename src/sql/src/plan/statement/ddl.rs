@@ -1919,7 +1919,6 @@ pub fn plan_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
         scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
@@ -1940,7 +1939,7 @@ pub fn plan_view(
 
     let view = View {
         create_sql,
-        expr: relation_expr,
+        expr,
         column_names: names,
         temporary,
     };

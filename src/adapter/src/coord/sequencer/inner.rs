@@ -911,7 +911,9 @@ impl Coordinator {
         );
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
-        let optimized_expr = self.view_optimizer.optimize(view.expr.clone())?;
+        let raw_expr = view.expr.clone();
+        let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+        let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
             create_sql: view.create_sql.clone(),
