@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::btreeset;
@@ -33,9 +34,13 @@ use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, ExprHumanizer, UsedIndexes};
+use mz_repr::explain::{
+    ExplainFormat, ExprHumanizer, ExprHumanizerExt, TransientItem, UsedIndexes,
+};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
+use mz_repr::{
+    ColumnName, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp,
+};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -2881,8 +2886,8 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let result = match plan.explainee {
-            Explainee::Query { .. } => {
-                let result = self.explain_query(&mut ctx, plan, target_cluster);
+            Explainee::Statement(_) => {
+                let result = self.explain_statement(&mut ctx, plan, target_cluster);
                 result.await
             }
             Explainee::MaterializedView(_) => {
@@ -3033,7 +3038,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    async fn explain_query(
+    async fn explain_statement(
         &mut self,
         ctx: &mut ExecuteContext,
         plan: plan::ExplainPlanPlan,
@@ -3046,56 +3051,74 @@ impl Coordinator {
             explainee,
         } = plan;
 
-        let Explainee::Query {
-            raw_plan,
-            row_set_finishing,
-            broken,
-        } = explainee
-        else {
+        let Explainee::Statement(stmt) = explainee else {
             // This is currently asserted in the `sequence_explain_plan` code that
             // calls this method.
             unreachable!()
         };
 
+        let broken = stmt.broken();
+        let row_set_finishing = stmt.row_set_finishing();
+
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
         let optimizer_trace = OptimizerTrace::new(broken, stage.path());
 
-        let pipeline_result = {
-            self.explain_query_optimizer_pipeline(
+        let pipeline_result = match stmt {
+            plan::ExplaineeStatement::Query {
                 raw_plan,
+                row_set_finishing,
                 broken,
-                target_cluster,
-                ctx.session_mut(),
-                &row_set_finishing,
-            )
-            .with_subscriber(&optimizer_trace)
-            .await
+            } => {
+                self.explain_query_optimizer_pipeline(
+                    raw_plan,
+                    broken,
+                    target_cluster,
+                    ctx.session_mut(),
+                    &row_set_finishing,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
+            }
+            plan::ExplaineeStatement::CreateMaterializedView {
+                name,
+                raw_plan,
+                column_names,
+                cluster_id,
+                broken,
+            } => {
+                self.explain_create_materialized_view_optimizer_pipeline(
+                    name,
+                    raw_plan,
+                    column_names,
+                    cluster_id,
+                    broken,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
+            }
         };
 
-        let (used_indexes, fast_path_plan, dataflow_metainfo) = match pipeline_result {
-            Ok((used_indexes, fast_path_plan, dataflow_metainfo)) => {
-                (used_indexes, fast_path_plan, dataflow_metainfo)
-            }
-            Err(err) => {
-                if broken {
-                    tracing::error!("error while handling EXPLAIN statement: {}", err);
-
-                    let used_indexes = UsedIndexes::default();
-                    let fast_path_plan: Option<FastPathPlan> = None;
-                    let dataflow_metainfo = DataflowMetainfo::default();
-
-                    (used_indexes, fast_path_plan, dataflow_metainfo)
-                } else {
-                    return Err(err);
+        let (used_indexes, fast_path_plan, dataflow_metainfo, transient_items) =
+            match pipeline_result {
+                Ok(pipeline_result) => pipeline_result,
+                Err(err) => {
+                    if broken {
+                        tracing::error!("error while handling EXPLAIN statement: {}", err);
+                        Default::default()
+                    } else {
+                        return Err(err);
+                    }
                 }
-            }
-        };
+            };
+
+        let session_catalog = self.catalog().for_session(ctx.session());
+        let expr_humanizer = ExprHumanizerExt::new(transient_items, &session_catalog);
 
         let trace = optimizer_trace.drain_all(
             format,
             &config,
-            &self.catalog().for_session(ctx.session()),
+            &expr_humanizer,
             row_set_finishing,
             used_indexes,
             fast_path_plan,
@@ -3110,10 +3133,9 @@ impl Coordinator {
                     .into_iter()
                     .map(|entry| {
                         // The trace would have to take over 584 years to overflow a u64.
-                        let span_duration =
-                            u64::try_from(entry.span_duration.as_nanos()).unwrap_or(u64::MAX);
+                        let span_duration = u64::try_from(entry.span_duration.as_nanos());
                         Row::pack_slice(&[
-                            Datum::from(span_duration),
+                            Datum::from(span_duration.unwrap_or(u64::MAX)),
                             Datum::from(entry.path.as_str()),
                             Datum::from(entry.plan.as_str()),
                         ])
@@ -3152,7 +3174,15 @@ impl Coordinator {
         target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
-    ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
+    ) -> Result<
+        (
+            UsedIndexes,
+            Option<FastPathPlan>,
+            DataflowMetainfo,
+            BTreeMap<GlobalId, TransientItem>,
+        ),
+        AdapterError,
+    > {
         use mz_repr::explain::trace_plan;
 
         if broken {
@@ -3181,7 +3211,7 @@ impl Coordinator {
         }
 
         let catalog = self.catalog();
-        let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        let target_cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
         // Set parameter values for optimizing one-shot SELECT queries.
         let explainee_id = GlobalId::Explain;
         let is_oneshot = true;
@@ -3212,7 +3242,7 @@ impl Coordinator {
 
         let source_ids = decorrelated_plan.depends_on();
         let id_bundle = self
-            .index_oracle(cluster_id)
+            .index_oracle(target_cluster_id)
             .sufficient_collections(&source_ids);
 
         // Execute the `optimize/local` stage.
@@ -3227,7 +3257,7 @@ impl Coordinator {
         })?;
 
         let mut dataflow = DataflowDesc::new("explanation".to_string());
-        let mut builder = self.dataflow_builder(cluster_id);
+        let mut builder = self.dataflow_builder(target_cluster_id);
         builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
 
         // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
@@ -3247,7 +3277,7 @@ impl Coordinator {
             .sequence_peek_timestamp(
                 session,
                 &QueryWhen::Immediately,
-                cluster_id,
+                target_cluster_id,
                 timeline_context,
                 &id_bundle,
                 &source_ids,
@@ -3265,7 +3295,7 @@ impl Coordinator {
         let dataflow_metainfo = catch_unwind(broken, "global", || {
             mz_transform::optimize_dataflow(
                 &mut dataflow,
-                &self.index_oracle(cluster_id),
+                &self.index_oracle(target_cluster_id),
                 stats.as_ref(),
             )
         })?;
@@ -3312,7 +3342,7 @@ impl Coordinator {
 
         // Execute the `optimize/finalize_dataflow` stage.
         let dataflow_plan = catch_unwind(broken, "finalize_dataflow", || {
-            self.finalize_dataflow(dataflow, cluster_id)
+            self.finalize_dataflow(dataflow, target_cluster_id)
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
@@ -3320,7 +3350,171 @@ impl Coordinator {
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((used_indexes, fast_path_plan, dataflow_metainfo))
+        Ok((
+            used_indexes,
+            fast_path_plan,
+            dataflow_metainfo,
+            BTreeMap::new(),
+        ))
+    }
+
+    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    async fn explain_create_materialized_view_optimizer_pipeline(
+        &mut self,
+        name: QualifiedItemName,
+        raw_plan: mz_sql::plan::HirRelationExpr,
+        column_names: Vec<ColumnName>,
+        target_cluster_id: ClusterId,
+        broken: bool,
+    ) -> Result<
+        (
+            UsedIndexes,
+            Option<FastPathPlan>,
+            DataflowMetainfo,
+            BTreeMap<GlobalId, TransientItem>,
+        ),
+        AdapterError,
+    > {
+        use mz_repr::explain::trace_plan;
+
+        if broken {
+            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
+        }
+
+        // Initialize helper context
+        // -------------------------
+
+        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
+        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+        where
+            F: FnOnce() -> Result<R, E>,
+            E: Into<AdapterError>,
+        {
+            if guard {
+                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+                match r {
+                    Ok(result) => result.map_err(Into::into),
+                    Err(_) => {
+                        let msg = format!("panic at the `{}` optimization stage", stage);
+                        Err(AdapterError::Internal(msg))
+                    }
+                }
+            } else {
+                f().map_err(Into::into)
+            }
+        }
+
+        let full_name = self.catalog().resolve_full_name(&name, None);
+
+        // Initialize optimizer context
+        // ----------------------------
+
+        // let typecheck_ctx = mz_transform::typecheck::empty_context();
+        // let catalog_state = self.catalog().state();
+        let compute_instance = self
+            .instance_snapshot(target_cluster_id)
+            .expect("compute instance does not exist");
+        let exported_sink_id = self.allocate_transient_id()?;
+        let internal_view_id = self.allocate_transient_id()?;
+        let debug_name = full_name.to_string();
+        let as_of = {
+            let id_bundle = self
+                .index_oracle(target_cluster_id)
+                .sufficient_collections(&raw_plan.depends_on());
+            self.least_valid_read(&id_bundle)
+        };
+        // let enable_consolidate_after_union_negate = self
+        //     .catalog()
+        //     .system_config()
+        //     .enable_consolidate_after_union_negate();
+
+        // Create a transient catalog item
+        // -------------------------------
+
+        let mut transient_items = BTreeMap::new();
+        transient_items.insert(exported_sink_id, {
+            TransientItem::new(
+                Some(full_name.to_string()),
+                Some(full_name.item.to_string()),
+                Some(column_names.iter().map(|c| c.to_string()).collect()),
+            )
+        });
+
+        // Execute the various stages of the optimization pipeline
+        // -------------------------------------------------------
+
+        // Trace the pipeline input under `optimize/raw`.
+        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
+            trace_plan(&raw_plan);
+        });
+
+        // Execute the `optimize/hir_to_mir` stage.
+        let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
+            raw_plan.optimize_and_lower(&OptimizerConfig {})
+        })?;
+
+        // Execute the `optimize/local` stage.
+        let optimized_plan = catch_unwind(broken, "local", || {
+            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
+                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
+                if let Ok(ref optimized_plan) = optimized_plan {
+                    trace_plan(optimized_plan.as_inner());
+                }
+                optimized_plan.map_err(AdapterError::from)
+            })
+        })?;
+
+        // Execute the `optimize/global` stage.
+        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
+            let mut dataflow_builder =
+                DataflowBuilder::new(self.catalog().state(), compute_instance);
+            dataflow_builder.build_materialized_view(
+                exported_sink_id,
+                internal_view_id,
+                debug_name,
+                &optimized_plan,
+                &RelationDesc::new(optimized_plan.typ(), column_names),
+            )
+        })?;
+
+        df.set_as_of(as_of);
+
+        // If the only outputs of the dataflow are sinks, we might be able to
+        // turn off the computation early, if they all have non-trivial
+        // `up_to`s.
+        //
+        // TODO: This should always be the case here so we can demote
+        // the outer index to a soft assert.
+        if df.index_exports.is_empty() {
+            df.until = Antichain::from_elem(Timestamp::MIN);
+            for (_, sink) in &df.sink_exports {
+                df.until.join_assign(&sink.up_to);
+            }
+        }
+
+        // Collect the list of indexes used by the dataflow at this point
+        let used_indexes = UsedIndexes::new(
+            df
+                .index_imports
+                .iter()
+                .map(|(id, _index_import)| {
+                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                })
+                .collect(),
+        );
+
+        // Execute the `optimize/finalize_dataflow` stage.
+        let df = catch_unwind(broken, "finalize_dataflow", || {
+            self.finalize_dataflow(df, target_cluster_id)
+        })?;
+
+        // Trace the resulting plan for the top-level `optimize` path.
+        trace_plan(&df);
+
+        // Return objects that need to be passed to the `ExplainContext`
+        // when rendering explanations for the various trace entries.
+        Ok((used_indexes, None, df_metainfo, transient_items))
     }
 
     pub fn sequence_explain_timestamp(
