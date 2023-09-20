@@ -49,8 +49,9 @@ col_option ::=
   'DEFAULT' expr
 comment_on ::=
   'COMMENT ON' (
-    'TABLE' | 'COLUMN' | 'VIEW' | 'MATERIALIZED VIEW' | 'SOURCE' | 'SINK' | 'INDEX' | 'FUNCTION' |
-    'CONNECTION' | 'TYPE' | 'SECRET' | 'ROLE' | 'DATABASE' | 'SCHEMA' | 'CLUSTER' | 'CLUSTER REPLICA'
+    'CLUSTER' | 'CLUSTER REPLICA' | 'COLUMN' | 'CONNECTION' | 'DATABASE' | 'FUNCTION' |
+    'INDEX' | 'MATERIALIZED VIEW' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' | 'SOURCE' |
+    'TABLE' | 'TYPE' | 'VIEW'
   ) object_name 'IS' ( string_literal | 'NULL' )
 commit ::=
   'COMMIT'

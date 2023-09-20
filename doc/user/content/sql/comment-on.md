@@ -1,6 +1,6 @@
 ---
 title: "COMMENT ON"
-description: "`COMMENT ON ...` add or update the comment of an object."
+description: "`COMMENT ON ...` adds or updates the comment of an object."
 menu:
   main:
     parent: 'commands'
@@ -8,7 +8,7 @@ menu:
 
 {{< private-preview />}}
 
-`COMMENT ON ...` add or update the comment of an object.
+`COMMENT ON ...` adds or updates the comment of an object.
 
 ## Syntax
 
@@ -20,14 +20,14 @@ menu:
 comment associated with it, so successive calls of `COMMENT ON` to a single object will overwrite
 the previous comment.
 
-To read the comments on an object you need to query the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
+To read the comment on an object you need to query the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
 catalog table.
 
 ## Privileges
 
 To comment on an object, the current role must be the owner of that object. Roles themselves do not
-have owners, so to comment on a Role you must have the `CREATEROLE` privilege. For more information
-on ownership and privileges, see [Role-based access control](/manage/access-control/rbac).
+have owners, so to comment on a role object you must have the `CREATEROLE` privilege. For more
+information on ownership and privileges, see [Role-based access control](/manage/access-control/rbac).
 
 ## Examples
 
