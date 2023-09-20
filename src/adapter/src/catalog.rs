@@ -6418,7 +6418,9 @@ impl Catalog {
             }) => {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let optimized_expr = optimizer.optimize(materialized_view.expr)?;
+                let raw_expr = materialized_view.expr;
+                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,

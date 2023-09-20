@@ -2059,7 +2059,6 @@ pub fn plan_create_materialized_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
