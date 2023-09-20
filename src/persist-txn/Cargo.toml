@@ -17,7 +17,7 @@ tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-tokio = { version = "1.24.2", default-features = false, features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1.32.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
