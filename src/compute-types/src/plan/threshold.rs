@@ -38,7 +38,7 @@ include!(concat!(
 ));
 
 /// A plan describing how to compute a threshold operation.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
@@ -118,7 +118,7 @@ impl ThresholdPlan {
 }
 
 /// A plan to maintain all inputs with positive counts.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
     #[proptest(strategy = "any_arranged_thin()")]
@@ -127,7 +127,7 @@ pub struct BasicThresholdPlan {
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
 /// in order to maintain an equivalent collection compared to [BasicThresholdPlan].
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RetractionsThresholdPlan {
     /// Description of how the input has been arranged
     #[proptest(strategy = "any_arranged_thin()")]

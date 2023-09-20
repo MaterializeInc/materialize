@@ -181,6 +181,8 @@ pub struct ExplainConfig {
     pub cardinality: bool,
     /// Show inferred column names.
     pub column_names: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
 }
 
 impl Default for ExplainConfig {
@@ -200,6 +202,7 @@ impl Default for ExplainConfig {
             filter_pushdown: false,
             cardinality: false,
             column_names: false,
+            humanized_exprs: false,
         }
     }
 }
@@ -240,6 +243,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -519,37 +523,90 @@ pub struct Attributes {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<String>,
-    pub keys: Option<String>,
+    pub types: Option<Option<Vec<ColumnType>>>,
+    pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
     pub column_names: Option<Vec<String>>,
 }
 
-impl fmt::Display for Attributes {
+#[derive(Debug, Clone)]
+pub struct HumanizedAttributes<'a> {
+    attrs: &'a Attributes,
+    humanizer: &'a dyn ExprHumanizer,
+    config: &'a ExplainConfig,
+}
+
+impl<'a> HumanizedAttributes<'a> {
+    pub fn new<T>(attrs: &'a Attributes, ctx: &PlanRenderingContext<'a, T>) -> Self {
+        Self {
+            attrs,
+            humanizer: ctx.humanizer,
+            config: ctx.config,
+        }
+    }
+}
+
+impl<'a> fmt::Display for HumanizedAttributes<'a> {
+    // Attribute rendering is guarded by the ExplainConfig flag for each
+    // attribute. This is needed because we might have derived attributes that
+    // are not explicitly requested (such as column_names), in which case we
+    // don't want to display them.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
-        if let Some(subtree_size) = &self.subtree_size {
-            builder.field("subtree_size", subtree_size);
+
+        if self.config.subtree_size {
+            let subtree_size = self.attrs.subtree_size.expect("subtree_size");
+            builder.field("subtree_size", &subtree_size);
         }
-        if let Some(non_negative) = &self.non_negative {
-            builder.field("non_negative", non_negative);
+
+        if self.config.non_negative {
+            let non_negative = self.attrs.non_negative.expect("non_negative");
+            builder.field("non_negative", &non_negative);
         }
-        if let Some(arity) = &self.arity {
-            builder.field("arity", arity);
+
+        if self.config.arity {
+            let arity = self.attrs.arity.expect("arity");
+            builder.field("arity", &arity);
         }
-        if let Some(types) = &self.types {
-            builder.field("types", types);
+
+        if self.config.types {
+            let types = match self.attrs.types.as_ref().expect("types") {
+                Some(types) => {
+                    let types = types
+                        .into_iter()
+                        .map(|c| self.humanizer.humanize_column_type(c))
+                        .collect::<Vec<_>>();
+
+                    bracketed("(", ")", separated(", ", types)).to_string()
+                }
+                None => "(<error>)".to_string(),
+            };
+            builder.field("types", &types);
         }
-        if let Some(keys) = &self.keys {
-            builder.field("keys", keys);
+
+        if self.config.keys {
+            let keys = self
+                .attrs
+                .keys
+                .as_ref()
+                .expect("keys")
+                .into_iter()
+                .map(|key| bracketed("[", "]", separated(", ", key)).to_string());
+            let keys = bracketed("(", ")", separated(", ", keys)).to_string();
+            builder.field("keys", &keys);
         }
-        if let Some(cardinality) = &self.cardinality {
+
+        if self.config.cardinality {
+            let cardinality = self.attrs.cardinality.as_ref().expect("cardinality");
             builder.field("cardinality", cardinality);
         }
-        if let Some(column_names) = &self.column_names {
+
+        if self.config.column_names {
+            let column_names = self.attrs.column_names.as_ref().expect("column_names");
             let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
             builder.field("column_names", &column_names);
         }
+
         builder.finish()
     }
 }
@@ -759,6 +816,7 @@ mod tests {
             filter_pushdown: false,
             cardinality: false,
             column_names: false,
+            humanized_exprs: false,
         };
         let context = ExplainContext {
             env,

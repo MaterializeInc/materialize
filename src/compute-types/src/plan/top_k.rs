@@ -27,7 +27,7 @@ use crate::plan::bucketing_of_expected_group_size;
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.top_k.rs"));
 
 /// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TopKPlan {
     /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
@@ -165,7 +165,7 @@ impl RustType<ProtoTopKPlan> for TopKPlan {
 /// differential's semantics. (2) is especially interesting because Kafka is
 /// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
 /// Materialize and commonly used by users.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -200,7 +200,7 @@ impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -244,7 +244,7 @@ impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
 }
 
 /// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,

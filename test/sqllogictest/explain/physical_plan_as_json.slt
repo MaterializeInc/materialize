@@ -371,7 +371,9 @@ SELECT c + d, 1 FROM u
   ],
   "sources": [
     {
-      "id": "materialize.public.u",
+      "id": {
+        "User": 2
+      },
       "op": {
         "expressions": [
           {
@@ -645,7 +647,9 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 7
+      },
       "op": {
         "expressions": [],
         "predicates": [],
@@ -1034,7 +1038,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 7
+      },
       "op": {
         "expressions": [],
         "predicates": [],
@@ -1304,7 +1310,9 @@ SELECT x * 5 FROM cte WHERE x = 5
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 7
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -6292,7 +6300,9 @@ WHERE a = c AND d = e AND b + d > 42
   ],
   "sources": [
     {
-      "id": "materialize.public.u",
+      "id": {
+        "User": 2
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -6345,7 +6355,9 @@ WHERE a = c AND d = e AND b + d > 42
       }
     },
     {
-      "id": "materialize.public.v",
+      "id": {
+        "User": 3
+      },
       "op": {
         "expressions": [],
         "predicates": [

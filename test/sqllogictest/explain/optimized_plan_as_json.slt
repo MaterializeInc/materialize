@@ -432,7 +432,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 8
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -2865,7 +2867,9 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 8
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -5596,7 +5600,9 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
   ],
   "sources": [
     {
-      "id": "materialize.public.t2",
+      "id": {
+        "User": 13
+      },
       "op": {
         "expressions": [],
         "predicates": [
