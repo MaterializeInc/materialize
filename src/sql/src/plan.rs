@@ -829,21 +829,67 @@ pub enum Explainee {
     MaterializedView(GlobalId),
     /// An existing index.
     Index(GlobalId),
-    /// The object to be explained is a one-off query and may or may not be
-    /// served using a dataflow.
-    /// The object to be explained is a one-off query.
-    ///
-    /// THe query may be served using a dataflow or using a FastPathPlan.
-    ///
-    /// Queries that have their `broken` flag set are expected to cause a panic
-    /// in the optimizer code. In this case, pipeline execution will stop, but
-    /// panic will be intercepted and will not propagate to the caller. This is
-    /// useful when debugging queries that cause panics.
+    /// A SQL statement.
+    Statement(ExplaineeStatement),
+}
+
+/// Explainee types that are statements.
+#[derive(Clone, Debug)]
+pub enum ExplaineeStatement {
+    /// The object to be explained is a SELECT statement.
     Query {
         raw_plan: HirRelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
+    /// The object to be explained is a CREATE MATERIALIZED VIEW.
+    CreateMaterializedView {
+        name: QualifiedItemName,
+        raw_plan: HirRelationExpr,
+        column_names: Vec<ColumnName>,
+        cluster_id: ClusterId,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+    },
+}
+
+impl ExplaineeStatement {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            Self::Query { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
+        }
+    }
+
+    /// Statements that have their `broken` flag set are expected to cause a
+    /// panic in the optimizer code. In this case:
+    ///
+    /// 1. The optimizer pipeline execution will stop, but the panic will be
+    ///    intercepted and will not propagate to the caller. The partial
+    ///    optimizer trace collected until this point will be available.
+    /// 2. The optimizer trace tracing subscriber will delegate regular tracing
+    ///    spans and events to the default subscriber.
+    ///
+    /// This is useful when debugging queries that cause panics.
+    pub fn broken(&self) -> bool {
+        match self {
+            Self::Query { broken, .. } => *broken,
+            Self::CreateMaterializedView { broken, .. } => *broken,
+        }
+    }
+
+    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
+        match self {
+            Self::Query {
+                row_set_finishing, ..
+            } => row_set_finishing.clone(),
+            Self::CreateMaterializedView { .. } => {
+                // Trivial finishing asserted in plan_create_materialized_view.
+                None
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
