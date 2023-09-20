@@ -3034,3 +3034,26 @@ fn copy_from() {
         .expect("success");
     assert_eq!(rows.len(), 2);
 }
+
+// Test that relations are included in timedomains even if they're indexes.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn relation_timedomain() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut txn_client = server.connect(postgres::NoTls).unwrap();
+    let mut drop_client = server.connect(postgres::NoTls).unwrap();
+
+    txn_client
+        .execute("CREATE TABLE t (a INT);", &[])
+        .expect("failed to create cluster");
+    txn_client
+        .execute("CREATE INDEX i ON t (a);", &[])
+        .expect("failed to create cluster");
+
+    txn_client.execute("BEGIN", &[]).expect("success");
+    let _ = txn_client.query("SELECT * FROM t", &[]).expect("success");
+
+    drop_client.execute("DROP INDEX i", &[]).expect("success");
+
+    let _ = txn_client.query("SELECT * FROM t", &[]).expect("success");
+}

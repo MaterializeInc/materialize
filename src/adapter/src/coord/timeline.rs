@@ -22,6 +22,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
+use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use once_cell::sync::Lazy;
@@ -840,6 +841,23 @@ impl Coordinator {
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(item_ids.iter());
+
+        // Add storage collections that may be indexed back into id_bundle.
+        // The call above to `sufficient_collections` will only include storage
+        // collections if they are un-indexed.
+        //
+        // Gross hack.
+        for item_id in item_ids {
+            let entry = self.catalog().get_entry(&item_id);
+            if matches!(
+                entry.item_type(),
+                CatalogItemType::Table
+                    | CatalogItemType::Source
+                    | CatalogItemType::MaterializedView
+            ) {
+                id_bundle.storage_ids.insert(item_id);
+            }
+        }
 
         // Filter out ids from different timelines.
         for ids in [
