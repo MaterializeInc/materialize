@@ -12,10 +12,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use mz_ore::collections::HashMap;
-use tokio::sync::oneshot;
-
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
+use tokio::sync::oneshot;
 
 use crate::client::tokens::RefreshTokenResponse;
 use crate::{ApiTokenArgs, ApiTokenResponse, Error, RefreshToken};
