@@ -108,6 +108,7 @@ Decimal
 Declare
 Decorrelated
 Default
+Defaults
 Delete
 Delimited
 Delimiter

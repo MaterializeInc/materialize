@@ -77,7 +77,7 @@ impl fmt::Debug for JsonEncoder {
                 "schema",
                 &format!(
                     "{:?}",
-                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new())
+                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new(), None)
                 ),
             )
             .finish()
@@ -251,6 +251,7 @@ fn build_row_schema_field(
     type_namer: &mut Namer,
     custom_names: &BTreeMap<GlobalId, String>,
     typ: &ColumnType,
+    set_null_defaults: bool,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
         ScalarType::AclItem => json!("string"),
@@ -311,6 +312,7 @@ fn build_row_schema_field(
                     nullable: true,
                     scalar_type: ty.unwrap_collection_element_type().clone(),
                 },
+                set_null_defaults,
             );
             json!({
                 "type": "array",
@@ -325,6 +327,7 @@ fn build_row_schema_field(
                     nullable: true,
                     scalar_type: (**value_type).clone(),
                 },
+                set_null_defaults,
             );
             json!({
                 "type": "map",
@@ -342,7 +345,8 @@ fn build_row_schema_field(
                 json!(name)
             } else {
                 let fields = fields.to_vec();
-                let json_fields = build_row_schema_fields(&fields, type_namer, custom_names);
+                let json_fields =
+                    build_row_schema_fields(&fields, type_namer, custom_names, set_null_defaults);
                 json!({
                     "type": "record",
                     "name": name,
@@ -377,16 +381,25 @@ fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
     type_namer: &mut Namer,
     custom_names: &BTreeMap<GlobalId, String>,
+    set_null_defaults: bool,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
     let mut field_namer = Namer::default();
     for (name, typ) in columns.iter() {
         let (name, _seen) = field_namer.valid_name(name.as_str());
-        let field_type = build_row_schema_field(type_namer, custom_names, typ);
-        fields.push(json!({
-            "name": name,
-            "type": field_type,
-        }));
+        let field_type = build_row_schema_field(type_namer, custom_names, typ, set_null_defaults);
+        if set_null_defaults && typ.nullable {
+            fields.push(json!({
+                "name": name,
+                "type": field_type,
+                "default": "null",
+            }));
+        } else {
+            fields.push(json!({
+                "name": name,
+                "type": field_type,
+            }));
+        }
     }
     fields
 }
@@ -396,8 +409,14 @@ pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
     custom_names: &BTreeMap<GlobalId, String>,
+    set_null_defaults: Option<bool>,
 ) -> Result<serde_json::Value, anyhow::Error> {
-    let fields = build_row_schema_fields(columns, &mut Namer::default(), custom_names);
+    let fields = build_row_schema_fields(
+        columns,
+        &mut Namer::default(),
+        custom_names,
+        set_null_defaults.unwrap_or(false),
+    );
     let _ = mz_avro::schema::Name::parse_simple(name)?;
     Ok(json!({
         "type": "record",

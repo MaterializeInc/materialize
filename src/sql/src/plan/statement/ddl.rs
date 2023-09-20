@@ -2344,7 +2344,8 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
 generate_extracted_config!(
     CsrConfigOption,
     (AvroKeyFullname, String),
-    (AvroValueFullname, String)
+    (AvroValueFullname, String),
+    (NullDefaults, bool)
 );
 
 fn kafka_sink_builder(
@@ -2444,6 +2445,7 @@ fn kafka_sink_builder(
             let CsrConfigOptionExtracted {
                 avro_key_fullname,
                 avro_value_fullname,
+                null_defaults,
                 ..
             } = options.try_into()?;
 
@@ -2465,6 +2467,7 @@ fn kafka_sink_builder(
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
                 matches!(envelope, SinkEnvelope::Debezium),
+                null_defaults,
             )?;
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator

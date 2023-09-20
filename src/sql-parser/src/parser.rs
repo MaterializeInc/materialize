@@ -2034,7 +2034,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_config_option(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AVRO])? {
+        let name = match self.expect_one_of_keywords(&[AVRO, NULL])? {
             AVRO => {
                 let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
                     KEY => CsrConfigOptionName::AvroKeyFullname,
@@ -2043,6 +2043,10 @@ impl<'a> Parser<'a> {
                 };
                 self.expect_keyword(FULLNAME)?;
                 name
+            }
+            NULL => {
+                self.expect_keyword(DEFAULTS)?;
+                CsrConfigOptionName::NullDefaults
             }
             _ => unreachable!(),
         };
