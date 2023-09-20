@@ -54,17 +54,26 @@ For more details and troubleshooting, check the
 
 ## Known limitations
 
-
 When you connect to Materialize from Power BI, you will get a list of your tables and views.
 
 However, [Power BI does not display materialized views](https://ideas.fabric.microsoft.com/ideas/idea/?ideaid=92420736-afdc-45b9-8962-743a53acfa66) in that list.
 
-To work around this Power BI limitation, you can create a view that selects from the materialized view, and then use the view in Power BI.
+To work around this Power BI limitation, you can use one of the following options:
 
-For example, if you have a materialized view called `my_view`, you can create a view called `my_view_bi` with the following SQL:
+1. Create a view that selects from the materialized view, and then use the view in Power BI.
 
-```sql
-CREATE VIEW my_view_bi AS SELECT * FROM my_view;
-```
+    For example, if you have a materialized view called `my_view`, you can create a view called `my_view_bi` with the following SQL:
 
-Then, in Power BI, you can use the `my_view_bi` view.
+    ```sql
+    CREATE VIEW my_view_bi AS SELECT * FROM my_view;
+    ```
+
+    Then, in Power BI, you can use the `my_view_bi` view.
+
+2. If applicable, instead of using a materialized view, create a view with an [index](/sql/create-index) instead.
+
+3. Use the [Power BI Native query folding](https://learn.microsoft.com/en-us/power-query/connectors/postgresql#native-query-folding) to write your own query rather than using the Power BI UI. For example:
+
+    ```
+    = Value.NativeQuery(Source, "select * from my_view;")
+    ```
