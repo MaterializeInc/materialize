@@ -1223,7 +1223,7 @@ pub struct Sink {
 #[derive(Clone, Debug)]
 pub struct View {
     pub create_sql: String,
-    pub expr: mz_expr::MirRelationExpr,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
 }
