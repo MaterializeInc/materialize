@@ -3816,17 +3816,24 @@ impl Catalog {
             );
         }
         let cluster = self.resolve_cluster(session.vars().cluster())?;
-        // Disallow queries on storage clusters. There's no technical reason for
-        // this restriction, just a philosophical one: we want all crashes in
-        // a storage cluster to be the result of sources and sinks, not user
-        // queries.
-        if cluster.bound_objects.iter().any(|id| {
-            matches!(
-                self.get_entry(id).item_type(),
-                CatalogItemType::Source | CatalogItemType::Sink
-            )
-        }) {
-            coord_bail!("cannot execute queries on cluster containing sources or sinks");
+
+        if !self
+            .for_session(session)
+            .system_vars()
+            .enable_unified_clusters()
+        {
+            // Disallow queries on storage clusters. There's no technical reason for
+            // this restriction, just a philosophical one: we want all crashes in
+            // a storage cluster to be the result of sources and sinks, not user
+            // queries.
+            if cluster.bound_objects.iter().any(|id| {
+                matches!(
+                    self.get_entry(id).item_type(),
+                    CatalogItemType::Source | CatalogItemType::Sink
+                )
+            }) {
+                coord_bail!("cannot execute queries on cluster containing sources or sinks");
+            }
         }
         Ok(cluster)
     }

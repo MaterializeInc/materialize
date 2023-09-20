@@ -957,15 +957,7 @@ impl Coordinator {
             ambiguous_columns,
         } = plan;
 
-        if !self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec)
-            && !self.is_compute_cluster(cluster_id)
-        {
-            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-            return Err(AdapterError::BadItemInStorageCluster { cluster_name });
-        }
+        self.check_compute_item_in_cluster(&name, cluster_id)?;
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
@@ -1114,15 +1106,7 @@ impl Coordinator {
         // An index must be created on a specific cluster.
         let cluster_id = index.cluster_id;
 
-        if !self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec)
-            && !self.is_compute_cluster(cluster_id)
-        {
-            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-            return Err(AdapterError::BadItemInStorageCluster { cluster_name });
-        }
+        self.check_compute_item_in_cluster(&name, cluster_id)?;
 
         let empty_key = index.keys.is_empty();
 
