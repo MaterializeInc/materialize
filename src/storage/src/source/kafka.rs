@@ -16,6 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use chrono::NaiveDateTime;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -26,9 +27,12 @@ use mz_kafka_util::client::{
 use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
+use mz_storage_types::sources::{
+    KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
+};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 use mz_timely_util::order::Partitioned;
@@ -85,8 +89,8 @@ pub struct KafkaSourceReader {
     _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaPartitionMetrics,
-    /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
-    include_headers: bool,
+    /// The metadata columns requested by the user
+    metadata_columns: Vec<KafkaMetadataKind>,
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
     /// Per partition capabilities used to produce messages
@@ -361,7 +365,7 @@ impl SourceRender for KafkaSourceConnection {
                 start_offsets,
                 stats_rx,
                 partition_info,
-                include_headers: self.include_headers.is_some(),
+                metadata_columns: self.metadata_columns.into_iter().map(|(_name, kind)| kind).collect(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
                     config.base_metrics.clone(),
@@ -478,7 +482,7 @@ impl SourceRender for KafkaSourceConnection {
                         }
                         Ok(message) => {
                             let (message, ts) =
-                                construct_source_message(&message, reader.include_headers);
+                                construct_source_message(&message, &reader.metadata_columns);
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid];
@@ -668,7 +672,7 @@ impl KafkaSourceReader {
         self.partition_consumers.push(PartitionConsumer::new(
             partition_id,
             partition_queue,
-            self.include_headers,
+            self.metadata_columns.clone(),
         ));
         assert_eq!(
             self.consumer
@@ -831,20 +835,11 @@ impl KafkaSourceReader {
 
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
-    include_headers: bool,
+    metadata_columns: &[KafkaMetadataKind],
 ) -> (
     SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
     (PartitionId, MzOffset),
 ) {
-    let headers = match msg.headers() {
-        Some(headers) if include_headers => Some(
-            headers
-                .iter()
-                .map(|h| (h.key.into(), h.value.map(|v| v.to_vec())))
-                .collect::<Vec<_>>(),
-        ),
-        _ => None,
-    };
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
         panic!(
@@ -852,11 +847,52 @@ fn construct_source_message(
             msg.offset()
         );
     };
+
+    let mut metadata = Row::default();
+    let mut packer = metadata.packer();
+    for kind in metadata_columns {
+        match kind {
+            KafkaMetadataKind::Partition => packer.push(Datum::from(pid)),
+            KafkaMetadataKind::Offset => packer.push(Datum::UInt64(offset)),
+            KafkaMetadataKind::Timestamp => {
+                let ts = msg
+                    .timestamp()
+                    .to_millis()
+                    .expect("kafka sources always have upstream_time");
+
+                let d: Datum = NaiveDateTime::from_timestamp_millis(ts)
+                    .and_then(|dt| {
+                        let ct: Option<CheckedTimestamp<NaiveDateTime>> = dt.try_into().ok();
+                        ct
+                    })
+                    .into();
+                packer.push(d)
+            }
+            KafkaMetadataKind::Headers => {
+                packer.push_list_with(|r| {
+                    if let Some(headers) = msg.headers() {
+                        for header in headers.iter() {
+                            match header.value {
+                                Some(v) => r.push_list_with(|record_row| {
+                                    record_row.push(Datum::String(header.key));
+                                    record_row.push(Datum::Bytes(v));
+                                }),
+                                None => r.push_list_with(|record_row| {
+                                    record_row.push(Datum::String(header.key));
+                                    record_row.push(Datum::Null);
+                                }),
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     let msg = SourceMessage {
-        upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),
-        headers,
+        metadata,
     };
     (msg, (pid, offset.into()))
 }
@@ -867,8 +903,8 @@ struct PartitionConsumer {
     pid: PartitionId,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
-    /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
-    include_headers: bool,
+    /// Additional metadata columns requested by the user
+    metadata_columns: Vec<KafkaMetadataKind>,
 }
 
 impl PartitionConsumer {
@@ -876,12 +912,12 @@ impl PartitionConsumer {
     fn new(
         pid: PartitionId,
         partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
-        include_headers: bool,
+        metadata_columns: Vec<KafkaMetadataKind>,
     ) -> Self {
         PartitionConsumer {
             pid,
             partition_queue,
-            include_headers,
+            metadata_columns,
         }
     }
 
@@ -902,7 +938,7 @@ impl PartitionConsumer {
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
-                let (msg, ts) = construct_source_message(&msg, self.include_headers);
+                let (msg, ts) = construct_source_message(&msg, &self.metadata_columns);
                 assert_eq!(ts.0, self.pid);
                 Ok(Some((msg, ts)))
             }

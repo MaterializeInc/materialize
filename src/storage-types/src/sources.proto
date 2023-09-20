@@ -31,14 +31,12 @@ message ProtoMzOffset {
   uint64 offset = 1;
 }
 
-
-message ProtoIncludedColumnSource {
+message ProtoKafkaMetadataKind {
     oneof kind {
         google.protobuf.Empty partition = 1;
         google.protobuf.Empty offset = 2;
         google.protobuf.Empty timestamp = 3;
-        google.protobuf.Empty topic = 4;
-        google.protobuf.Empty headers = 5;
+        google.protobuf.Empty headers = 4;
     }
 }
 
@@ -88,11 +86,6 @@ message ProtoUpsertStyle {
         ProtoKeyEnvelope default = 1;
         ProtoDebezium debezium = 2;
     }
-}
-
-message ProtoIncludedColumnPos {
-    string name = 1;
-    uint64 pos = 2;
 }
 
 message ProtoDebeziumEnvelope {
@@ -145,7 +138,13 @@ message ProtoDebeziumSourceProjection {
     }
 }
 
+message ProtoKafkaMetadataColumn {
+    string name = 1;
+    ProtoKafkaMetadataKind kind = 2;
+}
+
 message ProtoKafkaSourceConnection {
+    reserved 6, 7, 8, 9, 10;
     mz_storage_types.connections.ProtoKafkaConnection connection = 1;
     mz_repr.global_id.ProtoGlobalId connection_id = 13;
     string topic = 2;
@@ -153,18 +152,14 @@ message ProtoKafkaSourceConnection {
     optional string group_id_prefix = 4;
     optional mz_proto.ProtoU128 environment_id = 5;
     optional string environment_name = 12;
-    ProtoIncludedColumnPos include_timestamp = 6;
-    ProtoIncludedColumnPos include_partition = 7;
-    ProtoIncludedColumnPos include_topic = 8;
-    ProtoIncludedColumnPos include_offset = 9;
-    ProtoIncludedColumnPos include_headers = 10;
+    repeated ProtoKafkaMetadataColumn metadata_columns = 11;
 }
 
 message ProtoSourceDesc {
+    reserved 4;
     ProtoSourceConnection connection = 1;
     mz_storage_types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
     ProtoSourceEnvelope envelope = 3;
-    repeated ProtoIncludedColumnSource metadata_columns = 4;
     mz_proto.ProtoDuration timestamp_interval = 5;
 }
 

@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
-use mz_repr::Diff;
+use mz_repr::{Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, TestScriptSourceConnection};
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
@@ -82,10 +82,9 @@ impl SourceRender for TestScriptSourceConnection {
                     ScriptCommand::Emit { key, value, offset } => {
                         // For now we only support `Finalized` messages
                         let msg = Ok(SourceMessage {
-                            upstream_time_millis: None,
                             key: key.map(|k| k.into_bytes()),
                             value: Some(value.into_bytes()),
-                            headers: None,
+                            metadata: Row::default(),
                         });
                         let ts = MzOffset::from(offset);
 
