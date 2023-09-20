@@ -5256,7 +5256,7 @@ impl Coordinator {
 /// cluster with a non-1 number of replicas), return that.  Otherwise,
 /// return a list of associated notices (today: we always emit exactly
 /// one notice if there are any per-replica log dependencies and if
-/// `enable_per_replica_notice` is set, and none otherwise.)
+/// `emit_introspection_query_notice` is set, and none otherwise.)
 fn check_log_reads(
     catalog: &Catalog,
     cluster: &Cluster,
@@ -5296,11 +5296,9 @@ where
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }
 
-    Ok(if vars.enable_per_replica_notice() {
-        Some(AdapterNotice::PerReplicaLogRead { log_names })
-    } else {
-        None
-    })
+    Ok(vars
+        .emit_introspection_query_notice()
+        .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
 }
 
 /// Return a [`SourceSinkClusterConfig`] based on the possibly altered

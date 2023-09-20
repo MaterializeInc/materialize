@@ -20,7 +20,7 @@ datestyle                                   | `ISO, MDY`                | The di
 emit_timestamp_notice                       | `false`                   | Boolean flag indicating whether to send a `notice` specifying query timestamps.
 emit_trace_id_notice                        | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.
 enable_session_rbac_checks                  | `false`                   | **Read-only.** Boolean flag indicating whether RBAC is enabled for the current session.
-enable_per_replica_notice                   | `true`                    | Whether to print a notice when querying replica introspection relations.
+emit_introspection_query_notice             | `true`                    | Whether to print a notice when querying replica introspection relations.
 extra_float_digits                          | `3`                       | Boolean flag indicating whether to adjust the number of digits displayed for floating-point values.
 failpoints                                  |                           | Allows failpoints to be dynamically activated.
 idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout.

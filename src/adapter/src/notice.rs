@@ -415,7 +415,7 @@ impl fmt::Display for AdapterNotice {
                 write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!", separated(", ", dependant_objects))
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
-                write!(f, "Queried per-replica objects: {}. Unlike other objects in Materialize, these results depend on the current values of the `CLUSTER` and `REPLICA` session variables.", log_names.join(", "))
+                write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
             }
         }
     }
