@@ -1086,6 +1086,24 @@ mod test {
         assert_eq!(date1, date2);
     }
 
+    #[mz_ore::test]
+    fn test_equality_with_different_precisions() {
+        let date1 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123500000).unwrap())
+                .unwrap();
+        let date1 = date1
+            .round_to_precision(Some(TimestampPrecision(5)))
+            .unwrap();
+
+        let date2 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap())
+                .unwrap();
+        let date2 = date2
+            .round_to_precision(Some(TimestampPrecision(4)))
+            .unwrap();
+        assert_eq!(date1, date2);
+    }
+
     proptest! {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow

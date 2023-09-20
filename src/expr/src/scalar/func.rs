@@ -4476,13 +4476,13 @@ derive_unary!(
     CastIntervalToString,
     CastIntervalToTime,
     CastTimestampToDate,
-    CastTimestampToTimestamp,
+    AdjustTimestampPrecision,
     CastTimestampToTimestampTz,
     CastTimestampToString,
     CastTimestampToTime,
     CastTimestampTzToDate,
     CastTimestampTzToTimestamp,
-    CastTimestampTzToTimestampTz,
+    AdjustTimestampTzPrecision,
     CastTimestampTzToString,
     CastTimestampTzToTime,
     CastPgLegacyCharToString,
@@ -4586,7 +4586,7 @@ derive_unary!(
     ExpNumeric,
     Sleep,
     Panic,
-    RescaleNumeric,
+    AdjustNumericScale,
     PgColumnSize,
     MzRowSize,
     MzTypeName,
@@ -5000,7 +5000,7 @@ impl Arbitrary for UnaryFunc {
             ExpNumeric::arbitrary().prop_map_into().boxed(),
             Sleep::arbitrary().prop_map_into().boxed(),
             Panic::arbitrary().prop_map_into().boxed(),
-            RescaleNumeric::arbitrary().prop_map_into().boxed(),
+            AdjustNumericScale::arbitrary().prop_map_into().boxed(),
             PgColumnSize::arbitrary().prop_map_into().boxed(),
             MzRowSize::arbitrary().prop_map_into().boxed(),
             MzTypeName::arbitrary().prop_map_into().boxed(),
@@ -5226,12 +5226,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastIntervalToString(_) => CastIntervalToString(()),
             UnaryFunc::CastIntervalToTime(_) => CastIntervalToTime(()),
             UnaryFunc::CastTimestampToDate(_) => CastTimestampToDate(()),
-            UnaryFunc::CastTimestampToTimestamp(func) => {
-                CastTimestampToTimestamp(mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+            UnaryFunc::AdjustTimestampPrecision(func) => Kind::AdjustTimestampPrecision(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
                     from: func.from.map(|p| p.into_proto()),
                     to: func.to.map(|p| p.into_proto()),
-                })
-            }
+                },
+            ),
             UnaryFunc::CastTimestampToTimestampTz(func) => CastTimestampToTimestampTz(
                 mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
                     from: func.from.map(|p| p.into_proto()),
@@ -5241,7 +5241,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastTimestampToString(_) => CastTimestampToString(()),
             UnaryFunc::CastTimestampToTime(_) => CastTimestampToTime(()),
             UnaryFunc::CastTimestampTzToDate(_) => CastTimestampTzToDate(()),
-            UnaryFunc::CastTimestampTzToTimestampTz(func) => CastTimestampTzToTimestampTz(
+            UnaryFunc::AdjustTimestampTzPrecision(func) => Kind::AdjustTimestampTzPrecision(
                 mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
                     from: func.from.map(|p| p.into_proto()),
                     to: func.to.map(|p| p.into_proto()),
@@ -5375,7 +5375,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::ExpNumeric(_) => ExpNumeric(()),
             UnaryFunc::Sleep(_) => Sleep(()),
             UnaryFunc::Panic(_) => Panic(()),
-            UnaryFunc::RescaleNumeric(func) => RescaleNumeric(func.0.into_proto()),
+            UnaryFunc::AdjustNumericScale(func) => AdjustNumericScale(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
@@ -5650,7 +5650,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastIntervalToString(()) => Ok(impls::CastIntervalToString.into()),
                 CastIntervalToTime(()) => Ok(impls::CastIntervalToTime.into()),
                 CastTimestampToDate(()) => Ok(impls::CastTimestampToDate.into()),
-                CastTimestampToTimestamp(precisions) => Ok(impls::CastTimestampToTimestamp {
+                AdjustTimestampPrecision(precisions) => Ok(impls::AdjustTimestampPrecision {
                     from: precisions.from.into_rust()?,
                     to: precisions.to.into_rust()?,
                 }
@@ -5668,13 +5668,11 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     to: precisions.to.into_rust()?,
                 }
                 .into()),
-                CastTimestampTzToTimestampTz(precisions) => {
-                    Ok(impls::CastTimestampTzToTimestampTz {
-                        from: precisions.from.into_rust()?,
-                        to: precisions.to.into_rust()?,
-                    }
-                    .into())
+                AdjustTimestampTzPrecision(precisions) => Ok(impls::AdjustTimestampTzPrecision {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
                 }
+                .into()),
                 CastTimestampTzToString(()) => Ok(impls::CastTimestampTzToString.into()),
                 CastTimestampTzToTime(()) => Ok(impls::CastTimestampTzToTime.into()),
                 CastPgLegacyCharToString(()) => Ok(impls::CastPgLegacyCharToString.into()),
@@ -5834,8 +5832,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 ExpNumeric(()) => Ok(impls::ExpNumeric.into()),
                 Sleep(()) => Ok(impls::Sleep.into()),
                 Panic(()) => Ok(impls::Panic.into()),
-                RescaleNumeric(max_scale) => {
-                    Ok(impls::RescaleNumeric(max_scale.into_rust()?).into())
+                AdjustNumericScale(max_scale) => {
+                    Ok(impls::AdjustNumericScale(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),

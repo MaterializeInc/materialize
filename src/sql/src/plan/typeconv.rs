@@ -374,7 +374,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Timestamp, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
             let from = from_type.unwrap_timestamp_precision();
             let to = to_type.unwrap_timestamp_precision();
-            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestamp(func::CastTimestampToTimestamp{from, to})))
+            Some(move |e: HirScalarExpr| e.call_unary(AdjustTimestampPrecision(func::AdjustTimestampPrecision{from, to})))
         }),
         (Timestamp, Time) => Assignment: CastTimestampToTime(func::CastTimestampToTime),
         (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
@@ -389,7 +389,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (TimestampTz, TimestampTz) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
             let from = from_type.unwrap_timestamp_precision();
             let to = to_type.unwrap_timestamp_precision();
-            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestampTz(func::CastTimestampTzToTimestampTz{from, to})))
+            Some(move |e: HirScalarExpr| e.call_unary(AdjustTimestampTzPrecision(func::AdjustTimestampTzPrecision{from, to})))
         }),
         (TimestampTz, Time) => Assignment: CastTimestampTzToTime(func::CastTimestampTzToTime),
         (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),
@@ -675,7 +675,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
             let scale = to_type.unwrap_numeric_max_scale();
             Some(move |e: HirScalarExpr| match scale {
                 None => e,
-                Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(func::RescaleNumeric(scale))),
+                Some(scale) => e.call_unary(UnaryFunc::AdjustNumericScale(func::AdjustNumericScale(scale))),
             })
         }),
         (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),

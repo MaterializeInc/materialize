@@ -126,7 +126,8 @@ message ProtoUnaryFunc {
         mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;
         repeated ProtoMirScalarExpr cast_exprs = 2;
     }
-    reserved 5, 6, 15, 104, 111, 115;
+    reserved 5, 6, 15, 104, 111, 115, 212, 306, 313;
+    // next field number 317
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
@@ -240,12 +241,12 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_interval_to_time = 109;
         google.protobuf.Empty cast_timestamp_to_date = 110;
         mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_to_timestamp_tz = 311;
-        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_to_timestamp = 306;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions adjust_timestamp_precision = 315;
         google.protobuf.Empty cast_timestamp_to_string = 112;
         google.protobuf.Empty cast_timestamp_to_time = 113;
         google.protobuf.Empty cast_timestamp_tz_to_date = 114;
         mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_tz_to_timestamp = 312;
-        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions cast_timestamp_tz_to_timestamp_tz = 313;
+        mz_repr.adt.timestamp.ProtoFromToTimestampPrecisions adjust_timestamp_tz_precision = 316;
         google.protobuf.Empty cast_timestamp_tz_to_string = 116;
         google.protobuf.Empty cast_timestamp_tz_to_time = 117;
         google.protobuf.Empty cast_pg_legacy_char_to_string = 118;
@@ -344,7 +345,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty exp_numeric = 209;
         google.protobuf.Empty sleep = 210;
         google.protobuf.Empty panic = 211;
-        mz_repr.adt.numeric.ProtoNumericMaxScale rescale_numeric = 212;
+        mz_repr.adt.numeric.ProtoNumericMaxScale adjust_numeric_scale = 314;
         google.protobuf.Empty pg_column_size = 213;
         google.protobuf.Empty mz_row_size = 214;
         google.protobuf.Empty mz_type_name = 215;

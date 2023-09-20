@@ -302,9 +302,9 @@ sqlfunc!(
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct RescaleNumeric(pub NumericMaxScale);
+pub struct AdjustNumericScale(pub NumericMaxScale);
 
-impl<'a> EagerUnaryFunc<'a> for RescaleNumeric {
+impl<'a> EagerUnaryFunc<'a> for AdjustNumericScale {
     type Input = Numeric;
     type Output = Result<Numeric, EvalError>;
 
@@ -323,8 +323,8 @@ impl<'a> EagerUnaryFunc<'a> for RescaleNumeric {
     }
 }
 
-impl fmt::Display for RescaleNumeric {
+impl fmt::Display for AdjustNumericScale {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("rescale_numeric")
+        f.write_str("adjust_numeric_scale")
     }
 }
