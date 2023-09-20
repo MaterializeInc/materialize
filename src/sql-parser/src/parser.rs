@@ -6889,7 +6889,18 @@ impl<'a> Parser<'a> {
             Explainee::Index(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
-            Explainee::Query(self.parse_query()?, broken)
+            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW]) {
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_materialized_view()? {
+                    Statement::CreateMaterializedView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::CreateMaterializedView(Box::new(stmt), broken)
+            } else {
+                // TODO: consider using parse_select here
+                let query = self.parse_query()?;
+                Explainee::Query(Box::new(query), broken)
+            }
         };
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {

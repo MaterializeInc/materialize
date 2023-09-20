@@ -708,7 +708,7 @@ fn generate_rbac_requirements(
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 }
-                Explainee::Query { raw_plan, .. } => raw_plan
+                Explainee::Statement(stmt) => stmt
                     .depends_on()
                     .into_iter()
                     .map(|id| {
@@ -720,7 +720,7 @@ fn generate_rbac_requirements(
             },
             item_usage: match explainee {
                 Explainee::MaterializedView(_) | Explainee::Index(_) => false,
-                Explainee::Query { .. } => true,
+                Explainee::Statement(_) => true,
             },
             ..Default::default()
         },
