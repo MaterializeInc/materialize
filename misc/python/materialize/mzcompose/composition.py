@@ -610,6 +610,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
+        max_retries: int = 2,
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -631,12 +632,23 @@ class Composition:
                 service["command"] = []
             self._write_compose()
 
-        self.invoke(
-            "up",
-            *(["--detach"] if detach else []),
-            *(["--wait"] if wait else []),
-            *services,
-        )
+        for retry in range(1, max_retries + 1):
+            try:
+                self.invoke(
+                    "up",
+                    *(["--detach"] if detach else []),
+                    *(["--wait"] if wait else []),
+                    *services,
+                )
+            except UIError as e:
+                if retry < max_retries:
+                    print("Retrying ...")
+                    time.sleep(1)
+                    continue
+                else:
+                    raise e
+
+            break
 
         if persistent:
             self.compose = old_compose  # type: ignore
