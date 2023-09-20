@@ -838,7 +838,7 @@ impl Coordinator {
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog().get_schema(&db, &schema, conn_id);
+            let schema = self.catalog().get_schema(db, schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
