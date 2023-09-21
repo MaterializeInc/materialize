@@ -1774,6 +1774,9 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
+        if &name == CLUSTER_VAR_NAME {
+            self.validate_set_cluster(session)?;
+        }
 
         let vars = session.vars_mut();
         let values = match plan.value {
@@ -1834,6 +1837,9 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
+        if &name == CLUSTER_VAR_NAME {
+            self.validate_set_cluster(session)?;
+        }
         session
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
@@ -1877,6 +1883,14 @@ impl Coordinator {
         }
     }
 
+    fn validate_set_cluster(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetCluster)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1915,7 +1929,7 @@ impl Coordinator {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(determination)), _))
+            Ok((Some(TransactionOps::Peeks { determination, .. }), _))
                 if ctx.session().vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
@@ -2566,11 +2580,17 @@ impl Coordinator {
         // depend on whether or not reads have occurred in the txn.
         let mut transaction_determination = determination.clone();
         if when.is_transactional() {
-            session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id,
+            })?;
         } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
             // If the query uses AS OF, then ignore the timestamp.
             transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
-            session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id,
+            })?;
         };
 
         Ok(determination)
