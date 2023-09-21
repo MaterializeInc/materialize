@@ -2249,7 +2249,7 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("sub_id", ScalarType::UInt64.nullable(true))
+        .with_column("object_sub_id", ScalarType::UInt64.nullable(true))
         .with_column("comment", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
