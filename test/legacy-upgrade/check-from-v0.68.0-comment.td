@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT object_type, sub_id, comment FROM mz_internal.mz_comments;
+> SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 "table" "<null>" "foo"
 "table" "1" "load_bearing"
 "view" "<null>" "subset_of_comment_table"

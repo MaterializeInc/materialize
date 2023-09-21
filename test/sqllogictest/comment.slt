@@ -57,12 +57,19 @@ u1  table  2  load_bearing
 u2  table  1  utc_timestamp
 
 statement ok
+COMMENT ON TABLE b IS 'foo_table';
+
+statement ok
 DROP TABLE a;
 
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
+u2  table  NULL foo_table
 u2  table  1  utc_timestamp
+
+statement ok
+COMMENT ON TABLE b IS NULL
 
 statement ok
 COMMENT ON COLUMN b.ts IS NULL

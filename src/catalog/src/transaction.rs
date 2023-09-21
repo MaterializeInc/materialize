@@ -201,9 +201,7 @@ impl<'a> Transaction<'a> {
             items: TableTransaction::new(items, |a: &ItemValue, b| {
                 a.schema_id == b.schema_id && a.name == b.name
             })?,
-            comments: TableTransaction::new(comments, |a: &CommentValue, b| {
-                a.comment == b.comment
-            })?,
+            comments: TableTransaction::new(comments, |_a, _b| false)?,
             roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
             clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
             cluster_replicas: TableTransaction::new(
