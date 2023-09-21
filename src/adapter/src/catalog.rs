@@ -4329,6 +4329,7 @@ impl Catalog {
                     id,
                     name,
                     attributes,
+                    vars,
                 } => {
                     state.ensure_not_reserved_role(&id)?;
                     if let Some(builtin_update) = state.pack_role_update(id, -1) {
@@ -4336,6 +4337,7 @@ impl Catalog {
                     }
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
+                    existing_role.vars = vars;
                     tx.update_role(id, existing_role.clone().into())?;
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {
                         builtin_table_updates.push(builtin_update);
@@ -6784,6 +6786,7 @@ pub enum Op {
         id: RoleId,
         name: String,
         attributes: RoleAttributes,
+        vars: RoleVars,
     },
     CreateDatabase {
         name: String,
@@ -7579,12 +7582,16 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.id
     }
 
-    fn is_inherit(&self) -> bool {
-        self.attributes.inherit
-    }
-
     fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
         &self.membership.map
+    }
+
+    fn attributes(&self) -> &RoleAttributes {
+        &self.attributes
+    }
+
+    fn vars(&self) -> &BTreeMap<String, OwnedVarInput> {
+        &self.vars.map
     }
 }
 

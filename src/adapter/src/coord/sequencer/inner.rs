@@ -40,7 +40,7 @@ use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
-    ErrorMessageObjectDescription, ObjectType, SessionCatalog,
+    ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
@@ -49,8 +49,8 @@ use mz_sql::names::{
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
-    Params, Plan, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom,
-    UpdatePrivilege,
+    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3985,20 +3985,58 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_role(
         &mut self,
-        session: &Session,
-        plan::AlterRolePlan {
-            id,
-            name,
-            attributes,
-        }: plan::AlterRolePlan,
+        session: &mut Session,
+        plan::AlterRolePlan { id, name, option }: plan::AlterRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog().for_session(session);
         let role = catalog.get_role(&id);
-        let attributes = (role, attributes).into();
+
+        // Get the attributes and variables from the role, as they currently are.
+        let mut attributes = role.attributes().clone();
+        let mut vars = role.vars().clone();
+
+        // Apply our updates.
+        match option {
+            PlannedAlterRoleOption::Attributes(attrs) => {
+                if let Some(inherit) = attrs.inherit {
+                    attributes.inherit = inherit;
+                }
+            }
+            PlannedAlterRoleOption::Variable(variable) => {
+                // Get the variable to make sure it's valid and visible.
+                session
+                    .vars()
+                    .get(Some(catalog.system_vars()), variable.name())?;
+
+                match variable {
+                    PlannedRoleVariable::Set { name, value } => {
+                        // Update our persisted set.
+                        match &value {
+                            VariableValue::Default => {
+                                vars.remove(&name);
+                            }
+                            VariableValue::Values(vals) => {
+                                let var = match &vals[..] {
+                                    [val] => OwnedVarInput::Flat(val.clone()),
+                                    vals => OwnedVarInput::SqlSet(vals.to_vec()),
+                                };
+                                vars.insert(name.clone(), var);
+                            }
+                        };
+                    }
+                    PlannedRoleVariable::Reset { name } => {
+                        // Remove it from our persisted values.
+                        vars.remove(&name);
+                    }
+                }
+            }
+        }
+
         let op = catalog::Op::AlterRole {
             id,
             name,
             attributes,
+            vars: RoleVars { map: vars },
         };
         self.catalog_transact(Some(session), vec![op])
             .await

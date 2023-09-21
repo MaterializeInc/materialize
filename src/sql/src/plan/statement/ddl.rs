@@ -31,14 +31,14 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
-    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
+    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    DeferredItemName, DropOwnedStatement, SetRoleVar, SshConnectionOption, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -118,8 +118,8 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation,
+    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -2799,6 +2799,12 @@ generate_extracted_config!(
 );
 
 #[derive(Debug)]
+pub enum PlannedAlterRoleOption {
+    Attributes(PlannedRoleAttributes),
+    Variable(PlannedRoleVariable),
+}
+
+#[derive(Debug)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
 }
@@ -2850,6 +2856,34 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
     }
 
     Ok(planned_attributes)
+}
+
+#[derive(Debug)]
+pub enum PlannedRoleVariable {
+    Set { name: String, value: VariableValue },
+    Reset { name: String },
+}
+
+impl PlannedRoleVariable {
+    pub fn name(&self) -> &str {
+        match self {
+            PlannedRoleVariable::Set { name, .. } => name,
+            PlannedRoleVariable::Reset { name } => name,
+        }
+    }
+}
+
+fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+    let plan = match variable {
+        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
+            name: name.to_string(),
+            value: scl::plan_set_variable_to(value)?,
+        },
+        SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
+            name: name.to_string(),
+        },
+    };
+    Ok(plan)
 }
 
 pub fn describe_create_role(
@@ -5102,26 +5136,27 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    _: &StatementContext,
-    AlterRoleStatement {
-        name,
-        options,
-        variable,
-    }: AlterRoleStatement<Aug>,
+    scx: &StatementContext,
+    AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(options)?;
+    let option = match option {
+        AlterRoleOption::Attributes(attrs) => {
+            let attrs = plan_role_attributes(attrs)?;
+            PlannedAlterRoleOption::Attributes(attrs)
+        }
+        AlterRoleOption::Variable(variable) => {
+            // Make sure the LaunchDarkly flag is enabled.
+            scx.require_feature_flag(&vars::ENABLE_ROLE_VARS)?;
 
-    if variable.is_some() {
-        return Err(PlanError::Unsupported {
-            feature: "ALTER ROLE ... SET".to_string(),
-            issue_no: Some(15651),
-        });
-    }
+            let var = plan_role_variable(variable)?;
+            PlannedAlterRoleOption::Variable(var)
+        }
+    };
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,
         name: name.name,
-        attributes,
+        option,
     }))
 }
 

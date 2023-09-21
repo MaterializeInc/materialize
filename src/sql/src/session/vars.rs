@@ -1686,6 +1686,10 @@ feature_flags!(
         true
     ),
     (enable_explain_broken, "EXPLAIN ... BROKEN <query> syntax"),
+    (
+        enable_role_vars,
+        "setting default session variables for a role"
+    ),
 );
 
 /// Represents the input to a variable.
@@ -1940,24 +1944,32 @@ impl SessionVars {
         local: bool,
     ) -> Result<(), VarError> {
         let name = UncasedStr::new(name);
-        if name == MZ_VERSION_NAME {
-            Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
-        } else if name == IS_SUPERUSER_NAME {
-            Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
-        } else if name == MAX_IDENTIFIER_LENGTH.name {
-            Err(VarError::ReadOnlyParameter(
-                MAX_IDENTIFIER_LENGTH.name.as_str(),
-            ))
-        } else {
-            self.vars
-                .get_mut(name)
-                .map(|v| {
-                    v.visible(&self.user, system_vars)?;
-                    v.set(input, local)
-                })
-                .transpose()?
-                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
-        }
+        self.check_read_only(name)?;
+
+        self.vars
+            .get_mut(name)
+            .map(|v| {
+                v.visible(&self.user, system_vars)?;
+                v.set(input, local)
+            })
+            .transpose()?
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Sets the "role default" parameter named `name` to the value represented by `value`.
+    ///
+    /// A role default only takes effect at the start of a Session, so running
+    /// `ALTER ROLE ... SET ...` has no visible impact until a new connection is started.
+    pub fn set_role_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        let name = UncasedStr::new(name);
+        self.check_read_only(name)?;
+
+        self.vars
+            .get_mut(name)
+            // Note: visibility is checked when persisting a role default.
+            .map(|v| v.set_role_default(input))
+            .transpose()?
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1980,20 +1992,31 @@ impl SessionVars {
         local: bool,
     ) -> Result<(), VarError> {
         let name = UncasedStr::new(name);
+        self.check_read_only(name)?;
+
+        self.vars
+            .get_mut(name)
+            .map(|v| {
+                v.visible(&self.user, system_vars)?;
+                v.reset(local);
+                Ok(())
+            })
+            .transpose()?
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Returns an error if the variable corresponding to `name` is read only.
+    fn check_read_only(&self, name: &UncasedStr) -> Result<(), VarError> {
         if name == MZ_VERSION_NAME {
             Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
+        } else if name == MAX_IDENTIFIER_LENGTH.name {
+            Err(VarError::ReadOnlyParameter(
+                MAX_IDENTIFIER_LENGTH.name.as_str(),
+            ))
         } else {
-            self.vars
-                .get_mut(name)
-                .map(|v| {
-                    v.visible(&self.user, system_vars)?;
-                    v.reset(local);
-                    Ok(())
-                })
-                .transpose()?
-                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+            Ok(())
         }
     }
 
@@ -3494,9 +3517,15 @@ struct SessionVar<V>
 where
     V: Value + ToOwned + Debug + PartialEq + 'static,
 {
+    /// Default value.
     default_value: &'static V,
+    /// Value persisted with the current role.
+    role_value: Option<V::Owned>,
+    /// Value `LOCAL` to a transaction, will be unset at the completion of the transaction.
     local_value: Option<V::Owned>,
+    /// Value set during a transaction, will be set if the transaction is committed.
     staged_value: Option<V::Owned>,
+    /// Value that overrides the default.
     session_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
     feature_flag: Option<&'static FeatureFlag>,
@@ -3567,6 +3596,7 @@ where
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
             default_value: parent.value,
+            role_value: None,
             local_value: None,
             staged_value: None,
             session_value: None,
@@ -3608,6 +3638,7 @@ where
             .map(|v| v.borrow())
             .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
+            .or_else(|| self.role_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(self.parent.value)
     }
 }
@@ -3653,6 +3684,12 @@ pub trait SessionVarMut: Var + Send + Sync {
     /// Parse the input and update the stored value to match.
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
 
+    /// Parse the input and update the default Role value.
+    ///
+    /// Note: these only get set on Session start. Updating the default value for a role will not
+    /// have any effect until your Session restarts, i.e. you reconnect.
+    fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError>;
+
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool);
 
@@ -3689,9 +3726,21 @@ where
         Ok(())
     }
 
+    /// Parse the input and set the default Role value.
+    fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError> {
+        let v = V::parse(self, input)?;
+        self.check_constraints(&v)?;
+        self.role_value = Some(v);
+        Ok(())
+    }
+
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool) {
-        let value = self.default_value.to_owned();
+        let value = self
+            .role_value
+            .as_ref()
+            .map(|val| val.borrow().to_owned())
+            .unwrap_or_else(|| self.default_value.to_owned());
         if local {
             self.local_value = Some(value);
         } else {

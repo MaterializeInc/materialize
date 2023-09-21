@@ -361,7 +361,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::AlterRole(plan) => {
-                let result = self.sequence_alter_role(ctx.session(), plan).await;
+                let result = self.sequence_alter_role(ctx.session_mut(), plan).await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }

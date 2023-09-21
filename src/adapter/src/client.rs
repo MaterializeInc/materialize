@@ -31,7 +31,6 @@ use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
-use mz_sql::session::vars::VarInput;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use mz_transform::Optimizer;
@@ -204,8 +203,9 @@ impl Client {
 
         let StartupResponse {
             role_id,
-            set_vars,
             write_notify,
+            session_vars,
+            role_vars,
             catalog,
         } = response;
 
@@ -215,12 +215,18 @@ impl Client {
         write_notify.await;
 
         client.session().initialize_role_metadata(role_id);
-        for (name, val) in set_vars {
-            client
-                .session()
-                .vars_mut()
-                .set(None, &name, VarInput::Flat(&val), false)
+        let vars_mut = client.session().vars_mut();
+        for (name, val) in session_vars {
+            vars_mut
+                .set(None, &name, val.borrow(), false)
                 .expect("constrained to be valid");
+        }
+        for (name, val) in role_vars {
+            if let Err(err) = vars_mut.set_role_default(&name, val.borrow()) {
+                // Note: erroring here is unexpected, but we don't want to panic if somehow our
+                // assumptions are wrong.
+                tracing::error!("failed to set peristed role default, {err:?}");
+            }
         }
         client
             .session()
