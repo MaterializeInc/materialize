@@ -886,55 +886,85 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     #[allow(clippy::unused_async)]
-    pub async fn start_reader_heartbeat_task(
+    pub async fn start_reader_heartbeat_tasks(
         self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
-    ) -> JoinHandle<()> {
-        let mut machine = self;
-        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+    ) -> Vec<JoinHandle<()>> {
+        let mut ret = Vec::new();
+
+        // TODO: In response to a production incident, this runs the heartbeat
+        // task on both the in-context tokio runtime and persist's isolated
+        // runtime. We think we were seeing tasks (including this one) get stuck
+        // indefinitely in tokio while waiting for a runtime worker. This could
+        // happen if some other task in that runtime never yields. It's possible
+        // that one of the two runtimes is healthy while the other isn't (this
+        // was inconclusive in the incident debugging), and the heartbeat task
+        // is fairly lightweight, so run a copy in each in case that helps.
+        //
+        // The real fix here is to find the misbehaving task and fix it. Remove
+        // this duplication when that happens.
+        let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
+        ret.push(mz_ore::task::spawn(|| name, {
+            let machine = self.clone();
+            let reader_id = reader_id.clone();
+            let gc = gc.clone();
+            Self::reader_heartbeat_task(machine, reader_id, gc)
+        }));
+
+        let isolated_runtime = Arc::clone(&self.isolated_runtime);
         let name = format!(
-            "persist::heartbeat_read({},{})",
-            machine.shard_id(),
+            "persist::heartbeat_read_isolated({},{})",
+            self.shard_id(),
             reader_id
         );
-        isolated_runtime.spawn_named(|| name, async move {
-            let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
+        ret.push(
+            isolated_runtime.spawn_named(|| name, Self::reader_heartbeat_task(self, reader_id, gc)),
+        );
 
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) went {}s between heartbeats",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
+        ret
+    }
 
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
-                    .await;
-                maintenance.start_performing(&machine, &gc);
+    async fn reader_heartbeat_task(
+        mut machine: Self,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+    ) {
+        let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
+        loop {
+            let before_sleep = Instant::now();
+            tokio::time::sleep(sleep_duration).await;
 
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) heartbeat call took {}s",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
+            let elapsed_since_before_sleeping = before_sleep.elapsed();
+            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_before_sleeping.as_secs_f64()
+                );
             }
-        })
+
+            let before_heartbeat = Instant::now();
+            let (_seqno, existed, maintenance) = machine
+                .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
+                .await;
+            maintenance.start_performing(&machine, &gc);
+
+            let elapsed_since_heartbeat = before_heartbeat.elapsed();
+            if elapsed_since_heartbeat > Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) heartbeat call took {}s",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_heartbeat.as_secs_f64(),
+                );
+            }
+
+            if !existed {
+                return;
+            }
+        }
     }
 }
 

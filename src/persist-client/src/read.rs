@@ -540,7 +540,7 @@ where
     explicitly_expired: bool,
     lease_returner: SubscriptionLeaseReturner,
 
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
+    pub(crate) heartbeat_tasks: Option<Vec<JoinHandle<()>>>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -577,7 +577,7 @@ where
                 reader_id: reader_id.clone(),
                 metrics,
             },
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
+            heartbeat_tasks: Some(machine.start_reader_heartbeat_tasks(reader_id, gc).await),
         }
     }
 
@@ -1238,8 +1238,10 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
+        if let Some(heartbeat_tasks) = self.heartbeat_tasks.take() {
+            for heartbeat_task in heartbeat_tasks {
+                heartbeat_task.abort();
+            }
         }
         if self.explicitly_expired {
             return;
