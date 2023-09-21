@@ -2943,6 +2943,8 @@ fn test_auto_run_on_introspection_feature_enabled() {
     assert_introspection_notice(false);
 }
 
+const INTROSPECTION_NOTICE: &'static str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
+
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
@@ -2958,16 +2960,15 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_introspection_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+            (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
-                assert_eq!(msg, expected);
+                assert!(msg.contains(expected));
             }
-            (Err(_), false) => (),
-            (_, true) => panic!("Didn't get the expected notice!"),
-            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+            (Err(_), None) => (),
+            (_, Some(_)) => panic!("Didn't get the expected notice!"),
+            (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
         while let Ok(Some(_)) = rx.try_next() {}
@@ -2987,12 +2988,12 @@ fn test_auto_run_on_introspection_feature_disabled() {
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _row = client
         .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _row = client
         .query_one(
@@ -3000,12 +3001,12 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query(
@@ -3013,18 +3014,18 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     client
         .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     client.batch_execute("FETCH ALL c").unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     client.batch_execute("COMMIT").unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 }
 
 #[mz_ore::test]
@@ -3042,16 +3043,15 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_introspection_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+            (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
-                assert_eq!(msg, expected);
+                assert!(msg.contains(expected));
             }
-            (Err(_), false) => (),
-            (_, true) => panic!("Didn't get the expected notice!"),
-            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+            (Err(_), None) => (),
+            (_, Some(_)) => panic!("Didn't get the expected notice!"),
+            (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
         while let Ok(Some(_)) = rx.try_next() {}
@@ -3074,7 +3074,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
     let _rows = client
@@ -3083,14 +3083,14 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     // Enable the feature
     client
         .execute("SET auto_route_introspection_queries = true", &[])
         .unwrap();
 
-    // Even after enabling the feature we still shouldn't emit any notices
+    // Even after enabling the feature we still shouldn't emit the auto-routing notice
 
     let _rows = client
         .query(
@@ -3098,12 +3098,12 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 }
 
 #[mz_ore::test]
