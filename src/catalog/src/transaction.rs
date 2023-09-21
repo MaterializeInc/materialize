@@ -20,12 +20,13 @@ use crate::objects::{
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    builtin_cluster_replica_config, BootstrapArgs, Connection, Error, DATABASE_ID_ALLOC_KEY,
+    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, DATABASE_ID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -44,6 +45,7 @@ use mz_stash::objects::proto;
 use mz_stash::TableTransaction;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 pub(crate) fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
     let cluster_names: BTreeSet<_> = txn
@@ -118,10 +120,29 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
     Ok(())
 }
 
+pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
+    ReplicaConfig {
+        location: ReplicaLocation::Managed {
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
+            availability_zone: None,
+            disk: false,
+        },
+        logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
+    }
+}
+
+fn default_logging_config() -> ReplicaLogging {
+    ReplicaLogging {
+        log_logging: false,
+        interval: Some(Duration::from_secs(1)),
+    }
+}
+
 /// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
 /// them atomically.
 pub struct Transaction<'a> {
-    conn: &'a mut Connection,
+    durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -147,7 +168,7 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     pub fn new(
-        conn: &mut Connection,
+        durable_catalog: &'a mut dyn DurableCatalogState,
         databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
         schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
         roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
@@ -172,7 +193,7 @@ impl<'a> Transaction<'a> {
         system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     ) -> Result<Transaction, Error> {
         Ok(Transaction {
-            conn,
+            durable_catalog,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
             schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
                 a.database_id == b.database_id && a.name == b.name
@@ -786,14 +807,14 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), Error> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
-                let id = if let GlobalId::System(id) = mapping.id {
+                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
                     id
                 } else {
                     panic!("non-system id provided")
                 };
                 Some(GidMappingValue {
                     id,
-                    fingerprint: mapping.fingerprint.clone(),
+                    fingerprint: mapping.unique_identifier.fingerprint.clone(),
                 })
             } else {
                 None
@@ -1055,13 +1076,13 @@ impl<'a> Transaction<'a> {
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
-        self.conn.commit(txn_batch).await
+        self.durable_catalog.commit_transaction(txn_batch).await
     }
 }
 
 /// Describes a set of changes to apply as the result of a catalog transaction.
 #[derive(Debug, Clone)]
-pub(crate) struct TransactionBatch {
+pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,

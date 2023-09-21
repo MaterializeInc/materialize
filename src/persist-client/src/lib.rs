@@ -433,7 +433,7 @@ impl PersistClient {
             .register_leased_reader(
                 &reader_id,
                 &diagnostics.handle_purpose,
-                self.cfg.reader_lease_duration,
+                self.cfg.dynamic.reader_lease_duration(),
                 heartbeat_ts,
             )
             .await;
@@ -1972,7 +1972,10 @@ mod tests {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
         let mut cache = new_test_client_cache();
-        cache.cfg.reader_lease_duration = Duration::from_millis(1);
+        cache
+            .cfg
+            .dynamic
+            .set_reader_lease_duration(Duration::from_millis(1));
         cache.cfg.writer_lease_duration = Duration::from_millis(1);
         let (_write, mut read) = cache
             .open(PersistLocation::new_in_mem())

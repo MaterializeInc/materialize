@@ -62,9 +62,11 @@ impl Coordinator {
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::GroupCommitInitiate(span) => self.try_group_commit().instrument(span).await,
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard)
+            Message::GroupCommitInitiate(span, permit) => {
+                self.try_group_commit(permit).instrument(span).await
+            }
+            Message::GroupCommitApply(timestamp, responses, write_lock_guard, notifies, permit) => {
+                self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
                     .await;
             }
             Message::AdvanceTimelines => {
@@ -600,7 +602,10 @@ impl Coordinator {
                             .await;
                     }
                 }
-                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
+                Deferred::GroupCommit => {
+                    self.group_commit_initiate(Some(write_lock_guard), None)
+                        .await
+                }
             }
         }
         // N.B. if no deferred plans, write lock is released by drop

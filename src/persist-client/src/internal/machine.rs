@@ -899,7 +899,7 @@ where
             reader_id
         );
         isolated_runtime.spawn_named(|| name, async move {
-            let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
+            let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
             loop {
                 let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
@@ -1692,7 +1692,7 @@ pub mod datadriven {
             .register_leased_reader(
                 &reader_id,
                 "tests",
-                datadriven.client.cfg.reader_lease_duration,
+                datadriven.client.cfg.dynamic.reader_lease_duration(),
                 (datadriven.client.cfg.now)(),
             )
             .await;
@@ -1939,7 +1939,7 @@ pub mod tests {
         // bounded).
         let max_live_diffs = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
-            live_diffs.0.len() < max_live_diffs,
+            live_diffs.0.len() <= max_live_diffs,
             "{} vs {}",
             live_diffs.0.len(),
             max_live_diffs

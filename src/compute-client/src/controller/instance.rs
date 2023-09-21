@@ -262,6 +262,17 @@ impl<T> Instance<T> {
         };
         self.ready_responses.push_back(resp);
     }
+
+    /// List compute collections that depend on the given collection.
+    pub fn collection_reverse_dependencies(&self, id: GlobalId) -> impl Iterator<Item = &GlobalId> {
+        self.collections_iter().filter_map(move |(id2, state)| {
+            if state.compute_dependencies.contains(&id) {
+                Some(id2)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl<T> Instance<T>

@@ -185,10 +185,9 @@ impl SourceRender for PostgresSourceConnection {
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {
-                upstream_time_millis: None,
                 key: (),
                 value: row,
-                headers: None,
+                metadata: Row::default(),
             });
             (output, res)
         });

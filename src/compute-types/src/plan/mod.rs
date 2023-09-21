@@ -85,7 +85,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.rs"));
 /// when creating arrangements, and permute by the hashmap when reading them,
 /// the contract of the function where they are generated (`mz_expr::permutation_for_arrangement`)
 /// ensures that the correct values will be read.
-#[derive(Arbitrary, Default, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(
+    Arbitrary, Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
@@ -161,7 +163,7 @@ impl AvailableCollections {
 }
 
 /// A rendering plan with as much conditional logic as possible removed.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Plan<T = mz_repr::Timestamp> {
     /// A collection containing a pre-determined collection.
     Constant {
@@ -887,7 +889,7 @@ impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, mz_repr::Timestamp, i64
 }
 
 /// How a `Get` stage will be rendered.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,

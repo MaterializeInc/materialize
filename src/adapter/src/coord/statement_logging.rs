@@ -370,6 +370,9 @@ impl Coordinator {
         params: Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> Option<StatementLoggingId> {
+        if session.user().is_internal() {
+            return None;
+        }
         let sample_rate = self.statement_execution_sample_rate(session);
 
         let distribution = Bernoulli::new(sample_rate).expect("rate must be in range [0, 1]");

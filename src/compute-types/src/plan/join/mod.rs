@@ -45,7 +45,7 @@ pub use linear_join::LinearJoinPlan;
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.join.rs"));
 
 /// A complete enumeration of possible join plans to render.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum JoinPlan {
     /// A join implemented by a linear join.
     Linear(LinearJoinPlan),
@@ -82,7 +82,7 @@ impl RustType<ProtoJoinPlan> for JoinPlan {
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct JoinClosure {
     pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
     pub before: mz_expr::SafeMfpPlan,

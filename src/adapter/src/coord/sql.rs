@@ -218,7 +218,7 @@ impl Coordinator {
             .catalog()
             .state()
             .pack_subscribe_update(id, &active_subscribe, 1);
-        self.send_builtin_table_updates(vec![update]).await;
+        self.send_builtin_table_updates_blocking(vec![update]).await;
 
         let session_type = metrics::session_type_label_value(&active_subscribe.user);
         self.metrics
@@ -236,7 +236,7 @@ impl Coordinator {
                 .catalog()
                 .state()
                 .pack_subscribe_update(id, &active_subscribe, -1);
-            self.send_builtin_table_updates(vec![update]).await;
+            self.send_builtin_table_updates_blocking(vec![update]).await;
 
             let session_type = metrics::session_type_label_value(&active_subscribe.user);
             self.metrics

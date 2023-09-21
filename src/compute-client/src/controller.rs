@@ -216,6 +216,17 @@ impl<T> ComputeController<T> {
             storage,
         }
     }
+
+    /// List compute collections that depend on the given collection.
+    pub fn collection_reverse_dependencies(
+        &self,
+        instance_id: ComputeInstanceId,
+        id: GlobalId,
+    ) -> Result<impl Iterator<Item = &GlobalId>, InstanceMissing> {
+        Ok(self
+            .instance(instance_id)?
+            .collection_reverse_dependencies(id))
+    }
 }
 
 impl<T> ComputeController<T>

@@ -2737,13 +2737,7 @@ fn test_timelines_persist_after_failed_transaction() {
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
 fn test_mz_sessions() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let now = Arc::new(Mutex::new(0));
-    let now_fn = {
-        let now = Arc::clone(&now);
-        NowFn::from(move || *now.lock().unwrap())
-    };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
+    let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
     let mut foo_client = server
@@ -2775,20 +2769,19 @@ fn test_mz_sessions() {
 
     // Concurrent session appears in mz_sessions and is removed from mz_sessions.
     {
-        *now.lock().expect("lock poisoned") += 1_000;
-        let _bar_client = server
+        let mut bar_client = server
             .pg_config()
             .user("bar")
             .connect(postgres::NoTls)
             .unwrap();
         assert_eq!(
-            foo_client
+            bar_client
                 .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
             2,
         );
-        let bar_session_row = foo_client
+        let bar_session_row = bar_client
             .query_one(
                 &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
                 &[],
@@ -2796,14 +2789,16 @@ fn test_mz_sessions() {
             .unwrap();
         let bar_role_id = bar_session_row.get::<_, String>("role_id");
         assert_eq!(
-            foo_client
+            bar_client
                 .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&bar_role_id])
                 .unwrap()
                 .get::<_, String>(0),
             "bar",
         );
-        *now.lock().expect("lock poisoned") += 1_000;
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client
@@ -2823,14 +2818,13 @@ fn test_mz_sessions() {
     // Concurrent session, with the same name as active session,
     // appears in mz_sessions and is removed from mz_sessions.
     {
-        *now.lock().expect("lock poisoned") += 1_000;
-        let _other_foo_client = server
+        let mut other_foo_client = server
             .pg_config()
             .user("foo")
             .connect(postgres::NoTls)
             .unwrap();
         assert_eq!(
-            foo_client
+            other_foo_client
                 .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
@@ -2846,8 +2840,10 @@ fn test_mz_sessions() {
         let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
-        *now.lock().expect("lock poisoned") += 1_000;
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client

@@ -15,7 +15,6 @@ use mz_expr::explain::ExplainContext;
 use mz_expr::visit::{Visit, Visitor};
 use mz_expr::{LocalId, MirRelationExpr};
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{bracketed, separated};
 use mz_repr::explain::{AnnotatedPlan, Attributes};
 
 mod arity;
@@ -289,7 +288,7 @@ impl<'c> From<&ExplainContext<'c>> for DerivedAttributes<'c> {
         if context.config.cardinality {
             builder.require(Cardinality::default());
         }
-        if context.config.column_names {
+        if context.config.column_names || context.config.humanized_exprs {
             builder.require(ColumnNames::new(context.humanizer));
         }
         builder.finish()
@@ -509,7 +508,11 @@ pub fn annotate_plan<'a>(
     let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
     let config = context.config;
 
-    if config.requires_attributes() {
+    // We want to annotate the plan with attributes in the following cases:
+    // 1. An attribute was explicitly requested in the ExplainConfig.
+    // 2. Humanized expressions were requested in the ExplainConfig (in which
+    //    case we need to derive the ColumnNames attribute).
+    if config.requires_attributes() || config.humanized_exprs {
         // get the annotation keys
         let subtree_refs = plan.post_order_vec();
         // get the annotation values
@@ -517,12 +520,12 @@ pub fn annotate_plan<'a>(
         plan.visit(&mut attributes)?;
 
         if config.subtree_size {
-            for (expr, attr) in std::iter::zip(
+            for (expr, subtree_size) in std::iter::zip(
                 subtree_refs.iter(),
                 attributes.remove_results::<SubtreeSize>().into_iter(),
             ) {
                 let attributes = annotations.entry(expr).or_default();
-                attributes.subtree_size = Some(attr);
+                attributes.subtree_size = Some(subtree_size);
             }
         }
         if config.non_negative {
@@ -536,12 +539,12 @@ pub fn annotate_plan<'a>(
         }
 
         if config.arity {
-            for (expr, attr) in std::iter::zip(
+            for (expr, arity) in std::iter::zip(
                 subtree_refs.iter(),
                 attributes.remove_results::<Arity>().into_iter(),
             ) {
                 let attrs = annotations.entry(expr).or_default();
-                attrs.arity = Some(attr);
+                attrs.arity = Some(arity);
             }
         }
 
@@ -550,19 +553,8 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<RelationType>().into_iter(),
             ) {
-                let attr = match types {
-                    Some(types) => {
-                        let humanized_columns = types
-                            .into_iter()
-                            .map(|c| context.humanizer.humanize_column_type(&c))
-                            .collect::<Vec<_>>();
-
-                        bracketed("(", ")", separated(", ", humanized_columns)).to_string()
-                    }
-                    None => "(<error>)".to_string(),
-                };
                 let attrs = annotations.entry(expr).or_default();
-                attrs.types = Some(attr);
+                attrs.types = Some(types);
             }
         }
 
@@ -571,12 +563,8 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<UniqueKeys>().into_iter(),
             ) {
-                let formatted_keys = keys
-                    .into_iter()
-                    .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
-                let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
                 let attrs = annotations.entry(expr).or_default();
-                attrs.keys = Some(attr);
+                attrs.keys = Some(keys);
             }
         }
 
@@ -585,15 +573,15 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<Cardinality>().into_iter(),
             ) {
-                let attr =
+                let cardinality =
                     cardinality::HumanizedSymbolicExpression::new(&cardinality, context.humanizer)
                         .to_string();
                 let attrs = annotations.entry(expr).or_default();
-                attrs.cardinality = Some(attr);
+                attrs.cardinality = Some(cardinality);
             }
         }
 
-        if config.column_names {
+        if config.column_names || config.humanized_exprs {
             for (expr, column_names) in std::iter::zip(
                 subtree_refs.iter(),
                 attributes.remove_results::<ColumnNames>().into_iter(),
