@@ -892,6 +892,7 @@ where
         gc: GarbageCollector<K, V, T, D>,
     ) -> Vec<JoinHandle<()>> {
         let mut ret = Vec::new();
+        let metrics = Arc::clone(&self.applier.metrics);
 
         // TODO: In response to a production incident, this runs the heartbeat
         // task on both the in-context tokio runtime and persist's isolated
@@ -909,7 +910,10 @@ where
             let machine = self.clone();
             let reader_id = reader_id.clone();
             let gc = gc.clone();
-            Self::reader_heartbeat_task(machine, reader_id, gc)
+            metrics
+                .tasks
+                .heartbeat_read
+                .instrument_task(Self::reader_heartbeat_task(machine, reader_id, gc))
         }));
 
         let isolated_runtime = Arc::clone(&self.isolated_runtime);
@@ -919,7 +923,13 @@ where
             reader_id
         );
         ret.push(
-            isolated_runtime.spawn_named(|| name, Self::reader_heartbeat_task(self, reader_id, gc)),
+            isolated_runtime.spawn_named(
+                || name,
+                metrics
+                    .tasks
+                    .heartbeat_read
+                    .instrument_task(Self::reader_heartbeat_task(self, reader_id, gc)),
+            ),
         );
 
         ret
