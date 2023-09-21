@@ -86,7 +86,7 @@ class TemporalTypes(Check):
 
 class TemporalPrecisionTypes(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.69.0-dev")
+        return self.base_version >= MzVersion.parse("0.70.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
