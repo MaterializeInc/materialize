@@ -875,6 +875,14 @@ COMMIT
 
 ## Auto-routing doesn't select mz_introspection in the middle of a transaction.
 
+# Since mz_views uses custom types, the postgres client will look it up in the catalog on
+# first use. If the first use happens to be in a transaction, then we can get unexpected time
+# domain errors. This is an annoying hack to load the information in the postgres client before
+# we start any transactions.
+statement ok
+SELECT * FROM mz_views LIMIT 0
+----
+
 statement ok
 BEGIN
 
@@ -884,15 +892,13 @@ SELECT * FROM t, mz_views
 query T multiline
 EXPLAIN SHOW VIEWS
 ----
-            Optimized Plan
----------------------------------------
- Explained Query:                     +
-   Project (#3)                       +
-     Filter (#2 = "u3")               +
-       ReadStorage mz_catalog.mz_views+
-                                      +
- Source mz_catalog.mz_views           +
-   filter=((#2 = "u3"))               +
+Explained Query:
+  Project (#3)
+    Filter (#2 = "u3")
+      ReadStorage mz_catalog.mz_views
+
+Source mz_catalog.mz_views
+  filter=((#2 = "u3"))
 
 EOF
 
