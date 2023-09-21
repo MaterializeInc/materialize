@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro cluster_test_sql(main_sql, fail_calc, warn_if, error_if, limit, cluster) -%}
+{% macro get_test_sql(main_sql, fail_calc, warn_if, error_if, limit, cluster) -%}
     {% if cluster %}
         {% call statement(auto_begin=True) %}
             set cluster = {{ cluster }}

@@ -55,7 +55,7 @@
 
   {% call statement('main', fetch_result=True) -%}
 
-    {{ cluster_test_sql(main_sql, fail_calc, warn_if, error_if, limit, cluster)}}
+    {{ get_test_sql(main_sql, fail_calc, warn_if, error_if, limit, cluster)}}
 
   {%- endcall %}
 
