@@ -349,7 +349,7 @@ impl fmt::Display for AdapterNotice {
                 index_name,
                 dependant_objects,
             }) => {
-                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index will be dropped from the catalog, but it will continue to be maintained and take up resources!", separated(", ", dependant_objects))
+                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!", separated(", ", dependant_objects))
             }
         }
     }
