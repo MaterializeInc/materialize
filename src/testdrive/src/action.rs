@@ -568,6 +568,7 @@ impl Run for PosCommand {
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
+                    "kafka-verify-topic" => kafka::run_verify_topic(builtin, state).await,
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
                     "nop" => nop::run_nop(),
