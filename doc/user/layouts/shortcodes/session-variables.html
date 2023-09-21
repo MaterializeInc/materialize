@@ -17,10 +17,10 @@ application_name                            |                           | The ap
 client_encoding                             | `UTF8`                    | The client's character set encoding. The only supported value is `UTF-8`.
 client_min_messages                         | `notice`                  | The message levels that are sent to the client. <br/><br/> Accepts values: `debug5`, `debug4`, `debug3`, `debug2`, `debug1`, `log`, `notice`, `warning`, `error`. Each level includes all the levels that follow it.
 datestyle                                   | `ISO, MDY`                | The display format for date and time values. The only supported value is `ISO, MDY`.
+emit_introspection_query_notice             | `true`                    | Whether to print a notice when querying replica introspection relations.
 emit_timestamp_notice                       | `false`                   | Boolean flag indicating whether to send a `notice` specifying query timestamps.
 emit_trace_id_notice                        | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.
 enable_session_rbac_checks                  | `false`                   | **Read-only.** Boolean flag indicating whether RBAC is enabled for the current session.
-emit_introspection_query_notice             | `true`                    | Whether to print a notice when querying replica introspection relations.
 extra_float_digits                          | `3`                       | Boolean flag indicating whether to adjust the number of digits displayed for floating-point values.
 failpoints                                  |                           | Allows failpoints to be dynamically activated.
 idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout.
