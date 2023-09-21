@@ -57,7 +57,7 @@ kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "83
 kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.11.0" }
+lru = { version = "0.11.1" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
@@ -161,7 +161,7 @@ kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "83
 kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.11.0" }
+lru = { version = "0.11.1" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
