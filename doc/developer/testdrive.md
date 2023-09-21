@@ -787,6 +787,13 @@ once one record matches, the following must all match.  There are permitted to b
 topic after the matching is complete.  Note that if the topic is not required to have `partial-search`
 elements in it but there will be an attempt to read up to this number with a blocking read.
 
+#### `kafka-verify-topic [sink=... | topic=...] [await-value-schema=false] [await-key-schema=false]`
+
+Verifies that the broker contains the appropriate topic.
+
+`await-value-schema` and `await-key-schema` optionally check that the Confluent
+Schema Registry also contains the appropriate subjects before continuing.
+
 #### `kafka-verify-commit consumer-group-id=... topic=... partition=...
 
 Verifies that the provided offset (the input data) matches the committed offset

@@ -59,6 +59,8 @@ $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keys
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
+$ kafka-verify-topic sink=materialize.public.wide_data_sink await-value-schema=true await-key-schema=true
+
 > CREATE SOURCE wide_data_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-wide-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
