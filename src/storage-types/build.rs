@@ -121,7 +121,6 @@ fn main() {
                 "storage-types/src/parameters.proto",
                 "storage-types/src/sinks.proto",
                 "storage-types/src/sources.proto",
-                "storage-types/src/sources_legacy.proto",
                 "storage-types/src/sources/encoding.proto",
             ],
             &[".."],
