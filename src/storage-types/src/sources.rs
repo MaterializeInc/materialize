@@ -57,7 +57,9 @@ use crate::instances::StorageInstanceId;
 use crate::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::sources::proto_load_generator_source_connection::Generator as ProtoGenerator;
-use crate::sources_legacy::{decode_dataflow_error_with_fallback, decode_source_data_with_fallback};
+use crate::sources_legacy::{
+    decode_dataflow_error_with_fallback, decode_source_data_with_fallback,
+};
 
 pub mod encoding;
 

@@ -15,10 +15,7 @@ use crate::errors::{
 };
 use crate::sources::{ProtoSourceData, SourceData};
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.sources_legacy.rs"
-));
+include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources_legacy.rs"));
 
 pub(crate) fn decode_source_data_with_fallback(buf: &[u8]) -> Result<SourceData, String> {
     let decoded = ProtoSourceData::decode(buf)
