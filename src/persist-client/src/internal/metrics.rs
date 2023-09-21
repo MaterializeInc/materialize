@@ -20,7 +20,8 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
-    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollectorOpts, MetricsRegistry, PrometheusOpts,
+    UIntGauge,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -2304,30 +2305,55 @@ pub struct TaskMetrics {
     monitor: TaskMonitor,
     // WIP figure out which of the rest of tokio's TaskMetrics are interesting
     // and fill them in here.
+    _total_idle_count: ComputedGauge,
     _total_idle_duration: ComputedGauge,
+    _total_scheduled_count: ComputedGauge,
+    _total_scheduled_duration: ComputedGauge,
 }
 
 impl TaskMetrics {
     fn new(registry: &MetricsRegistry, name: &str) -> Self {
         let monitor = TaskMonitor::new();
+
         // TODO: Oof, it's brutal to do a `cumulative` call
         // per-gauge-per-scrape. Should be fixable with a custom collector type.
         // I think this would also be necessary to make a ComputedGaugeVec work:
         // atm if TaskMetrics::new is called twice, it will panic.
-        let _total_idle_duration = {
-            let monitor = monitor.clone();
-            registry.register_computed_gauge(
-                metric!(
-                    name: "mz_persist_task_total_idle_duration",
-                    help: "WIP",
-                    const_labels: {"name" => name},
-                ),
-                move || monitor.cumulative().total_idle_duration.as_secs_f64(),
-            )
-        };
+        let register_gauge =
+            |metric: &str, help: &str, field: fn(tokio_metrics::TaskMetrics) -> f64| {
+                let monitor = monitor.clone();
+                registry.register_computed_gauge(
+                    MakeCollectorOpts {
+                        opts: PrometheusOpts::new(metric, help)
+                            .const_labels([("name".to_owned(), name.to_owned())].into()),
+                        buckets: None,
+                    },
+                    move || field(monitor.cumulative()),
+                )
+            };
+
         TaskMetrics {
+            _total_idle_count: register_gauge(
+                "mz_persist_task_total_idled_count",
+                "The total number of task idles. Useful for computing the average idle time.",
+                |m| f64::cast_lossy(m.total_idled_count),
+            ),
+            _total_idle_duration: register_gauge(
+                "mz_persist_task_total_idle_duration",
+                "Seconds of time spent idling, ie. waiting for a task to be woken up.",
+                |m| m.total_idle_duration.as_secs_f64(),
+            ),
+            _total_scheduled_count: register_gauge(
+                "mz_persist_task_total_scheduled_count",
+                "The total number of task schedules. Useful for computing the average scheduled time.",
+                |m| f64::cast_lossy(m.total_scheduled_count),
+            ),
+            _total_scheduled_duration: register_gauge(
+                "mz_persist_task_total_scheduled_duration",
+                "Seconds of time spent scheduled, ie. ready to poll but not yet polled.",
+                |m| m.total_scheduled_duration.as_secs_f64(),
+            ),
             monitor,
-            _total_idle_duration,
         }
     }
 
