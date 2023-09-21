@@ -9,27 +9,53 @@
 
 import random
 import threading
+from collections.abc import Sequence
 from copy import copy
+from enum import Enum
 
-from materialize.parallel_workload.data_type import DATA_TYPES, DataType
+from materialize.parallel_workload.data_type import (
+    DATA_TYPES,
+    Bytea,
+    DataType,
+    Jsonb,
+    Text,
+)
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 100
 MAX_ROWS = 1000
-MAX_CLUSTERS = 10
+MAX_COMPUTE_CLUSTERS = 10
 MAX_CLUSTER_REPLICAS = 4
 MAX_TABLES = 100
 MAX_VIEWS = 100
 MAX_ROLES = 100
+MAX_SOURCES = 20
+MAX_INCLUDE_HEADERS = 5
 
-MAX_INITIAL_CLUSTERS = 1
+MAX_INITIAL_COMPUTE_CLUSTERS = 1
+MAX_INITIAL_STORAGE_CLUSTERS = 1
 MAX_INITIAL_TABLES = 10
 MAX_INITIAL_VIEWS = 10
 MAX_INITIAL_ROLES = 3
+MAX_INITIAL_SOURCES = 3
 
 
-# TODO: Create/Drop source (load generator, pg circle from Mz)
+class BodyFormat(Enum):
+    TEXT = 1
+    JSON = 2
+    BYTES = 3
+
+    def to_data_type(self) -> type[DataType]:
+        if self == BodyFormat.JSON:
+            return Jsonb
+        if self == BodyFormat.TEXT:
+            return Text
+        if self == BodyFormat.BYTES:
+            return Bytea
+        raise ValueError(f"Unknown body format {self.name}")
+
+
 class Column:
     column_id: int
     data_type: type[DataType]
@@ -74,7 +100,7 @@ class Column:
 
 
 class DBObject:
-    columns: list[Column]
+    columns: Sequence[Column]
 
 
 class Table(DBObject):
@@ -109,7 +135,6 @@ class View(DBObject):
     view_id: int
     base_object: DBObject
     base_object2: DBObject | None
-    columns: list[Column]
     source_columns: list[Column]
     materialized: bool
     join_column: Column | None
@@ -125,8 +150,8 @@ class View(DBObject):
         self.view_id = view_id
         self.base_object = base_object
         self.base_object2 = base_object2
-        all_columns = base_object.columns + (
-            base_object2.columns if base_object2 else []
+        all_columns = list(base_object.columns) + (
+            list(base_object2.columns) if base_object2 else []
         )
         self.source_columns = [
             column
@@ -175,7 +200,64 @@ class View(DBObject):
         exe.execute(query)
 
 
-class Role(DBObject):
+class WebhookColumn(Column):
+    def __init__(
+        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
+    ):
+        self._name = name
+        self.data_type = data_type
+        self.nullable = nullable
+        self.db_object = db_object
+
+    def __str__(self) -> str:
+        return f"{self.db_object}.{self._name}"
+
+    def name(self) -> str:
+        return self._name
+
+
+class WebhookSource(DBObject):
+    source_id: int
+    rename: int
+    cluster: "Cluster"
+    body_format: BodyFormat
+    include_headers: list[str]
+
+    def __init__(self, source_id: int, cluster: "Cluster", rng: random.Random):
+        self.source_id = source_id
+        self.cluster = cluster
+        self.rename = 0
+        self.body_format = rng.choice([e for e in BodyFormat])
+        self.include_headers = []
+        for i in range(rng.randint(0, MAX_INCLUDE_HEADERS)):
+            self.include_headers.append(f"ih{i}")
+        self.columns = [
+            WebhookColumn(
+                "body",
+                self.body_format.to_data_type(),
+                False,
+                self,
+            )
+        ] + [
+            WebhookColumn(include_header, Text, True, self)
+            for include_header in self.include_headers
+        ]
+        # TODO: INCLUDE HEADERS (as map)
+        # TODO: CHECK WITH
+
+    def __str__(self) -> str:
+        if self.rename:
+            return f"wh{self.source_id}_{self.rename}"
+        return f"wh{self.source_id}"
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE SOURCE {self} IN CLUSTER {self.cluster} FROM WEBHOOK BODY FORMAT {self.body_format.name}"
+        for include_header in self.include_headers:
+            query += f" INCLUDE HEADER '{include_header}' as {include_header}"
+        exe.execute(query)
+
+
+class Role:
     role_id: int
 
     def __init__(self, role_id: int):
@@ -188,7 +270,7 @@ class Role(DBObject):
         exe.execute(f"CREATE ROLE {self}")
 
 
-class ClusterReplica(DBObject):
+class ClusterReplica:
     replica_id: int
     size: str
     cluster: "Cluster"
@@ -208,7 +290,13 @@ class ClusterReplica(DBObject):
         )
 
 
-class Cluster(DBObject):
+class ClusterType(Enum):
+    COMPUTE = 1
+    STORAGE = 2
+
+
+class Cluster:
+    cluster_type: ClusterType
     cluster_id: int
     managed: bool
     size: str
@@ -218,12 +306,14 @@ class Cluster(DBObject):
 
     def __init__(
         self,
+        cluster_type: ClusterType,
         cluster_id: int,
         managed: bool,
         size: str,
         replication_factor: int,
         introspection_interval: str,
     ):
+        self.cluster_type = cluster_type
         self.cluster_id = cluster_id
         self.managed = managed
         self.size = size
@@ -234,7 +324,7 @@ class Cluster(DBObject):
         self.introspection_interval = introspection_interval
 
     def __str__(self) -> str:
-        return f"cluster{self.cluster_id}"
+        return f"cluster_{self.cluster_type.name.lower()}_{self.cluster_id}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
@@ -256,15 +346,20 @@ class Database:
     host: str
     port: int
     system_port: int
+    http_port: int
     tables: list[Table]
     table_id: int
     views: list[View]
     view_id: int
     roles: list[Role]
     role_id: int
-    clusters: list[Cluster]
-    cluster_id: int
+    compute_clusters: list[Cluster]
+    compute_cluster_id: int
+    storage_clusters: list[Cluster]
+    storage_cluster_id: int
     indexes: set[str]
+    sources: list[WebhookSource]
+    source_id: int
     lock: threading.Lock
 
     def __init__(
@@ -274,12 +369,15 @@ class Database:
         host: str,
         port: int,
         system_port: int,
+        http_port: int,
         complexity: Complexity,
         scenario: Scenario,
     ):
         self.seed = seed
         self.host = host
         self.port = port
+        self.system_port = system_port
+        self.http_port = http_port
         self.complexity = complexity
         self.scenario = scenario
 
@@ -298,22 +396,52 @@ class Database:
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
         self.role_id = len(self.roles)
-        self.clusters = [
+        self.compute_clusters = [
             Cluster(
+                ClusterType.COMPUTE,
                 i,
                 managed=rng.choice([True, False]),
                 size=rng.choice(["1", "2", "4"]),
                 replication_factor=rng.choice([1, 2, 4, 5]),
                 introspection_interval=rng.choice(["0", "1s", "10s"]),
             )
-            for i in range(rng.randint(0, MAX_INITIAL_CLUSTERS))
+            for i in range(rng.randint(0, MAX_INITIAL_COMPUTE_CLUSTERS))
         ]
-        self.cluster_id = len(self.clusters)
+        self.compute_cluster_id = len(self.compute_clusters)
+        # At least one storage cluster required for WebhookSources
+        self.storage_clusters = [
+            Cluster(
+                ClusterType.STORAGE,
+                i,
+                managed=rng.choice([True, False]),
+                size=rng.choice(["1", "2", "4"]),
+                replication_factor=1,  # cannot create source in cluster with more than one replica
+                introspection_interval=rng.choice(["0", "1s", "10s"]),
+            )
+            for i in range(rng.randint(1, MAX_INITIAL_STORAGE_CLUSTERS))
+        ]
+        self.storage_cluster_id = len(self.storage_clusters)
         self.indexes = set()
+        self.sources = [
+            WebhookSource(i, rng.choice(self.storage_clusters), rng)
+            for i in range(rng.randint(0, MAX_INITIAL_SOURCES))
+        ]
+        self.source_id = len(self.sources)
         self.lock = threading.Lock()
 
     def __str__(self) -> str:
         return f"db_pw_{self.seed}"
+
+    def __iter__(self):
+        """Returns all relations"""
+        return (
+            self.compute_clusters
+            + self.storage_clusters
+            + self.tables
+            + self.views
+            + self.roles
+            + self.sources
+        ).__iter__()
 
     def drop(self, exe: Executor) -> None:
         exe.execute(f"DROP DATABASE IF EXISTS {self}")
@@ -327,18 +455,9 @@ class Database:
         for row in exe.cur.fetchall():
             exe.execute(f"DROP CLUSTER {row[0]} CASCADE")
 
-        for cluster in self.clusters:
-            cluster.create(exe)
-
-        for table in self.tables:
-            table.create(exe)
-
-        for view in self.views:
-            view.create(exe)
-
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {row[0]}")
 
-        for role in self.roles:
-            role.create(exe)
+        for relation in self:
+            relation.create(exe)

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from traceback import print_exc
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -16,7 +18,9 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(
-        external_cockroach=True, restart="on-failure", ports=["6975:6875", "6977:6877"]
+        external_cockroach=True,
+        restart="on-failure",
+        ports=["6975:6875", "6976:6876", "6977:6877"],
     ),
 ]
 
@@ -32,6 +36,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "localhost",
             c.default_port("materialized"),
             c.port("materialized", 6877),
+            c.port("materialized", 6876),
             args.seed,
             args.runtime,
             Complexity(args.complexity),
@@ -39,9 +44,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.threads,
             c,
         )
-    except Exception as e:
+    except Exception:
         print("--- Execution of parallel-workload failed")
-        print(e)
+        print_exc()
         # Don't fail the entire run. We ran into a crash,
         # ci-logged-errors-detect will handle this if it's an unknown failure.
         return

@@ -81,7 +81,29 @@ class Text(DataType):
     @staticmethod
     def value(rng: random.Random, in_query: bool = False) -> Any:
         result = rng.randint(-100, 100)
-        return f"'{result}'" if in_query else result
+        return f"'{result}'" if in_query else str(result)
+
+
+class Jsonb(DataType):
+    @staticmethod
+    def name() -> str:
+        return "jsonb"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        result = rng.randint(-100, 100)
+        return f"'{result}'::jsonb"
+
+
+class Bytea(DataType):
+    @staticmethod
+    def name() -> str:
+        return "bytea"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        result = rng.randint(-100, 100)
+        return f"'{result}'::bytea"
 
 
 DATA_TYPES = DataType.__subclasses__()
