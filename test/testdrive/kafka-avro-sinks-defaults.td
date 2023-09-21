@@ -63,7 +63,7 @@ fish    2  fish     1000
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   (
-    NULL DEFAULTS TRUE
+    NULL DEFAULTS = TRUE
   )
   ENVELOPE UPSERT
 
@@ -89,7 +89,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-$
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   (
-    NULL DEFAULTS FALSE
+    NULL DEFAULTS = FALSE
   )
   ENVELOPE UPSERT
 
@@ -130,9 +130,31 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   (
-    NULL DEFAULTS FALSE
+    NULL DEFAULTS = FALSE
   )
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
 {"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"}]}
+
+# errors
+! CREATE SINK bad_sink FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
+    NULL DEFAULTS = "some_value"
+  )
+  ENVELOPE UPSERT
+contains: invalid NULL DEFAULTS: cannot use value as boolean
+
+! CREATE SINK bad_sink FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
+    NULL DEFAULTS,
+    NULL DEFAULTS = TRUE
+  )
+  ENVELOPE UPSERT
+contains: NULL DEFAULTS specified more than once
