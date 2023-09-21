@@ -849,6 +849,50 @@ SET CLUSTER TO c
 statement ok
 ROLLBACK
 
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET cluster cannot be called in an active transaction
+SET LOCAL CLUSTER TO c
+
+statement ok
+ROLLBACK
+
+# Test that the cluster can change at the start of a transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SET CLUSTER TO c
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+statement ok
+SET CLUSTER TO default
+
+statement ok
+BEGIN
+
+statement ok
+SET LOCAL CLUSTER TO c
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+statement ok
+SET CLUSTER TO default
+
 # Test that the cluster is selected at the start of a transaction and doesn't change.
 
 ## Auto-routing selects mz_introspection at the start of transaction.
