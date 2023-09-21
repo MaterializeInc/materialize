@@ -410,8 +410,11 @@ impl PendingWork {
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling
-                (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-                    panic!("decoding failed")
+                (Err(err), Ok(_)) | (Err(err), Err(_)) => {
+                    panic!("failed to decode source data: {err}")
+                }
+                (Ok(_), Err(err)) => {
+                    panic!("failed to decode unit struct: {err}")
                 }
             }
             if yield_fn(start_time, *work) {
