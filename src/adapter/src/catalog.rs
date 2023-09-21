@@ -5412,6 +5412,10 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
+    pub fn get_mz_introspections_cluster_id(&self) -> &ClusterId {
+        &self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER).id
+    }
+
     /// Resolves a [`Cluster`] for a TargetCluster.
     pub fn resolve_target_cluster(
         &self,
@@ -5423,6 +5427,9 @@ impl Catalog {
                 Ok(self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER))
             }
             TargetCluster::Active => self.active_cluster(session),
+            TargetCluster::Transaction(cluster_id) => self
+                .try_get_cluster(cluster_id)
+                .ok_or(AdapterError::ConcurrentClusterDrop),
         }
     }
 

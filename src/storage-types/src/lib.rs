@@ -86,3 +86,4 @@ pub mod instances;
 pub mod parameters;
 pub mod sinks;
 pub mod sources;
+pub mod sources_legacy;
