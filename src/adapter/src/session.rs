@@ -979,6 +979,12 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
+    ///
+    /// # Panics
+    /// If the operations are compatible but the operation metadata doesn't match.
+    /// Such as reads at different timestamps, reads on different timelines, reads
+    /// on different clusters, etc. It's up to the caller to make sure these are
+    /// aligned.
     pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
