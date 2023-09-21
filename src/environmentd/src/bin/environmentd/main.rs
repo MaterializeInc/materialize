@@ -537,6 +537,10 @@ pub struct Args {
     #[clap(long, env = "HTTP_HOST_NAME")]
     http_host_name: Option<String>,
 
+    /// URL of the Web Console to redirect to from the /internal-console endpoint on the InternalHTTPServer
+    #[clap(long, env = "INTERNAL_CONSOLE_REDIRECT_URL")]
+    internal_console_redirect_url: Option<String>,
+
     #[clap(long, env = "DEPLOY_GENERATION")]
     deploy_generation: Option<u64>,
 
@@ -943,6 +947,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 bootstrap_role: args.bootstrap_role,
                 deploy_generation: args.deploy_generation,
                 http_host_name: args.http_host_name,
+                internal_console_redirect_url: args.internal_console_redirect_url,
             })
             .await
     })?;

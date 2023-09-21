@@ -206,6 +206,8 @@ pub struct Config {
     pub deploy_generation: Option<u64>,
     /// Host name or URL for connecting to the HTTP server of this instance.
     pub http_host_name: Option<String>,
+    /// URL of the Web Console to redirect to from the /internal-console endpoint on the InternalHTTPServer
+    pub internal_console_redirect_url: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -336,6 +338,7 @@ impl Listeners {
                 active_connection_count: Arc::clone(&active_connection_count),
                 promote_leader: promote_leader_tx,
                 ready_to_promote: ready_to_promote_rx,
+                internal_console_redirect_url: config.internal_console_redirect_url,
             });
             mz_ore::server::serve(internal_http_conns, internal_http_server)
         });

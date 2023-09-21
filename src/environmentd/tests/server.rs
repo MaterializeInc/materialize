@@ -82,7 +82,7 @@ use std::fmt::Write;
 use std::io::Write as _;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
@@ -113,7 +113,7 @@ use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
-use reqwest::Url;
+use reqwest::{redirect, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio_postgres::error::SqlState;
@@ -2014,6 +2014,46 @@ fn test_concurrent_id_reuse() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("SELECT 1").unwrap();
+}
+
+#[mz_ore::test]
+fn test_internal_console_redirect() {
+    let test_url =
+        Url::parse("https://test_org.test_region.internal.console.materialize.com").unwrap();
+
+    let config = util::Config::default()
+        .unsafe_mode()
+        .with_internal_console_redirect_url(Some(test_url.to_string()));
+    let server = util::start_server(config.clone()).unwrap();
+
+    let redirected = Arc::new(AtomicBool::new(false));
+    let cloned = Arc::clone(&redirected);
+    // Reqwest will default follow redirects, so we want to avoid that and introspect
+    // the redirect to make sure it's pointing to our test_url
+    let custom_redirect_policy = redirect::Policy::custom(move |attempt| {
+        tracing::debug!("Got redirect request to URL: {:?}", attempt.url());
+        if attempt.url() == &test_url {
+            cloned.store(true, Ordering::Relaxed);
+        }
+        attempt.stop()
+    });
+
+    let res = Client::builder()
+        .redirect(custom_redirect_policy)
+        .build()
+        .unwrap()
+        .get(
+            Url::parse(&format!(
+                "http://{}/api/internal-console",
+                server.inner.internal_http_local_addr()
+            ))
+            .unwrap(),
+        )
+        .send()
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(redirected.load(Ordering::Relaxed), true);
 }
 
 #[mz_ore::test]
