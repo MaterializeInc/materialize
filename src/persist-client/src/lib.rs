@@ -1979,14 +1979,16 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let read_heartbeat_task = read
-            .heartbeat_task
+        let read_heartbeat_tasks = read
+            .heartbeat_tasks
             .take()
             .expect("handle should have heartbeat task");
         read.expire().await;
-        let () = read_heartbeat_task
-            .await
-            .expect("task should shutdown cleanly");
+        for read_heartbeat_task in read_heartbeat_tasks {
+            let () = read_heartbeat_task
+                .await
+                .expect("task should shutdown cleanly");
+        }
     }
 
     /// Regression test for 16743, where the nightly tests found that calling
