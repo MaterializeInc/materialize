@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+* Deprecate the custom `materializedview` materialization name in favor of
+  `materialized_view`, which is built-in from dbt v1.6.
+
+  **New**
+
+  ```sql
+  {{ config( materialized = 'materialized_view' )}}
+  ```
+
+  **Deprecated**
+
+  ```sql
+  {{ config( materialized = 'materializedview' )}}
+  ```
+
+  The deprecated materialization name will be removed in a future release of the
+  adapter.
+
 * **Breaking change.** Set 255 as the maximum identifier length for relation
     names, after [#20999](https://github.com/MaterializeInc/materialize/pull/20999)
     introduced a `max_identifier_length` session variable that enforces this

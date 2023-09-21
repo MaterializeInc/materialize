@@ -232,7 +232,7 @@ This is where Materialize goes beyond dbt's incremental models (and traditional 
 
 **Filename:** models/materialized_view_a.sql
 ```sql
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
 SELECT
     col_a, ...
@@ -277,7 +277,7 @@ database.schema.kafka_topic_c
 Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
 
 ```sql
-{{ config(materialized='materializedview', cluster='cluster_a') }}
+{{ config(materialized='materialized_view', cluster='cluster_a') }}
 ```
 
 #### Databases
@@ -285,7 +285,7 @@ Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which
 Use the `database` option to specify the [database](/sql/namespaces/#database-details) in which a `source`, `view`, `materialized view` or `sink` is created. If unspecified, the default database for the connection is used.
 
 ```sql
-{{ config(materialized='materializedview', database='database_a') }}
+{{ config(materialized='materialized_view', database='database_a') }}
 ```
 
 #### Indexes
