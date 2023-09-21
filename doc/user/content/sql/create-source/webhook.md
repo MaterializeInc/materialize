@@ -111,7 +111,7 @@ filtered out.
 The URL which can be used to **POST** events to your webhook source is stored in the
 [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources) system table.
 
-In general these URLs have the following format:
+In general, these URLs have the following format:
 
 ```
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>

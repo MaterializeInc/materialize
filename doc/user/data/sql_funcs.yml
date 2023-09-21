@@ -352,8 +352,8 @@
     description: >-
       Replaces the first occurrence of `pattern` with `replacement` in `source`.
       No match will return `source` unchanged.
-      If `flags` contains the string `g` all occurrences are replaced.
-      If `flags` contains the string `i` matches case-insensitively.
+      If `flags` is set to `g`, all occurrences are replaced.
+      If `flags` is set to `i`, matches case-insensitively.
       `$N` or `$name` in `replacement` can be used to match capture groups.
       `${N}` must be used to disambiguate capture group indexes from names if other characters follow `N`.
       A `$$` in `replacement` will write a literal `$`.
@@ -362,7 +362,7 @@
   - signature: 'regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]'
     description: >-
       Splits `text` by the regular expression `pattern` into an array.
-      If `flags` is set to the string `i` matches case-insensitively.
+      If `flags` is set to `i`, matches case-insensitively.
 
   - signature: 'repeat(s: str, n: int) -> str'
     description: Replicate the string `n` times.
@@ -637,7 +637,7 @@
   - signature: 'regexp_split_to_table(text: str, pattern: str [, flags: str]]) -> Col<string>'
     description: >-
       Splits `text` by the regular expression `pattern`.
-      If `flags` is set to the string `i` matches case-insensitively.
+      If `flags` is set to `i`, matches case-insensitively.
   - signature: 'unnest(a: anyarray)'
     description: Expands the array `a` into a set of rows.
   - signature: 'unnest(l: anylist)'
