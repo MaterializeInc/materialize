@@ -131,6 +131,15 @@
     {%- endif %};
 {%- endmacro %}
 
+{% macro materialize__alter_relation_comment(relation, comment) -%}
+  {% set escaped_comment = postgres_escape_comment(comment) %}
+  {% if relation.type == 'materializedview' -%}
+    {% set relation_type = "materialized view" %}
+  {%- else -%}
+    {%- set relation_type = relation.type -%}
+  {%- endif -%}
+  comment on {{ relation_type }} {{ relation }} is {{ escaped_comment }};
+{% endmacro %}
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
 {% macro materialize__list_relations_without_caching(schema_relation) %}
