@@ -22,6 +22,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
+use mz_ore::task::JoinHandleExt;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
@@ -891,13 +892,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .writing_parts
                 .pop_front()
                 .expect("pop failed when len was just > some usize");
-            let part = match handle
+            let part = handle
                 .instrument(debug_span!("batch::max_outstanding"))
-                .await
-            {
-                Ok(x) => x,
-                Err(err) => panic!("part upload task failed: {}", err),
-            };
+                .wait_and_assert_finished()
+                .await;
             self.finished_parts.push(part);
         }
     }
@@ -906,10 +904,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
         let mut parts = self.finished_parts;
         for handle in self.writing_parts {
-            let part = match handle.await {
-                Ok(x) => x,
-                Err(err) => panic!("part upload task failed: {}", err),
-            };
+            let part = handle.wait_and_assert_finished().await;
             parts.push(part);
         }
         parts
