@@ -75,14 +75,70 @@ impl<T> Future for AbortOnDropHandle<T> {
 }
 
 /// Extension methods for [`JoinHandle`].
+#[async_trait::async_trait]
 pub trait JoinHandleExt<T> {
     /// Converts a [`JoinHandle`] into a [`AbortOnDropHandle`].
     fn abort_on_drop(self) -> AbortOnDropHandle<T>;
+
+    /// Awaits the `JoinHandle`, resuming the unwind if the task panicked,
+    /// and panicking if the task was cancelled.
+    ///
+    /// If abort-on-drop is on, then this method will only
+    /// panic on cancelled tasks.
+    ///
+    /// This method will also yield to the runtime
+    async fn wait_and_assert_finished(self) -> T;
 }
 
-impl<T> JoinHandleExt<T> for JoinHandle<T> {
+async fn unpack_join_result<T>(res: Result<T, JoinError>) -> T {
+    match res {
+        Ok(val) => val,
+        Err(err) => match err.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(e) => {
+                // Yield explicitly to the tokio runtime. The runtime
+                // can only shutdown each core thread when the running
+                // task yields. This means we could panic here if the `JoinHandle`
+                // is cancelled because it is owned by a separate core thread,
+                // which is already shutdown. We don't want to panic
+                // spuriously when we are already shutting down.
+                tokio::task::yield_now().await;
+                panic!("task expected to complete was cancelled: {}", e);
+            }
+        },
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: Send> JoinHandleExt<T> for JoinHandle<T> {
     fn abort_on_drop(self) -> AbortOnDropHandle<T> {
         AbortOnDropHandle(self)
+    }
+
+    async fn wait_and_assert_finished(self) -> T {
+        unpack_join_result(self.await).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: Send> JoinHandleExt<T> for tracing::instrument::Instrumented<JoinHandle<T>> {
+    fn abort_on_drop(self) -> AbortOnDropHandle<T> {
+        panic!("not yet supported");
+    }
+
+    async fn wait_and_assert_finished(self) -> T {
+        unpack_join_result(self.await).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: Send> JoinHandleExt<T> for AbortOnDropHandle<T> {
+    fn abort_on_drop(self) -> AbortOnDropHandle<T> {
+        self
+    }
+
+    async fn wait_and_assert_finished(self) -> T {
+        unpack_join_result(self.await).await
     }
 }
 
