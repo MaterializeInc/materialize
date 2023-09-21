@@ -47,3 +47,45 @@ class TestDataTest:
 
         result_statuses = sorted(r.status for r in results)
         assert result_statuses == ["fail", "pass"]
+
+
+class TestDataTestCluster:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "data_tests",
+            "tests": {
+                "test": {
+                    "+store_failures": True,
+                    "+schema": "etl_failure",
+                    "+cluster": "not_default_test",
+                },
+            },
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_materialized_view.sql": test_materialized_view,
+        }
+
+    @pytest.fixture(scope="class")
+    def tests(self):
+        return {
+            "unique.sql": unique,
+        }
+
+    def test_store_failures_cluster(self, project):
+        project.run_sql("CREATE CLUSTER not_default_test REPLICAS (r1 (SIZE '1'))")
+        project.run_sql("CREATE SCHEMA etl_failure")
+
+        # run models
+        results = run_dbt(["run"])
+        # run result length
+        assert len(results) == 1
+
+        results = run_dbt(["test"])
+        assert len(results) == 1
+
+        result_statuses = sorted(r.status for r in results)
+        assert result_statuses == ["pass"]
