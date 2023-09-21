@@ -124,7 +124,7 @@ impl AvroSchemaGenerator {
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
         debezium: bool,
-        null_defaults: Option<bool>,
+        set_null_defaults: bool,
     ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
         if debezium {
@@ -134,7 +134,7 @@ impl AvroSchemaGenerator {
             &value_columns,
             value_fullname.unwrap_or("envelope"),
             &ENVELOPE_CUSTOM_NAMES,
-            null_defaults,
+            set_null_defaults,
         )?;
         let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
         let key_info = match key_desc {
@@ -145,7 +145,7 @@ impl AvroSchemaGenerator {
                     &columns,
                     key_fullname.unwrap_or("row"),
                     &BTreeMap::new(),
-                    null_defaults,
+                    set_null_defaults,
                 )?;
                 Some(KeyInfo {
                     schema: Schema::parse(&row_schema).expect("valid schema constructed"),

@@ -77,7 +77,7 @@ impl fmt::Debug for JsonEncoder {
                 "schema",
                 &format!(
                     "{:?}",
-                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new(), None)
+                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new(), false)
                 ),
             )
             .finish()
@@ -409,13 +409,13 @@ pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
     custom_names: &BTreeMap<GlobalId, String>,
-    set_null_defaults: Option<bool>,
+    set_null_defaults: bool,
 ) -> Result<serde_json::Value, anyhow::Error> {
     let fields = build_row_schema_fields(
         columns,
         &mut Namer::default(),
         custom_names,
-        set_null_defaults.unwrap_or(false),
+        set_null_defaults,
     );
     let _ = mz_avro::schema::Name::parse_simple(name)?;
     Ok(json!({

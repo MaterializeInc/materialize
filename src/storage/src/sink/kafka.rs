@@ -1013,7 +1013,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                None,
+                false,
             )
             .expect("avro schema validated");
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
