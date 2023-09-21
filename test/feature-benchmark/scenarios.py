@@ -1132,6 +1132,8 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+$ kafka-verify-topic sink=materialize.public.sink1
+
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
 > CREATE SOURCE sink1_check

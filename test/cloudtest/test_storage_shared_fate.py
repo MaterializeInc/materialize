@@ -34,7 +34,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE TABLE t{i} (f1 INTEGER);
 
-            > INSERT INTO t{i} SELECT 123000 + generate_series FROM generate_series(1, 1000);
+            > INSERT INTO t{i} SELECT 123001;
 
             $ kafka-create-topic topic=storage-shared-fate-sink{i} partitions={CLUSTER_SIZE*4}
 
@@ -43,6 +43,13 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
               INTO KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM;
+
+            # Verify the sink contains the expected data because we also want to ensure the topic exists + had
+            # the expected schema
+            $ kafka-verify-data format=avro sink=materialize.public.sink{i} sort-messages=true
+            {{"before": null, "after": {{"row":{{"f1": {{"int": 123001}}}}}}}}
+
+            > INSERT INTO t{i} SELECT 123000 + generate_series FROM generate_series(2, 1000);
 
             > CREATE SOURCE sink{i}_check
               IN CLUSTER storage_shared_fate
