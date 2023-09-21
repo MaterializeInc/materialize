@@ -13,6 +13,7 @@ mod delete_topic;
 mod ingest;
 mod verify_commit;
 mod verify_data;
+mod verify_topic;
 
 pub use add_partitions::run_add_partitions;
 pub use create_topic::run_create_topic;
@@ -20,3 +21,4 @@ pub use delete_topic::run_delete_topic;
 pub use ingest::run_ingest;
 pub use verify_commit::run_verify_commit;
 pub use verify_data::run_verify_data;
+pub use verify_topic::run_verify_topic;

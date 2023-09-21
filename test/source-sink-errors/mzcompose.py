@@ -103,6 +103,8 @@ class KafkaTransactionLogGreaterThan1:
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
+
+                $ kafka-verify-topic sink=materialize.public.kafka_sink
                 """
             ),
         )
@@ -185,6 +187,8 @@ class KafkaDisruption:
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                $ kafka-verify-topic sink=materialize.public.sink1
                 """
             )
         )
