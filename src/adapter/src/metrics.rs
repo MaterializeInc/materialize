@@ -32,6 +32,7 @@ pub struct Metrics {
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub statement_logging_actual_bytes: IntCounterVec,
     pub slow_message_handling: HistogramVec,
+    pub optimization_notices: IntCounterVec,
 }
 
 impl Metrics {
@@ -113,6 +114,11 @@ impl Metrics {
                     defined by the LaunchDarkly variable 'coord_slow_message_reporting_threshold'",
                 var_labels: ["message_kind"],
                 buckets: histogram_seconds_buckets(0.128, 32.0),
+            )),
+            optimization_notices: registry.register(metric!(
+                name: "mz_optimization_notices",
+                help: "Number of optimization notices per notice type.",
+                var_labels: ["notice_type"],
             )),
         }
     }

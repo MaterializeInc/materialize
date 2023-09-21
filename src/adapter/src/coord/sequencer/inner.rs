@@ -1252,6 +1252,10 @@ impl Coordinator {
         }
         for dropped_in_use_index in dropped_in_use_indexes {
             session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+            self.metrics
+                .optimization_notices
+                .with_label_values(&["DroppedInUseIndex"])
+                .inc_by(1);
         }
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
@@ -5224,6 +5228,10 @@ impl Coordinator {
                 let (notice, hint) = optimizer_notice.to_string(&humanizer);
                 session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
             }
+            self.metrics
+                .optimization_notices
+                .with_label_values(&[optimizer_notice.metric_label()])
+                .inc_by(1);
         }
     }
 }
