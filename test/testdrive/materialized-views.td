@@ -63,6 +63,8 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+$ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true
+
 > CREATE SOURCE sink1_check
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'

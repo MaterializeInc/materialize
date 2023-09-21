@@ -102,6 +102,8 @@ class CreateSink(Action):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE DEBEZIUM;
 
+                $ kafka-verify-topic sink=materialize.public.{self.sink.name} await-value-schema=true
+
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
