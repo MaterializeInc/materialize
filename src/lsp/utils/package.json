@@ -1,0 +1,14 @@
+{
+  "name": "utils",
+  "version": "1.0.0",
+  "description": "",
+  "main": "func_parser.js",
+  "scripts": {
+    "start": "node index"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "yaml": "^2.3.1"
+  }
+}

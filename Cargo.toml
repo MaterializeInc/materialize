@@ -31,6 +31,7 @@ members = [
     "src/kafka-util",
     "src/lowertest",
     "src/lowertest-derive",
+    "src/lsp",
     "src/metabase",
     "src/mz",
     "src/npm",
