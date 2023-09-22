@@ -20,7 +20,6 @@ SELECT DISTINCT ON
   auctions.item,
   auctions.seller
 FROM {{ source('auction','auctions') }}
-JOIN {{ source('auction','bids') }}
-WHERE auctions.id = bids.auction_id
-  AND bids.bid_time < auctions.end_time
+JOIN {{ source('auction','bids') }} ON auctions.id = bids.auction_id
+WHERE bids.bid_time < auctions.end_time
   AND mz_now() >= auctions.end_time
