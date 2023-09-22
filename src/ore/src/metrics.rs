@@ -517,7 +517,7 @@ pub struct WallTimeFuture<F, Metric> {
     /// [`Instant`] at which the [`Future`] was first polled.
     start: Option<Instant>,
     /// Optional filter that determines if we observe the wall time of this [`Future`].
-    filter: Option<Box<dyn FnMut(Duration) -> bool>>,
+    filter: Option<Box<dyn FnMut(Duration) -> bool + Send + Sync>>,
 }
 
 impl<F: Debug, M: Debug> fmt::Debug for WallTimeFuture<F, M> {
@@ -573,7 +573,10 @@ impl<F, M> WallTimeFuture<F, M> {
     ///
     /// This can be particularly useful if you have a high volume `Future` and you only want to
     /// record ones that take a long time to complete.
-    pub fn with_filter(mut self, filter: impl FnMut(Duration) -> bool + 'static) -> Self {
+    pub fn with_filter(
+        mut self,
+        filter: impl FnMut(Duration) -> bool + Send + Sync + 'static,
+    ) -> Self {
         self.filter = Some(Box::new(filter));
         self
     }
@@ -620,7 +623,7 @@ pub struct ExecTimeFuture<F, Metric> {
     /// Total [`Duration`] for which this [`Future`] has been executing.
     running_duration: Duration,
     /// Optional filter that determines if we observe the execution time of this [`Future`].
-    filter: Option<Box<dyn FnMut(Duration) -> bool>>,
+    filter: Option<Box<dyn FnMut(Duration) -> bool + Send + Sync>>,
 }
 
 impl<F: Debug, M: Debug> fmt::Debug for ExecTimeFuture<F, M> {
@@ -673,7 +676,10 @@ impl<F> ExecTimeFuture<F, UnspecifiedMetric> {
 
 impl<F, M> ExecTimeFuture<F, M> {
     /// Specifies a filter which much return `true` for the execution time to be recorded.
-    pub fn with_filter(mut self, filter: impl FnMut(Duration) -> bool + 'static) -> Self {
+    pub fn with_filter(
+        mut self,
+        filter: impl FnMut(Duration) -> bool + Send + Sync + 'static,
+    ) -> Self {
         self.filter = Some(Box::new(filter));
         self
     }
