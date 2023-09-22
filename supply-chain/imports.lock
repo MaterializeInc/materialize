@@ -120,6 +120,13 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.libc]]
+version = "0.2.148"
+when = "2023-09-13"
+user-id = 4333
+user-login = "joshtriplett"
+user-name = "Josh Triplett"
+
 [[publisher.memchr]]
 version = "2.5.0"
 when = "2022-04-30"
@@ -189,6 +196,27 @@ when = "2023-01-15"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
+
+[[publisher.tokio]]
+version = "1.32.0"
+when = "2023-08-16"
+user-id = 10
+user-login = "carllerche"
+user-name = "Carl Lerche"
+
+[[publisher.tokio-macros]]
+version = "2.1.0"
+when = "2023-04-25"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.tokio-metrics]]
+version = "0.3.0"
+when = "2023-08-14"
+user-id = 10
+user-login = "carllerche"
+user-name = "Carl Lerche"
 
 [[publisher.unicode-normalization]]
 version = "0.1.21"
@@ -405,6 +433,18 @@ who = "Jamey Sharp <jsharp@fastly.com>"
 criteria = "safe-to-deploy"
 delta = "0.3.1 -> 0.3.0"
 
+[[audits.bytecode-alliance.audits.hashbrown]]
+who = "Chris Fallin <chris@cfallin.org>"
+criteria = "safe-to-deploy"
+delta = "0.12.3 -> 0.13.1"
+notes = "The diff looks plausible. Much of it is low-level memory-layout code and I can't be 100% certain without a deeper dive into the implementation logic, but nothing looks actively malicious."
+
+[[audits.bytecode-alliance.audits.hashbrown]]
+who = "Trevor Elliott <telliott@fastly.com>"
+criteria = "safe-to-deploy"
+delta = "0.13.1 -> 0.13.2"
+notes = "I read through the diff between v0.13.1 and v0.13.2, and verified that the changes made matched up with the changelog entries. There were very few changes between these two releases, and it was easy to verify what they did."
+
 [[audits.bytecode-alliance.audits.heck]]
 who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
@@ -450,6 +490,12 @@ notes = "I am the maintainer of this crate."
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.0"
+
+[[audits.bytecode-alliance.audits.mio]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.6 -> 0.8.8"
+notes = "Mostly OS portability updates along with some minor bugfixes."
 
 [[audits.bytecode-alliance.audits.native-tls]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -884,13 +930,6 @@ version = "0.4.3"
 notes = "All code written or reviewed by Josh Stone."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.num-derive]]
-who = "Josh Stone <jistone@redhat.com>"
-criteria = "safe-to-deploy"
-version = "0.3.3"
-notes = "All code written or reviewed by Josh Stone."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.num-traits]]
 who = "Josh Stone <jistone@redhat.com>"
 criteria = "safe-to-deploy"
@@ -1038,3 +1077,52 @@ who = "Kershaw Chang <kershaw@mozilla.com>"
 criteria = "safe-to-deploy"
 version = "0.2.6"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.zcash.audits.hashbrown]]
+who = "Daira Emma Hopwood <daira@jacaranda.org>"
+criteria = "safe-to-deploy"
+delta = "0.13.2 -> 0.14.0"
+notes = """
+There is some additional use of unsafe code but the changes in this crate looked plausible.
+There is a new default dependency on the `allocator-api2` crate, which itself has quite a lot of unsafe code.
+Many previously undocumented safety requirements have been documented.
+"""
+aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
+
+[[audits.zcash.audits.mio]]
+who = "Jack Grigg <jack@z.cash>"
+criteria = "safe-to-deploy"
+delta = "0.8.5 -> 0.8.6"
+notes = """
+New `unsafe` usages:
+- `NonZeroU8::new_unchecked`: I verified the constant is non-zero.
+- Additional `syscall!(close(socket))` calls before returning errors.
+"""
+aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
+
+[[audits.zcash.audits.pin-project-lite]]
+who = "Jack Grigg <jack@electriccoin.co>"
+criteria = "safe-to-deploy"
+delta = "0.2.9 -> 0.2.13"
+aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
+
+[[audits.zcash.audits.rand_xorshift]]
+who = "Sean Bowe <ewillbefull@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"
+
+[[audits.zcash.audits.rustc_version]]
+who = "Jack Grigg <jack@electriccoin.co>"
+criteria = "safe-to-deploy"
+version = "0.4.0"
+notes = """
+Most of the crate is code to parse and validate the output of `rustc -vV`. The caller can
+choose which `rustc` to use, or can use `rustc_version::{version, version_meta}` which will
+try `$RUSTC` followed by `rustc`.
+
+If an adversary can arbitrarily set the `$RUSTC` environment variable then this crate will
+execute arbitrary code. But when this crate is used within a build script, `$RUSTC` should
+be set correctly by `cargo`.
+"""
+aggregated-from = "https://raw.githubusercontent.com/zcash/zcash/master/qa/supply-chain/audits.toml"

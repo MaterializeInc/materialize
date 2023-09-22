@@ -13,6 +13,9 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[imports.zcash]
+url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
+
 [policy.differential-dataflow]
 audit-as-crates-io = true
 
@@ -780,10 +783,6 @@ criteria = "safe-to-deploy"
 version = "2.0.3"
 criteria = "safe-to-deploy"
 
-[[exemptions.hashbrown]]
-version = "0.14.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.hdrhistogram]]
 version = "7.4.0"
 criteria = "safe-to-deploy"
@@ -972,10 +971,6 @@ criteria = "safe-to-deploy"
 version = "0.8.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.libc]]
-version = "0.2.142"
-criteria = "safe-to-deploy"
-
 [[exemptions.libloading]]
 version = "0.7.3"
 criteria = "safe-to-deploy"
@@ -1002,10 +997,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.lock_api]]
 version = "0.4.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.lol_alloc]]
-version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.loom]]
@@ -1460,10 +1451,6 @@ criteria = "safe-to-deploy"
 version = "0.6.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.rand_xorshift]]
-version = "0.3.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.rayon]]
 version = "1.5.1"
 criteria = "safe-to-deploy"
@@ -1530,10 +1517,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rustc-demangle]]
 version = "0.1.16"
-criteria = "safe-to-deploy"
-
-[[exemptions.rustc_version]]
-version = "0.4.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustix]]
@@ -1772,10 +1755,6 @@ criteria = "safe-to-deploy"
 version = "0.5.2"
 criteria = "safe-to-deploy"
 
-[[exemptions.spin]]
-version = "0.9.8"
-criteria = "safe-to-deploy"
-
 [[exemptions.ssh-key]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
@@ -1948,20 +1927,12 @@ criteria = "safe-to-deploy"
 version = "1.1.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.tokio]]
-version = "1.27.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.tokio-io-timeout]]
 version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-io-utility]]
 version = "0.7.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.tokio-macros]]
-version = "2.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tokio-native-tls]]
@@ -2078,10 +2049,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.typed-builder]]
 version = "0.10.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.typemap_rev]]
-version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.typenum]]
