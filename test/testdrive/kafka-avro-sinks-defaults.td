@@ -30,15 +30,16 @@ $ set upsert-schema={
         "name" : "test",
         "fields" : [
             {"name":"f1", "type":["null", "string"]},
-            {"name":"f2", "type":["long", "null"]}
+            {"name":"f2", "type":["long", "null"]},
+            {"name":"f3", "type":["long", "string"]}
         ]
     }
 
 $ kafka-create-topic topic=upsert-avro
 
 $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema}
-{"key1": "fish", "key2": {"long": 2}} {"f1": {"string": "fish"}, "f2": {"long": 1000}}
-{"key1": "fisch", "key2": {"long": 42}} {"f1": null, "f2": {"long": 1000}}
+{"key1": "fish", "key2": {"long": 2}} {"f1": {"string": "fish"}, "f2": {"long": 1000}, "f3": {"long": 1}}
+{"key1": "fisch", "key2": {"long": 42}} {"f1": null, "f2": {"long": 1000}, "f3": {"string": "hello"}}
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
@@ -52,9 +53,10 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
+# we split avro unions into separate columns
 > SELECT * FROM upsert_input;
-fisch  42  <null>   1000
-fish    2  fish     1000
+fisch  42  <null>   1000  <null>  hello
+fish    2  fish     1000  1       <null>
 
 # Checking all combination of NULL DEFAULTS with and without values
 
@@ -68,7 +70,7 @@ fish    2  fish     1000
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null}]}
+{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null},{"name":"f31","type":["null","long"],"default":null},{"name":"f32","type":["null","string"],"default":null}]}
 
 > CREATE SINK upsert_input_sink2 FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink2-${testdrive.seed}')
@@ -80,7 +82,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-$
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null}]}
+{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null},{"name":"f31","type":["null","long"],"default":null},{"name":"f32","type":["null","string"],"default":null}]}
 
 > CREATE SINK upsert_input_sink3 FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink3-${testdrive.seed}')
@@ -92,7 +94,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-$
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink3-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"]},{"name":"f1","type":["null","string"]},{"name":"f2","type":["null","long"]}]}
+{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"]},{"name":"f1","type":["null","string"]},{"name":"f2","type":["null","long"]},{"name":"f31","type":["null","long"]},{"name":"f32","type":["null","string"]}]}
 
 > CREATE SINK upsert_input_sink4 FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink4-${testdrive.seed}')
@@ -101,7 +103,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink3-$
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"]},{"name":"f1","type":["null","string"]},{"name":"f2","type":["null","long"]}]}
+{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"]},{"name":"f1","type":["null","string"]},{"name":"f2","type":["null","long"]},{"name":"f31","type":["null","long"]},{"name":"f32","type":["null","string"]}]}
 
 # Different types of columns
 > CREATE TYPE point AS (x integer, y integer);
