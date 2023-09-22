@@ -2446,7 +2446,7 @@ fn kafka_sink_builder(
                 avro_key_fullname,
                 avro_value_fullname,
                 null_defaults,
-                seen,
+                ..
             } = options.try_into()?;
 
             if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
@@ -2458,10 +2458,6 @@ fn kafka_sink_builder(
             {
                 sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
             }
-
-            // If NULL DEFAULTS was specified without TRUE | FALSE, it should be equivalent to NULL DEFAULTS TRUE
-            let null_defaults =
-                null_defaults.unwrap_or(seen.contains(&CsrConfigOptionName::NullDefaults));
 
             let schema_generator = AvroSchemaGenerator::new(
                 avro_key_fullname.as_deref(),
