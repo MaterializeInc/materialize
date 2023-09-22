@@ -196,6 +196,7 @@ pub struct TlsCliArgs {
         default_value = "disable",
         default_value_ifs = &[
             ("frontegg-tenant", None, Some("require")),
+            ("frontegg-resolver-template", None, Some("require")),
         ],
         value_name = "MODE",
     )]

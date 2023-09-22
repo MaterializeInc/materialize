@@ -833,7 +833,7 @@ fn test_auth_expiry() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id,
+            tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: "mzadmin".to_string(),
@@ -974,7 +974,7 @@ fn test_auth_base_require_tls_frontegg() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.url,
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id,
+            tenant_id: Some(tenant_id),
             now,
             refresh_before_secs: 0,
             admin_role: "mzadmin".to_string(),
@@ -1712,7 +1712,7 @@ fn test_auth_admin_non_superuser() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id,
+            tenant_id: Some(tenant_id),
             now,
             refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: admin_role.to_string(),
@@ -1818,7 +1818,7 @@ fn test_auth_admin_superuser() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id,
+            tenant_id: Some(tenant_id),
             now,
             refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: admin_role.to_string(),
@@ -1924,7 +1924,7 @@ fn test_auth_admin_superuser_revoked() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id,
+            tenant_id: Some(tenant_id),
             now,
             refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: admin_role.to_string(),

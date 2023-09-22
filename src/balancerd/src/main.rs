@@ -75,68 +75,59 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-mod app_password;
-mod auth;
-mod client;
-mod error;
+use mz_balancerd::BUILD_INFO;
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
+use tracing::{info_span, Instrument};
 
-pub use auth::{
-    Authentication, AuthenticationConfig, Claims, ValidatedApiTokenResponse, REFRESH_SUFFIX,
-};
-pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
-pub use client::Client;
-pub use error::Error;
-use jsonwebtoken::DecodingKey;
-use uuid::Uuid;
+pub mod service;
 
-pub use crate::app_password::{AppPassword, AppPasswordParseError};
+#[derive(Debug, clap::Parser)]
+#[clap(about = "Balancer service", long_about = None)]
+struct Args {
+    #[clap(subcommand)]
+    command: Command,
 
-/// Command line arguments for frontegg.
-#[derive(Debug, Clone, clap::Parser)]
-pub struct FronteggCliArgs {
-    /// Enables Frontegg authentication for the specified tenant ID.
-    #[clap(
-        long,
-        env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
-        value_name = "UUID",
-    )]
-    frontegg_tenant: Option<Uuid>,
-    /// JWK used to validate JWTs during Frontegg authentication as a PEM public
-    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant")]
-    frontegg_jwk: Option<String>,
-    /// The full URL (including path) to the Frontegg api-token endpoint.
-    #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
-    frontegg_api_token_url: Option<String>,
-    /// The name of the admin role in Frontegg.
-    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
-    frontegg_admin_role: Option<String>,
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
-impl FronteggCliArgs {
-    pub fn into_auth(self) -> Result<Option<Authentication>, Error> {
-        match (
-            self.frontegg_tenant,
-            self.frontegg_api_token_url,
-            self.frontegg_jwk,
-            self.frontegg_admin_role,
-        ) {
-            (None, None, None, None) => Ok(None),
-            (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
-                Ok(Some(Authentication::new(
-                    AuthenticationConfig {
-                        admin_api_token_url,
-                        decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                        tenant_id: Some(tenant_id),
-                        now: mz_ore::now::SYSTEM_TIME.clone(),
-                        refresh_before_secs: 60,
-                        admin_role,
-                    },
-                    Client::environmentd_default(),
-                )))
-            }
-            _ => unreachable!("clap enforced"),
-        }
+#[derive(Debug, clap::Subcommand)]
+enum Command {
+    Service(crate::service::Args),
+}
+
+fn main() {
+    let args: Args = cli::parse_args(CliConfig::default());
+
+    // Mirror the tokio Runtime configuration in our production binaries.
+    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ncpus_useful)
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime");
+
+    let (_, _tracing_guard) = runtime
+        .block_on(args.tracing.configure_tracing(
+            StaticTracingConfig {
+                service_name: "balancer",
+                build_info: BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        ))
+        .expect("failed to init tracing");
+
+    let root_span = info_span!("balancer");
+    let res = match args.command {
+        Command::Service(args) => runtime.block_on(crate::service::run(args).instrument(root_span)),
+    };
+
+    if let Err(err) = res {
+        eprintln!("balancer: fatal: {}", err.display_with_causes());
+        std::process::exit(1);
     }
+    drop(_tracing_guard);
 }

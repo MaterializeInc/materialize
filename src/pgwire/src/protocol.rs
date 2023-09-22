@@ -32,9 +32,7 @@ use mz_ore::netio::AsyncReady;
 use mz_ore::server::TlsMode;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_pgwire_common::{
-    Conn, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
-};
+use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
@@ -148,24 +146,8 @@ where
         }
     }
 
-    // Validate that the connection is compatible with the TLS mode.
-    //
-    // The match here explicitly spells out all cases to be resilient to
-    // future changes to TlsMode.
-    match (tls_mode, conn.inner()) {
-        (None, Conn::Unencrypted(_)) => (),
-        (None, Conn::Ssl(_)) => unreachable!(),
-        (Some(TlsMode::Allow), Conn::Unencrypted(_)) => (),
-        (Some(TlsMode::Allow), Conn::Ssl(_)) => (),
-        (Some(TlsMode::Require), Conn::Ssl(_)) => (),
-        (Some(TlsMode::Require), Conn::Unencrypted(_)) => {
-            return conn
-                .send(ErrorResponse::fatal(
-                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                    "TLS encryption is required",
-                ))
-                .await;
-        }
+    if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
+        return conn.send(err).await;
     }
 
     let (mut session, is_expired) = if let Some(frontegg) = frontegg {
