@@ -22,6 +22,5 @@ SELECT
   w1.item buyer_item,
   w1.amount buyer_amount
 FROM {{ ref('winning_bids') }} w1
-JOIN {{ ref('winning_bids') }} w2
-WHERE w1.buyer = w2.seller
-  AND w2.amount > w1.amount
+JOIN {{ ref('winning_bids') }} w2 ON w1.buyer = w2.seller
+WHERE w2.amount > w1.amount
