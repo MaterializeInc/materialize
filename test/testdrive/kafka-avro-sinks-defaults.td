@@ -68,8 +68,7 @@ fish    2  fish     1000
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":"null"},{"name":"f1","type":["null","string"],"default":"null"},{"name":"f2","type":["null","long"],"default":"null"}]}
-
+{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null}]}
 
 > CREATE SINK upsert_input_sink2 FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink2-${testdrive.seed}')
@@ -81,8 +80,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-$
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":"null"},{"name":"f1","type":["null","string"],"default":"null"},{"name":"f2","type":["null","long"],"default":"null"}]}
-
+{"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null}]}
 
 > CREATE SINK upsert_input_sink3 FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink3-${testdrive.seed}')
@@ -123,7 +121,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-$
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":"null"},{"name":"y","type":["null","int"],"default":"null"}]}],"default":"null"},{"name":"c2","type":"string"}]}
+{"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":null},{"name":"y","type":["null","int"],"default":null}]}],"default":null},{"name":"c2","type":"string"}]}
 
 > CREATE SINK sink2 FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')

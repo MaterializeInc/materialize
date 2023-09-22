@@ -392,7 +392,7 @@ fn build_row_schema_fields(
             fields.push(json!({
                 "name": name,
                 "type": field_type,
-                "default": "null",
+                "default": null,
             }));
         } else {
             fields.push(json!({
