@@ -19,6 +19,7 @@ use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
@@ -219,6 +220,17 @@ pub enum AdapterError {
 }
 
 impl AdapterError {
+    pub fn into_response(self, severity: Severity) -> ErrorResponse {
+        ErrorResponse {
+            severity,
+            code: self.code(),
+            message: self.to_string(),
+            detail: self.detail(),
+            hint: self.hint(),
+            position: None,
+        }
+    }
+
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {

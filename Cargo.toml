@@ -49,6 +49,7 @@ members = [
     "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
+    "src/pgwire-common",
     "src/pid-file",
     "src/postgres-util",
     "src/prof",
@@ -145,7 +146,7 @@ differential-dataflow = { git = "https://github.com/MaterializeInc/differential-
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }

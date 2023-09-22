@@ -91,6 +91,7 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
+use mz_ore::server::TlsCertConfig;
 use mz_ore::task;
 use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
@@ -129,7 +130,7 @@ pub static KAFKA_ADDRS: Lazy<String> =
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
-    tls: Option<mz_environmentd::TlsConfig>,
+    tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthentication>,
     unsafe_mode: bool,
     workers: usize,
@@ -178,7 +179,7 @@ impl Config {
     }
 
     pub fn with_tls(mut self, cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
-        self.tls = Some(mz_environmentd::TlsConfig {
+        self.tls = Some(TlsCertConfig {
             cert: cert_path.into(),
             key: key_path.into(),
         });

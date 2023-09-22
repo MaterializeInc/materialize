@@ -1539,7 +1539,7 @@ fn test_max_request_size() {
 
     // pgwire
     {
-        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param_size = mz_pgwire_common::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
