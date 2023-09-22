@@ -28,7 +28,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
-use tracing::{error, event, info, warn, Level};
+use tracing::{debug, event, info, warn, Level};
 
 use crate::upgrade;
 use crate::{
@@ -1166,7 +1166,7 @@ impl Consolidator {
                             Ok(()) => break,
                             Err(e) => {
                                 attempt += 1;
-                                error!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
+                                debug!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
                                 self.client = None;
                                 retry.next().await;
                             }
