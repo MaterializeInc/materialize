@@ -10,7 +10,7 @@
 //! Various profiling utilities:
 //!
 //! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
-//! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap` and `collate_stacks`)
+//! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap`)
 
 use std::ffi::CString;
 use std::io::BufRead;
@@ -62,17 +62,17 @@ pub struct JemallocProfCtl {
 /// Parse a jemalloc profile file, producing a vector of stack traces along with their weights.
 pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     let mut cur_stack = None;
-    let mut profile = <StackProfile as Default>::default();
+    let mut profile = StackProfile::default();
     let mut lines = r.lines();
+
     let first_line = match lines.next() {
-        Some(s) => s,
+        Some(s) => s?,
         None => bail!("Heap dump file was empty"),
-    }?;
+    };
     // The first line of the file should be e.g. "heap_v2/524288", where the trailing
     // number is the inverse probability of a byte being sampled.
-    // TODO(benesch): rewrite to avoid `as`.
-    #[allow(clippy::as_conversions)]
-    let sampling_rate = str::parse::<usize>(first_line.trim_start_matches("heap_v2/"))? as f64;
+    let sampling_rate: f64 = str::parse(first_line.trim_start_matches("heap_v2/"))?;
+
     for line in lines {
         let line = line?;
         let line = line.trim();
@@ -117,12 +117,8 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
                 // For more details, see this doc: https://github.com/jemalloc/jemalloc/pull/1902
                 //
                 // And this gitter conversation between me (Brennan Vincent) and David Goldblatt: https://gitter.im/jemalloc/jemalloc?at=5f31b673811d3571b3bb9b6b
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                let n_objs = str::parse::<usize>(words[1].trim_end_matches(':'))? as f64;
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                let bytes_in_sampled_objs = str::parse::<usize>(words[2])? as f64;
+                let n_objs: f64 = str::parse(words[1].trim_end_matches(':'))?;
+                let bytes_in_sampled_objs: f64 = str::parse(words[2])?;
                 let ratio = (bytes_in_sampled_objs / n_objs) / sampling_rate;
                 let scale_factor = 1.0 / (1.0 - (-ratio).exp());
                 let weight = bytes_in_sampled_objs * scale_factor;
@@ -131,7 +127,7 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
         }
     }
     if cur_stack.is_some() {
-        bail!("Stack without corresponding weight!")
+        bail!("Stack without corresponding weight!");
     }
     Ok(profile)
 }

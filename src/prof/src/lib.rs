@@ -80,14 +80,13 @@ use std::ffi::c_void;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
+mod time;
+
 pub mod http;
 #[cfg(feature = "jemalloc")]
 pub mod jemalloc;
-pub mod time;
 
 #[derive(Copy, Clone, Debug)]
-// These constructors are dead on macOS
-#[allow(dead_code)]
 pub enum ProfStartTime {
     Instant(Instant),
     TimeImmemorial,
