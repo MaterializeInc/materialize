@@ -17,5 +17,8 @@ sources:
   - name: auction
     schema: "{{ target.schema }}"
     tables:
+      - name: organizations
+      - name: users
+      - name: accounts
       - name: auctions
       - name: bids
