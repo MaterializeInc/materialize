@@ -8,7 +8,7 @@ menu:
     weight: 10
 ---
 
-[Segment](https://Segment.com/) is a Customer Data Platform (CDP) that collects and routes events
+[Segment](https://segment.com/) is a Customer Data Platform (CDP) that collects and routes events
 from your web and mobile app. You can use Materialize to process, sink or serve each event.
 
 This guide will walk you through the steps to ingest data from Segment to Materialize.
@@ -91,7 +91,7 @@ A webhook destination in Segment requires a [data mapping](https://segment.com/b
    3. In **Select mappings**, fill the fields as follows:
     Field               | Value
     ------------------- | ----------------------
-    Url                 | Use the URL from the [Step 3](`/`).
+    Url                 | Use the URL from the [Step 3](#step-3-set-up-a-webhook-source).
     Method              | `POST`
     Batch Size          | `0`
     Headers             | -
