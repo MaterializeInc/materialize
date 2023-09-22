@@ -44,6 +44,8 @@ issue, GitHub will automatically add a backlink to this issue.
 Consider breaking down the work items into multiple subsections, for example
 multiple milestones or definite/possible/descoped work items. You will know
 best what breakdown makes sense and the breakdown might evolve over time.
+
+Please use the "problem" issue template for work items.
 -->
 
 ```[tasklist]
