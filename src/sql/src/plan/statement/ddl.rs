@@ -5103,9 +5103,20 @@ pub fn describe_alter_role(
 
 pub fn plan_alter_role(
     _: &StatementContext,
-    AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
+    AlterRoleStatement {
+        name,
+        options,
+        variable,
+    }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let attributes = plan_role_attributes(options)?;
+
+    if variable.is_some() {
+        return Err(PlanError::Unsupported {
+            feature: "ALTER ROLE ... SET".to_string(),
+            issue_no: Some(15651),
+        });
+    }
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,
