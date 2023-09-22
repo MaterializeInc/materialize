@@ -1,38 +1,39 @@
 # Sink connection management refactor
 
-- Associated:
-    - [sentry: panic: Reference to absent collection](https://github.com/MaterializeInc/materialize/issues/17210)
-    - [sinks: bootstrapping catalog does not wait for sink
-      creation](https://github.com/MaterializeInc/materialize/issues/20019)
+-   Associated:
+    -   [sentry: panic: Reference to absent
+        collection](https://github.com/MaterializeInc/materialize/issues/17210)
+    -   [sinks: bootstrapping catalog does not wait for sink
+        creation](https://github.com/MaterializeInc/materialize/issues/20019)
 
 ## Context
 
 The current implementation of sink connections relies on establishing the
 connection in adapter code. In addition to lacking parity with source connection
 management, this also introduces an issue which is detailed in [sinks:
-      bootstrapping catalog does not wait for sink
-      creation](https://github.com/MaterializeInc/materialize/issues/20019).
+bootstrapping catalog does not wait for sink
+creation](https://github.com/MaterializeInc/materialize/issues/20019).
 
 ## Goals
 
-- Detail and defend the approach for moving sink connection management into
-  storage, while still detecting some errors during sink creation.
+-   Detail and defend the approach for moving sink connection management into
+    storage, while still detecting some errors during sink creation.
 
 ## Overview
 
 In general, the approach will be to mirror the structure of source connection
 management for sinks. This means:
 
-- Check for potential errors during purification.
-    - This introduces the possibility for TOCTOU errors, so it will be possible
-      to create a sink that we believe will work only to have the sink
-      immediately fail.
-- Create the sink in the storage controller after purification or during
-  bootstrapping, i.e. remove the notion of
-  `prepare_export`/`SinkConnectionReady`.
-    - This guarantees that we understand when connections to sinks are
-      established and does not potentially leave them in a dangling state during
-      bootstrapping.
+-   Check for potential errors during purification.
+    -   This introduces the possibility for TOCTOU errors, so it will be
+        possible to create a sink that we believe will work only to have the
+        sink immediately fail.
+-   Create the sink in the storage controller after purification or during
+    bootstrapping, i.e. remove the notion of
+    `prepare_export`/`SinkConnectionReady`.
+    -   This guarantees that we understand when connections to sinks are
+        established and does not potentially leave them in a dangling state
+        during bootstrapping.
 
 ## Detailed description
 
@@ -57,7 +58,7 @@ On `main` currently, creating a sink requires generating an export token, which
 is used to ensure that you hold the since of the object you are sinking to some
 fixed point
 
- With this refactor, preparation becomes totally unnecessary because we will no
+With this refactor, preparation becomes totally unnecessary because we will no
 longer prepare the export, we will only create it under the assumption that it
 will either connect or error.
 
@@ -75,6 +76,19 @@ We will describe connections to Kafka brokers where we plan to write the sink,
 but will no longer "build" the connections in the controller. This means that
 `SinkConnectionReady` will be obviated as `prepare_export` is.
 
+### Managing broker topics
+
+Kafka broker admins can delete topics––either the data or the progress topics.
+We might encounter this in rendering the sink.
+
+If admins delete the progress topic, we will re-create it, as well as ensure the
+data topic exists. We do this because we cannot know if this is a net-new sink
+or if the progress topic got deleted.
+
+If admins delete the data topic, we will error iff we find data in the progress
+topic that indicates that we had previously produced data for the data topic.
+Otherwise, we will re-create the data topic.
+
 ## Alternatives
 
 We could, theoretically, treat `CreateExportToken` as a proxy for the sink in
@@ -83,10 +97,3 @@ some given ID, even if it is not yet present. However, I am leery of this
 approach because of its complexity (how far down do you propagate
 `CreateExportToken`s? does it differ during boostrapping vs. sink creation?) and
 its lack of parallelism with sources + the idioms of SQL planning.
-
-## Open questions
-
-I have not yet investigated what this change means for sink health reporting and
-am operating under the assumption that errors encountered in
-`storage::sink::kafka::KafkaSinkState::new` can still be propagated with
-`mz_internal.mz_sink_status_history`.
