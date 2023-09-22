@@ -80,6 +80,7 @@ use std::ffi::c_void;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
+mod pprof_types;
 mod time;
 
 pub mod http;

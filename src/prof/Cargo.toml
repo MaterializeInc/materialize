@@ -23,6 +23,7 @@ mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 pprof = "0.11.1"
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 tempfile = "3.2.0"
 tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }
@@ -33,6 +34,8 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [build-dependencies]
 anyhow = "1.0.66"
 mz-npm = { path = "../npm", default-features = false }
+prost-build = "0.11.2"
+protobuf-src = "1.1.0"
 
 [features]
 default = ["workspace-hack"]
