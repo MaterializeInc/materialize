@@ -39,18 +39,19 @@ ALTER TABLE t REPLICA IDENTITY FULL;
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty')
   FOR ALL TABLES;
-exact: PostgreSQL PUBLICATION mz_source_empty is empty
+contains:PUBLICATION mz_source_empty is empty
 
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_empty')
   FOR TABLES (t1);
-exact: PostgreSQL PUBLICATION mz_source_empty is empty
+contains:PUBLICATION mz_source_empty is empty
 
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
-exact: multi-output sources require a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause
+contains:missing TABLES specification
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source)
   FOR SCHEMAS (dne);
-exact: FOR SCHEMAS (..) included dne, but PostgreSQL database has no schema with that name
+contains:database postgres missing referenced schemas
+detail:missing schemas: dne

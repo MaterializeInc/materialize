@@ -55,7 +55,7 @@ use mz_storage_types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage_types::sources::{
-    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
+    GenericSourceConnection, KafkaMetadataKind, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
@@ -675,63 +675,63 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
 
-            let mut connection = KafkaSourceConnection::<ReferencedConnection> {
+            if !include_metadata.is_empty()
+                && !matches!(
+                    envelope,
+                    Envelope::Upsert | Envelope::None | Envelope::Debezium(DbzMode::Plain)
+                )
+            {
+                // TODO(guswynn): should this be `bail_unsupported!`?
+                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+            }
+
+            let metadata_columns = include_metadata
+                .into_iter()
+                .flat_map(|item| match item.ty {
+                    SourceIncludeMetadataType::Timestamp => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "timestamp".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Timestamp))
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "partition".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Partition))
+                    }
+                    SourceIncludeMetadataType::Offset => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "offset".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Offset))
+                    }
+                    SourceIncludeMetadataType::Headers => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "headers".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Headers))
+                    }
+                    SourceIncludeMetadataType::Key => {
+                        // handled below
+                        None
+                    }
+                })
+                .collect();
+
+            let connection = KafkaSourceConnection::<ReferencedConnection> {
                 connection: connection_item.id(),
                 connection_id: connection_item.id(),
                 topic,
                 start_offsets,
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
-                include_timestamp: None,
-                include_partition: None,
-                include_topic: None,
-                include_offset: None,
-                include_headers: None,
+                metadata_columns,
             };
-
-            let unwrap_name = |alias: Option<Ident>, default, pos| {
-                Some(IncludedColumnPos {
-                    name: alias
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| String::from(default)),
-                    pos,
-                })
-            };
-
-            if !matches!(envelope, Envelope::Upsert | Envelope::None)
-                && include_metadata
-                    .iter()
-                    .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
-            {
-                // TODO(guswynn): should this be `bail_unsupported!`?
-                sql_bail!("INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE");
-            }
-
-            for (pos, item) in include_metadata.iter().cloned().enumerate() {
-                match item.ty {
-                    SourceIncludeMetadataType::Timestamp => {
-                        connection.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
-                    }
-                    SourceIncludeMetadataType::Partition => {
-                        connection.include_partition = unwrap_name(item.alias, "partition", pos);
-                    }
-                    SourceIncludeMetadataType::Topic => {
-                        // TODO(bwm): This requires deeper thought, the current structure of the
-                        // code requires us to clone the topic name around all over the place
-                        // whether or not anyone ever uses it. Considering we expect the
-                        // overwhelming majority of people will *not* want topics in dataflows that
-                        // is an unnacceptable cost.
-                        bail_unsupported!("INCLUDE TOPIC");
-                    }
-                    SourceIncludeMetadataType::Offset => {
-                        connection.include_offset = unwrap_name(item.alias, "offset", pos);
-                    }
-                    SourceIncludeMetadataType::Headers => {
-                        connection.include_headers = unwrap_name(item.alias, "headers", pos);
-                    }
-                    SourceIncludeMetadataType::Key => {} // handled below
-                }
-            }
 
             let connection = GenericSourceConnection::Kafka(connection);
 
@@ -1140,7 +1140,6 @@ pub fn plan_create_source(
     };
 
     let metadata_columns = external_connection.metadata_columns();
-    let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
@@ -1217,7 +1216,6 @@ pub fn plan_create_source(
         connection: external_connection,
         encoding,
         envelope: envelope.clone(),
-        metadata_columns: metadata_column_types,
         timestamp_interval,
     };
 

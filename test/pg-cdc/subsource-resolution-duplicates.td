@@ -40,12 +40,14 @@ ALTER TABLE other.t REPLICA IDENTITY FULL;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
-contains:multiple tables with name "t": "postgres"."other"."t", "postgres"."public"."t"
+contains:multiple subsources would be named t
+detail:referenced tables with duplicate name: postgres.other.t, postgres.public.t
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (public.t AS x, public.t as Y);
-contains:table "postgres"."public"."t" referred to by multiple subsources: "x", "y"
+contains:multiple subsources refer to table postgres.public.t
+detail: subsources referencing table: x, y
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

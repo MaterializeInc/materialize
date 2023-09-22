@@ -1,0 +1,27 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_repr.adt.timestamp;
+
+message ProtoTimestampPrecision {
+    uint32 value = 1;
+}
+
+// Helper struct for representing `Option<TimestampPrecision>`.
+message ProtoOptionalTimestampPrecision {
+    ProtoTimestampPrecision value = 1;
+}
+
+// Helper struct for representing from and to precisions each of type `Option<TimestampPrecision>`.
+message ProtoFromToTimestampPrecisions {
+    optional ProtoTimestampPrecision from = 1;
+    optional ProtoTimestampPrecision to = 2;
+}

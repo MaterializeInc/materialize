@@ -11,8 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, ServiceHealthcheck
-from materialize.mzcompose.services import Cockroach, Materialized, Testdrive
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import ServiceHealthcheck
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 CRDB_NODE_COUNT = 4

@@ -375,11 +375,11 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    mz_storage_client::controller::Controller<T>: StorageController<Timestamp = T>,
+    mz_storage_controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
-        let storage_controller = mz_storage_client::controller::Controller::new(
+        let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
             config.persist_location,

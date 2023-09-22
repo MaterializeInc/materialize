@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
+use mz_catalog::Transaction;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
@@ -20,7 +21,6 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, RawClusterName, Statement};
 use mz_storage_types::sources::IngestionDescription;
 
-use crate::catalog::storage::Transaction;
 use crate::catalog::{
     catalog_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem,
     CatalogState, DataSourceDesc, Error, ErrorKind, Index, MaterializedView, Sink, Source,

@@ -369,7 +369,8 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates).await;
+            self.send_builtin_table_updates_blocking(builtin_table_updates)
+                .await;
 
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
@@ -771,10 +772,10 @@ impl Coordinator {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        let status_id =
-            Some(self.catalog().resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
-            ));
+        let status_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
+        );
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean

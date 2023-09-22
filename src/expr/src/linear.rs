@@ -34,7 +34,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -1441,7 +1441,7 @@ pub mod plan {
     };
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
         pub(crate) mfp: MapFilterProject,
     }

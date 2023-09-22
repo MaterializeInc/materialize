@@ -11,7 +11,7 @@ use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
-use mz_expr::{EvalError, PartitionId};
+use mz_expr::EvalError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use proptest_derive::Arbitrary;
@@ -205,45 +205,28 @@ impl Display for UpsertValueError {
 #[derive(
     Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
 )]
-pub struct UpsertNullKeyError {
-    partition_id: Option<PartitionId>,
-}
-
-impl UpsertNullKeyError {
-    pub fn with_partition_id(partition_id: PartitionId) -> Self {
-        Self {
-            partition_id: Some(partition_id),
-        }
-    }
-}
+pub struct UpsertNullKeyError;
 
 impl RustType<ProtoUpsertNullKeyError> for UpsertNullKeyError {
     fn into_proto(&self) -> ProtoUpsertNullKeyError {
-        ProtoUpsertNullKeyError {
-            partition_id: self.partition_id.map(|id| id.into_proto()),
-        }
+        ProtoUpsertNullKeyError {}
     }
 
-    fn from_proto(proto: ProtoUpsertNullKeyError) -> Result<Self, TryFromProtoError> {
-        let partition_id = RustType::from_proto(proto.partition_id)?;
-        Ok(Self { partition_id })
+    fn from_proto(_proto: ProtoUpsertNullKeyError) -> Result<Self, TryFromProtoError> {
+        Ok(UpsertNullKeyError)
     }
 }
 
 impl Display for UpsertNullKeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "record with NULL key in UPSERT source")?;
-
-        if let Some(partition_id) = self.partition_id {
-            write!(f, " in partition {}", partition_id)?;
-        }
-
         write!(
             f,
-            "; to retract this error, produce a record upstream with a NULL key and NULL value",
+            "record with NULL key in UPSERT source; to retract this error, "
         )?;
-
-        Ok(())
+        write!(
+            f,
+            "produce a record upstream with a NULL key and NULL value"
+        )
     }
 }
 

@@ -201,6 +201,11 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     )
     annotate_errors(known_errors, "Known errors in logs, ignoring", "info")
 
+    if unknown_errors:
+        print(
+            f"--- Failing test because of {len(unknown_errors)} unknown error(s) in logs"
+        )
+
     return len(unknown_errors)
 
 

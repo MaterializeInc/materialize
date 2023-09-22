@@ -24,6 +24,7 @@ launchdarkly-server-sdk = { version = "1.0.0", default_features = false, feature
 maplit = "1.0.2"
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
+mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -70,6 +71,7 @@ serde = "1.0.152"
 serde_json = "1.0.89"
 serde_plain = "1.0.1"
 smallvec = { version = "1.10.0", features = ["union"] }
+static_assertions = "1.1"
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.24.2", features = ["rt", "time"] }
 tokio-postgres = { version = "0.7.8" }

@@ -169,7 +169,7 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = catalog::storage::ReplicaLocation::Managed {
+        let location = mz_catalog::ReplicaLocation::Managed {
             size: size.clone(),
             availability_zone: None,
             disk,
@@ -271,7 +271,7 @@ impl Coordinator {
                     workers,
                     compute,
                 } => {
-                    let location = catalog::storage::ReplicaLocation::Unmanaged {
+                    let location = mz_catalog::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
                         storage_addrs,
                         computectl_addrs,
@@ -286,7 +286,7 @@ impl Coordinator {
                     compute,
                     disk,
                 } => {
-                    let location = catalog::storage::ReplicaLocation::Managed {
+                    let location = mz_catalog::ReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
                         disk,
@@ -394,7 +394,7 @@ impl Coordinator {
                 workers,
                 compute,
             } => {
-                let location = catalog::storage::ReplicaLocation::Unmanaged {
+                let location = mz_catalog::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -416,7 +416,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
-                let location = catalog::storage::ReplicaLocation::Managed {
+                let location = mz_catalog::ReplicaLocation::Managed {
                     size,
                     availability_zone,
                     disk,

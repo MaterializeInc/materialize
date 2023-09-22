@@ -1,0 +1,41 @@
+[package]
+name = "mz-storage-controller"
+description = "Implementation of the Storage controller API."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1.0.66"
+async-trait = "0.1.68"
+bytes = "1.3.0"
+chrono = { version = "0.4.23", default-features = false, features = ["std"] }
+differential-dataflow = "0.12.0"
+futures = "0.3.25"
+itertools = { version = "0.10.5" }
+mz-build-info = { path = "../build-info" }
+mz-cluster-client = { path = "../cluster-client" }
+mz-ore = { path = "../ore", features = ["async", "chrono", "tracing_"] }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+mz-postgres-util = { path = "../postgres-util" }
+mz-proto = { path = "../proto", features = ["tokio-postgres"] }
+mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
+mz-stash = { path = "../stash" }
+mz-storage-client = { path = "../storage-client" }
+mz-storage-types = { path = "../storage-types" }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = { version = "1.0.89" }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util", "time"] }
+tokio-postgres = { version = "0.7.8", features = ["serde"] }
+tokio-stream = "0.1.11"
+tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

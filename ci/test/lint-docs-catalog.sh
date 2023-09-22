@@ -20,6 +20,8 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 catalog_files=(
   doc/user/content/sql/system-catalog/mz_internal.md
   doc/user/content/sql/system-catalog/mz_catalog.md
@@ -32,20 +34,18 @@ rewrite=false
 if [[ "${1:-}" = --rewrite ]]; then
     shift
     rewrite=true
-    echo "Linting catalog docs"
+    ci_uncollapsed_heading "Linting catalog docs; rewriting .slt files"
 else
-    echo "Linting catalog docs, run with --rewrite to update .slt files"
+    ci_uncollapsed_heading "Linting catalog docs, run $0 --rewrite to update .slt files"
 fi
-
-function generate_slt() {
-  bin/pyactivate ci/test/lint-docs-catalog.py "$@"
-}
 
 for catalog_file in "${catalog_files[@]}"; do
     slt="$slt_directory/$(basename "$catalog_file" .md).slt"
     if $rewrite; then
-        generate_slt "$catalog_file" > "$slt"
+        ci_try bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file" > "$slt"
     else
-        diff --unified=0 "$slt" <(generate_slt "$catalog_file")
+        ci_try diff "$slt" <(bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file")
     fi
 done
+
+ci_status_report

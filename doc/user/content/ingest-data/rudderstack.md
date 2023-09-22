@@ -28,7 +28,7 @@ create a [cluster](/sql/create-cluster) guide,
 or create a managed cluster using the following SQL statement:
 
 ```sql
-CREATE CLUSTER rudderstack_cluster SIZE = '3xsmall', REPLICATION FACTOR = 2;
+CREATE CLUSTER rudderstack_cluster SIZE = '3xsmall';
 ```
 
 ## Step 2. Create a Shared Secret
@@ -121,14 +121,12 @@ Depending on your use case, you can create a materialized view to parse the inco
 
 ```sql
 CREATE VIEW json_parsed AS
-WITH parse AS (
-    SELECT
-        (body -> '_metadata' ->> 'nodeVersion')::text AS nodeVersion,
-        (body ->> 'channel')::text AS channel,
-        (body ->> 'event')::text AS event,
-        (body ->> 'userId')::text AS userId
-    FROM my_webhook_source
-);
+  SELECT
+    (body -> '_metadata' ->> 'nodeVersion')::text AS nodeVersion,
+    (body ->> 'channel')::text AS channel,
+    (body ->> 'event')::text AS event,
+    (body ->> 'userId')::text AS userId
+  FROM rudderstack_source;
 ```
 
 This `json_parsed` view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `nodeVersion`, `channel`, `event`, and `userId`.

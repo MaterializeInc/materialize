@@ -60,6 +60,7 @@ pub(crate) mod v33_to_v34;
 pub(crate) mod v34_to_v35;
 pub(crate) mod v35_to_v36;
 pub(crate) mod v36_to_v37;
+pub(crate) mod v37_to_v38;
 
 macro_rules! objects {
     ( $( $x:ident ),* ) => {
@@ -73,7 +74,7 @@ macro_rules! objects {
     }
 }
 
-objects!(v27, v28, v29, v31, v32, v33, v34, v35, v36);
+objects!(v27, v28, v29, v31, v32, v33, v34, v35, v36, v37, v38);
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.

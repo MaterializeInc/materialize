@@ -19,6 +19,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_controller_types::ClusterId;
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::Format;
 use mz_repr::role_id::RoleId;
@@ -33,6 +34,7 @@ pub use mz_sql::session::vars::{
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
@@ -118,16 +120,19 @@ impl<T: TimestampManipulation> Session<T> {
     // binding a statement directly to a portal without creating an
     // intermediate prepared statement. Thus, for those cases, a
     // mechanism for generating the logging metadata directly is needed.
-    pub(crate) fn mint_logging(&self, sql: String) -> Arc<QCell<PreparedStatementLoggingInfo>> {
+    pub(crate) fn mint_logging(
+        &self,
+        sql: String,
+        redacted_sql: String,
+        now: EpochMillis,
+    ) -> Arc<QCell<PreparedStatementLoggingInfo>> {
         Arc::new(QCell::new(
             &self.qcell_owner,
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
+                redacted_sql,
                 session_id: self.uuid,
-                prepared_at: Utc::now()
-                    .timestamp_millis()
-                    .try_into()
-                    .expect("sane system time"),
+                prepared_at: now,
                 name: "".to_string(),
                 accounted: false,
             },
@@ -220,7 +225,7 @@ impl<T: TimestampManipulation> Session<T> {
             // - Currently in `READ ONLY`
             // - Already performed a query
             let read_write_prohibited = match txn.ops {
-                TransactionOps::Peeks(_) | TransactionOps::Subscribe => {
+                TransactionOps::Peeks { .. } | TransactionOps::Subscribe => {
                     txn.access == Some(TransactionAccessMode::ReadOnly)
                 }
                 TransactionOps::None
@@ -420,7 +425,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// anomalies will occur if cleared.
     pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<T>> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
-            if let TransactionOps::Peeks(_) = ops {
+            if let TransactionOps::Peeks { .. } = ops {
                 let ops = std::mem::take(ops);
                 Some(
                     ops.timestamp_determination()
@@ -443,7 +448,7 @@ impl<T: TimestampManipulation> Session<T> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(determination),
+                ops: TransactionOps::Peeks { determination, .. },
                 write_lock_guard: _,
                 access: _,
                 id: _,
@@ -458,10 +463,13 @@ impl<T: TimestampManipulation> Session<T> {
             self.transaction.inner(),
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(TimestampDetermination {
-                    timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                ops: TransactionOps::Peeks {
+                    determination: TimestampDetermination {
+                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        ..
+                    },
                     ..
-                }),
+                },
                 write_lock_guard: _,
                 access: _,
                 id: _,
@@ -479,6 +487,10 @@ impl<T: TimestampManipulation> Session<T> {
         catalog_revision: u64,
         now: EpochMillis,
     ) {
+        let redacted_sql = stmt
+            .as_ref()
+            .map(|stmt| stmt.to_ast_string_redacted())
+            .unwrap_or(String::default());
         let statement = PreparedStatement {
             stmt,
             desc,
@@ -487,6 +499,7 @@ impl<T: TimestampManipulation> Session<T> {
                 &self.qcell_owner,
                 PreparedStatementLoggingInfo::StillToLog {
                     sql,
+                    redacted_sql,
                     name: name.clone(),
                     prepared_at: now,
                     session_id: self.uuid,
@@ -944,6 +957,17 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// The cluster of the transaction, if one exists.
+    pub fn cluster(&self) -> Option<ClusterId> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.cluster(),
+        }
+    }
+
     /// Reports whether any operations have been executed as part of this transaction
     pub fn contains_ops(&self) -> bool {
         match self.inner() {
@@ -955,6 +979,12 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
+    ///
+    /// # Panics
+    /// If the operations are compatible but the operation metadata doesn't match.
+    /// Such as reads at different timestamps, reads on different timelines, reads
+    /// on different clusters, etc. It's up to the caller to make sure these are
+    /// aligned.
     pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
@@ -969,8 +999,15 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         }
                         *ops = add_ops;
                     }
-                    TransactionOps::Peeks(determination) => match add_ops {
-                        TransactionOps::Peeks(add_timestamp_determination) => {
+                    TransactionOps::Peeks {
+                        determination,
+                        cluster_id,
+                    } => match add_ops {
+                        TransactionOps::Peeks {
+                            determination: add_timestamp_determination,
+                            cluster_id: add_cluster_id,
+                        } => {
+                            assert_eq!(*cluster_id, add_cluster_id);
                             match (
                                 &determination.timestamp_context,
                                 &add_timestamp_determination.timestamp_context,
@@ -1020,7 +1057,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.
-                        TransactionOps::Peeks(determination)
+                        TransactionOps::Peeks { determination, .. }
                             if !determination.timestamp_context.contains_timestamp() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
@@ -1075,12 +1112,27 @@ impl<T> Transaction<T> {
     /// The timeline of the transaction, if one exists.
     fn timeline(&self) -> Option<Timeline> {
         match &self.ops {
-            TransactionOps::Peeks(TimestampDetermination {
-                timestamp_context: TimestampContext::TimelineTimestamp(timeline, _),
+            TransactionOps::Peeks {
+                determination:
+                    TimestampDetermination {
+                        timestamp_context: TimestampContext::TimelineTimestamp(timeline, _),
+                        ..
+                    },
                 ..
-            }) => Some(timeline.clone()),
-            TransactionOps::Peeks(_)
+            } => Some(timeline.clone()),
+            TransactionOps::Peeks { .. }
             | TransactionOps::None
+            | TransactionOps::Subscribe
+            | TransactionOps::Writes(_)
+            | TransactionOps::SingleStatement { .. } => None,
+        }
+    }
+
+    /// The cluster of the transaction, if one exists.
+    pub fn cluster(&self) -> Option<ClusterId> {
+        match &self.ops {
+            TransactionOps::Peeks { cluster_id, .. } => Some(cluster_id.clone()),
+            TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
             | TransactionOps::SingleStatement { .. } => None,
@@ -1147,7 +1199,12 @@ pub enum TransactionOps<T> {
     /// is has a timestamp, it must only do other peeks. However, if it doesn't
     /// have a timestamp (i.e. the values are constants), the transaction can still
     /// perform writes.
-    Peeks(TimestampDetermination<T>),
+    Peeks {
+        /// The timestamp and timestamp related metadata for the peek.
+        determination: TimestampDetermination<T>,
+        /// The cluster used to execute peeks.
+        cluster_id: ClusterId,
+    },
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
@@ -1165,7 +1222,7 @@ pub enum TransactionOps<T> {
 impl<T> TransactionOps<T> {
     fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
         match self {
-            TransactionOps::Peeks(determination) => Some(determination),
+            TransactionOps::Peeks { determination, .. } => Some(determination),
             TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)

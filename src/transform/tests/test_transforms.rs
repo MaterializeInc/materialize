@@ -75,8 +75,15 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use mz_expr::explain::{enforce_linear_chains, ExplainContext};
 use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
-use mz_repr::explain::ExplainConfig;
+use mz_ore::str::Indent;
+use mz_repr::explain::text::text_string_at;
+use mz_repr::explain::{ExplainConfig, PlanRenderingContext, UsedIndexes};
+use mz_transform::attribute::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
 
@@ -89,12 +96,72 @@ fn run_tests() {
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
                 "define" => handle_define(&mut catalog, &test_case.input),
-                "apply" => handle_apply(&catalog, &test_case.input, &test_case.args),
+                "explain" => handle_explain(&catalog, &test_case.input, &test_case.args),
                 "typecheck" => handle_typecheck(&catalog, &test_case.input, &test_case.args),
+                "apply" => handle_apply(&catalog, &test_case.input, &test_case.args),
                 _ => format!("unknown directive: {}", test_case.directive),
             }
         })
     });
+}
+
+#[allow(clippy::disallowed_types)]
+fn handle_explain(
+    catalog: &TestCatalog,
+    input: &str,
+    args: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
+    let with = match args.get("with") {
+        Some(with) => with.iter().cloned().collect::<BTreeSet<String>>(),
+        None => return "missing required `with` argument for `explain` directive".to_string(),
+    };
+
+    // Create the ExplainConfig from the given `with` set of strings.
+    let config = match ExplainConfig::try_from(with) {
+        Ok(config) => config,
+        Err(e) => return format!("ExplainConfig::try_from error\n{}\n", e.to_string().trim()),
+    };
+
+    let context = ExplainContext {
+        config: &config,
+        humanizer: catalog,
+        used_indexes: UsedIndexes::default(),
+        finishing: None,
+        duration: Duration::default(),
+        optimizer_notices: Vec::default(),
+    };
+
+    // Parse the relation, returning early on parse error.
+    let mut relation = match try_parse_mir(catalog, input) {
+        Ok(relation) => relation,
+        Err(e) => return format!("try_parse_mir error:\n{}\n", e.to_string().trim()),
+    };
+
+    // normalize the representation as linear chains
+    // (this implies !context.config.raw_plans by construction)
+    if context.config.linear_chains {
+        match enforce_linear_chains(&mut relation) {
+            Ok(_) => {}
+            Err(e) => return format!("enforce_linear_chains error:\n{}\n", e.to_string().trim()),
+        };
+    };
+
+    // We deliberately don't interpret the `raw_plans` config option here,
+    // because we might want to test the output of things that are reset when it
+    // is set. For test purposes we never want to implicitly normalize the plan
+    // as part this statement.
+
+    let annotated_plan = match annotate_plan(&relation, &context) {
+        Ok(annotated_plan) => annotated_plan,
+        Err(e) => return format!("annotate_plan error:\n{}\n", e.to_string().trim()),
+    };
+
+    text_string_at(annotated_plan.plan, || PlanRenderingContext {
+        indent: Indent::default(),
+        humanizer: context.humanizer,
+        annotations: annotated_plan.annotations.clone(),
+        config: &config,
+    })
 }
 
 #[allow(clippy::disallowed_types)]

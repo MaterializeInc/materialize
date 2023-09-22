@@ -11,8 +11,11 @@ import time
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres, Redpanda, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 COLLECTION_INTERVAL_SECS = 5
 
@@ -165,7 +168,8 @@ database_objects = [
             """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table (f1 TEXT);
-            INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
+            ALTER TABLE pg_table REPLICA IDENTITY FULL;
 
             > CREATE SOURCE obj
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -183,13 +187,16 @@ database_objects = [
             """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table1 (f1 TEXT);
-            INSERT INTO pg_table1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            INSERT INTO pg_table1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
+            ALTER TABLE pg_table1 REPLICA IDENTITY FULL;
 
             CREATE TABLE pg_table2 (f1 TEXT);
             INSERT INTO pg_table2 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            ALTER TABLE pg_table2 REPLICA IDENTITY FULL;
 
             CREATE TABLE pg_table3 (f1 TEXT);
             INSERT INTO pg_table3 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            ALTER TABLE pg_table3 REPLICA IDENTITY FULL;
 
             > CREATE SOURCE pg_source
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

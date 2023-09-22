@@ -7,18 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Debezium,
-    Kafka,
-    Materialized,
-    MySql,
-    Postgres,
-    SchemaRegistry,
-    SqlServer,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
 

@@ -10,7 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor, MzcomposeExecutorParallel
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
@@ -116,10 +116,7 @@ class Owners(Check):
 
     def _can_run(self, e: Executor) -> bool:
         # Object owner changes weren't persisted in some cases earlier than 0.63.0.
-        # ALTER SET OWNER hangs in parallel mode - #21317
-        return self.base_version >= MzVersion.parse("0.63.0-dev") and not isinstance(
-            e, MzcomposeExecutorParallel
-        )
+        return self.base_version >= MzVersion.parse("0.63.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

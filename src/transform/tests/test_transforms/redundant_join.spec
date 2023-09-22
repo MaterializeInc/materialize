@@ -13,16 +13,16 @@
 # Define x source
 define
 DefSource name=x
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
 ----
 Source defined as t0
 
 # Define y source
 define
 DefSource name=y keys=[[#0]]
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
 ----
 Source defined as t1
 

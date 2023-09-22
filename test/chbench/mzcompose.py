@@ -9,16 +9,18 @@
 
 import requests
 
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Debezium,
-    Kafka,
-    Materialized,
-    Metabase,
-    MySql,
-    SchemaRegistry,
-    Zookeeper,
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metabase import Metabase
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

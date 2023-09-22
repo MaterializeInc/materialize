@@ -60,18 +60,6 @@ named         id       b
 ------------------------
 1             2        3
 
-! CREATE SOURCE not_supported
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TOPIC
-contains:INCLUDE TOPIC not yet supported
-
-! CREATE SOURCE not_supported
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TIMESTAMP as myts, TOPIC
-contains:INCLUDE TOPIC not yet supported
-
 ! CREATE SOURCE avro_data_conflict
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'

@@ -28,12 +28,12 @@ use mz_expr::{
     RowSetFinishing,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
+use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExplainFormat, UsedIndexes};
+use mz_repr::explain::{ExplainFormat, ExprHumanizer, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
@@ -105,7 +105,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::notice::AdapterNotice;
+use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -128,6 +128,7 @@ struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
     dropped_active_cluster: bool,
+    dropped_in_use_indexes: Vec<DroppedInUseIndex>,
 }
 
 // A bundle of values returned from create_source_inner
@@ -224,7 +225,7 @@ impl Coordinator {
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
-                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
@@ -1232,6 +1233,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
+            dropped_in_use_indexes,
         } = self.sequence_drop_common(session, drop_ids)?;
 
         self.catalog_transact(Some(session), ops).await?;
@@ -1247,6 +1249,13 @@ impl Coordinator {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
                 name: session.vars().cluster().to_string(),
             });
+        }
+        for dropped_in_use_index in dropped_in_use_indexes {
+            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+            self.metrics
+                .optimization_notices
+                .with_label_values(&["DroppedInUseIndex"])
+                .inc_by(1);
         }
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
@@ -1465,6 +1474,7 @@ impl Coordinator {
             ops: drop_ops,
             dropped_active_db,
             dropped_active_cluster,
+            dropped_in_use_indexes,
         } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
@@ -1484,6 +1494,9 @@ impl Coordinator {
                 name: session.vars().cluster().to_string(),
             });
         }
+        for dropped_in_use_index in dropped_in_use_indexes {
+            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+        }
         Ok(ExecuteResponse::DroppedOwned)
     }
 
@@ -1494,6 +1507,7 @@ impl Coordinator {
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
+        let mut dropped_in_use_indexes = Vec::new();
         let mut dropped_roles = BTreeMap::new();
         let mut dropped_databases = BTreeSet::new();
         let mut dropped_schemas = BTreeSet::new();
@@ -1505,6 +1519,7 @@ impl Coordinator {
         // database or schema.
         let mut default_privilege_revokes = BTreeSet::new();
 
+        let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1538,6 +1553,42 @@ impl Coordinator {
                     // We must revoke all role memberships that the dropped roles belongs to.
                     for (group_id, grantor_id) in &role.membership.map {
                         role_revokes.insert((*group_id, *id, *grantor_id));
+                    }
+                }
+                ObjectId::Item(id) => {
+                    if let Some(index) = self.catalog().get_entry(id).index() {
+                        let humanizer = self.catalog().for_session(session);
+                        let dependants = self
+                            .controller
+                            .compute
+                            .collection_reverse_dependencies(index.cluster_id, *id)
+                            .ok()
+                            .into_iter()
+                            .flatten()
+                            .filter(|dependant_id| {
+                                // Transient Ids belong to Peeks. We are not interested for now in
+                                // peeks depending on a dropped index.
+                                // TODO: show a different notice in this case. Something like
+                                // "There is an in-progress ad hoc SELECT that uses the dropped
+                                // index. The resources used by the index will be freed when all
+                                // such SELECTs complete."
+                                !matches!(dependant_id, GlobalId::Transient(..)) &&
+                                // If the dependent object is also being dropped, then there is no
+                                // problem, so we don't want a notice.
+                                !ids_set.contains(&ObjectId::Item(**dependant_id))
+                            })
+                            .map(|dependant_id| {
+                                humanizer
+                                    .humanize_id(*dependant_id)
+                                    .unwrap_or(id.to_string())
+                            })
+                            .collect_vec();
+                        if !dependants.is_empty() {
+                            dropped_in_use_indexes.push(DroppedInUseIndex {
+                                index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
+                                dependant_objects: dependants,
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -1602,6 +1653,7 @@ impl Coordinator {
             ops,
             dropped_active_db,
             dropped_active_cluster,
+            dropped_in_use_indexes,
         })
     }
 
@@ -1722,6 +1774,9 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
+        if &name == CLUSTER_VAR_NAME {
+            self.validate_set_cluster(session)?;
+        }
 
         let vars = session.vars_mut();
         let values = match plan.value {
@@ -1782,6 +1837,9 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
+        if &name == CLUSTER_VAR_NAME {
+            self.validate_set_cluster(session)?;
+        }
         session
             .vars_mut()
             .reset(Some(self.catalog().system_config()), &name, false)?;
@@ -1825,6 +1883,14 @@ impl Coordinator {
         }
     }
 
+    fn validate_set_cluster(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.transaction().contains_ops() {
+            Err(AdapterError::InvalidSetCluster)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1863,7 +1929,7 @@ impl Coordinator {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(determination)), _))
+            Ok((Some(TransactionOps::Peeks { determination, .. }), _))
                 if ctx.session().vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
@@ -2514,11 +2580,17 @@ impl Coordinator {
         // depend on whether or not reads have occurred in the txn.
         let mut transaction_determination = determination.clone();
         if when.is_transactional() {
-            session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id,
+            })?;
         } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
             // If the query uses AS OF, then ignore the timestamp.
             transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
-            session.add_transaction_ops(TransactionOps::Peeks(transaction_determination))?;
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id,
+            })?;
         };
 
         Ok(determination)
@@ -3634,7 +3706,13 @@ impl Coordinator {
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
             let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
-            let timeout_dur = *ctx.session().vars().statement_timeout();
+            let mut timeout_dur = *ctx.session().vars().statement_timeout();
+
+            // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
+            if timeout_dur == Duration::ZERO {
+                timeout_dur = Duration::MAX;
+            }
+
             let make_diffs = move |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, AdapterError> {
                 let arena = RowArena::new();
                 // Use 2x row len incase there's some assignments.
@@ -4200,11 +4278,17 @@ impl Coordinator {
                     mut ops,
                     dropped_active_db,
                     dropped_active_cluster,
+                    dropped_in_use_indexes,
                 } = self.sequence_drop_common(session, drops)?;
 
                 assert!(
                     !dropped_active_db && !dropped_active_cluster,
                     "dropping subsources does not drop DBs or clusters"
+                );
+
+                soft_assert!(
+                    dropped_in_use_indexes.is_empty(),
+                    "Dropping subsources might drop indexes, but then all objects dependent on the index should also be dropped."
                 );
 
                 // Redefine source.
@@ -4419,7 +4503,7 @@ impl Coordinator {
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
-                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
@@ -5011,9 +5095,6 @@ struct CachedStatisticsOracle {
     cache: BTreeMap<GlobalId, usize>,
 }
 
-const OPTIMIZER_MAX_STATS_WAIT: Duration = Duration::from_millis(250);
-const OPTIMIZER_ONESHOT_STATS_WAIT: Duration = Duration::from_millis(10);
-
 impl CachedStatisticsOracle {
     pub async fn new<T: Clone + std::fmt::Debug + timely::PartialOrder + Send + Sync>(
         ids: &BTreeSet<GlobalId>,
@@ -5067,9 +5148,11 @@ impl Coordinator {
 
         let timeout = if is_oneshot {
             // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
-            OPTIMIZER_ONESHOT_STATS_WAIT
+            self.catalog()
+                .system_config()
+                .optimizer_oneshot_stats_timeout()
         } else {
-            OPTIMIZER_MAX_STATS_WAIT
+            self.catalog().system_config().optimizer_stats_timeout()
         };
 
         let cached_stats = mz_ore::future::timeout(
@@ -5081,6 +5164,12 @@ impl Coordinator {
         match cached_stats {
             Ok(stats) => Ok(Box::new(stats)),
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                warn!(
+                    is_oneshot = is_oneshot,
+                    "optimizer statistics collection timed out after {}ms",
+                    timeout.as_millis()
+                );
+
                 Ok(Box::new(EmptyStatisticsOracle))
             }
             Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
@@ -5159,6 +5248,10 @@ impl Coordinator {
                 let (notice, hint) = optimizer_notice.to_string(&humanizer);
                 session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
             }
+            self.metrics
+                .optimization_notices
+                .with_label_values(&[optimizer_notice.metric_label()])
+                .inc_by(1);
         }
     }
 }

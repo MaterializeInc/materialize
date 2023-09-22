@@ -87,10 +87,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use clap::Parser;
-use mz_adapter::catalog::builtin::{BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_ROLES};
-use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::{self as catalog, BootstrapArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -99,7 +98,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
-use mz_storage_client::controller as storage;
+use mz_storage_controller as storage;
 use once_cell::sync::Lazy;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -359,7 +358,7 @@ impl Usage {
     fn names(&self) -> BTreeSet<String> {
         BTreeSet::from_iter(
             match self {
-                Self::Catalog => catalog::ALL_COLLECTIONS,
+                Self::Catalog => mz_catalog::ALL_COLLECTIONS,
                 Self::Storage => storage::ALL_COLLECTIONS,
             }
             .iter()
@@ -469,25 +468,13 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let storage = mz_adapter::catalog::storage::Connection::open(
+        let storage = mz_catalog::Connection::open(
             stash,
             now.clone(),
             &BootstrapArgs {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 bootstrap_role: None,
-                builtin_clusters: BUILTIN_CLUSTERS
-                    .into_iter()
-                    .map(|cluster| (*cluster).into())
-                    .collect(),
-                builtin_cluster_replicas: BUILTIN_CLUSTER_REPLICAS
-                    .into_iter()
-                    .map(|replica| (*replica).into())
-                    .collect(),
-                builtin_roles: BUILTIN_ROLES
-                    .into_iter()
-                    .map(|role| (*role).into())
-                    .collect(),
             },
             None,
         )
@@ -495,7 +482,7 @@ impl Usage {
         let secrets_reader = Arc::new(InMemorySecretsController::new());
 
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage,
+            storage: Box::new(storage),
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,

@@ -15,16 +15,14 @@ from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorPar
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Debezium,
-    Materialized,
-    Postgres,
-    Redpanda,
-)
-from materialize.mzcompose.services import Testdrive as TestdriveService
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
 
 SERVICES = [
     Cockroach(

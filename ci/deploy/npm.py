@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PUBLISH_CRATES = ["mz-sql-lexer"]
+PUBLISH_CRATES = ["mz-sql-lexer-wasm"]
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,8 @@ def build_package(version: Version, crate_path: Path) -> Path:
         package = json.load(package_file)
         # Since all packages are scoped to the MaterializeInc org, names don't need prefixes
         package["name"] = package["name"].replace("/mz-", "/")
+        # Remove any -wasm suffixes.
+        package["name"] = package["name"].removesuffix("-wasm")
         package["version"] = version.node
         package["license"] = "SEE LICENSE IN 'LICENSE'"
         package["repository"] = "github:MaterializeInc/materialize"
@@ -95,7 +97,7 @@ def build_all(
     workspace: cargo.Workspace, version: Version, *, do_release: bool = True
 ) -> None:
     for crate_name in PUBLISH_CRATES:
-        crate_path = workspace.crates[crate_name].path
+        crate_path = workspace.all_crates[crate_name].path
         logger.info("Building %s @ %s", crate_path, version.node)
         package_path = build_package(version, crate_path)
         logger.info("Built %s", crate_path)

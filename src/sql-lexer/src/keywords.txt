@@ -369,6 +369,7 @@ Time
 Timeline
 Timeout
 Timestamp
+TimestampTz
 To
 Token
 Topic

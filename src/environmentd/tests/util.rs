@@ -416,7 +416,7 @@ impl Listeners {
                         },
                         persist_clients,
                         storage_stash_url,
-                        now: SYSTEM_TIME.clone(),
+                        now: config.now.clone(),
                         postgres_factory,
                         metrics_registry: metrics_registry.clone(),
                         persist_pubsub_url: format!(

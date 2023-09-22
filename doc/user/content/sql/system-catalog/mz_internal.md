@@ -147,7 +147,7 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ### `mz_compute_dependencies`
@@ -965,10 +965,10 @@ The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the
 
 ### `mz_expected_group_size_advice`
 
-The `mz_expected_group_size_advice` view provides advice on opportunities to set the `EXPECTED GROUP SIZE`
-[query hint]. This hint is applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns. The
-maintainance of these query patterns is implemented inside an operator scope, called a region, through a
-hierarchical scheme for either aggregation or Top K computations.
+The `mz_expected_group_size_advice` view provides advice on opportunities to set [query hints].
+Query hints are applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns.
+The maintainance of these query patterns is implemented inside an operator scope, called a region,
+through a hierarchical scheme for either aggregation or Top K computations.
 
 <!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
 | Field           | Type                 | Meaning                                                                                                   |
@@ -980,7 +980,7 @@ hierarchical scheme for either aggregation or Top K computations.
 | `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
 | `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
 | `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
-| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy. |
+| `hint`          | [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.                           |
 
 ### `mz_message_counts`
 
@@ -1095,7 +1095,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
-[query hint]: /sql/select/#query-hints
+[query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
