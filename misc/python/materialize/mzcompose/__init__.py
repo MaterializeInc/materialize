@@ -50,12 +50,30 @@ DEFAULT_MZ_VOLUMES = [
 ]
 
 DEFAULT_SYSTEM_PARAMETERS = {
-    "persist_sink_minimum_batch_updates": "128",
-    "enable_multi_worker_storage_persist_sink": "true",
-    "storage_persist_sink_minimum_batch_updates": "100",
+     # From LD staging
+    "persist_reader_lease_duration": "30min",
+    "persist_fast_path_limit": "1000",
+    "enable_connection_validation_syntax": "true",
+    "optimizer_oneshot_stats_timeout": "2000ms",
+    "upsert_rocksdb_auto_spill_to_disk": "true",
+    "upsert_rocksdb_auto_spill_threshold_bytes": "178956970",
+    "storage_shrink_upsert_unused_buffers_by_ratio": "2",
+    "storage_dataflow_delay_sources_past_rehydration": "true",
+    "enable_within_timestamp_order_by_in_subscribe": "true",
+    "upsert_rocksdb_parallelism": "4",
+    "persist_rollup_threshold": "128",
+    "enable_storage_shard_finalization": "true",
     "persist_pubsub_push_diff_enabled": "true",
     "persist_pubsub_client_enabled": "true",
-    "persist_stats_audit_percent": "100",
+    "storage_persist_sink_minimum_batch_updates": "1024",
+    "persist_compaction_minimum_timeout": "90s",
+
+    #"persist_sink_minimum_batch_updates": "128",
+    "enable_multi_worker_storage_persist_sink": "true",
+    ##"storage_persist_sink_minimum_batch_updates": "100",
+    #"persist_pubsub_push_diff_enabled": "true",
+    #"persist_pubsub_client_enabled": "true",
+    #"persist_stats_audit_percent": "100",
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
@@ -63,18 +81,18 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
-    "statement_logging_max_sample_rate": "1.0",
-    "statement_logging_default_sample_rate": "1.0",
-    # This needs to be kept in sync with the --variable-length-row-encoding
-    # flag to testdrive.
+    #"statement_logging_max_sample_rate": "1.0",
+    #"statement_logging_default_sample_rate": "1.0",
+    ## This needs to be kept in sync with the --variable-length-row-encoding
+    ## flag to testdrive.
     "variable_length_row_encoding": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
-    "persist_next_listen_batch_retryer_clamp": "100ms",
-    "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+    #"persist_next_listen_batch_retryer_clamp": "100ms",
+    #"persist_next_listen_batch_retryer_initial_backoff": "1200ms",
     # Advance coverage on some Persist internals changes
-    "persist_streaming_compaction_enabled": "true",
-    "persist_streaming_snapshot_and_fetch_enabled": "true",
+    #"persist_streaming_compaction_enabled": "true",
+    #"persist_streaming_snapshot_and_fetch_enabled": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
