@@ -10,7 +10,7 @@ menu:
     weight: 40
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{% create-source/intro %}}
 Webhook sources expose a public URL that allow your other applications to push data into Materialize.
