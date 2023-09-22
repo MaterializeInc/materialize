@@ -2345,7 +2345,7 @@ generate_extracted_config!(
     CsrConfigOption,
     (AvroKeyFullname, String),
     (AvroValueFullname, String),
-    (NullDefaults, bool)
+    (NullDefaults, bool, Default(false))
 );
 
 fn kafka_sink_builder(
