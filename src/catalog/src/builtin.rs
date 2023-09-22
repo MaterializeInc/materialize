@@ -4702,7 +4702,16 @@ pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sources_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_sources (schema_id)",
+ON mz_catalog.mz_sources (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SOURCES_CID_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sources_cid_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sources_cid_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_sources (cluster_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4720,7 +4729,7 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_materialized_views_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_materialized_views (schema_id)",
+ON mz_catalog.mz_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4729,7 +4738,7 @@ pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_sinks_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_sinks (schema_id)",
+ON mz_catalog.mz_sinks (schema_id)",
     is_retained_metrics_object: false,
 };
 
@@ -4783,7 +4792,7 @@ pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_show_cluster_replicas_ind
 IN CLUSTER mz_introspection
-ON mz_internal.mz_show_cluster_replicas (cluster)",
+ON mz_catalog.mz_cluster_replicas (name)",
     is_retained_metrics_object: false,
 };
 
@@ -4802,6 +4811,15 @@ pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_clusters_ind
 IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_INDEXES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_indexes_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_indexes_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_indexes (id)",
     is_retained_metrics_object: false,
 };
 
@@ -5277,6 +5295,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
         Builtin::Index(&MZ_SHOW_TABLES_IND),
         Builtin::Index(&MZ_SHOW_SOURCES_IND),
+        Builtin::Index(&MZ_SOURCES_CID_IND),
         Builtin::Index(&MZ_SHOW_VIEWS_IND),
         Builtin::Index(&MZ_SHOW_MATERIALIZED_VIEWS_IND),
         Builtin::Index(&MZ_SHOW_SINKS_IND),
@@ -5288,6 +5307,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
         Builtin::Index(&MZ_CLUSTERS_IND),
+        Builtin::Index(&MZ_INDEXES_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),
