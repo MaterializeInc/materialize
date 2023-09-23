@@ -2101,11 +2101,8 @@ impl Catalog {
         }
 
         let default_privileges = catalog.storage().await.get_default_privileges().await?;
-        for (default_privilege_object, default_privilege) in default_privileges {
-            catalog
-                .state
-                .default_privileges
-                .grant(default_privilege_object, default_privilege);
+        for mz_catalog::DefaultPrivilege { object, acl_item } in default_privileges {
+            catalog.state.default_privileges.grant(object, acl_item);
         }
 
         let system_privileges = catalog.storage().await.get_system_privileges().await?;
@@ -2126,7 +2123,12 @@ impl Catalog {
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
         let comments = catalog.storage().await.get_comments().await?;
-        for (object_id, sub_component, comment) in comments {
+        for mz_catalog::Comment {
+            object_id,
+            sub_component,
+            comment,
+        } in comments
+        {
             catalog
                 .state
                 .comments
@@ -2743,7 +2745,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        for (name, value) in system_config {
+        for mz_catalog::SystemConfiguration { name, value } in system_config {
             match self
                 .state
                 .insert_system_configuration(&name, VarInput::Flat(&value))
@@ -3699,7 +3701,14 @@ impl Catalog {
     pub async fn get_all_persisted_timestamps(
         &self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        self.storage().await.get_timestamps().await.err_into()
+        Ok(self
+            .storage()
+            .await
+            .get_timestamps()
+            .await?
+            .into_iter()
+            .map(|mz_catalog::TimelineTimestamp { timeline, ts }| (timeline, ts))
+            .collect())
     }
 
     /// Get the next system replica id without allocating it.

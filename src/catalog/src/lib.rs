@@ -87,14 +87,14 @@ use std::num::NonZeroI64;
 use std::time::Duration;
 
 use mz_proto::TryFromProtoError;
-use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-};
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{DebugStashFactory, StashError};
 
+use crate::objects::Snapshot;
 pub use crate::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Database, Item,
-    ReplicaConfig, ReplicaLocation, Role, Schema, SystemObjectMapping,
+    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
+    Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
+    SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
 use crate::stash::{Connection, DebugOpenableConnection, OpenableConnection};
 pub use crate::stash::{StashConfig, ALL_COLLECTIONS};
@@ -115,7 +115,6 @@ use mz_ore::now::NowFn;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::names::CommentObjectId;
 use mz_storage_types::sources::Timeline;
 
 mod stash;
@@ -273,24 +272,20 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_roles(&mut self) -> Result<Vec<Role>, Error>;
 
     /// Get all default privileges.
-    async fn get_default_privileges(
-        &mut self,
-    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error>;
+    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, Error>;
 
     /// Get all system privileges.
     async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error>;
 
     /// Get all system configurations.
-    async fn get_system_configurations(&mut self) -> Result<BTreeMap<String, String>, Error>;
+    async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error>;
 
     /// Get all comments.
-    async fn get_comments(
-        &mut self,
-    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error>;
+    async fn get_comments(&mut self) -> Result<Vec<Comment>, Error>;
 
     /// Get all timelines and their persisted timestamps.
     // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
-    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error>;
+    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, Error>;
 
     /// Get the persisted timestamp of a timeline.
     // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
@@ -314,6 +309,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_next_user_replica_id(&mut self) -> Result<u64, Error> {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
+
+    /// Get a snapshot of the catalog.
+    async fn snapshot(&mut self) -> Result<Snapshot, Error>;
 
     // TODO(jkosh44) Implement this for the catalog debug tool.
     /*    /// Dumps the entire catalog contents in human readable JSON.
