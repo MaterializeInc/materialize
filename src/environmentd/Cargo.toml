@@ -10,7 +10,10 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
+askama = { version = "0.11.1", default-features = false, features = [
+  "config",
+  "serde-json",
+] }
 async-trait = "0.1.68"
 axum = { version = "0.6.20", features = ["headers", "ws"] }
 base64 = "0.13.1"
@@ -51,6 +54,7 @@ mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
+mz-pgwire-common = { path = "../pgwire-common" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
@@ -68,7 +72,12 @@ openssl-sys = { version = "0.9.80", features = ["vendored"] }
 opentelemetry = { version = "0.20.0", features = ["rt-tokio", "trace"] }
 pin-project = "1.0.12"
 prometheus = { version = "0.13.3", default-features = false }
-rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka-sys = { version = "4.3.0", features = [
+  "cmake-build",
+  "ssl-vendored",
+  "libz-static",
+  "zstd",
+] }
 rand = "0.8.5"
 reqwest = { version = "0.11.13", features = ["json"] }
 rlimit = "0.8.3"
@@ -77,7 +86,6 @@ sentry-tracing = "0.29.1"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 shell-words = "1.1.0"
-socket2 = "0.4.7"
 sysctl = "0.5.4"
 tempfile = "3.2.0"
 thiserror = "1.0.37"
@@ -112,13 +120,15 @@ postgres-openssl = { version = "0.5.0" }
 postgres-protocol = { version = "0.6.5" }
 postgres_array = { version = "0.11.0" }
 predicates = "2.1.4"
-proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 regex = "1.7.0"
 reqwest = { version = "0.11.13", features = ["blocking"] }
 serde_json = "1.0.89"
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.4"
-timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+timely = { version = "0.12.0", default-features = false, features = [
+  "bincode",
+] }
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
@@ -136,7 +146,10 @@ default = ["jemalloc"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
-tokio-console = ["mz-ore/tokio-console", "mz-orchestrator-tracing/tokio-console"]
+tokio-console = [
+  "mz-ore/tokio-console",
+  "mz-orchestrator-tracing/tokio-console",
+]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.

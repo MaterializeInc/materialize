@@ -14,6 +14,7 @@ use std::{io, str};
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_ore::cast::ReinterpretCast;
+use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
@@ -28,7 +29,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use crate::types::{UINT2, UINT4, UINT8};
-use crate::{Format, Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
+use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
 
 pub mod interval;
 pub mod jsonb;

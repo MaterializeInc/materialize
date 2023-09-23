@@ -75,68 +75,25 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-mod app_password;
-mod auth;
-mod client;
-mod error;
+//! Common PostgreSQL network ("wire") protocol logic.
 
-pub use auth::{
-    Authentication, AuthenticationConfig, Claims, ValidatedApiTokenResponse, REFRESH_SUFFIX,
+#![warn(clippy::as_conversions)]
+#![warn(unused_extern_crates)]
+
+mod codec;
+mod conn;
+mod format;
+mod message;
+mod severity;
+
+pub use codec::{
+    decode_startup, input_err, parse_frame_len, Cursor, DecodeState, ACCEPT_SSL_ENCRYPTION,
+    MAX_REQUEST_SIZE, REJECT_ENCRYPTION,
 };
-pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
-pub use client::Client;
-pub use error::Error;
-use jsonwebtoken::DecodingKey;
-use uuid::Uuid;
-
-pub use crate::app_password::{AppPassword, AppPasswordParseError};
-
-/// Command line arguments for frontegg.
-#[derive(Debug, Clone, clap::Parser)]
-pub struct FronteggCliArgs {
-    /// Enables Frontegg authentication for the specified tenant ID.
-    #[clap(
-        long,
-        env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
-        value_name = "UUID",
-    )]
-    frontegg_tenant: Option<Uuid>,
-    /// JWK used to validate JWTs during Frontegg authentication as a PEM public
-    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant")]
-    frontegg_jwk: Option<String>,
-    /// The full URL (including path) to the Frontegg api-token endpoint.
-    #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
-    frontegg_api_token_url: Option<String>,
-    /// The name of the admin role in Frontegg.
-    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
-    frontegg_admin_role: Option<String>,
-}
-
-impl FronteggCliArgs {
-    pub fn into_auth(self) -> Result<Option<Authentication>, Error> {
-        match (
-            self.frontegg_tenant,
-            self.frontegg_api_token_url,
-            self.frontegg_jwk,
-            self.frontegg_admin_role,
-        ) {
-            (None, None, None, None) => Ok(None),
-            (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
-                Ok(Some(Authentication::new(
-                    AuthenticationConfig {
-                        admin_api_token_url,
-                        decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                        tenant_id,
-                        now: mz_ore::now::SYSTEM_TIME.clone(),
-                        refresh_before_secs: 60,
-                        admin_role,
-                    },
-                    Client::environmentd_default(),
-                )))
-            }
-            _ => unreachable!("clap enforced"),
-        }
-    }
-}
+pub use conn::Conn;
+pub use format::Format;
+pub use message::{
+    ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSIONS, VERSION_3, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL,
+};
+pub use severity::Severity;

@@ -85,7 +85,6 @@ use std::collections::BTreeMap;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -102,6 +101,7 @@ use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_ore::server::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
@@ -109,16 +109,13 @@ use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
-use crate::server::{ConnectionStream, ListenerHandle};
 
 pub mod http;
-mod server;
 mod telemetry;
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
@@ -141,7 +138,7 @@ pub struct Config {
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
     /// TLS encryption and authentication configuration.
-    pub tls: Option<TlsConfig>,
+    pub tls: Option<TlsCertConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
     /// Number of concurrent requests accepted for webhooks, `None` indicates a default limit.
@@ -221,15 +218,6 @@ pub struct Config {
     pub now: NowFn,
 }
 
-/// Configures TLS encryption for connections.
-#[derive(Debug, Clone)]
-pub struct TlsConfig {
-    /// The path to the TLS certificate.
-    pub cert: PathBuf,
-    /// The path to the TLS key.
-    pub key: PathBuf,
-}
-
 /// Configuration for network listeners.
 pub struct ListenersConfig {
     /// The IP address and port to listen for pgwire connections on.
@@ -272,10 +260,10 @@ impl Listeners {
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, anyhow::Error> {
-        let sql = server::listen(sql_listen_addr).await?;
-        let http = server::listen(http_listen_addr).await?;
-        let internal_sql = server::listen(internal_sql_listen_addr).await?;
-        let internal_http = server::listen(internal_http_listen_addr).await?;
+        let sql = mz_ore::server::listen(sql_listen_addr).await?;
+        let http = mz_ore::server::listen(http_listen_addr).await?;
+        let internal_sql = mz_ore::server::listen(internal_sql_listen_addr).await?;
+        let internal_http = mz_ore::server::listen(internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
@@ -316,21 +304,10 @@ impl Listeners {
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
-                let context = {
-                    // Mozilla publishes three presets: old, intermediate, and modern. They
-                    // recommend the intermediate preset for general purpose servers, which
-                    // is what we use, as it is compatible with nearly every client released
-                    // in the last five years but does not include any known-problematic
-                    // ciphers. We once tried to use the modern preset, but it was
-                    // incompatible with Fivetran, and presumably other JDBC-based tools.
-                    let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-                    builder.set_certificate_chain_file(&tls_config.cert)?;
-                    builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
-                    builder.build().into_context()
-                };
-                let pgwire_tls = mz_pgwire::TlsConfig {
+                let context = tls_config.context()?;
+                let pgwire_tls = mz_ore::server::TlsConfig {
                     context: context.clone(),
-                    mode: mz_pgwire::TlsMode::Require,
+                    mode: mz_ore::server::TlsMode::Require,
                 };
                 let http_tls = http::TlsConfig {
                     context,
@@ -360,7 +337,7 @@ impl Listeners {
                 promote_leader: promote_leader_tx,
                 ready_to_promote: ready_to_promote_rx,
             });
-            server::serve(internal_http_conns, internal_http_server)
+            mz_ore::server::serve(internal_http_conns, internal_http_server)
         });
 
         'leader_promotion: {
@@ -537,7 +514,7 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            server::serve(sql_conns, sql_server)
+            mz_ore::server::serve(sql_conns, sql_server)
         });
 
         // Launch internal SQL server.
@@ -550,7 +527,7 @@ impl Listeners {
                     //
                     // TODO(benesch): migrate all internal applications to TLS and
                     // remove `TlsMode::Allow`.
-                    pgwire_tls.mode = mz_pgwire::TlsMode::Allow;
+                    pgwire_tls.mode = mz_ore::server::TlsMode::Allow;
                     pgwire_tls
                 }),
                 adapter_client: adapter_client.clone(),
@@ -559,7 +536,7 @@ impl Listeners {
                 internal: true,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            server::serve(internal_sql_conns, internal_sql_server)
+            mz_ore::server::serve(internal_sql_conns, internal_sql_server)
         });
 
         // Launch HTTP server.
@@ -576,7 +553,7 @@ impl Listeners {
                     .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics,
             });
-            server::serve(http_conns, http_server)
+            mz_ore::server::serve(http_conns, http_server)
         });
 
         // Start telemetry reporting loop.

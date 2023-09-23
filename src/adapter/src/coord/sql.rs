@@ -73,7 +73,7 @@ impl Coordinator {
             .collect::<Vec<_>>();
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
         let params = params.datums.into_iter().zip(params.types).collect();
-        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let redacted_sql = stmt.to_ast_string_redacted();
         let logging = session.mint_logging(sql, redacted_sql, now);
         session.set_portal(
