@@ -34,13 +34,6 @@ USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
-# The DevEx account in the Confluent Cloud is used to provide Kafka services
-KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
-SCHEMA_REGISTRY_ENDPOINT = "https://psrc-8kz20.us-east-2.aws.confluent.cloud"
-# The actual values are stored in the i2 repository
-CONFLUENT_API_KEY = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME"]
-CONFLUENT_API_SECRET = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD"]
-
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(
@@ -112,7 +105,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Test - `mz app-password`
         # Assert `mz app-password create`
         new_app_password_name = "Materialize CLI (mz) - Nightlies"
-        output = c.run("mz", "app-password", "create", new_app_password_name, capture=True)
+        output = c.run(
+            "mz", "app-password", "create", new_app_password_name, capture=True
+        )
         assert "mzp_" in output.stdout
 
         # Assert `mz app-password list`
@@ -121,14 +116,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # // Test - `mz secrets`
         secret = "decode('c2VjcmV0Cg==', 'base64')"
-        output = c.run("mz", "secret", "create", "CI_SECRET", stdin=secret, capture=True)
+        output = c.run(
+            "mz", "secret", "create", "CI_SECRET", stdin=secret, capture=True
+        )
         assert output.returncode == 0
 
-        output = c.run("mz", "sql", "--", "-q", "-c", "\"SHOW SECRETS;\"", capture=True)
+        output = c.run("mz", "sql", "--", "-q", "-c", '"SHOW SECRETS;"', capture=True)
         assert "CI_SECRET" in output.stdout
 
         # Assert using force
-        output = c.run("mz", "secret", "create", "CI_SECRET", "force", stdin=secret, capture=True)
+        output = c.run(
+            "mz", "secret", "create", "CI_SECRET", "force", stdin=secret, capture=True
+        )
         assert output.returncode == 0
 
         # Test - `mz user`
@@ -154,7 +153,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Enable, disable and show are already tested.
         output = c.run("mz", "region", "list", capture=True)
         us_east_1_line = output.stdout.split("\n")[3]
-        assert "aws/us-east-1" in us_east_1_line
+        assert REGION in us_east_1_line
         assert "enabled" in us_east_1_line
 
         # TODO: TEST using CSV and JSON.
