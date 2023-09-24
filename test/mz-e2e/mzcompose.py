@@ -30,8 +30,8 @@ from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
-USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com")
-APP_PASSWORD = os.environ["NIGHTLY_CANARY_APP_PASSWORD"]
+USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+bot@materialize.com")
+APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
