@@ -222,21 +222,11 @@ where
 }
 
 impl<T: 'static> PlanTrace<T> {
-    /// Create a new trace for plans of type `T`.
-    pub fn new() -> Self {
-        Self {
-            find: None,
-            path: Mutex::new(String::with_capacity(256)),
-            times: Mutex::new(vec![]),
-            entries: Mutex::new(vec![]),
-        }
-    }
-
     /// Create a new trace for plans of type `T` that will only accumulate
     /// [`TraceEntry`] instances along the prefix of the given `path`.
-    pub fn find(path: &'static str) -> Self {
+    pub fn new(path: Option<&'static str>) -> Self {
         Self {
-            find: Some(path),
+            find: path,
             path: Mutex::new(String::with_capacity(256)),
             times: Mutex::new(vec![]),
             entries: Mutex::new(vec![]),
@@ -412,7 +402,7 @@ mod test {
 
     #[mz_ore::test]
     fn test_optimizer_trace() {
-        let subscriber = tracing_subscriber::registry().with(Some(PlanTrace::<String>::new()));
+        let subscriber = tracing_subscriber::registry().with(Some(PlanTrace::<String>::new(None)));
         let dispatch = dispatcher::Dispatch::new(subscriber);
 
         dispatcher::with_default(&dispatch, || {

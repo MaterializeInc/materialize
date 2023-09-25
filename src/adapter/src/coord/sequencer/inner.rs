@@ -3045,10 +3045,9 @@ impl Coordinator {
             unreachable!()
         };
 
-        let optimizer_trace = match stage {
-            ExplainStage::Trace => OptimizerTrace::new(broken), // collect all trace entries
-            stage => OptimizerTrace::find(broken, stage.path()), // collect a trace entry only the selected stage
-        };
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
 
         let pipeline_result = {
             self.explain_query_optimizer_pipeline(
@@ -3091,10 +3090,10 @@ impl Coordinator {
             dataflow_metainfo,
         )?;
 
-        let rows = match stage {
-            ExplainStage::Trace => {
-                // For the `Trace` (pseudo-)stage, return the entire trace as (time,
-                // path, plan) triples.
+        let rows = match stage.path() {
+            None => {
+                // For the `Trace` (pseudo-)stage, return the entire trace as
+                // triples of (time, path, plan) values.
                 let rows = trace
                     .into_iter()
                     .map(|entry| {
@@ -3110,17 +3109,16 @@ impl Coordinator {
                     .collect();
                 rows
             }
-            stage => {
+            Some(path) => {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
                 let row = trace
                     .into_iter()
-                    .find(|entry| entry.path == stage.path())
+                    .find(|entry| entry.path == path)
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
                         AdapterError::Internal(format!(
-                            "stage `{}` not present in the collected optimizer trace",
-                            stage.path(),
+                            "stage `{path}` not present in the collected optimizer trace",
                         ))
                     })?;
                 vec![row]

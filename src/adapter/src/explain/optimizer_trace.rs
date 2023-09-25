@@ -45,67 +45,37 @@ pub(crate) struct OptimizerTrace(dispatcher::Dispatch);
 
 impl OptimizerTrace {
     /// Create a new [`OptimizerTrace`].
-    pub fn new(broken: bool) -> OptimizerTrace {
+    ///
+    /// The instance will will only accumulate [`TraceEntry`] instances along
+    /// the prefix of the given `path` if `path` is present, or it will
+    /// accumulate all [`TraceEntry`] instances otherwise.
+    pub fn new(broken: bool, path: Option<&'static str>) -> OptimizerTrace {
         if broken {
             let subscriber = DelegateSubscriber::default()
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purpuses.
-                .with(PlanTrace::<String>::new())
-                .with(PlanTrace::<HirScalarExpr>::new())
-                .with(PlanTrace::<MirScalarExpr>::new())
+                .with(PlanTrace::<String>::new(path))
+                .with(PlanTrace::<HirScalarExpr>::new(path))
+                .with(PlanTrace::<MirScalarExpr>::new(path))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new())
-                .with(PlanTrace::<MirRelationExpr>::new())
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new())
-                .with(PlanTrace::<DataflowDescription<Plan>>::new());
+                .with(PlanTrace::<HirRelationExpr>::new(path))
+                .with(PlanTrace::<MirRelationExpr>::new(path))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
             let subscriber = tracing_subscriber::registry()
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purpuses.
-                .with(PlanTrace::<String>::new())
-                .with(PlanTrace::<HirScalarExpr>::new())
-                .with(PlanTrace::<MirScalarExpr>::new())
+                .with(PlanTrace::<String>::new(path))
+                .with(PlanTrace::<HirScalarExpr>::new(path))
+                .with(PlanTrace::<MirScalarExpr>::new(path))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new())
-                .with(PlanTrace::<MirRelationExpr>::new())
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new())
-                .with(PlanTrace::<DataflowDescription<Plan>>::new());
-
-            OptimizerTrace(dispatcher::Dispatch::new(subscriber))
-        }
-    }
-
-    /// Create a new [`OptimizerTrace`] that will only accumulate [`TraceEntry`]
-    /// instances along the prefix of the given `path`.
-    pub fn find(broken: bool, path: &'static str) -> OptimizerTrace {
-        if broken {
-            let subscriber = DelegateSubscriber::default()
-                // Collect `explain_plan` types that are not used in the regular explain
-                // path, but are useful when instrumenting code for debugging purpuses.
-                .with(PlanTrace::<String>::find(path))
-                .with(PlanTrace::<HirScalarExpr>::find(path))
-                .with(PlanTrace::<MirScalarExpr>::find(path))
-                // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::find(path))
-                .with(PlanTrace::<MirRelationExpr>::find(path))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::find(path))
-                .with(PlanTrace::<DataflowDescription<Plan>>::find(path));
-
-            OptimizerTrace(dispatcher::Dispatch::new(subscriber))
-        } else {
-            let subscriber = tracing_subscriber::registry()
-                // Collect `explain_plan` types that are not used in the regular explain
-                // path, but are useful when instrumenting code for debugging purpuses.
-                .with(PlanTrace::<String>::find(path))
-                .with(PlanTrace::<HirScalarExpr>::find(path))
-                .with(PlanTrace::<MirScalarExpr>::find(path))
-                // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::find(path))
-                .with(PlanTrace::<MirRelationExpr>::find(path))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::find(path))
-                .with(PlanTrace::<DataflowDescription<Plan>>::find(path));
+                .with(PlanTrace::<HirRelationExpr>::new(path))
+                .with(PlanTrace::<MirRelationExpr>::new(path))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         }
@@ -215,8 +185,8 @@ impl OptimizerTrace {
                         Some(fast_path_plan)
                             if !context.config.no_fast_path && {
                                 [
-                                    ExplainStage::OptimizedPlan.path(),
-                                    ExplainStage::PhysicalPlan.path(),
+                                    ExplainStage::OptimizedPlan.path().expect("path"),
+                                    ExplainStage::PhysicalPlan.path().expect("path"),
                                 ]
                                 .contains(&entry.path.as_str())
                             } =>
