@@ -9,6 +9,8 @@
 
 * Support cancelling outstanding queries when pressing Ctrl+C.
 
+* Allow `cluster` configuration for `dbt test`.
+
 ## 1.5.1 - 2023-07-24
 
 * Enable the `indexes` config for `table` materializations.
