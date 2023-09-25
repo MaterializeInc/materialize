@@ -711,6 +711,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             sink_description,
                         ));
                     }
+
+                    // Continue with other commands.
+                    return;
                 }
 
                 if !self
