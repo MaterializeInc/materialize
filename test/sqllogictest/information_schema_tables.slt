@@ -317,6 +317,10 @@ mz_comments
 BASE TABLE
 materialize
 mz_internal
+mz_compute_delays_average
+SOURCE
+materialize
+mz_internal
 mz_compute_delays_histogram
 VIEW
 materialize
