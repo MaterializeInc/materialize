@@ -102,7 +102,7 @@ create the following subsources:
     -------------|------------------------------|------------
     `id`         | [`bigint`]                   | A unique identifier for the bid.
     `buyer`      | [`bigint`]                   | The identifier vof the user placing the bid. References `users.id`.
-    `auction_id` | [`text`]                     | The identifier of the auction in which the bid is placed. References `auctions.id`.
+    `auction_id` | [`bigint`]                   | The identifier of the auction in which the bid is placed. References `auctions.id`.
     `amount`     | [`bigint`]                   | The bid amount in dollars.
     `bid_time`   | [`timestamp with time zone`] | The time at which the bid was placed.
 
