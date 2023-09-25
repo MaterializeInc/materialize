@@ -131,6 +131,8 @@ pub struct PersistConfig {
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
     pub consensus_connection_pool_max_size: usize,
+    /// The maximum time to wait when attempting to obtain a connection from the pool.
+    pub consensus_connection_pool_max_wait: Option<Duration>,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -213,6 +215,7 @@ impl PersistConfig {
             compaction_queue_size: 20,
             compaction_yield_after_n_updates: 100_000,
             consensus_connection_pool_max_size: 50,
+            consensus_connection_pool_max_wait: Some(Duration::from_secs(60)),
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
@@ -352,6 +355,10 @@ impl PersistConfig {
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
         self.consensus_connection_pool_max_size
+    }
+
+    fn connection_pool_max_wait(&self) -> Option<Duration> {
+        self.consensus_connection_pool_max_wait
     }
 
     fn connection_pool_ttl(&self) -> Duration {

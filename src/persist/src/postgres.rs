@@ -138,6 +138,11 @@ impl PostgresConsensusConfig {
             fn connection_pool_max_size(&self) -> usize {
                 2
             }
+
+            fn connection_pool_max_wait(&self) -> Option<Duration> {
+                None
+            }
+
             fn connection_pool_ttl(&self) -> Duration {
                 Duration::MAX
             }
