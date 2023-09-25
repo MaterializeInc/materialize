@@ -77,6 +77,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level};
+use tracing_core::callsite::rebuild_interest_cache;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
@@ -3044,10 +3045,9 @@ impl Coordinator {
             unreachable!()
         };
 
-        let optimizer_trace = match stage {
-            ExplainStage::Trace => OptimizerTrace::new(), // collect all trace entries
-            stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
-        };
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
 
         let pipeline_result = {
             self.explain_query_optimizer_pipeline(
@@ -3090,10 +3090,10 @@ impl Coordinator {
             dataflow_metainfo,
         )?;
 
-        let rows = match stage {
-            ExplainStage::Trace => {
-                // For the `Trace` (pseudo-)stage, return the entire trace as (time,
-                // path, plan) triples.
+        let rows = match stage.path() {
+            None => {
+                // For the `Trace` (pseudo-)stage, return the entire trace as
+                // triples of (time, path, plan) values.
                 let rows = trace
                     .into_iter()
                     .map(|entry| {
@@ -3109,36 +3109,43 @@ impl Coordinator {
                     .collect();
                 rows
             }
-            stage => {
+            Some(path) => {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
                 let row = trace
                     .into_iter()
-                    .find(|entry| entry.path == stage.path())
+                    .find(|entry| entry.path == path)
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
                         AdapterError::Internal(format!(
-                            "stage `{}` not present in the collected optimizer trace",
-                            stage.path(),
+                            "stage `{path}` not present in the collected optimizer trace",
                         ))
                     })?;
                 vec![row]
             }
         };
 
+        if broken {
+            rebuild_interest_cache();
+        }
+
         Ok(Self::send_immediate_rows(rows))
     }
 
-    #[tracing::instrument(level = "info", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
-        no_errors: bool,
+        broken: bool,
         target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
     ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
         use mz_repr::explain::trace_plan;
+
+        if broken {
+            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
+        }
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
         /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
@@ -3171,12 +3178,12 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(Level::INFO, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
         // Execute the `optimize/hir_to_mir` stage.
-        let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
+        let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
             raw_plan.optimize_and_lower(&OptimizerConfig {})
         })?;
 
@@ -3197,13 +3204,13 @@ impl Coordinator {
             .sufficient_collections(&source_ids);
 
         // Execute the `optimize/local` stage.
-        let optimized_plan = catch_unwind(no_errors, "local", || {
-            tracing::span!(Level::INFO, "local").in_scope(|| -> Result<_, AdapterError> {
+        let optimized_plan = catch_unwind(broken, "local", || {
+            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
                 if let Ok(ref optimized_plan) = optimized_plan {
                     trace_plan(optimized_plan.as_inner());
                 }
-                optimized_plan.map_err(Into::into)
+                optimized_plan.map_err(AdapterError::from)
             })
         })?;
 
@@ -3243,7 +3250,7 @@ impl Coordinator {
             .await?;
 
         // Execute the `optimize/global` stage.
-        let dataflow_metainfo = catch_unwind(no_errors, "global", || {
+        let dataflow_metainfo = catch_unwind(broken, "global", || {
             mz_transform::optimize_dataflow(
                 &mut dataflow,
                 &self.index_oracle(cluster_id),
@@ -3292,7 +3299,7 @@ impl Coordinator {
         }
 
         // Execute the `optimize/finalize_dataflow` stage.
-        let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
+        let dataflow_plan = catch_unwind(broken, "finalize_dataflow", || {
             self.finalize_dataflow(dataflow, cluster_id)
         })?;
 

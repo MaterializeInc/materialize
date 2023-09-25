@@ -327,6 +327,10 @@ pub fn plan_explain_plan(
                 Some(finishing)
             };
 
+            if broken {
+                scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
+            }
+
             crate::plan::Explainee::Query {
                 raw_plan,
                 row_set_finishing,
