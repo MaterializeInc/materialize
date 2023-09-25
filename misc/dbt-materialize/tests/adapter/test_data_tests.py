@@ -77,7 +77,6 @@ class TestDataTestCluster:
 
     def test_store_failures_cluster(self, project):
         project.run_sql("CREATE CLUSTER not_default_test REPLICAS (r1 (SIZE '1'))")
-        project.run_sql("CREATE SCHEMA etl_failure")
 
         # run models
         results = run_dbt(["run"])
