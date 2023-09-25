@@ -390,13 +390,10 @@ fn build_row_schema_fields(
         let field_type =
             build_row_schema_field_type(type_namer, custom_names, typ, set_null_defaults);
 
-        let is_nullable_union = field_type.is_array();
-        if is_nullable_union {
-            // currently the only supported union types are nullable ones
-            let array = field_type.as_array().unwrap();
-            mz_ore::soft_assert!(array.len() == 2);
-            mz_ore::soft_assert!(array.first().is_some_and(|v| v == &json!("null")));
-        }
+        // It's a nullable union if the type is an array and the first option is "null"
+        let is_nullable_union = field_type
+            .as_array()
+            .is_some_and(|array| array.first().is_some_and(|first| first == &json!("null")));
 
         if set_null_defaults && is_nullable_union {
             fields.push(json!({
