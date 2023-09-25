@@ -31,7 +31,7 @@ pub trait PopFront {
 /// Helper methods for collections that support `back` and `pop_back`, or
 /// similar methods (e.g. `last` and `pop` for `Vec`).
 pub trait PopBack {
-    // The item contained by the collection.
+    /// The item contained by the collection.
     type Item;
     /// Call a supplied function on each element at the
     /// back of the collection in turn, removing it if the
