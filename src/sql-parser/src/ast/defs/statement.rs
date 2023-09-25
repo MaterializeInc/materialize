@@ -2161,29 +2161,45 @@ impl_display!(AlterConnectionStatement);
 pub struct AlterRoleStatement<T: AstInfo> {
     /// The specified role.
     pub name: T::RoleName,
-    /// Any options that were attached, in the order they were presented.
-    pub options: Vec<RoleAttribute>,
-    /// A variable that we want to provide a default value for this role.
-    pub variable: Option<SetRoleVar>,
+    /// Alterations we're making to the role.
+    pub option: AlterRoleOption,
 }
 
 impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ROLE ");
         f.write_node(&self.name);
-
-        for option in &self.options {
-            f.write_str(" ");
-            option.fmt(f)
-        }
-
-        if let Some(variable) = &self.variable {
-            f.write_str(" ");
-            f.write_node(variable);
-        }
+        f.write_node(&self.option);
     }
 }
 impl_display_t!(AlterRoleStatement);
+
+/// `ALTER ROLE ... [ WITH | SET ] ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterRoleOption {
+    /// Any options that were attached, in the order they were presented.
+    Attributes(Vec<RoleAttribute>),
+    /// A variable that we want to provide a default value for this role.
+    Variable(SetRoleVar),
+}
+
+impl AstDisplay for AlterRoleOption {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AlterRoleOption::Attributes(attrs) => {
+                for attr in attrs {
+                    f.write_str(" ");
+                    attr.fmt(f)
+                }
+            }
+            AlterRoleOption::Variable(var) => {
+                f.write_str(" ");
+                f.write_node(var);
+            }
+        }
+    }
+}
+impl_display!(AlterRoleOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {

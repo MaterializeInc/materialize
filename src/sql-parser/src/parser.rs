@@ -4737,34 +4737,28 @@ impl<'a> Parser<'a> {
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
 
-        let (options, variable) = match self.parse_one_of_keywords(&[SET, RESET, WITH]) {
+        let option = match self.parse_one_of_keywords(&[SET, RESET, WITH]) {
             Some(SET) => {
                 let name = self.parse_identifier()?;
                 self.expect_keyword_or_token(TO, &Token::Eq)?;
                 let value = self.parse_set_variable_to()?;
                 let var = SetRoleVar::Set { name, value };
-
-                (vec![], Some(var))
+                AlterRoleOption::Variable(var)
             }
             Some(RESET) => {
                 let name = self.parse_identifier()?;
                 let var = SetRoleVar::Reset { name };
-
-                (vec![], Some(var))
+                AlterRoleOption::Variable(var)
             }
             Some(WITH) | None => {
                 let _ = self.parse_keyword(WITH);
-                let options = self.parse_role_attributes();
-                (options, None)
+                let attrs = self.parse_role_attributes();
+                AlterRoleOption::Attributes(attrs)
             }
             Some(k) => unreachable!("unmatched keyword: {k}"),
         };
 
-        Ok(Statement::AlterRole(AlterRoleStatement {
-            name,
-            options,
-            variable,
-        }))
+        Ok(Statement::AlterRole(AlterRoleStatement { name, option }))
     }
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {

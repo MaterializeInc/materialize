@@ -18,21 +18,21 @@ ALTER ROLE arjun
 ----
 ALTER ROLE arjun
 =>
-AlterRole(AlterRoleStatement { name: Ident("arjun"), options: [], variable: None })
+AlterRole(AlterRoleStatement { name: Ident("arjun"), option: Attributes([]) })
 
 parse-statement
 ALTER ROLE frank SUPERUSER
 ----
 ALTER ROLE frank SUPERUSER
 =>
-AlterRole(AlterRoleStatement { name: Ident("frank"), options: [SuperUser], variable: None })
+AlterRole(AlterRoleStatement { name: Ident("frank"), option: Attributes([SuperUser]) })
 
 parse-statement
 ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
 ----
 ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
 =>
-AlterRole(AlterRoleStatement { name: Ident("other_usr"), options: [Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole], variable: None })
+AlterRole(AlterRoleStatement { name: Ident("other_usr"), option: Attributes([Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole]) })
 
 parse-statement
 ALTER ROLE bad.qualification
@@ -46,7 +46,7 @@ ALTER ROLE usr WITH LOGIN
 ----
 ALTER ROLE usr LOGIN
 =>
-AlterRole(AlterRoleStatement { name: Ident("usr"), options: [Login], variable: None })
+AlterRole(AlterRoleStatement { name: Ident("usr"), option: Attributes([Login]) })
 
 parse-statement
 ALTER ROLE usr WITH badopt
@@ -60,11 +60,11 @@ ALTER ROLE parker SET cluster TO my_cluster
 ----
 ALTER ROLE parker SET cluster = my_cluster
 =>
-AlterRole(AlterRoleStatement { name: Ident("parker"), options: [], variable: Some(Set { name: Ident("cluster"), value: Values([Ident(Ident("my_cluster"))]) }) })
+AlterRole(AlterRoleStatement { name: Ident("parker"), option: Variable(Set { name: Ident("cluster"), value: Values([Ident(Ident("my_cluster"))]) }) })
 
 parse-statement
 ALTER ROLE parker RESET cluster
 ----
 ALTER ROLE parker RESET cluster
 =>
-AlterRole(AlterRoleStatement { name: Ident("parker"), options: [], variable: Some(Reset { name: Ident("cluster") }) })
+AlterRole(AlterRoleStatement { name: Ident("parker"), option: Variable(Reset { name: Ident("cluster") }) })

@@ -94,7 +94,7 @@ pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
-pub use statement::ddl::PlannedRoleAttributes;
+pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
@@ -978,7 +978,7 @@ pub struct AlterSystemResetAllPlan {}
 pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
-    pub attributes: PlannedRoleAttributes,
+    pub option: PlannedAlterRoleOption,
 }
 
 #[derive(Debug)]
