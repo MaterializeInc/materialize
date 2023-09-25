@@ -773,6 +773,12 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
 
+<!-- mz_internal.mz_compute_delays_average is undocumented because it's just just a prototype,
+     so we are highly likely to change it.
+     Currently, it reports the frontier delay of an export relative to the minimum
+     frontier across all its imports, averaged over the last ten seconds. -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_average -->
+
 ### `mz_compute_delays_histogram`
 
 The `mz_compute_delays_histogram` view describes a histogram of the wall-clock delay in nanoseconds between observations of import frontier advancements of a [dataflow] and the advancements of the corresponding export frontiers.

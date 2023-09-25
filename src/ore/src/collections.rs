@@ -21,8 +21,10 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 
 mod hash;
+mod pop;
 
 pub use crate::collections::hash::{HashMap, HashSet};
+pub use crate::collections::pop::{PopBack, PopFront};
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>: Sized

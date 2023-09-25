@@ -1474,6 +1474,12 @@ pub const MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::BatchesReceived),
 };
 
+pub const MZ_COMPUTE_DELAYS_AVERAGE: BuiltinLog = BuiltinLog {
+    name: "mz_compute_delays_average",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::FrontierDelayAvg),
+};
+
 pub const MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_batch_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5078,6 +5084,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
+        Builtin::Log(&MZ_COMPUTE_DELAYS_AVERAGE),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),

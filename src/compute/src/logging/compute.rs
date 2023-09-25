@@ -17,9 +17,11 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::Count;
 use differential_dataflow::trace::TraceReader;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::PopFront;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
@@ -180,6 +182,7 @@ pub(super) fn construct<A: Allocate + 'static>(
         let (mut arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
         let (mut arrangement_heap_allocations_out, arrangement_heap_allocations) =
             demux.new_output();
+        let (mut aggregated_frontier_delay_out, aggregated_frontier_delay) = demux.new_output();
 
         let mut demux_state = DemuxState::new(worker2);
         let mut demux_buffer = Vec::new();
@@ -195,6 +198,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
+                let mut aggregated_frontier_delay = aggregated_frontier_delay_out.activate();
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
@@ -210,6 +214,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         arrangement_heap_size: arrangement_heap_size.session(&cap),
                         arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
                         arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
+                        aggregated_frontier_delay: aggregated_frontier_delay.session(&cap),
                     };
 
                     for (time, logger_id, event) in demux_buffer.drain(..) {
@@ -302,6 +307,17 @@ pub(super) fn construct<A: Allocate + 'static>(
             .as_collection()
             .map(arrangement_heap_datum_to_row);
 
+        // NB[btv]: AFAIK there is no strong reason to give a custom name to the count operator here.
+        #[allow(clippy::disallowed_methods)]
+        let frontier_delay_avg = aggregated_frontier_delay.as_collection().count_core().map(
+            |(export_id, (delay_ns, n))| {
+                Row::pack_slice(&[
+                    Datum::String(&export_id.to_string()),
+                    Datum::UInt64((delay_ns / n).try_into().expect("delay too big")),
+                ])
+            },
+        );
+
         use ComputeLog::*;
         let logs = [
             (DataflowCurrent, dataflow_current),
@@ -314,6 +330,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             (ArrangementHeapSize, arrangement_heap_size),
             (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapAllocations, arrangement_heap_allocations),
+            (FrontierDelayAvg, frontier_delay_avg),
         ];
 
         // Build the output arrangements.
@@ -363,6 +380,7 @@ struct DemuxState<A: Allocate> {
     export_dataflows: BTreeMap<GlobalId, usize>,
     /// Maps dataflow exports to their imports and frontier delay tracking state.
     export_imports: BTreeMap<GlobalId, BTreeMap<GlobalId, FrontierDelayState>>,
+    aggregated_frontiers: BTreeMap<GlobalId, VecDeque<(Timestamp, Duration)>>,
     /// Maps live dataflows to counts of their exports.
     dataflow_export_counts: BTreeMap<usize, u32>,
     /// Maps dropped dataflows to their drop time.
@@ -386,6 +404,7 @@ impl<A: Allocate> DemuxState<A> {
             shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
+            aggregated_frontiers: Default::default(),
         }
     }
 }
@@ -401,9 +420,10 @@ struct FrontierDelayState {
     delay_map: BTreeMap<u128, i64>,
 }
 
-type Update<D> = (D, Timestamp, Diff);
-type Pusher<D> = Counter<Timestamp, Update<D>, Tee<Timestamp, Update<D>>>;
-type OutputSession<'a, D> = Session<'a, Timestamp, Vec<Update<D>>, Pusher<D>>;
+type Update<D, R> = (D, Timestamp, R);
+type Pusher<D, R> = Counter<Timestamp, Update<D, R>, Tee<Timestamp, Update<D, R>>>;
+type DiffOutputSession<'a, D, R> = Session<'a, Timestamp, Vec<Update<D, R>>, Pusher<D, R>>;
+type OutputSession<'a, D> = DiffOutputSession<'a, D, Diff>;
 
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
@@ -411,6 +431,7 @@ struct DemuxOutput<'a> {
     frontier: OutputSession<'a, FrontierDatum>,
     import_frontier: OutputSession<'a, ImportFrontierDatum>,
     frontier_delay: OutputSession<'a, FrontierDelayDatum>,
+    aggregated_frontier_delay: DiffOutputSession<'a, GlobalId, (i128, i128)>,
     peek: OutputSession<'a, Peek>,
     peek_duration: OutputSession<'a, u128>,
     shutdown_duration: OutputSession<'a, u128>,
@@ -526,6 +547,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         self.state.export_dataflows.insert(id, dataflow_id);
         self.state.export_imports.insert(id, BTreeMap::new());
+        self.state.aggregated_frontiers.insert(id, VecDeque::new());
         *self
             .state
             .dataflow_export_counts
@@ -573,6 +595,12 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             error!(
                 export = ?id,
                 "missing export_imports entry at time of export drop"
+            );
+        }
+        if self.state.aggregated_frontiers.remove(&id).is_none() {
+            error!(
+                export = ?id,
+                "missing aggregated_frontiers entry at time of export drop"
             );
         }
     }
@@ -661,10 +689,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                     time_deque,
                     delay_map,
                 } = delay_state;
-                while let Some(current_front) = time_deque.pop_front() {
+                time_deque.pop_front_while(|current_front| {
                     let (import_frontier, update_time) = current_front;
-                    if frontier >= import_frontier {
-                        let elapsed_ns = self.time.saturating_sub(update_time).as_nanos();
+                    if frontier >= *import_frontier {
+                        let elapsed_ns = self.time.saturating_sub(*update_time).as_nanos();
                         let elapsed_pow = elapsed_ns.next_power_of_two();
                         let datum = FrontierDelayDatum {
                             export_id,
@@ -675,12 +703,38 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
                         let delay_count = delay_map.entry(elapsed_pow).or_default();
                         *delay_count += 1;
+                        true
                     } else {
-                        time_deque.push_front(current_front);
-                        break;
+                        false
                     }
-                }
+                });
             }
+        }
+        if let Some(frontiers) = self.state.aggregated_frontiers.get_mut(&export_id) {
+            frontiers.pop_front_while(|current_front| {
+                let (min_import_frontier, update_time) = current_front;
+                if frontier >= *min_import_frontier {
+                    let elapsed_ns = self
+                        .time
+                        .saturating_sub(*update_time)
+                        .as_nanos()
+                        .try_into()
+                        .expect("sane timestamp");
+                    self.output
+                        .aggregated_frontier_delay
+                        .give((export_id, ts, (elapsed_ns, 1)));
+
+                    self.output.aggregated_frontier_delay.give((
+                        export_id,
+                        ts.step_forward_by(&(10000.into())),
+                        (-elapsed_ns, -1),
+                    ));
+
+                    true
+                } else {
+                    false
+                }
+            });
         }
     }
 
@@ -711,6 +765,18 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         if let Some(import_map) = self.state.export_imports.get_mut(&export_id) {
             let delay_state = import_map.entry(import_id).or_default();
             delay_state.time_deque.push_back((frontier, self.time));
+            let is_new_min = import_map.values().all(|state| {
+                state
+                    .time_deque
+                    .back()
+                    .map(|(frontier2, _time)| *frontier2 >= frontier)
+                    .unwrap_or(false)
+            });
+            if is_new_min {
+                if let Some(frontiers) = self.state.aggregated_frontiers.get_mut(&export_id) {
+                    frontiers.push_back((frontier, self.time));
+                }
+            }
         }
     }
 
