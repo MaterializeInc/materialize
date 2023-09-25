@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{{ config(materialized='view', indexes=[{'columns': ['item', 'buyer', 'seller']}]) }}
+{{ config(materialized='view', indexes=[{'columns': 'item'}, {'columns': 'buyer'}, {'columns': 'seller'}]) }}
 
 SELECT DISTINCT ON
   (auctions.id) bids.*,
