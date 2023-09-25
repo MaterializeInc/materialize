@@ -680,7 +680,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: mz-e2e
-    branches: "main v*.*"
 
   - id: output-consistency-test
     label: "Output consistency test"
