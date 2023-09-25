@@ -7,15 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test Avro UPSERT sinks.
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_envelope_materialize = true
-
-
+# Test Avro UPSERT sinks with null defaults
 
 # sinking directly from an UPSERT source with multi-part key
-
 $ set upsert-keyschema={
     "type": "record",
     "name": "Key",
@@ -158,3 +152,8 @@ contains: invalid NULL DEFAULTS: cannot use value as boolean
   )
   ENVELOPE UPSERT
 contains: NULL DEFAULTS specified more than once
+
+> DROP SOURCE upsert_input CASCADE;
+> DROP TABLE t CASCADE;
+> DROP TYPE point;
+> DROP TYPE custom_map;
