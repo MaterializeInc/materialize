@@ -350,7 +350,7 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        rustflags = rustc_flags.coverage if rd.coverage else []
+        rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
 
         cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
 

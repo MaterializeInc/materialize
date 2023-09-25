@@ -87,7 +87,7 @@ tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
 
 [features]
-default = ["workspace-hack"]
+default = ["tokio-console", "workspace-hack"]
 async = [
   "async-trait",
   "futures",
