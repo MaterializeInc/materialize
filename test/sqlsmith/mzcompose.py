@@ -26,8 +26,8 @@ if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
     TOTAL_MEMORY = 12
     NUM_SERVERS = 2
 else:
-    TOTAL_MEMORY = 48
-    NUM_SERVERS = 2
+    TOTAL_MEMORY = 96
+    NUM_SERVERS = 1
 
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
