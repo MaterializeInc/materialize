@@ -102,8 +102,8 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-$
 # Different types of columns
 > CREATE TYPE point AS (x integer, y integer);
 > CREATE TYPE custom_map AS MAP (KEY TYPE = text, VALUE TYPE = bool)
-> CREATE TABLE t (c1 point, c2 text NOT NULL, c3 integer[], c4 custom_map);
-> INSERT INTO t SELECT ROW(1, 1)::point AS c1, 'text' AS c2, ARRAY[1 , 2] as c3, '{a=>true}'::custom_map as c4;
+> CREATE TABLE t (c1 point, c2 text NOT NULL, c3 custom_map, c4 point list);
+> INSERT INTO t SELECT ROW(1, 1)::point AS c1, 'text' AS c2, '{a=>true}'::custom_map as c3, LIST[ROW(1, 1)::point] as c4;
 
 > CREATE MATERIALIZED VIEW v AS SELECT * from t;
 
@@ -117,7 +117,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-$
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":null},{"name":"y","type":["null","int"],"default":null}]}],"default":null},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"array","items":["null","int"]}],"default":null},{"name":"c4","type":["null",{"type":"map","values":["null","boolean"]}],"default":null}]}
+{"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":null},{"name":"y","type":["null","int"],"default":null}]}],"default":null},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}],"default":null},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":null},{"name":"y","type":["null","int"],"default":null}]}]}],"default":null}]}
 
 > CREATE SINK sink2 FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
@@ -129,7 +129,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
   ENVELOPE UPSERT
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
-{"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"array","items":["null","int"]}]},{"name":"c4","type":["null",{"type":"map","values":["null","boolean"]}]}]}
+{"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}]},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]}]}]}
 
 # errors
 ! CREATE SINK bad_sink FROM v
@@ -152,8 +152,3 @@ contains: invalid NULL DEFAULTS: cannot use value as boolean
   )
   ENVELOPE UPSERT
 contains: NULL DEFAULTS specified more than once
-
-> DROP SOURCE upsert_input CASCADE;
-> DROP TABLE t CASCADE;
-> DROP TYPE point;
-> DROP TYPE custom_map;
