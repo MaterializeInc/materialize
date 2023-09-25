@@ -99,11 +99,20 @@ pub struct WeightedStack {
     pub weight: f64,
 }
 
+pub struct Mapping {
+    pub memory_start: usize,
+    pub memory_end: usize,
+    pub file_offset: u64,
+    pub pathname: Option<String>,
+    pub build_id: Option<Vec<u8>>,
+}
+
 #[derive(Default)]
 pub struct StackProfile {
     annotations: Vec<String>,
     // The second element is the index in `annotations`, if one exists.
     stacks: Vec<(WeightedStack, Option<usize>)>,
+    mappings: Vec<Mapping>,
 }
 
 impl StackProfile {
@@ -174,7 +183,7 @@ impl<'a> Iterator for StackProfileIter<'a> {
 }
 
 impl StackProfile {
-    pub fn push(&mut self, stack: WeightedStack, annotation: Option<&str>) {
+    pub fn push_stack(&mut self, stack: WeightedStack, annotation: Option<&str>) {
         let anno_idx = if let Some(annotation) = annotation {
             Some(
                 self.annotations
@@ -190,6 +199,11 @@ impl StackProfile {
         };
         self.stacks.push((stack, anno_idx))
     }
+
+    pub fn push_mapping(&mut self, mapping: Mapping) {
+        self.mappings.push(mapping);
+    }
+
     pub fn iter(&self) -> StackProfileIter<'_> {
         StackProfileIter {
             inner: self,

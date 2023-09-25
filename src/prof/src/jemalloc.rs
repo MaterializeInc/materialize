@@ -12,13 +12,15 @@
 //! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
 //! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap`)
 
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::io::BufRead;
 use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use libc::size_t;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
@@ -27,8 +29,9 @@ use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
 use tokio::sync::Mutex;
+use tracing::error;
 
-use crate::{ProfStartTime, StackProfile, WeightedStack};
+use crate::{Mapping, ProfStartTime, StackProfile, WeightedStack};
 
 // lg_prof_sample:19 is currently the default according to `man jemalloc`,
 // but let's make that explicit in case upstream ever changes it.
@@ -46,6 +49,25 @@ pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
     } else {
         None
     }
+});
+
+#[cfg(target_os = "linux")]
+static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, Vec<u8>>>> = Lazy::new(|| {
+    // SAFETY: We are on Linux, and this is the only place in the program this
+    // function is called.
+    match unsafe { mz_build_id::all_build_ids() } {
+        Ok(ids) => Some(ids),
+        Err(err) => {
+            error!("build ID fetching failed: {err}");
+            None
+        }
+    }
+});
+
+#[cfg(not(target_os = "linux"))]
+static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, Vec<u8>>>> = Lazy::new(|| {
+    error!("build ID fetching is only supported on Linux");
+    None
 });
 
 #[derive(Copy, Clone, Debug)]
@@ -73,10 +95,16 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     // number is the inverse probability of a byte being sampled.
     let sampling_rate: f64 = str::parse(first_line.trim_start_matches("heap_v2/"))?;
 
-    for line in lines {
+    let mut parse_mapped_libraries = false;
+    while let Some(line) = lines.next() {
         let line = line?;
         let line = line.trim();
-        let words = line.split_ascii_whitespace().collect::<Vec<_>>();
+        if line == "MAPPED_LIBRARIES:" {
+            parse_mapped_libraries = true;
+            break;
+        }
+
+        let words: Vec<_> = line.split_ascii_whitespace().collect();
         if words.len() > 0 && words[0] == "@" {
             if cur_stack.is_some() {
                 bail!("Stack without corresponding weight!")
@@ -122,14 +150,66 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
                 let ratio = (bytes_in_sampled_objs / n_objs) / sampling_rate;
                 let scale_factor = 1.0 / (1.0 - (-ratio).exp());
                 let weight = bytes_in_sampled_objs * scale_factor;
-                profile.push(WeightedStack { addrs, weight }, None);
+                profile.push_stack(WeightedStack { addrs, weight }, None);
             }
         }
     }
     if cur_stack.is_some() {
         bail!("Stack without corresponding weight!");
     }
+
+    if parse_mapped_libraries {
+        // jemalloc just dumps the contents of `/proc/[pid]/maps`.
+        while let Some(line) = lines.next() {
+            let line = line?;
+            let line = line.trim();
+
+            let mut mapping = parse_proc_map(line)?;
+
+            if let Some(pathname) = &mapping.pathname {
+                mapping.build_id = BUILD_IDS
+                    .as_ref()
+                    .and_then(|ids| ids.get(Path::new(&pathname)))
+                    .cloned();
+            }
+
+            profile.push_mapping(mapping);
+        }
+    }
+
     Ok(profile)
+}
+
+/// Parse a line from `/proc/[pid]/maps` into a `Mapping`.
+///
+/// See `man 5 proc` of the format.
+fn parse_proc_map(line: &str) -> anyhow::Result<Mapping> {
+    let error = |msg| anyhow!("{msg}: {line}");
+
+    let mut fields = line.split_ascii_whitespace();
+    let address = fields
+        .next()
+        .ok_or_else(|| error("missing address field"))?;
+    let _perms = fields.next().ok_or_else(|| error("missing perms field"))?;
+    let offset = fields.next().ok_or_else(|| error("missing offset field"))?;
+    let _dev = fields.next().ok_or_else(|| error("missing dev field"))?;
+    let _inode = fields.next().ok_or_else(|| error("missing inode field"))?;
+    let pathname = fields.next().map(Into::into);
+
+    let (start, end) = address
+        .split_once('-')
+        .ok_or_else(|| error("invalid address"))?;
+    let start = usize::from_str_radix(start, 16).map_err(|_| error("invalid address"))?;
+    let end = usize::from_str_radix(end, 16).map_err(|_| error("invalid address"))?;
+    let offset = u64::from_str_radix(offset, 16).map_err(|_| error("invalid offset"))?;
+
+    Ok(Mapping {
+        memory_start: start,
+        memory_end: end,
+        file_offset: offset,
+        pathname,
+        build_id: None,
+    })
 }
 
 // See stats.{allocated, active, ...} in http://jemalloc.net/jemalloc.3.html for details
