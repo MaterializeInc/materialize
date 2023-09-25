@@ -102,7 +102,10 @@ pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
     memoize_expr, MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
-pub use relation::func::{AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, TableFunc};
+pub use relation::func::{
+    AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, NaiveOneByOneAggr, OneByOneAggr,
+    TableFunc,
+};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     canonicalize, compare_columns, non_nullable_columns, AccessStrategy, AggregateExpr,
