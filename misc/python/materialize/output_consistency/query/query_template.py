@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Optional
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -29,15 +28,15 @@ class QueryTemplate:
     def __init__(
         self,
         expect_error: bool,
-        select_expressions: List[Expression],
-        where_expression: Optional[Expression],
+        select_expressions: list[Expression],
+        where_expression: Expression | None,
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
         row_selection: DataRowSelection,
     ) -> None:
         assert storage_layout != ValueStorageLayout.ANY
         self.expect_error = expect_error
-        self.select_expressions: List[Expression] = select_expressions
+        self.select_expressions: list[Expression] = select_expressions
         self.where_expression = where_expression
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
@@ -47,7 +46,7 @@ class QueryTemplate:
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
 
-    def add_multiple_select_expressions(self, expressions: List[Expression]) -> None:
+    def add_multiple_select_expressions(self, expressions: list[Expression]) -> None:
         self.select_expressions.extend(expressions)
 
     def to_sql(
@@ -55,7 +54,7 @@ class QueryTemplate:
         strategy: EvaluationStrategy,
         output_format: QueryOutputFormat,
         query_column_selection: QueryColumnByIndexSelection,
-        override_db_object_name: Optional[str] = None,
+        override_db_object_name: str | None = None,
     ) -> str:
         db_object_name = override_db_object_name or strategy.get_db_object_name(
             self.storage_layout
@@ -107,7 +106,7 @@ FROM{space_separator}{db_object_name}
         )
         return f"WHERE {all_conditions_sql}"
 
-    def _create_row_filter_clause(self) -> Optional[str]:
+    def _create_row_filter_clause(self) -> str | None:
         """Create s SQL clause to only include rows of certain indices"""
         if self.row_selection.keys is None:
             return None

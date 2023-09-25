@@ -528,7 +528,6 @@ impl StorageUsageClient {
     ///
     /// Can be safely called within retry_external to ensure it succeeds
     #[cfg(test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn size(
         &self,
         prefix: BlobKeyPrefix<'_>,
@@ -967,7 +966,7 @@ mod tests {
     }
 
     fn writer_id(x: char) -> WriterId {
-        let x = vec![x, x, x, x].iter().collect::<String>();
+        let x = [x, x, x, x].iter().collect::<String>();
         let s = format!("w{x}{x}-{x}-{x}-{x}-{x}{x}{x}");
         s.parse().unwrap()
     }

@@ -19,7 +19,7 @@ use mz_repr::{GlobalId, RelationType, ScalarType};
 /// later.
 #[derive(Debug, Default)]
 pub struct TestCatalog {
-    objects: BTreeMap<String, (GlobalId, RelationType)>,
+    objects: BTreeMap<String, (GlobalId, Vec<String>, RelationType)>,
     names: BTreeMap<GlobalId, String>,
 }
 
@@ -35,6 +35,7 @@ impl<'a> TestCatalog {
     pub fn insert(
         &mut self,
         name: &str,
+        cols: Vec<String>,
         typ: RelationType,
         transient: bool,
     ) -> Result<GlobalId, String> {
@@ -46,12 +47,12 @@ impl<'a> TestCatalog {
         } else {
             GlobalId::User(u64::cast_from(self.objects.len()))
         };
-        self.objects.insert(name.to_string(), (id, typ));
+        self.objects.insert(name.to_string(), (id, cols, typ));
         self.names.insert(id, name.to_string());
         Ok(id)
     }
 
-    pub fn get(&'a self, name: &str) -> Option<&'a (GlobalId, RelationType)> {
+    pub fn get(&'a self, name: &str) -> Option<&'a (GlobalId, Vec<String>, RelationType)> {
         self.objects.get(name)
     }
 
@@ -63,7 +64,7 @@ impl<'a> TestCatalog {
     /// Clears all transient objects from the catalog.
     pub fn remove_transient_objects(&mut self) {
         self.objects
-            .retain(|_, (id, _)| !matches!(id, GlobalId::Transient(_)));
+            .retain(|_, (id, _, _)| !matches!(id, GlobalId::Transient(_)));
         self.names
             .retain(|k, _| !matches!(k, GlobalId::Transient(_)));
     }
@@ -80,5 +81,14 @@ impl ExprHumanizer for TestCatalog {
 
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         DummyHumanizer.humanize_scalar_type(ty)
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        let src_name = self.get_source_name(&id)?;
+        self.objects.get(src_name).map(|(_, cols, _)| cols.clone())
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.names.get(&id).is_some()
     }
 }

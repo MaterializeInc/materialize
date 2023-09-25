@@ -36,6 +36,7 @@ use mz_frontegg_client::client::{Authentication, Client as AdminClient};
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
 };
+use url::{ParseError, Url};
 
 /// Arguments for [`Context::load`].
 pub struct ContextLoadArgs {
@@ -47,6 +48,10 @@ pub struct ContextLoadArgs {
     pub output_format: OutputFormat,
     /// Whether to suppress color output.
     pub no_color: bool,
+    /// Global optional region.
+    pub region: Option<String>,
+    /// Global optional profile.
+    pub profile: Option<String>,
 }
 
 /// Context for a basic command.
@@ -54,6 +59,8 @@ pub struct ContextLoadArgs {
 pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
+    region: Option<String>,
+    profile: Option<String>,
 }
 
 impl Context {
@@ -63,6 +70,8 @@ impl Context {
             config_file_path,
             output_format,
             no_color,
+            region,
+            profile,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
         let config_file_path = match config_file_path {
@@ -73,22 +82,67 @@ impl Context {
         Ok(Context {
             config_file,
             output_formatter: OutputFormatter::new(output_format, no_color),
+            region,
+            profile,
         })
+    }
+
+    /// Retrieves the admin endpoint from the configuration file.
+    ///
+    /// - If an admin-endpoint is provided, it uses its value.
+    /// - If only a cloud-endpoint is provided, it constructs the admin endpoint based on it.
+    /// - If neither an admin-endpoint nor a cloud-endpoint is provided, default values are used.
+    pub fn get_admin_endpoint(
+        &self,
+        cloud_endpoint: Option<Url>,
+        admin_endpoint: Option<&str>,
+    ) -> Result<Option<Url>, ParseError> {
+        if let Some(admin_endpoint) = admin_endpoint {
+            return Ok(Some(admin_endpoint.parse()?));
+        } else if let Some(cloud_endpoint) = cloud_endpoint {
+            let mut admin_endpoint_url = cloud_endpoint;
+
+            if let Some(host) = admin_endpoint_url.host_str().as_mut() {
+                if let Some(host) = host.strip_prefix("api.") {
+                    admin_endpoint_url.set_host(Some(&format!("admin.{}", host)))?;
+                }
+                return Ok(Some(admin_endpoint_url));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Returns the global profile option.
+    pub fn get_global_profile(&self) -> Option<String> {
+        self.profile.clone()
     }
 
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
-    pub fn activate_profile(self, name: Option<String>) -> Result<ProfileContext, Error> {
-        let profile_name = name.unwrap_or_else(|| self.config_file.profile().into());
+    pub fn activate_profile(self) -> Result<ProfileContext, Error> {
+        let profile_name = self
+            .profile
+            .clone()
+            .unwrap_or_else(|| self.config_file.profile().into());
         let config_file = self.config_file.clone();
+
         let profile = config_file.load_profile(&profile_name)?;
+
+        // Parse the endpoint form the string in the config to URL.
+        let cloud_endpoint = match profile.cloud_endpoint() {
+            Some(endpoint) => Some(endpoint.parse::<Url>()?),
+            None => None,
+        };
 
         // Build clients
         let mut admin_client_builder = AdminClientBuilder::default();
 
-        if let Some(admin_endpoint) = profile.admin_endpoint() {
-            admin_client_builder = admin_client_builder.endpoint(admin_endpoint.parse()?);
+        if let Ok(Some(admin_endpoint)) =
+            self.get_admin_endpoint(cloud_endpoint.clone(), profile.admin_endpoint())
+        {
+            admin_client_builder = admin_client_builder.endpoint(admin_endpoint);
         }
 
         let admin_client: Arc<AdminClient> = Arc::new(
@@ -104,8 +158,8 @@ impl Context {
 
         let mut cloud_client_builder = CloudClientBuilder::default();
 
-        if let Some(cloud_endpoint) = profile.cloud_endpoint() {
-            cloud_client_builder = cloud_client_builder.endpoint(cloud_endpoint.parse()?);
+        if let Some(cloud_endpoint) = cloud_endpoint {
+            cloud_client_builder = cloud_client_builder.endpoint(cloud_endpoint);
         }
 
         let cloud_client = cloud_client_builder.build(CloudClientConfig {
@@ -152,16 +206,24 @@ pub struct ProfileContext {
 
 impl ProfileContext {
     /// Loads the profile and returns a region context.
-    pub fn activate_region(self, name: Option<String>) -> Result<RegionContext, Error> {
+    pub fn activate_region(self) -> Result<RegionContext, Error> {
         let profile = self
             .context
             .config_file
             .load_profile(&self.profile_name)
             .unwrap();
-        let region_name = name
+
+        // Region must be lower case.
+        // Cloud's API response returns the region in
+        // lower case.
+        let region_name = self
+            .context
+            .region
+            .clone()
             .or(profile.region().map(|r| r.to_string()))
             .ok_or_else(|| panic!("no region configured"))
-            .unwrap();
+            .unwrap()
+            .to_lowercase();
         Ok(RegionContext {
             context: self,
             region_name,
@@ -186,6 +248,15 @@ impl ProfileContext {
     /// Returns the output_formatter associated with this context.
     pub fn output_formatter(&self) -> &OutputFormatter {
         &self.context.output_formatter
+    }
+
+    /// Returns the context profile.
+    /// If a global profile has been set, it will return the global profile.
+    /// Otherwise returns the config's profile.
+    pub fn get_profile(&self) -> String {
+        self.context
+            .get_global_profile()
+            .unwrap_or(self.config_file().profile().to_string())
     }
 }
 
@@ -246,6 +317,14 @@ impl RegionContext {
     /// Returns the configuration file loaded by this context.
     pub fn config_file(&self) -> &ConfigFile {
         self.context.config_file()
+    }
+
+    /// Returns the region profile.
+    /// As in the context, if a global profile has been set,
+    /// it will return the global profile.
+    /// Otherwise returns the config's profile.
+    pub fn get_profile(&self) -> String {
+        self.context.get_profile()
     }
 
     /// Returns the output_formatter associated with this context.

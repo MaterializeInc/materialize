@@ -79,11 +79,7 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                     "Literal": [
                       {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       },
                       {
@@ -111,11 +107,8 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
                 "Literal": [
                   {
                     "data": [
-                      4,
-                      1,
-                      0,
-                      0,
-                      0
+                      42,
+                      1
                     ]
                   },
                   {
@@ -130,11 +123,8 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
             "Literal": [
               {
                 "data": [
-                  4,
-                  4,
-                  0,
-                  0,
-                  0
+                  42,
+                  4
                 ]
               },
               {
@@ -168,11 +158,8 @@ SELECT * FROM generate_series(1, 7)
         "Literal": [
           {
             "data": [
-              4,
-              1,
-              0,
-              0,
-              0
+              42,
+              1
             ]
           },
           {
@@ -185,11 +172,8 @@ SELECT * FROM generate_series(1, 7)
         "Literal": [
           {
             "data": [
-              4,
-              7,
-              0,
-              0,
-              0
+              42,
+              7
             ]
           },
           {
@@ -202,11 +186,8 @@ SELECT * FROM generate_series(1, 7)
         "Literal": [
           {
             "data": [
-              4,
-              1,
-              0,
-              0,
-              0
+              42,
+              1
             ]
           },
           {
@@ -303,63 +284,6 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
         ]
       }
     }
-  }
-}
-EOF
-
-# Test TopK.
-query T multiline
-EXPLAIN RAW PLAN AS JSON FOR
-VIEW ov
-----
-{
-  "Project": {
-    "input": {
-      "TopK": {
-        "input": {
-          "Get": {
-            "id": {
-              "Global": {
-                "User": 1
-              }
-            },
-            "typ": {
-              "column_types": [
-                {
-                  "scalar_type": "Int32",
-                  "nullable": true
-                },
-                {
-                  "scalar_type": "Int32",
-                  "nullable": true
-                }
-              ],
-              "keys": []
-            }
-          }
-        },
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 1,
-            "desc": false,
-            "nulls_last": true
-          },
-          {
-            "column": 0,
-            "desc": true,
-            "nulls_last": false
-          }
-        ],
-        "limit": 5,
-        "offset": 0,
-        "expected_group_size": null
-      }
-    },
-    "outputs": [
-      0,
-      1
-    ]
   }
 }
 EOF
@@ -1243,11 +1167,8 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
             "Literal": [
               {
                 "data": [
-                  4,
-                  1,
-                  0,
-                  0,
-                  0
+                  42,
+                  1
                 ]
               },
               {
@@ -1295,11 +1216,7 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                     "Literal": [
                       {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       },
                       {

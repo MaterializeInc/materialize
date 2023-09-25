@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
@@ -23,7 +23,7 @@ use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
 use mz_stash::StashError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -85,7 +85,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
         {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
-                    session: res.session,
+                    conn_id: res.session.conn_id().clone(),
                     tx: None,
                 }))
                 .expect("coordinator unexpectedly gone");
@@ -228,7 +228,12 @@ pub fn describe(
                 .get_portal_unverified(name.as_str())
                 .map(|p| p.desc.clone())
             {
-                Some(desc) => Ok(desc),
+                Some(mut desc) => {
+                    // Parameters are already bound to the portal and will not be accepted through
+                    // FETCH.
+                    desc.param_types = Vec::new();
+                    Ok(desc)
+                }
                 None => Err(AdapterError::UnknownCursor(name.to_string())),
             }
         }
@@ -291,6 +296,15 @@ impl ShouldHalt for crate::catalog::Error {
     fn should_halt(&self) -> bool {
         match &self.kind {
             crate::catalog::ErrorKind::Stash(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
+impl ShouldHalt for mz_catalog::Error {
+    fn should_halt(&self) -> bool {
+        match &self {
+            Self::Stash(e) => e.should_halt(),
             _ => false,
         }
     }

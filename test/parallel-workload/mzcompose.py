@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach, Materialized
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import Complexity, Scenario
 
@@ -26,17 +27,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
     c.up("cockroach", "materialized")
-    run(
-        "localhost",
-        c.default_port("materialized"),
-        c.port("materialized", 6877),
-        args.seed,
-        args.runtime,
-        Complexity(args.complexity),
-        Scenario(args.scenario),
-        args.threads,
-        c,
-    )
+    try:
+        run(
+            "localhost",
+            c.default_port("materialized"),
+            c.port("materialized", 6877),
+            args.seed,
+            args.runtime,
+            Complexity(args.complexity),
+            Scenario(args.scenario),
+            args.threads,
+            c,
+        )
+    except Exception as e:
+        print("--- Execution of parallel-workload failed")
+        print(e)
+        # Don't fail the entire run. We ran into a crash,
+        # ci-logged-errors-detect will handle this if it's an unknown failure.
+        return
     # Restart mz
     c.kill("materialized")
     c.up("materialized")

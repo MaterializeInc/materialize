@@ -36,7 +36,7 @@ use itertools::zip_eq;
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Pushes projections down through other operators.
 #[derive(Debug, Default)]
@@ -53,7 +53,7 @@ impl crate::Transform for ProjectionPushdown {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(
             relation,
@@ -414,7 +414,12 @@ impl ProjectionPushdown {
     ) -> Result<(), TransformError> {
         relation.visit_mut_pre(&mut |e| {
             if let MirRelationExpr::Project { input, outputs } = e {
-                if let MirRelationExpr::Get { id: inner_id, typ } = &mut **input {
+                if let MirRelationExpr::Get {
+                    id: inner_id,
+                    typ,
+                    access_strategy: _,
+                } = &mut **input
+                {
                     if let Some((new_projection, new_type)) = applied_projections.get(inner_id) {
                         typ.clone_from(new_type);
                         reverse_permute_columns(outputs.iter_mut(), new_projection.iter());

@@ -10,13 +10,16 @@ members = [
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/catalog",
     "src/cloud-api",
     "src/cluster",
     "src/clusterd",
     "src/cluster-client",
     "src/compute",
     "src/compute-client",
+    "src/compute-types",
     "src/controller",
+    "src/controller-types",
     "src/environmentd",
     "src/expr",
     "src/expr-parser",
@@ -37,13 +40,16 @@ members = [
     "src/orchestrator-tracing",
     "src/ore",
     "src/persist",
+    "src/persist-cli",
     "src/persist-client",
+    "src/persist-txn",
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
     "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
+    "src/pgwire-common",
     "src/pid-file",
     "src/postgres-util",
     "src/prof",
@@ -65,6 +71,9 @@ members = [
     "src/stash-debug",
     "src/storage",
     "src/storage-client",
+    "src/storage-controller",
+    "src/storage-operators",
+    "src/storage-types",
     "src/test-macro",
     "src/testdrive",
     "src/timely-util",
@@ -75,7 +84,14 @@ members = [
     "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
+    "src/regexp",
 ]
+
+exclude = [
+    # Exclude the wasm crate to avoid needless cache invalidations.
+    "src/sql-lexer-wasm",
+]
+
 # Use Cargo's new feature resolver, which can handle target-specific features.
 # Explicit opt-in is required even with the 2021 edition because we use a
 # virtual workspace.
@@ -84,10 +100,11 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.71.0"
+rust-version = "1.72.0"
 
 [profile.dev]
-# TODO(gusywnn|benesch): remove this when incremental ice's are improved
+# TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
+# in our workspace.
 incremental = false
 
 [profile.dev.package]
@@ -129,7 +146,7 @@ differential-dataflow = { git = "https://github.com/MaterializeInc/differential-
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -172,6 +189,10 @@ kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a
 
 # Waiting on `lru` dep to update to `0.11.0`
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
+
+# Removes dependencies required for WASM support that create duplicated deps.
+reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.

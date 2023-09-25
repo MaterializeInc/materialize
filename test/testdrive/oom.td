@@ -85,21 +85,24 @@ contains:result exceeds max size of 320.0 KB
 
 # Rows keep 24 bytes inline, after that the row is spilled to the heap. int4 takes 5 bytes,
 # 4 for the int and 1 for the tag. A row of 5 int4's will spill to the heap, but any less will
-# be kept inline. A row of 5 int4's should then take 25 + 32 = 57 bytes
+# be kept inline. A row of 5 int4's should then take 25 + 32 = 57 bytes.
+#
+# Large numbers are used to avoid this test being defeated
+# by the optimization in https://github.com/MaterializeInc/materialize/pull/21016
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 57
 
-> SELECT 1::int4, 2::int4, 3::int4, 4::int4;
-1 2 3 4
+> SELECT 17000000, 17000001, 17000002, 17000003;
+17000000 17000001 17000002 17000003
 
-> SELECT 1::int4, 2::int4, 3::int4, 4::int4, 5::int4;
-1 2 3 4 5
+> SELECT 17000000, 17000001, 17000002, 17000003, 17000004;
+17000000 17000001 17000002 17000003 17000004
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 56
 
-! SELECT 1::int4, 2::int4, 3::int4, 4::int4, 5::int4;
+! SELECT 17000000, 17000001, 17000002, 17000003, 17000004;
 contains:result exceeds max size of 56 B
 
 $ postgres-execute connection=mz_system

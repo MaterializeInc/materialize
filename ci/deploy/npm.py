@@ -15,12 +15,11 @@ import shutil
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import requests
 from semver.version import VersionInfo
 
-from materialize import ROOT, cargo, spawn
+from materialize import MZ_ROOT, cargo, spawn
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -28,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PUBLISH_CRATES = ["mz-sql-lexer"]
+PUBLISH_CRATES = ["mz-sql-lexer-wasm"]
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,7 @@ class Version:
 
 
 def generate_version(
-    crate_version: VersionInfo, build_identifier: Optional[int]
+    crate_version: VersionInfo, build_identifier: int | None
 ) -> Version:
     node_version = str(crate_version)
     is_development = False
@@ -62,11 +61,13 @@ def generate_version(
 def build_package(version: Version, crate_path: Path) -> Path:
     spawn.runv(["bin/wasm-build", str(crate_path)])
     package_path = crate_path / "pkg"
-    shutil.copyfile(str(ROOT / "LICENSE"), str(package_path / "LICENSE"))
+    shutil.copyfile(str(MZ_ROOT / "LICENSE"), str(package_path / "LICENSE"))
     with open(package_path / "package.json", "r+") as package_file:
         package = json.load(package_file)
         # Since all packages are scoped to the MaterializeInc org, names don't need prefixes
         package["name"] = package["name"].replace("/mz-", "/")
+        # Remove any -wasm suffixes.
+        package["name"] = package["name"].removesuffix("-wasm")
         package["version"] = version.node
         package["license"] = "SEE LICENSE IN 'LICENSE'"
         package["repository"] = "github:MaterializeInc/materialize"
@@ -76,7 +77,7 @@ def build_package(version: Version, crate_path: Path) -> Path:
 
 
 def release_package(version: Version, package_path: Path) -> None:
-    with open(package_path / "package.json", "r") as package_file:
+    with open(package_path / "package.json") as package_file:
         package = json.load(package_file)
     name = package["name"]
     dist_tag = "dev" if version.is_development else "latest"
@@ -96,7 +97,7 @@ def build_all(
     workspace: cargo.Workspace, version: Version, *, do_release: bool = True
 ) -> None:
     for crate_name in PUBLISH_CRATES:
-        crate_path = workspace.crates[crate_name].path
+        crate_path = workspace.all_crates[crate_name].path
         logger.info("Building %s @ %s", crate_path, version.node)
         package_path = build_package(version, crate_path)
         logger.info("Built %s", crate_path)
@@ -162,7 +163,7 @@ if __name__ == "__main__":
             build_id = int(os.environ["BUILDKITE_BUILD_NUMBER"])
     if args.do_release and "NPM_TOKEN" not in os.environ:
         raise ValueError("'NPM_TOKEN' must be set")
-    workspace = cargo.Workspace(ROOT)
+    workspace = cargo.Workspace(MZ_ROOT)
     crate_version = workspace.crates["mz-environmentd"].version
     version = generate_version(crate_version, build_id)
     build_all(workspace, version, do_release=args.do_release)

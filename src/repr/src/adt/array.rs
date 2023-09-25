@@ -84,7 +84,7 @@ impl PartialOrd for ArrayDimensions<'_> {
 
 impl fmt::Debug for ArrayDimensions<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_list().entries(self.into_iter()).finish()
+        f.debug_list().entries(*self).finish()
     }
 }
 

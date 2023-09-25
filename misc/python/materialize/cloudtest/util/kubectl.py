@@ -10,11 +10,12 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 
-from materialize.cloudtest.util.common import eprint, retry
+from materialize.cloudtest.util.common import retry
+from materialize.cloudtest.util.wait import wait
 
 
 class KubectlError(AssertionError):
@@ -46,7 +47,7 @@ class Kubectl:
         self,
         resource_type: str,
         name: str,
-        namespace: Optional[str],
+        namespace: str | None,
         patch: Any,
     ) -> None:
         command = [
@@ -70,34 +71,33 @@ class Kubectl:
 
     def wait(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
-        resource_name: str,
+        resource_name: str | None,
         wait_for: str,
         timeout_secs: int,
+        label: str | None = None,
     ) -> None:
-        command = [
-            "kubectl",
-            "--context",
-            self.context,
-            "wait",
-            f"{resource_type}/{resource_name}",
-            "--for",
+        if resource_name is None and label is None:
+            raise RuntimeError("Either resource_name or label must be set")
+
+        if resource_name is None:
+            resource = resource_type
+        else:
+            resource = f"{resource_type}/{resource_name}"
+
+        wait(
             wait_for,
-            "--timeout",
-            f"{timeout_secs}s",
-        ]
-        if namespace:
-            command.extend(["-n", namespace])
-        eprint(f"Waiting for {resource_type} {resource_name} to be {wait_for}")
-        subprocess.run(
-            command,
-            check=True,
+            resource,
+            timeout_secs,
+            self.context,
+            label=label,
+            namespace=namespace,
         )
 
     def delete(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
         resource_name: str,
     ) -> None:
@@ -127,10 +127,10 @@ class Kubectl:
 
     def get(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
-        resource_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        resource_name: str | None = None,
+    ) -> dict[str, Any]:
         command = [
             "kubectl",
             "--context",
@@ -146,7 +146,7 @@ class Kubectl:
         command.extend(["-o", "yaml"])
 
         try:
-            yaml_data: Dict[str, Any] = yaml.safe_load(
+            yaml_data: dict[str, Any] = yaml.safe_load(
                 subprocess.run(
                     command,
                     capture_output=True,
@@ -159,15 +159,15 @@ class Kubectl:
 
     def get_retry(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
         resource_name: str,
         max_attempts: int,
-    ) -> Dict[str, Any]:
-        def f() -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        def f() -> dict[str, Any]:
             return self.get(namespace, resource_type, resource_name)
 
-        yaml_data: Dict[str, Any] = retry(
+        yaml_data: dict[str, Any] = retry(
             f,
             max_attempts=max_attempts,
             exception_types=[KubectlError],
@@ -176,10 +176,10 @@ class Kubectl:
 
     def get_or_none(
         self,
-        namespace: Optional[str],
+        namespace: str | None,
         resource_type: str,
-        resource_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        resource_name: str | None = None,
+    ) -> dict[str, Any] | None:
         try:
             return self.get(namespace, resource_type, resource_name)
         except KubectlError as e:
@@ -190,18 +190,15 @@ class Kubectl:
     def load_k8s_yaml(
         self,
         filepath: str,
-        tests_dir: Optional[str] = None,
-        substitutions: Optional[dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        tests_dir: str,
+        substitutions: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Load a Kubernetes YAML specification to assert against. If `substitutions`
         are given, find-and-replace in the YAML contents before parsing.
         """
-        # TODO(necaris): Make this path-finding less fragile
-        if tests_dir is None:
-            tests_dir = str(Path(__file__).parent.parent)
         contents = Path(tests_dir).joinpath(filepath).read_text()
         for old, new in (substitutions or {}).items():
             contents = contents.replace(old, new)
-        yaml_data: Dict[str, Any] = yaml.safe_load(contents)
+        yaml_data: dict[str, Any] = yaml.safe_load(contents)
         return yaml_data

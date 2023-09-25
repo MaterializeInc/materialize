@@ -8,20 +8,21 @@
 # by the Apache License, Version 2.0.
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, Optional
+from typing import Any
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Localstack,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from pg8000 import Cursor  # type: ignore
+
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -44,7 +45,7 @@ class AllowCompactionCheck:
         assert "." in replica
         self.replica = replica
         self.host = host
-        self.ids: Optional[list[str]] = None
+        self.ids: list[str] | None = None
         self.satisfied = False
 
     def find_ids(self, c: Composition) -> None:
@@ -68,7 +69,7 @@ class AllowCompactionCheck:
                 WHERE cluster_id = mz_clusters.id AND mz_clusters.name = '{cluster}'
                 AND mz_cluster_replicas.name = '{replica}'""",
         )
-        return str(cursor.fetchone()[0])
+        return str(get_single_value_from_cursor(cursor))
 
     def cluster_id(self, c: Composition) -> str:
         cursor = c.sql_cursor()
@@ -76,7 +77,7 @@ class AllowCompactionCheck:
         cursor.execute(
             f"SELECT id FROM mz_clusters WHERE mz_clusters.name = '{cluster}'",
         )
-        return str(cursor.fetchone()[0])
+        return str(get_single_value_from_cursor(cursor))
 
     @staticmethod
     def _log_contains_id(log: str, the_id: str) -> bool:
@@ -121,7 +122,7 @@ class MaterializedView(AllowCompactionCheck):
                 WHERE object_id = id AND name = 'v3';
             """
         )
-        self.ids = [self._format_id(cursor.fetchone()[0])]
+        self.ids = [self._format_id(get_single_value_from_cursor(cursor))]
 
     def print_error(self) -> None:
         print(f"!! AllowCompaction not found for materialized view with id {self.ids}")
@@ -463,3 +464,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
         c.rm_volumes("mzdata")
+
+
+def get_single_value_from_cursor(cursor: Cursor) -> Any:
+    result = cursor.fetchone()
+    assert result is not None
+    return result[0]

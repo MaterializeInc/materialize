@@ -7,14 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Iterator, List, Optional
+from collections.abc import Callable, Iterator
 
 from materialize.feature_benchmark.executor import Executor
 
 
 class Action:
     def __init__(self) -> None:
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def __iter__(self) -> Iterator[None]:
         return self
@@ -28,7 +28,7 @@ class Action:
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         assert False
 
@@ -39,7 +39,7 @@ class LambdaAction(Action):
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         e = executor or self._executor
         assert e is not None
@@ -48,14 +48,14 @@ class LambdaAction(Action):
 
 
 class Kgen(Action):
-    def __init__(self, topic: str, args: List[str]) -> None:
+    def __init__(self, topic: str, args: list[str]) -> None:
         self._topic: str = topic
-        self._args: List[str] = args
-        self._executor: Optional[Executor] = None
+        self._args: list[str] = args
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         executor = executor or self._executor
         assert executor
@@ -67,11 +67,11 @@ class TdAction(Action):
 
     def __init__(self, td_str: str) -> None:
         self._td_str = td_str
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         executor = executor or self._executor
         assert executor
@@ -86,6 +86,6 @@ class TdAction(Action):
 class DummyAction(Action):
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         return None

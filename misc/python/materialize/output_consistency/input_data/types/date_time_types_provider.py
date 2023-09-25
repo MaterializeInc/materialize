@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -20,7 +19,7 @@ class DateTimeDataType(DataType):
         type_name: str,
         min_value: str,
         max_value: str,
-        further_values: List[str],
+        further_values: list[str],
         has_time_zone: bool = False,
     ):
         super().__init__(identifier, type_name, DataTypeCategory.DATE_TIME)
@@ -53,7 +52,7 @@ TIMESTAMP_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33"],
+    ["2023-06-01 11:22:33.44444"],
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
     TIMESTAMPTZ_TYPE_IDENTIFIER,
@@ -61,7 +60,7 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33"],
+    ["2023-06-01 11:22:33.44444", "2023-09-01 14:00:02.46464646"],
     has_time_zone=True,
 )
 INTERVAL_TYPE = DateTimeDataType(
@@ -72,7 +71,7 @@ INTERVAL_TYPE = DateTimeDataType(
     ["2 years 3 months 4 days 11:22:33.456789", "100 months 100 days", "44:45:45"],
 )
 
-DATE_TIME_DATA_TYPES: List[DateTimeDataType] = [
+DATE_TIME_DATA_TYPES: list[DateTimeDataType] = [
     DATE_TYPE,
     TIME_TYPE,
     TIMESTAMP_TYPE,

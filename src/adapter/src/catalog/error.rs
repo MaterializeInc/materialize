@@ -11,7 +11,6 @@ use std::fmt;
 
 use mz_ore::str::StrExt;
 use mz_proto::TryFromProtoError;
-use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
 #[derive(Debug, thiserror::Error)]
@@ -25,24 +24,10 @@ pub struct Error {
 pub enum ErrorKind {
     #[error("corrupt catalog: {detail}")]
     Corruption { detail: String },
-    #[error("id counter overflows i64")]
-    IdExhaustion,
     #[error("oid counter overflows i64")]
     OidExhaustion,
     #[error(transparent)]
     Sql(#[from] SqlCatalogError),
-    #[error("database '{0}' already exists")]
-    DatabaseAlreadyExists(String),
-    #[error("schema '{0}' already exists")]
-    SchemaAlreadyExists(String),
-    #[error("role '{0}' already exists")]
-    RoleAlreadyExists(String),
-    #[error("cluster '{0}' already exists")]
-    ClusterAlreadyExists(String),
-    #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
-    DuplicateReplica(String, String),
-    #[error("catalog item '{1}' already exists")]
-    ItemAlreadyExists(GlobalId, String),
     #[error("unacceptable schema name '{0}'")]
     ReservedSchemaName(String),
     #[error("role name {} is reserved", .0.quoted())]
@@ -79,8 +64,6 @@ pub enum ErrorKind {
         this_version: &'static str,
         cause: String,
     },
-    #[error("failed to migrate schema of builtin objects: {0}")]
-    FailedBuiltinSchemaMigration(String),
     #[error("failpoint {0} reached)")]
     FailpointReached(String),
     #[error("{0}")]
@@ -151,6 +134,15 @@ impl From<TryFromProtoError> for Error {
 impl From<uuid::Error> for Error {
     fn from(e: uuid::Error) -> Error {
         Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<mz_catalog::Error> for Error {
+    fn from(e: mz_catalog::Error) -> Self {
+        match e {
+            mz_catalog::Error::Catalog(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::Error::Stash(e) => Error::new(ErrorKind::from(e)),
+        }
     }
 }
 

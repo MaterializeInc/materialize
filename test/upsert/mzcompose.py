@@ -13,15 +13,13 @@
 from pathlib import Path
 
 from materialize import ci_util
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
 
@@ -130,8 +128,9 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
 
+        junit_report = ci_util.junit_report_filename(c.name)
+
         try:
-            junit_report = ci_util.junit_report_filename(c.name)
             c.run(
                 "testdrive",
                 f"--junit-report={junit_report}",
@@ -172,6 +171,9 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
+                    # Enabling shrinking buffers
+                    "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+                    "storage_shrink_upsert_unused_buffers_by_ratio": "4",
                 },
                 environment_extra=materialized_environment_extra,
             ),
@@ -355,7 +357,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             where s.name ='{source_name}'"""
         )[0]
         prefix = "/scratch"
-        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id[1:]}"
+        cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}"
         return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
 
     # Returns the number of files recursive in a given directory

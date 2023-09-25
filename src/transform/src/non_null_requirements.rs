@@ -28,7 +28,7 @@ use itertools::{zip_eq, Either, Itertools};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -60,7 +60,7 @@ impl crate::Transform for NonNullRequirements {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(relation, BTreeSet::new(), &mut BTreeMap::new());
         mz_repr::explain::trace_plan(&*relation);

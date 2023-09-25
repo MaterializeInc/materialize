@@ -15,8 +15,17 @@ import urllib.parse
 
 import pg8000
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser, _wait_for_pg
-from materialize.mzcompose.services import Cockroach, Materialized, Mz, Testdrive
+from materialize.mzcompose import (
+    _wait_for_pg,
+)
+from materialize.mzcompose.composition import (
+    Composition,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
@@ -157,7 +166,9 @@ def version_check(c: Composition) -> None:
         ssl_context=ssl.SSLContext(),
     ).cursor()
     cloud_cursor.execute("SELECT mz_version()")
-    cloud_version = cloud_cursor.fetchone()[0]
+    result = cloud_cursor.fetchone()
+    assert result is not None
+    cloud_version = result[0]
     assert (
         local_version == cloud_version
     ), f"local version: {local_version} is not identical to cloud version: {cloud_version}"

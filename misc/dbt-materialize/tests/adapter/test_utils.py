@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.adapter.utils.base_utils import BaseUtils
 from dbt.tests.adapter.utils.fixture_cast_bool_to_text import (
     models__test_cast_bool_to_text_yml,
 )
@@ -73,8 +72,8 @@ class TestCurrentTimestamps(BaseCurrentTimestamps):
     def expected_schema(self):
         return {
             "current_timestamp": "timestamp with time zone",
-            "current_timestamp_in_utc_backcompat": "timestamp",
-            "current_timestamp_backcompat": "timestamp",
+            "current_timestamp_in_utc_backcompat": "timestamp without time zone",
+            "current_timestamp_backcompat": "timestamp without time zone",
         }
 
     pass

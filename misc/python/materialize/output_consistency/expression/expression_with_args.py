@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Callable, List, Optional, Set
+from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -34,7 +34,7 @@ class ExpressionWithArgs(Expression):
     def __init__(
         self,
         operation: DbOperationOrFunction,
-        args: List[Expression],
+        args: list[Expression],
         is_aggregate: bool,
         is_expect_error: bool,
     ):
@@ -90,7 +90,7 @@ class ExpressionWithArgs(Expression):
 
         return self.return_type_spec.resolve_type_category(input_type_hints)
 
-    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+    def try_resolve_exact_data_type(self) -> DataType | None:
         return self.operation.try_resolve_exact_data_type(self.args)
 
     def __str__(self) -> str:
@@ -99,8 +99,8 @@ class ExpressionWithArgs(Expression):
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
-    ) -> Set[ExpressionCharacteristics]:
-        involved_characteristics: Set[ExpressionCharacteristics] = set()
+    ) -> set[ExpressionCharacteristics]:
+        involved_characteristics: set[ExpressionCharacteristics] = set()
         involved_characteristics = involved_characteristics.union(
             self.own_characteristics
         )
@@ -112,7 +112,7 @@ class ExpressionWithArgs(Expression):
 
         return involved_characteristics
 
-    def collect_leaves(self) -> List[LeafExpression]:
+    def collect_leaves(self) -> list[LeafExpression]:
         leaves = []
 
         for arg in self.args:
@@ -146,8 +146,8 @@ class ExpressionWithArgs(Expression):
         return False
 
 
-def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
-    mutual_storage_layout: Optional[ValueStorageLayout] = None
+def _determine_storage_layout(args: list[Expression]) -> ValueStorageLayout:
+    mutual_storage_layout: ValueStorageLayout | None = None
 
     for arg in args:
         if (

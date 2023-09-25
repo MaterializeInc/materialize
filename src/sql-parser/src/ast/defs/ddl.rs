@@ -374,7 +374,6 @@ pub enum SourceIncludeMetadataType {
     Key,
     Timestamp,
     Partition,
-    Topic,
     Offset,
     Headers,
 }
@@ -385,7 +384,6 @@ impl AstDisplay for SourceIncludeMetadataType {
             SourceIncludeMetadataType::Key => f.write_str("KEY"),
             SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
             SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
-            SourceIncludeMetadataType::Topic => f.write_str("TOPIC"),
             SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
             SourceIncludeMetadataType::Headers => f.write_str("HEADERS"),
         }

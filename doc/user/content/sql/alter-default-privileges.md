@@ -22,8 +22,6 @@ The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously 
 privileges on objects created in the future. It will not revoke any privileges on objects that have
 already been created.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "alter-default-privileges.svg" >}}

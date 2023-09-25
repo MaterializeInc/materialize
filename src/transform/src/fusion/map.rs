@@ -22,7 +22,7 @@ use std::mem;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Fuses a sequence of `Map` operators in to one `Map` operator.
 #[derive(Debug)]
@@ -38,7 +38,7 @@ impl crate::Transform for Map {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);

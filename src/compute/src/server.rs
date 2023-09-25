@@ -22,7 +22,7 @@ use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
-use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
@@ -399,14 +399,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    #[allow(dead_code)]
-    fn shut_down(&mut self, response_tx: &mut ResponseSender) {
-        if let Some(mut compute_state) = self.activate_compute(response_tx) {
-            compute_state.compute_state.traces.del_all_traces();
-            compute_state.shutdown_logging();
-        }
-    }
-
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
@@ -503,16 +495,16 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // this before being too confident. It should be rare without peeks, but could happen with e.g.
             // multiple outputs of a dataflow.
 
-            // The logging configuration with which a prior `CreateInstance` was called, if it was.
-            let mut old_logging_config = None;
+            // The values with which a prior `CreateInstance` was called, if it was.
+            let mut old_instance_config = None;
             // Index dataflows by `export_ids().collect()`, as this is a precondition for their compatibility.
             let mut old_dataflows = BTreeMap::default();
             // Maintain allowed compaction, in case installed identifiers may have been allowed to compact.
             let mut old_frontiers = BTreeMap::default();
             for command in compute_state.command_history.iter() {
                 match command {
-                    ComputeCommand::CreateInstance(logging) => {
-                        old_logging_config = Some(logging);
+                    ComputeCommand::CreateInstance(config) => {
+                        old_instance_config = Some(config);
                     }
                     ComputeCommand::CreateDataflow(dataflow) => {
                         let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
@@ -580,13 +572,13 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));
                         }
                     }
-                    ComputeCommand::CreateInstance(logging) => {
+                    ComputeCommand::CreateInstance(config) => {
                         // Cluster creation should not be performed again!
-                        if Some(logging) != old_logging_config {
+                        if Some(config) != old_instance_config {
                             halt!(
-                                "new logging configuration does not match existing logging configuration:\n{:?}\nvs\n{:?}",
-                                logging,
-                                old_logging_config,
+                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
+                                config,
+                                old_instance_config,
                             );
                         }
                     }
@@ -659,7 +651,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
                 // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = collection.reported_frontier().logging_time() {
+                    if let Some(time) = collection.reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                     if let Some(time) = new_reported_frontier.logging_time() {
@@ -667,7 +659,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 }
 
-                collection.set_reported_frontier(new_reported_frontier);
+                collection.reported_frontier = new_reported_frontier;
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.

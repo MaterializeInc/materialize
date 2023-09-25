@@ -40,21 +40,23 @@ ALTER TABLE other.t REPLICA IDENTITY FULL;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
-contains:multiple tables with name "t": "postgres"."other"."t", "postgres"."public"."t"
+contains:multiple subsources would be named t
+detail:referenced tables with duplicate name: postgres.other.t, postgres.public.t
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (public.t AS x, public.t as Y);
-contains:table "postgres"."public"."t" referred to by multiple subsources: "x", "y"
+contains:multiple subsources refer to table postgres.public.t
+detail: subsources referencing table: x, y
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS (other);
 
 > SHOW sources
- mz_source          postgres  ${arg.default-storage-size}
- mz_source_progress progress  <null>
- t                  subsource <null>
+ mz_source          postgres  ${arg.default-storage-size} materialize_public_mz_source
+ mz_source_progress progress  <null> <null>
+ t                  subsource <null> <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;

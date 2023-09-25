@@ -13,7 +13,7 @@ use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Detects an input being unioned with its negation and cancels them out
 ///
@@ -38,7 +38,7 @@ impl crate::Transform for UnionBranchCancellation {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let result = relation.try_visit_mut_post(&mut |e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);

@@ -16,13 +16,16 @@ c 2 1
 ----
 parts=3 len=3
 
-fetch-batch input=b0
+fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 0 1
 <part 1>
+<key lower=b>
 b 1 1
 <part 2>
+<key lower=c>
 c 2 1
 <run 0>
 part 0
@@ -36,13 +39,16 @@ c 5 1
 ----
 parts=3 len=3
 
-fetch-batch input=b1
+fetch-batch input=b1 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 3 1
 <part 1>
+<key lower=b>
 b 4 1
 <part 2>
+<key lower=c>
 c 5 1
 <run 0>
 part 0
@@ -53,9 +59,10 @@ compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6
 ----
 parts=1 len=3
 
-fetch-batch input=b0_1
+fetch-batch input=b0_1 stats=lower
 ----
 <part 0>
+<key lower=a>
 a 6 2
 b 6 2
 c 6 2

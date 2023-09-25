@@ -9,7 +9,6 @@
 
 
 import subprocess
-from typing import Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
@@ -23,8 +22,8 @@ def wait(
     timeout_secs: int = 300,
     context: str = DEFAULT_K8S_CONTEXT_NAME,
     *,
-    label: Optional[str] = None,
-    namespace: Optional[str] = None,
+    label: str | None = None,
+    namespace: str | None = None,
 ) -> None:
     cmd = [
         "kubectl",

@@ -9,7 +9,7 @@
 
 import operator
 import urllib.parse
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from kubernetes.client import (
     V1Container,
@@ -33,11 +33,12 @@ from kubernetes.client import (
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 
 try:
     from semver.version import Version
 except ImportError:
-    from semver import VersionInfo as Version
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
@@ -80,10 +81,10 @@ class MaterializedAliasService(K8sService):
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(
         self,
-        tag: Optional[str] = None,
+        tag: str | None = None,
         release_mode: bool = True,
         coverage_mode: bool = False,
-        log_filter: Optional[str] = None,
+        log_filter: str | None = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
         minio_namespace: str = DEFAULT_K8S_NAMESPACE,
         cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,
@@ -92,7 +93,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
-        self.env: Dict[str, str] = {}
+        self.env: dict[str, str] = {}
         self.minio_namespace = minio_namespace
         self.cockroach_namespace = cockroach_namespace
         super().__init__(namespace)
@@ -138,7 +139,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ),
         )
 
-    def claim_templates(self) -> List[V1PersistentVolumeClaim]:
+    def claim_templates(self) -> list[V1PersistentVolumeClaim]:
         claim_templates = [
             V1PersistentVolumeClaim(
                 metadata=V1ObjectMeta(name="data"),
@@ -162,7 +163,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         return claim_templates
 
-    def args(self) -> List[str]:
+    def args(self) -> list[str]:
         s3_endpoint = urllib.parse.quote(
             f"http://minio-service.{self.minio_namespace}:9000"
         )
@@ -237,7 +238,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         return args
 
-    def env_vars(self) -> List[V1EnvVar]:
+    def env_vars(self) -> list[V1EnvVar]:
         value_from = V1EnvVarSource(
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )
@@ -256,13 +257,13 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
             ),
-            # TODO: these should be the same as in mzcompose
             V1EnvVar(
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
-                value=(
-                    "enable_envelope_upsert_in_subscribe=true;"
-                    "enable_disk_cluster_replicas=true;"
-                    "enable_with_mutually_recursive=true"
+                value=";".join(
+                    [
+                        f"{key}={value}"
+                        for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+                    ]
                 ),
             ),
         ]
@@ -282,7 +283,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 ]
             )
 
-        for (k, v) in self.env.items():
+        for k, v in self.env.items():
             env.append(V1EnvVar(name=k, value=v))
 
         return env
@@ -297,8 +298,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         except ValueError:
             return default
 
-        version = Version.parse(version)
-        return bool(operator(tag_version, version))
+        cmp_version = Version.parse(version)
+        return bool(operator(tag_version, cmp_version))
 
     def _meets_minimum_version(self, version: str) -> bool:
         return self._meets_version(version=version, operator=operator.ge, default=True)

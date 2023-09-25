@@ -17,10 +17,11 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
-use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
+use mz_cluster_client::ReplicaId;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_client::types::dataflows::{DataflowDescription, IndexImport};
-use mz_controller::clusters::ClusterId;
+use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
+use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
@@ -28,8 +29,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
-use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
-use mz_repr::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
+use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -39,6 +39,7 @@ use uuid::Uuid;
 use crate::client::ConnectionId;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 
@@ -68,14 +69,14 @@ pub enum PeekResponseUnary {
 
 #[derive(Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
-    desc: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
+    desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: BTreeMap<usize, usize>,
     thinned_arity: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
@@ -83,7 +84,8 @@ pub enum FastPathPlan {
     /// may be helpful when printing out an explanation.
     Constant(Result<Vec<(Row, Diff)>, EvalError>, RelationType),
     /// The view can be read out of an existing arrangement.
-    PeekExisting(GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
+    /// (coll_id, idx_id, values to look up, mfp to apply)
+    PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
 }
 
 impl<'a, C> DisplayText<C> for FastPathPlan
@@ -110,7 +112,7 @@ where
             FastPathPlan::Constant(Err(err), _) => {
                 writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
             }
-            FastPathPlan::PeekExisting(id, literal_constraints, mfp) => {
+            FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
                 if project.len() != mfp.input_arity + map.len()
@@ -130,7 +132,14 @@ where
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
-                MirRelationExpr::fmt_indexed_filter(f, ctx, id, literal_constraints.clone(), None)?;
+                MirRelationExpr::fmt_indexed_filter(
+                    f,
+                    ctx,
+                    coll_id,
+                    idx_id,
+                    literal_constraints.clone(),
+                    None,
+                )?;
                 writeln!(f)?;
                 ctx.as_mut().reset();
                 Ok(())
@@ -181,9 +190,10 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
-    dataflow_plan: &mut DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
+pub fn create_fast_path_plan<T: Timestamp>(
+    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
+    finishing: Option<&RowSetFinishing>,
 ) -> Result<Option<FastPathPlan>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -192,7 +202,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
-        let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
+        let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
@@ -202,17 +212,49 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                 mir.typ(),
             )));
         } else {
+            // If there is a TopK that would be completely covered by the finishing, then jump
+            // through the TopK.
+            if let MirRelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic: _,
+                expected_group_size: _,
+            } = mir
+            {
+                if let Some(finishing) = finishing {
+                    if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
+                        // The following is roughly `limit >= finishing.limit`, but with Options.
+                        let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
+                            (None, _) => true,
+                            (Some(..), None) => false,
+                            (Some(topk_limit), Some(finishing_limit)) => {
+                                *topk_limit >= finishing_limit
+                            }
+                        };
+                        if finishing_limits_at_least_as_topk {
+                            mir = input;
+                        }
+                    }
+                }
+            }
             // In the case of a linear operator around an indexed view, we
             // can skip creating a dataflow and instead pull all the rows in
             // index and apply the linear operator against them.
             let (mfp, mir) = mz_expr::MapFilterProject::extract_from_expression(mir);
             match mir {
-                mz_expr::MirRelationExpr::Get { id, .. } => {
+                MirRelationExpr::Get {
+                    id: Id::Global(get_id),
+                    ..
+                } => {
                     // Just grab any arrangement
                     // Nothing to be done if an arrangement does not exist
                     for (index_id, IndexImport { desc, .. }) in dataflow_plan.index_imports.iter() {
-                        if Id::Global(desc.on_id) == *id {
+                        if desc.on_id == *get_id {
                             return Ok(Some(FastPathPlan::PeekExisting(
+                                *get_id,
                                 *index_id,
                                 None,
                                 permute_oneshot_mfp_around_index(mfp, &desc.key)?,
@@ -220,24 +262,16 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                         }
                     }
                 }
-                mz_expr::MirRelationExpr::Join { implementation, .. } => {
-                    if let mz_expr::JoinImplementation::IndexedFilter(id, key, vals) =
+                MirRelationExpr::Join { implementation, .. } => {
+                    if let mz_expr::JoinImplementation::IndexedFilter(coll_id, idx_id, key, vals) =
                         implementation
                     {
-                        // We should only get excited if we can track down an index for `id`.
-                        // If `keys` is non-empty, that means we think one exists.
-                        for (index_id, IndexImport { desc, .. }) in
-                            dataflow_plan.index_imports.iter()
-                        {
-                            if desc.on_id == *id && &desc.key == key {
-                                // Indicate an early exit with a specific index and key value.
-                                return Ok(Some(FastPathPlan::PeekExisting(
-                                    *index_id,
-                                    Some(vals.clone()),
-                                    permute_oneshot_mfp_around_index(mfp, key)?,
-                                )));
-                            }
-                        }
+                        return Ok(Some(FastPathPlan::PeekExisting(
+                            *coll_id,
+                            *idx_id,
+                            Some(vals.clone()),
+                            permute_oneshot_mfp_around_index(mfp, key)?,
+                        )));
                     }
                 }
                 // nothing can be done for non-trivial expressions.
@@ -246,6 +280,29 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
         }
     }
     Ok(None)
+}
+
+impl FastPathPlan {
+    pub fn used_indexes(&self, finishing: &Option<RowSetFinishing>) -> UsedIndexes {
+        match self {
+            FastPathPlan::Constant(..) => UsedIndexes::new(Vec::new()),
+            FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, _mfp) => {
+                if literal_constraints.is_some() {
+                    UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::Lookup(*idx_id)])])
+                } else {
+                    if let Some(finishing) = finishing {
+                        if finishing.limit.is_some() && finishing.order_by.is_empty() {
+                            UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::FastPathLimit])])
+                        } else {
+                            UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::FullScan])])
+                        }
+                    } else {
+                        UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::FullScan])])
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl crate::coord::Coordinator {
@@ -263,9 +320,10 @@ impl crate::coord::Coordinator {
         key: Vec<MirScalarExpr>,
         permutation: BTreeMap<usize, usize>,
         thinned_arity: usize,
+        finishing: &RowSetFinishing,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id)?;
+        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id, Some(finishing))?;
         // derive a PeekPlan from the optional FastPathPlan
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default
@@ -373,11 +431,12 @@ impl crate::coord::Coordinator {
         // If we must build the view, ship the dataflow.
         let (peek_command, drop_dataflow, is_fast_path) = match fast_path {
             PeekPlan::FastPath(FastPathPlan::PeekExisting(
-                id,
+                _coll_id,
+                idx_id,
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (id, literal_constraints, timestamp, map_filter_project),
+                (idx_id, literal_constraints, timestamp, map_filter_project),
                 None,
                 true,
             ),
@@ -648,6 +707,7 @@ mod tests {
         }]);
         let constant_err = FastPathPlan::Constant(Err(EvalError::DivisionByZero), typ.clone());
         let no_lookup = FastPathPlan::PeekExisting(
+            GlobalId::User(8),
             GlobalId::User(10),
             None,
             MapFilterProject::new(4)
@@ -659,6 +719,7 @@ mod tests {
                 .expect("invalid nontemporal"),
         );
         let lookup = FastPathPlan::PeekExisting(
+            GlobalId::User(9),
             GlobalId::User(11),
             Some(vec![Row::pack(Some(Datum::Int32(5)))]),
             MapFilterProject::new(3)
@@ -675,8 +736,10 @@ mod tests {
         let ctx_gen = || RenderingContext::new(Indent::default(), &humanizer);
 
         let constant_err_exp = "Error \"division by zero\"\n";
-        let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadExistingIndex u10\n";
-        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
+        let no_lookup_exp =
+            "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadIndex on=u8 [DELETED INDEX]=[*** full scan ***]\n";
+        let lookup_exp =
+            "Filter (#0) IS NULL\n  ReadIndex on=u9 [DELETED INDEX]=[lookup value=(5)]\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
         assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);

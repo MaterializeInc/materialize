@@ -17,7 +17,7 @@ use mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::StringOrSecret;
+use mz_storage_types::connections::StringOrSecret;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
@@ -103,6 +103,8 @@ pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
 
 impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
     type Error = PlanError;
+    // We are in a macro, so allow calling a closure immediately.
+    #[allow(clippy::redundant_closure_call)]
     fn try_from(
         KafkaConfigOptionExtracted {
             acks,

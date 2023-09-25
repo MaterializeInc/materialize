@@ -16,7 +16,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -39,7 +39,7 @@ use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::pg_legacy_name::PgLegacyName;
 use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
-use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
+use crate::adt::timestamp::{CheckedTimestamp, TimestampError, TimestampPrecision};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
@@ -948,9 +948,9 @@ impl<'a> Datum<'a> {
                     (Datum::Date(_), _) => false,
                     (Datum::Time(_), ScalarType::Time) => true,
                     (Datum::Time(_), _) => false,
-                    (Datum::Timestamp(_), ScalarType::Timestamp) => true,
+                    (Datum::Timestamp(_), ScalarType::Timestamp { .. }) => true,
                     (Datum::Timestamp(_), _) => false,
-                    (Datum::TimestampTz(_), ScalarType::TimestampTz) => true,
+                    (Datum::TimestampTz(_), ScalarType::TimestampTz { .. }) => true,
                     (Datum::TimestampTz(_), _) => false,
                     (Datum::Interval(_), ScalarType::Interval) => true,
                     (Datum::Interval(_), _) => false,
@@ -1387,9 +1387,13 @@ pub enum ScalarType {
     /// The type of [`Datum::Time`].
     Time,
     /// The type of [`Datum::Timestamp`].
-    Timestamp,
+    Timestamp {
+        precision: Option<TimestampPrecision>,
+    },
     /// The type of [`Datum::TimestampTz`].
-    TimestampTz,
+    TimestampTz {
+        precision: Option<TimestampPrecision>,
+    },
     /// The type of [`Datum::Interval`].
     Interval,
     /// A single byte character type backed by a [`Datum::UInt8`].
@@ -1524,8 +1528,12 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ScalarType::Float64 => Float64(()),
                 ScalarType::Date => Date(()),
                 ScalarType::Time => Time(()),
-                ScalarType::Timestamp => Timestamp(()),
-                ScalarType::TimestampTz => TimestampTz(()),
+                ScalarType::Timestamp { precision } => Timestamp(ProtoTimestamp {
+                    precision: precision.into_proto(),
+                }),
+                ScalarType::TimestampTz { precision } => TimestampTz(ProtoTimestampTz {
+                    precision: precision.into_proto(),
+                }),
                 ScalarType::Interval => Interval(()),
                 ScalarType::PgLegacyChar => PgLegacyChar(()),
                 ScalarType::PgLegacyName => PgLegacyName(()),
@@ -1595,8 +1603,12 @@ impl RustType<ProtoScalarType> for ScalarType {
             Float64(()) => Ok(ScalarType::Float64),
             Date(()) => Ok(ScalarType::Date),
             Time(()) => Ok(ScalarType::Time),
-            Timestamp(()) => Ok(ScalarType::Timestamp),
-            TimestampTz(()) => Ok(ScalarType::TimestampTz),
+            Timestamp(x) => Ok(ScalarType::Timestamp {
+                precision: x.precision.into_rust()?,
+            }),
+            TimestampTz(x) => Ok(ScalarType::TimestampTz {
+                precision: x.precision.into_rust()?,
+            }),
             Interval(()) => Ok(ScalarType::Interval),
             PgLegacyChar(()) => Ok(ScalarType::PgLegacyChar),
             PgLegacyName(()) => Ok(ScalarType::PgLegacyName),
@@ -1767,8 +1779,6 @@ impl_datum_type_copy!(u64, UInt64);
 impl_datum_type_copy!(Interval, Interval);
 impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
-impl_datum_type_copy!(CheckedTimestamp<NaiveDateTime>, Timestamp);
-impl_datum_type_copy!(CheckedTimestamp<DateTime<Utc>>, TimestampTz);
 impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
@@ -2337,6 +2347,52 @@ impl<'a, E> DatumType<'a, E> for AclItem {
     }
 }
 
+impl AsColumnType for CheckedTimestamp<NaiveDateTime> {
+    fn as_column_type() -> ColumnType {
+        ScalarType::Timestamp { precision: None }.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Timestamp(a)) => Ok(a),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Timestamp(self))
+    }
+}
+
+impl AsColumnType for CheckedTimestamp<DateTime<Utc>> {
+    fn as_column_type() -> ColumnType {
+        ScalarType::TimestampTz { precision: None }.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::TimestampTz(a)) => Ok(a),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::TimestampTz(self))
+    }
+}
+
 impl<'a> ScalarType {
     /// Returns the contained numeric maximum scale.
     ///
@@ -2347,6 +2403,24 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Numeric { max_scale } => *max_scale,
             _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
+        }
+    }
+
+    /// Returns the contained timestamp precision.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scalar type is not [`ScalarType::Timestamp`] or
+    /// [`ScalarType::TimestampTz`].
+    pub fn unwrap_timestamp_precision(&self) -> Option<TimestampPrecision> {
+        match self {
+            ScalarType::Timestamp { precision } | ScalarType::TimestampTz { precision } => {
+                *precision
+            }
+            _ => panic!(
+                "ScalarType::unwrap_timestamp_precision called on {:?}",
+                self
+            ),
         }
     }
 
@@ -2725,6 +2799,15 @@ impl<'a> ScalarType {
                 Datum::Int16(i16::MIN),
                 Datum::Int16(i16::MIN + 1),
                 Datum::Int16(i16::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                //
+                // TODO[btv]: Add more datums around
+                // boundaries in VLE (e.g. negatives) if `test_smoketest_all_builtins` is
+                // fixed to be faster.
+                Datum::Int16(127),
+                Datum::Int16(128),
             ])
         });
         static INT32: Lazy<Row> = Lazy::new(|| {
@@ -2735,6 +2818,11 @@ impl<'a> ScalarType {
                 Datum::Int32(i32::MIN),
                 Datum::Int32(i32::MIN + 1),
                 Datum::Int32(i32::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int32(32767),
+                Datum::Int32(32768),
             ])
         });
         static INT64: Lazy<Row> = Lazy::new(|| {
@@ -2745,6 +2833,11 @@ impl<'a> ScalarType {
                 Datum::Int64(i64::MIN),
                 Datum::Int64(i64::MIN + 1),
                 Datum::Int64(i64::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::Int64(2147483647),
+                Datum::Int64(2147483648),
             ])
         });
         static UINT16: Lazy<Row> = Lazy::new(|| {
@@ -2785,18 +2878,25 @@ impl<'a> ScalarType {
             ])
         });
         static NUMERIC: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[
-                Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
-                Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
-            ])
+            cfg_if::cfg_if! {
+                // Numerics can't currently be instantiated under Miri
+                if #[cfg(miri)] {
+                    Row::pack_slice(&[])
+                } else {
+                    Row::pack_slice(&[
+                        Datum::Numeric(OrderedDecimal(Numeric::from(0.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(1.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(-1.0))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MIN_POSITIVE))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::MAX))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::EPSILON))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::NAN))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::INFINITY))),
+                        Datum::Numeric(OrderedDecimal(Numeric::from(f64::NEG_INFINITY))),
+                    ])
+                }
+            }
         });
         static DATE: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
@@ -2833,6 +2933,23 @@ impl<'a> ScalarType {
                         .try_into()
                         .unwrap(),
                 ),
+                // nano seconds
+                Datum::Timestamp(
+                    NaiveDateTime::from_timestamp_opt(0, 123456789)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                ),
+                // Leap second
+                Datum::Timestamp(
+                    CheckedTimestamp::from_timestamplike(
+                        NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
+                            .unwrap()
+                            .and_hms_milli_opt(14, 32, 11, 1234)
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                ),
             ])
         });
         static TIMESTAMPTZ: Lazy<Row> = Lazy::new(|| {
@@ -2857,6 +2974,15 @@ impl<'a> ScalarType {
                         crate::adt::timestamp::HIGH_DATE
                             .and_hms_opt(23, 59, 59)
                             .unwrap(),
+                        Utc,
+                    )
+                    .try_into()
+                    .unwrap(),
+                ),
+                // nano seconds
+                Datum::TimestampTz(
+                    DateTime::from_utc(
+                        NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap(),
                         Utc,
                     )
                     .try_into()
@@ -2998,8 +3124,8 @@ impl<'a> ScalarType {
             ScalarType::Numeric { .. } => (*NUMERIC).iter(),
             ScalarType::Date => (*DATE).iter(),
             ScalarType::Time => (*TIME).iter(),
-            ScalarType::Timestamp => (*TIMESTAMP).iter(),
-            ScalarType::TimestampTz => (*TIMESTAMPTZ).iter(),
+            ScalarType::Timestamp { .. } => (*TIMESTAMP).iter(),
+            ScalarType::TimestampTz { .. } => (*TIMESTAMPTZ).iter(),
             ScalarType::Interval => (*INTERVAL).iter(),
             ScalarType::PgLegacyChar => (*PGLEGACYCHAR).iter(),
             ScalarType::PgLegacyName => (*PGLEGACYNAME).iter(),
@@ -3047,8 +3173,20 @@ impl<'a> ScalarType {
             },
             ScalarType::Date,
             ScalarType::Time,
-            ScalarType::Timestamp,
-            ScalarType::TimestampTz,
+            ScalarType::Timestamp {
+                precision: Some(TimestampPrecision(crate::adt::timestamp::MAX_PRECISION)),
+            },
+            ScalarType::Timestamp {
+                precision: Some(TimestampPrecision(0)),
+            },
+            ScalarType::Timestamp { precision: None },
+            ScalarType::TimestampTz {
+                precision: Some(TimestampPrecision(crate::adt::timestamp::MAX_PRECISION)),
+            },
+            ScalarType::TimestampTz {
+                precision: Some(TimestampPrecision(0)),
+            },
+            ScalarType::TimestampTz { precision: None },
             ScalarType::Interval,
             ScalarType::PgLegacyChar,
             ScalarType::Bytes,
@@ -3108,8 +3246,8 @@ impl<'a> ScalarType {
             | ScalarType::Numeric { .. }
             | ScalarType::Date
             | ScalarType::Time
-            | ScalarType::Timestamp
-            | ScalarType::TimestampTz
+            | ScalarType::Timestamp { .. }
+            | ScalarType::TimestampTz { .. }
             | ScalarType::Interval
             | ScalarType::PgLegacyChar
             | ScalarType::PgLegacyName
@@ -3159,8 +3297,12 @@ impl Arbitrary for ScalarType {
                 .boxed(),
             Just(ScalarType::Date).boxed(),
             Just(ScalarType::Time).boxed(),
-            Just(ScalarType::Timestamp).boxed(),
-            Just(ScalarType::TimestampTz).boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ScalarType::Timestamp { precision })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ScalarType::TimestampTz { precision })
+                .boxed(),
             Just(ScalarType::Interval).boxed(),
             Just(ScalarType::PgLegacyChar).boxed(),
             Just(ScalarType::Bytes).boxed(),

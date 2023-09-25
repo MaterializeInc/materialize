@@ -11,8 +11,8 @@ import logging
 import re
 import ssl
 from enum import Enum
-from importlib.abc import Traversable
-from typing import Any, Dict, List, Optional, cast
+from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pg8000
@@ -66,7 +66,7 @@ class ExplainOutput:
     def __str__(self) -> str:
         return self.output
 
-    def optimization_time(self) -> Optional[np.timedelta64]:
+    def optimization_time(self) -> np.timedelta64 | None:
         """Optionally, returns the optimization_time time for an 'EXPLAIN' output."""
         p = r"(Optimization time|Planning Time)\: (?P<time>[0-9]+(\.[0-9]+)?\s?\S+)"
         m = re.search(p, self.output, re.MULTILINE)
@@ -81,8 +81,8 @@ class Database:
         port: int,
         host: str,
         user: str,
-        password: Optional[str],
-        database: Optional[str],
+        password: str | None,
+        database: str | None,
         require_ssl: bool,
     ) -> None:
         logging.debug(f"Initialize Database with host={host} port={port}, user={user}")
@@ -111,7 +111,7 @@ class Database:
         result = self.query_one("SELECT version()")
         return cast(str, result[0])
 
-    def mz_version(self) -> Optional[str]:
+    def mz_version(self) -> str | None:
         if self.dialect == Dialect.MZ:
             result = self.query_one("SELECT mz_version()")
             return cast(str, result[0])
@@ -134,26 +134,26 @@ class Database:
         with self.conn.cursor() as cursor:
             cursor.execute(statement)
 
-    def execute_all(self, statements: List[str]) -> None:
+    def execute_all(self, statements: list[str]) -> None:
         with self.conn.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
 
-    def query_one(self, query: str) -> Dict[Any, Any]:
+    def query_one(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
             cursor.execute(query)
-            return cast(Dict[Any, Any], cursor.fetchone())
+            return cast(dict[Any, Any], cursor.fetchone())
 
-    def query_all(self, query: str) -> Dict[Any, Any]:
+    def query_all(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
             cursor.execute(query)
-            return cast(Dict[Any, Any], cursor.fetchall())
+            return cast(dict[Any, Any], cursor.fetchall())
 
 
 # Utility functions
 # -----------------
 
 
-def parse_from_file(path: Traversable) -> List[str]:
+def parse_from_file(path: Path) -> list[str]:
     """Parses a *.sql file to a list of queries."""
     return sqlparse.split(path.read_text())

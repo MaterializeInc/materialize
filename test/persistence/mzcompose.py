@@ -11,17 +11,14 @@ import os
 import time
 from argparse import Namespace
 from textwrap import dedent
-from typing import Union
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -36,7 +33,7 @@ td_test = os.environ.pop("TD_TEST", "*")
 
 
 def start_deps(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
 
     if isinstance(args_or_parser, Namespace):
@@ -58,7 +55,7 @@ def start_deps(
 
 
 def workflow_kafka_sources(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
     start_deps(c, args_or_parser)
 
@@ -87,7 +84,7 @@ def workflow_kafka_sources(
 
 
 def workflow_user_tables(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
     start_deps(c, args_or_parser)
 

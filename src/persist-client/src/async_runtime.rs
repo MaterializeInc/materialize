@@ -10,6 +10,7 @@
 //! Async runtime extensions.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::{Builder, Runtime};
@@ -36,6 +37,13 @@ impl IsolatedRuntime {
         // TODO: choose a more principled `worker_limit`. Right now we use the
         // Tokio default, which is presently the number of cores on the machine.
         let runtime = Builder::new_multi_thread()
+            .thread_name_fn(|| {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                // This will wrap around eventually, which is not ideal, but it's important that
+                // it stays small to fit within OS limits.
+                format!("persist:{:04x}", id % 0x10000)
+            })
             .enable_all()
             .build()
             .expect("known to be valid");

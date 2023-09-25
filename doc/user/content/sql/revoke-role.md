@@ -10,8 +10,6 @@ menu:
 of other roles, as well as inherit all the privileges of those
 roles. This membership can also be revoked.
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "revoke-role.svg" >}}

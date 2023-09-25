@@ -132,6 +132,7 @@ tests_without_views=(
     test/sqllogictest/recursion_limit.slt
     test/sqllogictest/recursive_type_unioning.slt
     test/sqllogictest/regex.slt
+    test/sqllogictest/like.slt
     test/sqllogictest/regressions.slt
     test/sqllogictest/returning.slt
     test/sqllogictest/role.slt
@@ -147,7 +148,6 @@ tests_without_views=(
     test/sqllogictest/show_create_system_objects.slt
     test/sqllogictest/slt.slt
     test/sqllogictest/source_sizing.slt
-    test/sqllogictest/source_with_schema.slt
     test/sqllogictest/string.slt
     test/sqllogictest/subquery.slt
     test/sqllogictest/subscribe_error.slt

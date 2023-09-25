@@ -14,10 +14,11 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::anyhow;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
@@ -299,6 +300,35 @@ impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
     }
 }
 
+impl RustType<proto::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpecifier {
+    fn into_proto(&self) -> proto::ResolvedDatabaseSpecifier {
+        let spec = match self {
+            ResolvedDatabaseSpecifier::Ambient => {
+                proto::resolved_database_specifier::Spec::Ambient(Default::default())
+            }
+            ResolvedDatabaseSpecifier::Id(database_id) => {
+                proto::resolved_database_specifier::Spec::Id(database_id.into_proto())
+            }
+        };
+        proto::ResolvedDatabaseSpecifier { spec: Some(spec) }
+    }
+
+    fn from_proto(proto: proto::ResolvedDatabaseSpecifier) -> Result<Self, TryFromProtoError> {
+        let spec = proto
+            .spec
+            .ok_or_else(|| TryFromProtoError::missing_field("ResolvedDatabaseSpecifier::spec"))?;
+        let spec = match spec {
+            proto::resolved_database_specifier::Spec::Ambient(_) => {
+                ResolvedDatabaseSpecifier::Ambient
+            }
+            proto::resolved_database_specifier::Spec::Id(database_id) => {
+                ResolvedDatabaseSpecifier::Id(database_id.into_rust()?)
+            }
+        };
+        Ok(spec)
+    }
+}
+
 /*
  * TODO(jkosh44) It's possible that in order to fix
  * https://github.com/MaterializeInc/materialize/issues/8805 we will need to assign temporary
@@ -377,6 +407,33 @@ impl From<SchemaSpecifier> for SchemaId {
             SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id,
         }
+    }
+}
+
+impl RustType<proto::SchemaSpecifier> for SchemaSpecifier {
+    fn into_proto(&self) -> proto::SchemaSpecifier {
+        let spec = match self {
+            SchemaSpecifier::Temporary => {
+                proto::schema_specifier::Spec::Temporary(Default::default())
+            }
+            SchemaSpecifier::Id(schema_id) => {
+                proto::schema_specifier::Spec::Id(schema_id.into_proto())
+            }
+        };
+        proto::SchemaSpecifier { spec: Some(spec) }
+    }
+
+    fn from_proto(proto: proto::SchemaSpecifier) -> Result<Self, TryFromProtoError> {
+        let spec = proto
+            .spec
+            .ok_or_else(|| TryFromProtoError::missing_field("SchemaSpecifier::spec"))?;
+        let spec = match spec {
+            proto::schema_specifier::Spec::Temporary(_) => SchemaSpecifier::Temporary,
+            proto::schema_specifier::Spec::Id(schema_id) => {
+                SchemaSpecifier::Id(schema_id.into_rust()?)
+            }
+        };
+        Ok(spec)
     }
 }
 
@@ -1103,6 +1160,28 @@ impl From<&GlobalId> for ObjectId {
     }
 }
 
+impl From<CommentObjectId> for ObjectId {
+    fn from(id: CommentObjectId) -> Self {
+        match id {
+            CommentObjectId::Table(global_id)
+            | CommentObjectId::View(global_id)
+            | CommentObjectId::MaterializedView(global_id)
+            | CommentObjectId::Source(global_id)
+            | CommentObjectId::Sink(global_id)
+            | CommentObjectId::Index(global_id)
+            | CommentObjectId::Func(global_id)
+            | CommentObjectId::Connection(global_id)
+            | CommentObjectId::Type(global_id)
+            | CommentObjectId::Secret(global_id) => ObjectId::Item(global_id),
+            CommentObjectId::Role(id) => ObjectId::Role(id),
+            CommentObjectId::Database(id) => ObjectId::Database(id),
+            CommentObjectId::Schema(id) => ObjectId::Schema(id),
+            CommentObjectId::Cluster(id) => ObjectId::Cluster(id),
+            CommentObjectId::ClusterReplica(id) => ObjectId::ClusterReplica(id),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum SystemObjectId {
     /// The ID of a specific object.
@@ -1127,6 +1206,151 @@ impl SystemObjectId {
 impl From<ObjectId> for SystemObjectId {
     fn from(id: ObjectId) -> Self {
         SystemObjectId::Object(id)
+    }
+}
+
+/// Comments can be applied to multiple kinds of objects (e.g. Tables and Role), so we need a way
+/// to represent these different types and their IDs (e.g. [`GlobalId`] and [`RoleId`]), as well as
+/// the inner kind of object that is represented, e.g. [`GlobalId`] is used to identify both Tables
+/// and Views. No other kind of ID encapsulates all of this, hence this new "*Id" type.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
+pub enum CommentObjectId {
+    Table(GlobalId),
+    View(GlobalId),
+    MaterializedView(GlobalId),
+    Source(GlobalId),
+    Sink(GlobalId),
+    Index(GlobalId),
+    Func(GlobalId),
+    Connection(GlobalId),
+    Type(GlobalId),
+    Secret(GlobalId),
+    Role(RoleId),
+    Database(DatabaseId),
+    Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
+    Cluster(ClusterId),
+    ClusterReplica((ClusterId, ReplicaId)),
+}
+
+impl RustType<proto::comment_key::Object> for CommentObjectId {
+    fn into_proto(&self) -> proto::comment_key::Object {
+        match self {
+            CommentObjectId::Table(global_id) => {
+                proto::comment_key::Object::Table(global_id.into_proto())
+            }
+            CommentObjectId::View(global_id) => {
+                proto::comment_key::Object::View(global_id.into_proto())
+            }
+            CommentObjectId::MaterializedView(global_id) => {
+                proto::comment_key::Object::MaterializedView(global_id.into_proto())
+            }
+            CommentObjectId::Source(global_id) => {
+                proto::comment_key::Object::Source(global_id.into_proto())
+            }
+            CommentObjectId::Sink(global_id) => {
+                proto::comment_key::Object::Sink(global_id.into_proto())
+            }
+            CommentObjectId::Index(global_id) => {
+                proto::comment_key::Object::Index(global_id.into_proto())
+            }
+            CommentObjectId::Func(global_id) => {
+                proto::comment_key::Object::Func(global_id.into_proto())
+            }
+            CommentObjectId::Connection(global_id) => {
+                proto::comment_key::Object::Connection(global_id.into_proto())
+            }
+            CommentObjectId::Type(global_id) => {
+                proto::comment_key::Object::Type(global_id.into_proto())
+            }
+            CommentObjectId::Secret(global_id) => {
+                proto::comment_key::Object::Secret(global_id.into_proto())
+            }
+            CommentObjectId::Role(role_id) => {
+                proto::comment_key::Object::Role(role_id.into_proto())
+            }
+            CommentObjectId::Database(database_id) => {
+                proto::comment_key::Object::Database(database_id.into_proto())
+            }
+            CommentObjectId::Schema((database, schema)) => {
+                proto::comment_key::Object::Schema(proto::ResolvedSchema {
+                    database: Some(database.into_proto()),
+                    schema: Some(schema.into_proto()),
+                })
+            }
+            CommentObjectId::Cluster(cluster_id) => {
+                proto::comment_key::Object::Cluster(cluster_id.into_proto())
+            }
+            CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                let cluster_replica_id = proto::ClusterReplicaId {
+                    cluster_id: Some(cluster_id.into_proto()),
+                    replica_id: Some(replica_id.into_proto()),
+                };
+                proto::comment_key::Object::ClusterReplica(cluster_replica_id)
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::comment_key::Object) -> Result<Self, TryFromProtoError> {
+        let id = match proto {
+            proto::comment_key::Object::Table(global_id) => {
+                CommentObjectId::Table(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::View(global_id) => {
+                CommentObjectId::View(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::MaterializedView(global_id) => {
+                CommentObjectId::MaterializedView(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Source(global_id) => {
+                CommentObjectId::Source(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Sink(global_id) => {
+                CommentObjectId::Sink(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Index(global_id) => {
+                CommentObjectId::Index(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Func(global_id) => {
+                CommentObjectId::Func(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Connection(global_id) => {
+                CommentObjectId::Connection(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Type(global_id) => {
+                CommentObjectId::Type(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Secret(global_id) => {
+                CommentObjectId::Secret(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::Role(role_id) => {
+                CommentObjectId::Role(role_id.into_rust()?)
+            }
+            proto::comment_key::Object::Database(database_id) => {
+                CommentObjectId::Database(database_id.into_rust()?)
+            }
+            proto::comment_key::Object::Schema(resolved_schema) => {
+                let database = resolved_schema
+                    .database
+                    .into_rust_if_some("ResolvedSchema::database")?;
+                let schema = resolved_schema
+                    .schema
+                    .into_rust_if_some("ResolvedSchema::schema")?;
+                CommentObjectId::Schema((database, schema))
+            }
+            proto::comment_key::Object::Cluster(cluster_id) => {
+                CommentObjectId::Cluster(cluster_id.into_rust()?)
+            }
+            proto::comment_key::Object::ClusterReplica(cluster_replica_id) => {
+                let cluster_id = cluster_replica_id
+                    .cluster_id
+                    .into_rust_if_some("ClusterReplicaId::cluster_id")?;
+                let replica_id = cluster_replica_id
+                    .replica_id
+                    .into_rust_if_some("ClusterReplicaId::replica_id")?;
+                CommentObjectId::ClusterReplica((cluster_id, replica_id))
+            }
+        };
+        Ok(id)
     }
 }
 
@@ -1688,7 +1912,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             // The ID is arbitrary here; we just need some dummy
                             // value to return.
                             cluster_id: ClusterId::System(0),
-                            replica_id: 0,
+                            replica_id: ReplicaId::System(0),
                         })
                     }
                 }

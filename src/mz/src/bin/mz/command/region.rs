@@ -18,14 +18,8 @@
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::{ProfileArg, RegionArg};
-
 #[derive(Debug, clap::Args)]
 pub struct RegionCommand {
-    #[clap(flatten)]
-    region: RegionArg,
-    #[clap(flatten)]
-    profile: ProfileArg,
     #[clap(subcommand)]
     subcommand: RegionSubcommand,
 }
@@ -48,9 +42,7 @@ pub enum RegionSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
-    let cx = cx
-        .activate_profile(cmd.profile.profile)?
-        .activate_region(cmd.region.region)?;
+    let cx = cx.activate_profile()?.activate_region()?;
     match cmd.subcommand {
         RegionSubcommand::Enable { version } => mz::command::region::enable(cx, version).await,
         RegionSubcommand::Disable => mz::command::region::disable(cx).await,

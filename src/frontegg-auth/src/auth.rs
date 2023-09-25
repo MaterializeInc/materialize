@@ -13,7 +13,6 @@ use std::time::Duration;
 use derivative::Derivative;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use mz_ore::now::NowFn;
-use mz_sql::session::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
 use tokio::time;
 use tracing::info;
@@ -267,13 +266,4 @@ pub struct ValidatedClaims {
     pub is_admin: bool,
     // Prevent construction outside of `Authentication::validate_access_token`.
     _private: (),
-}
-
-impl From<&ValidatedClaims> for ExternalUserMetadata {
-    fn from(claims: &ValidatedClaims) -> ExternalUserMetadata {
-        ExternalUserMetadata {
-            user_id: claims.user_id,
-            admin: claims.is_admin,
-        }
-    }
 }

@@ -13,17 +13,17 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint
-  - text?
+  - c0: bigint
+  - c1: bigint
+  - c2: text?
 ----
 Source defined as t0
 
 # Define t1 source
 define
 DefSource name=t1 keys=[[#0]]
-  - bigint
-  - text?
+  - c0: bigint
+  - c1: text?
 ----
 Source defined as t1
 

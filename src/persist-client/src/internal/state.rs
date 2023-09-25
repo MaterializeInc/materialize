@@ -162,6 +162,10 @@ pub struct HollowBatchPart {
     pub key: PartialBatchKey,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
+    /// A lower bound on the keys in the part. (By default, this the minimum
+    /// possible key: `vec![]`.)
+    #[serde(serialize_with = "serialize_part_bytes")]
+    pub key_lower: Vec<u8>,
     /// Aggregate statistics about data contained in this part.
     #[serde(serialize_with = "serialize_part_stats")]
     #[proptest(strategy = "super::encoding::any_some_lazy_part_stats()")]
@@ -977,8 +981,8 @@ pub struct TypedState<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-#[cfg(any(test, debug_assertions))]
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
         TypedState {
             state: State {
@@ -987,6 +991,20 @@ impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
                 hostname,
+                collections: self.collections.clone(),
+            },
+            _phantom: PhantomData,
+        }
+    }
+
+    pub(crate) fn clone_for_rollup(&self) -> Self {
+        TypedState {
+            state: State {
+                applier_version: self.applier_version.clone(),
+                shard_id: self.shard_id.clone(),
+                seqno: self.seqno.clone(),
+                walltime_ms: self.walltime_ms,
+                hostname: self.hostname.clone(),
                 collections: self.collections.clone(),
             },
             _phantom: PhantomData,
@@ -1335,6 +1353,11 @@ where
     }
 }
 
+fn serialize_part_bytes<S: Serializer>(val: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    let val = hex::encode(val);
+    val.serialize(s)
+}
+
 fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
@@ -1606,6 +1629,7 @@ pub(crate) mod tests {
                 .map(|x| HollowBatchPart {
                     key: PartialBatchKey((*x).to_owned()),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 })
                 .collect(),

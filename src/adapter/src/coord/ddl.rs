@@ -11,32 +11,33 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
+use mz_controller::clusters::ReplicaLocation;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::statement_logging::StatementEndedExecutionReason;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
-    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_MATERIALIZED_VIEWS, MAX_OBJECTS_PER_SCHEMA,
-    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_TABLES,
+    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
+    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
+    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::{
-    CreateExportToken, ExportDescription, ReadPolicy, StorageError,
-};
-use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
-use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
+use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
 use timely::progress::Antichain;
 use tracing::{event, warn, Level};
@@ -50,6 +51,7 @@ use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, flags, AdapterError, AdapterNotice};
@@ -68,7 +70,18 @@ impl Coordinator {
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_with(session, ops, |_| Ok(())).await
+        self.catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await
+    }
+
+    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn catalog_transact_conn(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        self.catalog_transact_with(conn_id, ops, |_| Ok(())).await
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
@@ -80,11 +93,11 @@ impl Coordinator {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    /// [`DataflowDesc`]: mz_compute_client::types::dataflows::DataflowDesc
+    /// [`DataflowDesc`]: mz_compute_types::dataflows::DataflowDesc
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn catalog_transact_with<F, R>(
+    pub(crate) async fn catalog_transact_with<'a, F, R>(
         &mut self,
-        session: Option<&Session>,
+        conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
         f: F,
     ) -> Result<R, AdapterError>
@@ -124,6 +137,9 @@ impl Coordinator {
                             if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                                 match &ingestion.desc.connection {
                                     GenericSourceConnection::Postgres(conn) => {
+                                        let conn = conn
+                                            .clone()
+                                            .into_inline_connection(self.catalog().state());
                                         let config = conn
                                             .connection
                                             .config(&*self.connection_context.secrets_reader)
@@ -166,14 +182,12 @@ impl Coordinator {
                         CatalogItem::Connection(catalog::Connection { connection, .. }) => {
                             match connection {
                                 // SSH connections have an associated secret that should be dropped
-                                mz_storage_client::types::connections::Connection::Ssh(_) => {
+                                mz_storage_types::connections::Connection::Ssh(_) => {
                                     secrets_to_drop.push(*id);
                                 }
                                 // AWS PrivateLink connections have an associated
                                 // VpcEndpoint K8S resource that should be dropped
-                                mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                    _,
-                                ) => {
+                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                                     vpc_endpoints_to_drop.push(*id);
                                 }
                                 _ => (),
@@ -319,12 +333,7 @@ impl Coordinator {
                 .map(catalog::Op::DropTimeline),
         );
 
-        self.validate_resource_limits(
-            &ops,
-            session
-                .map(|session| session.conn_id())
-                .unwrap_or(&SYSTEM_CONN_ID),
-        )?;
+        self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
 
         // This will produce timestamps that are guaranteed to increase on each
         // call, and also never be behind the system clock. If the system clock
@@ -336,13 +345,20 @@ impl Coordinator {
         // regress or pause for 10s.
         let oracle_write_ts = self.get_local_write_ts().await.timestamp;
 
-        let (catalog, controller) = self.catalog_and_controller_mut();
+        let Coordinator {
+            catalog,
+            controller,
+            active_conns,
+            ..
+        } = self;
+        let catalog = Arc::make_mut(catalog);
+        let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
         let TransactionResult {
             builtin_table_updates,
             audit_events,
             result,
         } = catalog
-            .transact(oracle_write_ts, session, ops, |catalog| {
+            .transact(oracle_write_ts, conn, ops, |catalog| {
                 f(CatalogTxn {
                     dataflow_client: controller,
                     catalog,
@@ -353,7 +369,8 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates).await;
+            self.send_builtin_table_updates_blocking(builtin_table_updates)
+                .await;
 
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
@@ -474,9 +491,10 @@ impl Coordinator {
         }
         .await;
 
+        let conn = conn_id.and_then(|id| self.active_conns.get(id));
         if let (Some(segment_client), Some(user_metadata)) = (
             &self.segment_client,
-            session.and_then(|s| s.user().external_metadata.as_ref()),
+            conn.and_then(|s| s.user().external_metadata.as_ref()),
         ) {
             for VersionedEvent::V1(event) in audit_events {
                 let event_type = format!(
@@ -484,11 +502,9 @@ impl Coordinator {
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
-                // Note: when there is no Session, that means something internal to
+                // Note: when there is no ConnMeta, that means something internal to
                 // environmentd initiated the transaction, hence the default name.
-                let application_name = session
-                    .map(|s| s.application_name())
-                    .unwrap_or("environmentd");
+                let application_name = conn.map(|s| s.application_name()).unwrap_or("environmentd");
                 segment_client.environment_track(
                     &self.catalog().config().environment_id,
                     application_name,
@@ -498,6 +514,10 @@ impl Coordinator {
                 );
             }
         }
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if sort assertions are enabled.
+        mz_ore::soft_assert_eq!(self.catalog().check_consistency(), Ok(()));
 
         Ok(result)
     }
@@ -669,12 +689,12 @@ impl Coordinator {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog_mut().drop_temp_item_ops(session.conn_id());
+    pub(crate) async fn drop_temp_items(&mut self, conn_id: &ConnectionId) {
+        let ops = self.catalog_mut().drop_temp_item_ops(conn_id);
         if ops.is_empty() {
             return;
         }
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact_conn(Some(conn_id), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
     }
@@ -745,15 +765,17 @@ impl Coordinator {
         &mut self,
         create_export_token: CreateExportToken,
         sink: &Sink,
-        connection: StorageSinkConnection,
+        connection: StorageSinkConnection<ReferencedConnection>,
     ) -> Result<(), AdapterError> {
+        let connection = connection.into_inline_connection(self.catalog().state());
+
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        let status_id =
-            Some(self.catalog().resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
-            ));
+        let status_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
+        );
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
@@ -771,7 +793,7 @@ impl Coordinator {
         };
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
-        let storage_sink_desc = mz_storage_client::types::sinks::StorageSinkDesc {
+        let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
                 .desc(&self.catalog().resolve_full_name(
@@ -804,7 +826,7 @@ impl Coordinator {
         &mut self,
         id: GlobalId,
         oid: u32,
-        connection: StorageSinkConnection,
+        connection: StorageSinkConnection<ReferencedConnection>,
         create_export_token: CreateExportToken,
         session: Option<&Session>,
     ) -> Result<(), AdapterError> {
@@ -865,6 +887,8 @@ impl Coordinator {
         ops: &Vec<catalog::Op>,
         conn_id: &ConnectionId,
     ) -> Result<(), AdapterError> {
+        let mut new_kafka_connections = 0;
+        let mut new_postgres_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -925,14 +949,17 @@ impl Coordinator {
                         ))
                         .or_insert(0) += 1;
                     match item {
-                        CatalogItem::Connection(connection) => match connection.connection {
-                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                _,
-                            ) => {
-                                new_aws_privatelink_connections += 1;
+                        CatalogItem::Connection(connection) => {
+                            use mz_storage_types::connections::Connection;
+                            match connection.connection {
+                                Connection::Kafka(_) => new_kafka_connections += 1,
+                                Connection::Postgres(_) => new_postgres_connections += 1,
+                                Connection::AwsPrivatelink(_) => {
+                                    new_aws_privatelink_connections += 1
+                                }
+                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
                             }
-                            _ => (),
-                        },
+                        }
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
@@ -992,33 +1019,31 @@ impl Coordinator {
                             ))
                             .or_insert(0) -= 1;
                         match entry.item() {
-                                CatalogItem::Connection(connection) => match connection.connection {
-                                    mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                        _,
-                                    ) => {
-                                        new_aws_privatelink_connections -= 1;
-                                    }
-                                    _ => (),
-                                },
-                                CatalogItem::Table(_) => {
-                                    new_tables -= 1;
+                            CatalogItem::Connection(connection) => match connection.connection {
+                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+                                    new_aws_privatelink_connections -= 1;
                                 }
-                                CatalogItem::Source(source) => {
-                                    new_sources -= source.user_controllable_persist_shard_count()
-                                }
-                                CatalogItem::Sink(_) => new_sinks -= 1,
-                                CatalogItem::MaterializedView(_) => {
-                                    new_materialized_views -= 1;
-                                }
-                                CatalogItem::Secret(_) => {
-                                    new_secrets -= 1;
-                                }
-                                CatalogItem::Log(_)
-                                | CatalogItem::View(_)
-                                | CatalogItem::Index(_)
-                                | CatalogItem::Type(_)
-                                | CatalogItem::Func(_) => {}
+                                _ => (),
+                            },
+                            CatalogItem::Table(_) => {
+                                new_tables -= 1;
                             }
+                            CatalogItem::Source(source) => {
+                                new_sources -= source.user_controllable_persist_shard_count()
+                            }
+                            CatalogItem::Sink(_) => new_sinks -= 1,
+                            CatalogItem::MaterializedView(_) => {
+                                new_materialized_views -= 1;
+                            }
+                            CatalogItem::Secret(_) => {
+                                new_secrets -= 1;
+                            }
+                            CatalogItem::Log(_)
+                            | CatalogItem::View(_)
+                            | CatalogItem::Index(_)
+                            | CatalogItem::Type(_)
+                            | CatalogItem::Func(_) => {}
+                        }
                     }
                 },
                 Op::AlterRole { .. }
@@ -1041,22 +1066,43 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateItem { .. }
-                | Op::UpdateRotatedKeys { .. } => {}
+                | Op::UpdateRotatedKeys { .. }
+                | Op::Comment { .. } => {}
             }
         }
 
+        let mut current_aws_privatelink_connections = 0;
+        let mut current_postgres_connections = 0;
+        let mut current_kafka_connections = 0;
+        for c in self.catalog().user_connections() {
+            let connection = c
+                .connection()
+                .expect("`user_connections()` only returns connection objects");
+
+            use mz_storage_types::connections::Connection;
+            match connection.connection {
+                Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
+                Connection::Postgres(_) => current_postgres_connections += 1,
+                Connection::Kafka(_) => current_kafka_connections += 1,
+                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+            }
+        }
         self.validate_resource_limit(
-            self.catalog()
-                .user_connections()
-                .filter(|c| {
-                    matches!(
-                        c.connection()
-                            .expect("`user_connections()` only returns connection objects")
-                            .connection,
-                        mz_storage_client::types::connections::Connection::AwsPrivatelink(_),
-                    )
-                })
-                .count(),
+            current_kafka_connections,
+            new_kafka_connections,
+            SystemVars::max_kafka_connections,
+            "Kafka Connection",
+            MAX_KAFKA_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_postgres_connections,
+            new_postgres_connections,
+            SystemVars::max_postgres_connections,
+            "PostgreSQL Connection",
+            MAX_POSTGRES_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_aws_privatelink_connections,
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",

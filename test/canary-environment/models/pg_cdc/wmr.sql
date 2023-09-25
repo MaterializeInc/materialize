@@ -12,7 +12,7 @@
 -- to ensure the result updates frequently
 
 -- depends_on: {{ ref('pg_cdc') }}
-{{ config(materialized='materializedview', indexes=[{'default': True}]) }}
+{{ config(materialized='materializedview', cluster="qa_canary_environment_compute", indexes=[{'default': True}]) }}
 
 WITH MUTUALLY RECURSIVE
     symm (a int, b int) AS (
@@ -28,7 +28,7 @@ WITH MUTUALLY RECURSIVE
         WHERE symm.b = reach.a
     ),
     reach(a int, b int, degree int) AS (
-        SELECT a , b , min(degree) FROM candidates group by a, b HAVING a != b
+        SELECT a, b, min(degree) FROM candidates group by a, b HAVING a != b
     )
 SELECT DISTINCT a_people.name AS a_name, b_people.name AS b_name, degree
 FROM reach

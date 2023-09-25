@@ -11,6 +11,8 @@
 
 * Make `dbt init` generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/).
 
+* Allow `cluster` configuration for `dbt test`.
+
 ## 1.5.1 - 2023-07-24
 
 * Enable the `indexes` config for `table` materializations.

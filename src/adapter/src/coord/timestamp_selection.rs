@@ -13,14 +13,14 @@ use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -527,8 +527,12 @@ impl Coordinator {
             ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
             ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
             ScalarType::UInt64 => evaled.unwrap_uint64().into(),
-            ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
-            ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
+            ScalarType::TimestampTz { .. } => {
+                evaled.unwrap_timestamptz().timestamp_millis().try_into()?
+            }
+            ScalarType::Timestamp { .. } => {
+                evaled.unwrap_timestamp().timestamp_millis().try_into()?
+            }
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
                 Catalog::for_session_state(catalog, session).humanize_column_type(&ty)

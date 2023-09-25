@@ -131,6 +131,16 @@ created in the previous step.
     XXX.100.27.23
     ```
 
+## Validate the SSH tunnel connection
+
+To confirm that the SSH tunnel connection is correctly configured, use the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+
+```sql
+VALIDATE CONNECTION ssh_connection;
+```
+
+If no validation errors are returned, the connection can be used to create a source connection.
+
 ## Create a source connection
 
 In Materialize, create a source connection that uses the SSH tunnel connection you configured in the previous section:

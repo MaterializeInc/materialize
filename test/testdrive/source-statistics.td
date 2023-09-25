@@ -76,16 +76,16 @@ mammalmore    moose   2
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
-
+# rehydration_latency_ms should be null for non-UPSERT sources
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
+  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency_ms IS NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true 2 2 2 true
+metrics_test_source true 2 2 2 true true
 
 > DROP SOURCE metrics_test_source
 
@@ -94,18 +94,18 @@ metrics_test_source true 2 2 2 true
 # jitter on when metrics are produced for each sub-source.
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0
+  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency_ms IS NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-accounts       true      false   true  true  false
-auction_house  true      true    false false true
-auctions       true      false   true  true  false
-bids           true      false   true  true  false
-organizations  true      false   true  true  false
-users          true      false   true  true  false
+accounts       true      false   true  true  false   true
+auction_house  true      true    false false true    true
+auctions       true      false   true  true  false   true
+bids           true      false   true  true  false   true
+organizations  true      false   true  true  false   true
+users          true      false   true  true  false   true
 
 > DROP SOURCE auction_house
 
@@ -124,13 +124,14 @@ users          true      false   true  true  false
     SUM(u.updates_committed) BETWEEN 3 AND 11,
     SUM(u.bytes_received) > 0,
     SUM(u.envelope_state_bytes) > 0,
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_count),
+    bool_and(u.rehydration_latency_ms IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true true 3
+upsert true 9 true true true true 3 true
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.

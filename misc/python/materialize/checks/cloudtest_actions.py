@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
@@ -18,9 +17,9 @@ from materialize.util import MzVersion
 class ReplaceEnvironmentdStatefulSet(Action):
     """Change the image tag of the environmentd stateful set, re-create the definition and replace the existing one."""
 
-    new_tag: Optional[str]
+    new_tag: str | None
 
-    def __init__(self, new_tag: Optional[str] = None) -> None:
+    def __init__(self, new_tag: str | None = None) -> None:
         self.new_tag = new_tag
 
     def execute(self, e: Executor) -> None:

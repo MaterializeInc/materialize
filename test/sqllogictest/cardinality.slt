@@ -48,7 +48,7 @@ EXPLAIN WITH(cardinality) SELECT DISTINCT x FROM t
 Explained Query:
   Distinct group_by=[#0] // { cardinality: "materialize.public.t" }
     Project (#0) // { cardinality: "materialize.public.t" }
-      Get materialize.public.t // { cardinality: "materialize.public.t" }
+      ReadIndex on=t t_x=[*** full scan ***] // { cardinality: "materialize.public.t" }
 
 Used Indexes:
   - materialize.public.t_x (*** full scan ***)
@@ -63,7 +63,7 @@ EXPLAIN WITH(cardinality) SELECT * FROM (SELECT DISTINCT ON(t.x) t.x, t.y FROM t
 Explained Query:
   Filter (#0 = #1) // { cardinality: "materialize.public.t * icard(#0)^1" }
     TopK group_by=[#0] limit=1 // { cardinality: "materialize.public.t" }
-      Get materialize.public.t // { cardinality: "materialize.public.t" }
+      ReadIndex on=t t_x=[*** full scan ***] // { cardinality: "materialize.public.t" }
 
 Used Indexes:
   - materialize.public.t_x (*** full scan ***)
@@ -82,9 +82,9 @@ Explained Query:
     Filter (#2 > (#4 / 2)) // { cardinality: "materialize.public.cities * materialize.public.states * 0.33" }
       Join on=(#1 = #3) type=differential // { cardinality: "materialize.public.cities * materialize.public.states" }
         ArrangeBy keys=[[#1]] // { cardinality: "materialize.public.cities" }
-          Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+          ReadIndex on=cities cities_state=[differential join] // { cardinality: "materialize.public.cities" }
         ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.states" }
-          Get materialize.public.states // { cardinality: "materialize.public.states" }
+          ReadIndex on=states state_state=[differential join] // { cardinality: "materialize.public.states" }
 
 Used Indexes:
   - materialize.public.cities_state (differential join)
@@ -114,9 +114,9 @@ Explained Query:
         Project (#1) // { cardinality: "materialize.public.t * materialize.public.t2" }
           Join on=(#0 = #2) type=differential // { cardinality: "materialize.public.t * materialize.public.t2" }
             ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t" }
-              Get materialize.public.t // { cardinality: "materialize.public.t" }
+              ReadIndex on=t t_x=[differential join] // { cardinality: "materialize.public.t" }
             ArrangeBy keys=[[#0]] // { cardinality: "materialize.public.t2" }
-              Get materialize.public.t2 // { cardinality: "materialize.public.t2" }
+              ReadIndex on=t2 tt_x=[differential join] // { cardinality: "materialize.public.t2" }
 
 Used Indexes:
   - materialize.public.t_x (differential join)
@@ -133,7 +133,7 @@ EXPLAIN WITH(cardinality) SELECT state, name FROM
 Explained Query:
   Project (#1, #0) // { cardinality: "materialize.public.cities" }
     TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 // { cardinality: "materialize.public.cities" }
-      Get materialize.public.cities // { cardinality: "materialize.public.cities" }
+      ReadIndex on=cities cities_name=[*** full scan ***] // { cardinality: "materialize.public.cities" }
 
 Used Indexes:
   - materialize.public.cities_name (*** full scan ***)
@@ -167,10 +167,10 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t
+        ReadIndex on=t t_x=[differential join]
 
 Used Indexes:
-  - materialize.public.t_x (differential join, differential join)
+  - materialize.public.t_x (differential join)
 
 EOF
 
@@ -186,9 +186,9 @@ Explained Query:
       implementation
         %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t
+        ReadIndex on=t t_x=[differential join]
       ArrangeBy keys=[[#0]]
-        Get materialize.public.t2
+        ReadIndex on=t2 tt_x=[differential join]
 
 Used Indexes:
   - materialize.public.t_x (differential join)
@@ -312,14 +312,293 @@ Explained Query:
                         Distinct group_by=[#0..=#2]
                           Get l0
                       Distinct group_by=[#0..=#2]
-                        Get materialize.public.person_knows_person
+                        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
                   ArrangeBy keys=[[#0..=#2]]
-                    Get materialize.public.person_knows_person
+                    ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
     cte l0 =
       Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-        Get materialize.public.person_knows_person
+        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+EOF
+
+# regression test drawn from LDBC-BI query 15 for having a selectivity of 0
+# TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive TO true;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+  mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
+  path (src bigint, dst bigint, w double precision) AS (
+      SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
+      FROM Person_knows_Person pp left join mm on least(pp.person1id, pp.person2id) = mm.src AND greatest(pp.person1id, pp.person2id) = mm.dst
+  ),
+  pexists (src bigint, dir bool) AS (
+      (
+          SELECT 1::bigint, true
+          UNION
+          SELECT 2::bigint, false
+      )
+      UNION
+      (
+          WITH
+          ss (src, dir) AS (SELECT src, dir FROM pexists),
+          ns (src, dir) AS (SELECT p.dst, ss.dir FROM ss, path p WHERE ss.src = p.src),
+          bb (src, dir) AS (SELECT src, dir FROM ns UNION ALL SELECT src, dir FROM ss),
+          found (found) AS (
+              SELECT 1 AS found
+              FROM bb b1, bb b2
+              WHERE b1.dir AND (NOT b2.dir) AND b1.src = b2.src
+          )
+          SELECT src, dir
+          FROM ns
+          WHERE NOT EXISTS (SELECT 1 FROM found)
+          UNION
+          SELECT -1, true
+          WHERE EXISTS (SELECT 1 FROM found)
+      )
+  ),
+  pathfound (c bool) AS (
+      SELECT true AS c
+      FROM pexists
+      WHERE src = -1 AND dir
+  )
+SELECT * FROM pexists;
+----
+Explained Query:
+  Return
+    Get l4
+  With Mutually Recursive
+    cte l4 =
+      Distinct group_by=[#0, #1]
+        Union
+          Distinct group_by=[#0, #1]
+            Union
+              Project (#1, #0)
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l1
+                  ArrangeBy keys=[[]]
+                    Union
+                      Negate
+                        Get l3
+                      Constant
+                        - ()
+              Project (#1, #0)
+                Map (true, -1)
+                  Get l3
+          Constant
+            - (1, true)
+            - (2, false)
+    cte l3 =
+      Distinct
+        Project ()
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter #1
+                  Get l2
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter NOT(#1)
+                  Get l2
+    cte l2 =
+      Union
+        Project (#1, #0)
+          Get l1
+        Get l4
+    cte l1 =
+      Project (#1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l4
+          ArrangeBy keys=[[#0]]
+            Union
+              Project (#1, #2)
+                Get l0
+              Project (#1, #2)
+                Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential
+                  ArrangeBy keys=[[#0..=#2]]
+                    Union
+                      Negate
+                        Distinct group_by=[#0..=#2]
+                          Get l0
+                      Distinct group_by=[#0..=#2]
+                        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+                  ArrangeBy keys=[[#0..=#2]]
+                    ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+    cte l0 =
+      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
+        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+EOF
+
+# timeouts should work
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '1us';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SHOW optimizer_oneshot_stats_timeout;
+----
+1 us
+COMPLETE 1
+
+statement ok
+CREATE TABLE t3 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t4 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t5 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t6 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t7 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t8 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t9 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t10 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+INSERT INTO t3 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 13)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t4 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 47)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t5 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 38)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t6 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 23)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t7 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 23)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t8 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 23)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t9 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 21)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t10 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 20)) AS l, (SELECT generate_series(1, 13)) AS r
+
+# TODO(mgree): Make this reproducible
+# query T multiline
+# EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+# ----
+# Explained Query:
+#   Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
+#     Join on=(eq(#0, #2, #4, #6, #8, #10, #12, #14, #16, #18)) type=delta
+#       implementation
+#         %0:t » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %1:t2 » %0:t[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %2:t3 » %0:t[#0]KA » %1:t2[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %3:t4 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %4:t5 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %5:t6 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %6:t7 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %7:t8 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %8:t9 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %9:t10[#0]KA
+#         %9:t10 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA
+#       ArrangeBy keys=[[#0]]
+#         ReadIndex on=t t_x=[delta join 1st input (full scan)]
+#       ArrangeBy keys=[[#0]]
+#         ReadIndex on=t2 tt_x=[delta join lookup]
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t3
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t4
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t5
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t6
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t7
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t8
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t9
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t10
+#
+# Used Indexes:
+#   - materialize.public.t_x (delta join 1st input (full scan))
+#   - materialize.public.tt_x (delta join lookup)
+#
+# EOF
+
+# restore and make sure we're good
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '20ms';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SHOW optimizer_oneshot_stats_timeout;
+----
+20 ms
+COMPLETE 1
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+----
+Explained Query:
+  Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
+    Join on=(eq(#0, #2, #4, #6, #8, #10, #12, #14, #16, #18)) type=delta
+      implementation
+        %0:t » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %1:t2 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611|
+        %2:t3 » %0:t[#0]KA|4| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %3:t4 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %1:t2[#0]KA|10000|
+        %4:t5 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %5:t6 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %6:t7 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %7:t8 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %8:t9 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %9:t10 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t t_x=[delta join 1st input (full scan)]
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t2 tt_x=[delta join lookup]
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t3
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t4
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t5
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t6
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t7
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t8
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t9
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t10
+
+Used Indexes:
+  - materialize.public.t_x (delta join 1st input (full scan))
+  - materialize.public.tt_x (delta join lookup)
 
 EOF

@@ -8,14 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::upgrade::MigrationAction;
+use crate::upgrade::{objects_v31, objects_v32};
 use crate::{StashError, Transaction, TypedCollection};
-
-pub mod objects_v31 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v31.rs"));
-}
-pub mod objects_v32 {
-    include!(concat!(env!("OUT_DIR"), "/objects_v32.rs"));
-}
 
 /// Remove randomly selected az's.
 pub async fn upgrade(tx: &'_ mut Transaction<'_>) -> Result<(), StashError> {

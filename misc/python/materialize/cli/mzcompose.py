@@ -28,13 +28,15 @@ import os
 import subprocess
 import sys
 import webbrowser
+from collections.abc import Sequence
 from pathlib import Path
-from typing import IO, Any, List, Optional, Sequence, Text, Tuple, Union
+from typing import IO, Any
 
 import junit_xml
 from humanize import naturalsize
 
-from materialize import ROOT, ci_util, mzbuild, mzcompose, spawn, ui
+from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
+from materialize.mzcompose.composition import Composition, UnknownCompositionError
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (2, 6, 0)
@@ -42,7 +44,7 @@ RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
 RECOMMENDED_MIN_CPUS = 2
 
 
-def main(argv: List[str]) -> None:
+def main(argv: list[str]) -> None:
     parser = ArgumentParser(
         prog="mzcompose",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -138,17 +140,17 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     args.command.invoke(args)
 
 
-def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
+def load_composition(args: argparse.Namespace) -> Composition:
     """Loads the composition specified by the command-line arguments."""
-    repo = mzbuild.Repository.from_arguments(ROOT, args)
+    repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
     try:
-        return mzcompose.Composition(
+        return Composition(
             repo,
             name=args.find or Path.cwd().name,
             preserve_ports=args.preserve_ports,
             project_name=args.project_name,
         )
-    except mzcompose.UnknownCompositionError as e:
+    except UnknownCompositionError as e:
         if args.find:
             hint = "available compositions:\n"
             for name in repo.compositions:
@@ -171,7 +173,7 @@ class Command:
     name: str
     """The name of the command."""
 
-    aliases: List[str] = []
+    aliases: list[str] = []
     """Aliases to register for the command."""
 
     help: str
@@ -232,7 +234,7 @@ class GenShortcutsCommand(Command):
     help = "generate shortcut `mzcompose` shell scripts in mzcompose directories"
 
     def run(self, args: argparse.Namespace) -> None:
-        repo = mzbuild.Repository.from_arguments(ROOT, args)
+        repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         template = """#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
@@ -259,11 +261,11 @@ class ListCompositionsCommand(Command):
     name = "list-compositions"
     help = "list the directories that contain compositions and their summaries"
 
-    def run(cls, args: argparse.Namespace) -> None:
-        repo = mzbuild.Repository.from_arguments(ROOT, args)
+    def run(self, args: argparse.Namespace) -> None:
+        repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
             print(os.path.relpath(path, repo.root))
-            composition = mzcompose.Composition(repo, name, munge_services=False)
+            composition = Composition(repo, name, munge_services=False)
             if composition.description:
                 # Emit the first paragraph of the description.
                 for line in composition.description.split("\n"):
@@ -382,7 +384,7 @@ class DockerComposeCommand(Command):
         self,
         name: str,
         help: str,
-        help_epilog: Optional[str] = None,
+        help_epilog: str | None = None,
         runs_containers: bool = False,
     ):
         self.name = name
@@ -446,7 +448,7 @@ class DockerComposeCommand(Command):
         self.handle_composition(args, composition)
 
     def handle_composition(
-        self, args: argparse.Namespace, composition: mzcompose.Composition
+        self, args: argparse.Namespace, composition: Composition
     ) -> None:
         ui.header("Delegating to Docker Compose")
         composition.invoke(*args.unknown_args, self.name, *args.unknown_subargs)
@@ -469,9 +471,7 @@ class DockerComposeCommand(Command):
                 "See https://materialize.com/docs/third-party/docker/."
             )
 
-    def capture(
-        self, args: List[str], stderr: Union[None, int, IO[bytes]] = None
-    ) -> str:
+    def capture(self, args: list[str], stderr: None | int | IO[bytes] = None) -> str:
         try:
             return spawn.capture(args, stderr=stderr)
         except subprocess.CalledProcessError as e:
@@ -550,7 +550,7 @@ To see the available workflows, run:
         super().run(args)
 
     def handle_composition(
-        self, args: argparse.Namespace, composition: mzcompose.Composition
+        self, args: argparse.Namespace, composition: Composition
     ) -> None:
         if args.workflow not in composition.workflows:
             # Restart any dependencies whose definitions have changed. This is
@@ -593,7 +593,7 @@ To see the available workflows, run:
             # Upload test report to Buildkite Test Analytics.
             junit_suite = junit_xml.TestSuite(composition.name)
 
-            for (name, result) in composition.test_results.items():
+            for name, result in composition.test_results.items():
                 test_case = junit_xml.TestCase(name, composition.name, result.duration)
                 if result.error:
                     test_case.add_error_info(message=result.error)
@@ -674,23 +674,25 @@ UpCommand = DockerComposeCommand(
 class ArgumentParser(argparse.ArgumentParser):
     def parse_known_args(
         self,
-        args: Optional[Sequence[Text]] = None,
-        namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> tuple[argparse.Namespace, list[str]]:
         namespace, unknown_args = super().parse_known_args(args, namespace)
         setattr(namespace, "unknown_args", unknown_args)
+        assert namespace is not None
         return namespace, []
 
 
 class ArgumentSubparser(argparse.ArgumentParser):
     def parse_known_args(
         self,
-        args: Optional[Sequence[Text]] = None,
-        namespace: Optional[argparse.Namespace] = None,
-    ) -> Tuple[argparse.Namespace, List[str]]:
-        namespace, unknown_args = super().parse_known_args(args, namespace)
-        setattr(namespace, "unknown_subargs", unknown_args)
-        return namespace, []
+        args: Sequence[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> tuple[argparse.Namespace, list[str]]:
+        new_namespace, unknown_args = super().parse_known_args(args, namespace)
+        setattr(new_namespace, "unknown_subargs", unknown_args)
+        assert new_namespace is not None
+        return new_namespace, []
 
 
 if __name__ == "__main__":

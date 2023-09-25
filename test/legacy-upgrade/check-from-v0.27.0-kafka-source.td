@@ -42,8 +42,16 @@ SELECT user FROM linked_cluster_audit_event_user ORDER BY priority DESC LIMIT 1
 # Test that the "disk" option on the linked cluster defaults to false
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_kafka_source'
 materialize_public_kafka_source  linked
+
+# NOTE: Due to the ('N' -> 'uN') migration of replica IDs in the audit log, we
+# currently see additional `drop` and `create` events for each replica that
+# existed before the migration. Those events don't have a user attached, so we
+# can recognize them and filter them out.
 > SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id', user
   FROM mz_audit_events
-  WHERE details->>'name' = 'materialize_public_kafka_source' OR details->>'cluster_name' = 'materialize_public_kafka_source'
+  WHERE (
+    details->>'name' = 'materialize_public_kafka_source' OR
+    details->>'cluster_name' = 'materialize_public_kafka_source'
+  ) AND user IS NOT NULL
 create  cluster          "{\"name\":\"materialize_public_kafka_source\"}"  ${expected-user}
 create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"  ${expected-user}

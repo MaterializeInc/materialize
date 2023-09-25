@@ -33,13 +33,14 @@ use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use http::{Request, StatusCode};
+use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
@@ -55,7 +56,6 @@ use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
 
 mod catalog;
@@ -164,6 +164,12 @@ impl HttpServer {
                 routing::post(webhook::handle_webhook),
             )
             .with_state(adapter_client)
+            .layer(
+                CorsLayer::new()
+                    .allow_methods(Method::POST)
+                    .allow_origin(AllowOrigin::mirror_request())
+                    .allow_headers(Any),
+            )
             .layer(
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_load_error))
@@ -395,8 +401,12 @@ impl InternalHttpServer {
             )
             .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
             .route(
-                "/api/catalog",
-                routing::get(catalog::handle_internal_catalog),
+                "/api/catalog/dump",
+                routing::get(catalog::handle_catalog_dump),
+            )
+            .route(
+                "/api/catalog/check",
+                routing::get(catalog::handle_catalog_check),
             )
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
             .layer(Extension(adapter_client_rx.shared()))
@@ -452,12 +462,28 @@ impl AuthedClient {
         adapter_client: &Client,
         user: AuthedUser,
         active_connection_count: SharedConnectionCounter,
+        options: BTreeMap<String, String>,
     ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
         let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let conn_id = adapter_client.new_conn_id()?;
-        let session = adapter_client.new_session(conn_id, user);
-        let (adapter_client, _) = adapter_client.startup(session, vec![]).await?;
+        let mut session = adapter_client.new_session(conn_id, user);
+        let mut set_setting_keys = Vec::new();
+        for (key, val) in options {
+            const LOCAL: bool = false;
+            if let Err(err) = session
+                .vars_mut()
+                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            {
+                session.add_notice(AdapterNotice::BadStartupSetting {
+                    name: key.to_string(),
+                    reason: err.to_string(),
+                })
+            } else {
+                set_setting_keys.push(key);
+            }
+        }
+        let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
         Ok(AuthedClient {
             client: adapter_client,
             drop_connection,
@@ -498,43 +524,31 @@ where
             )
         })?;
         let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
-        let mut client = AuthedClient::new(
+
+        let options = if params.options.is_empty() {
+            // It's possible 'options' simply wasn't provided, we don't want that to
+            // count as a failure to deserialize
+            BTreeMap::<String, String>::default()
+        } else {
+            match serde_json::from_str(&params.options) {
+                Ok(options) => options,
+                Err(_e) => {
+                    // If we fail to deserialize options, fail the request.
+                    let code = StatusCode::BAD_REQUEST;
+                    let msg = format!("Failed to deserialize {} map", "options".quoted());
+                    return Err((code, msg));
+                }
+            }
+        };
+
+        let client = AuthedClient::new(
             &adapter_client,
             user.clone(),
             Arc::clone(active_connection_count),
+            options,
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-        // Apply options that were provided in query params.
-        let session = client.client.session();
-        let maybe_options = if params.options.is_empty() {
-            // It's possible 'options' simply wasn't provided, we don't want that to
-            // count as a failure to deserialize
-            Ok(BTreeMap::<String, String>::default())
-        } else {
-            serde_json::from_str(&params.options)
-        };
-
-        if let Ok(options) = maybe_options {
-            for (key, val) in options {
-                const LOCAL: bool = false;
-                if let Err(err) = session
-                    .vars_mut()
-                    .set(None, &key, VarInput::Flat(&val), LOCAL)
-                {
-                    session.add_notice(AdapterNotice::BadStartupSetting {
-                        name: key.to_string(),
-                        reason: err.to_string(),
-                    })
-                }
-            }
-        } else {
-            // If we fail to deserialize options, fail the request.
-            let code = StatusCode::BAD_REQUEST;
-            let msg = format!("Failed to deserialize {} map", "options".quoted());
-            return Err((code, msg));
-        }
 
         Ok(client)
     }
@@ -678,23 +692,13 @@ async fn init_ws(
     };
     let user = auth(frontegg, creds).await?;
 
-    let mut client =
-        AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
-
-    // Assign any options we got from our WebSocket startup.
-    let session = client.client.session();
-    for (key, val) in options {
-        const LOCAL: bool = false;
-        if let Err(err) = session
-            .vars_mut()
-            .set(None, &key, VarInput::Flat(&val), LOCAL)
-        {
-            session.add_notice(AdapterNotice::BadStartupSetting {
-                name: key,
-                reason: err.to_string(),
-            })
-        }
-    }
+    let client = AuthedClient::new(
+        adapter_client,
+        user,
+        Arc::clone(active_connection_count),
+        options,
+    )
+    .await?;
 
     Ok(client)
 }
@@ -747,7 +751,10 @@ async fn auth(
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
             User {
-                external_metadata: Some(ExternalUserMetadata::from(&claims)),
+                external_metadata: Some(ExternalUserMetadata {
+                    user_id: claims.user_id,
+                    admin: claims.is_admin,
+                }),
                 name: claims.email,
             }
         }

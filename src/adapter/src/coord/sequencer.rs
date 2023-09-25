@@ -13,29 +13,32 @@
 //! Logic for executing a planned SQL query.
 
 use inner::return_if_err;
-use mz_controller::clusters::ClusterId;
-use mz_expr::OptimizedMirRelationExpr;
+use mz_controller_types::ClusterId;
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
-use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::CatalogCluster;
+use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_sql::catalog::{CatalogCluster, CatalogError};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, CreateSourcePlans,
-    FetchPlan, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
+    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan, RotateKeysPlan,
 };
+use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
 use tracing::{event, Level};
 
+use crate::catalog::{Catalog, ErrorKind};
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
-use crate::session::{EndTransactionAction, Session, TransactionStatus};
+use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{rbac, ExecuteContext, ExecuteResponseKind};
+use crate::{catalog, ExecuteContext, ExecuteResponseKind};
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -95,14 +98,21 @@ impl Coordinator {
             .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
-            self,
             &session_catalog,
-            ctx.session(),
+            &self
+                .active_conns()
+                .into_iter()
+                .map(|(conn_id, conn_meta)| {
+                    (conn_id.unhandled(), *conn_meta.authenticated_role_id())
+                })
+                .collect(),
+            ctx.session().role_metadata(),
+            ctx.session().vars(),
             &plan,
             target_cluster_id,
             &resolved_ids,
         ) {
-            return ctx.retire(Err(e));
+            return ctx.retire(Err(e.into()));
         }
 
         match plan {
@@ -141,7 +151,9 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateRole(plan) => {
-                let result = self.sequence_create_role(ctx.session(), plan).await;
+                let result = self
+                    .sequence_create_role(Some(ctx.session().conn_id()), plan)
+                    .await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }
@@ -192,6 +204,10 @@ impl Coordinator {
                 let result = self
                     .sequence_create_type(ctx.session(), plan, resolved_ids)
                     .await;
+                ctx.retire(result);
+            }
+            Plan::Comment(plan) => {
+                let result = self.sequence_comment_on(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::DropObjects(plan) => {
@@ -281,6 +297,10 @@ impl Coordinator {
             Plan::ShowCreate(plan) => {
                 ctx.retire(Ok(Self::send_immediate_rows(vec![plan.row])));
             }
+            Plan::ShowColumns(show_columns_plan) => {
+                self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster)
+                    .await;
+            }
             Plan::CopyFrom(plan) => {
                 let (tx, _, session, ctx_extra) = ctx.into_parts();
                 tx.send(
@@ -293,11 +313,11 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::CopyRows(CopyRowsPlan { id, columns, rows }) => {
-                self.sequence_copy_rows(ctx, id, columns, rows);
+            Plan::ExplainPlan(plan) => {
+                self.sequence_explain_plan(ctx, plan, target_cluster).await;
             }
-            Plan::Explain(plan) => {
-                self.sequence_explain(ctx, plan, target_cluster).await;
+            Plan::ExplainTimestamp(plan) => {
+                self.sequence_explain_timestamp(ctx, plan, target_cluster);
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(ctx, plan).await;
@@ -382,18 +402,13 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(ctx.session()).await;
+                self.drop_temp_items(ctx.session().conn_id()).await;
                 ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
-                    self.drop_temp_items(ctx.session()).await;
-                    let conn_meta = self
-                        .active_conns
-                        .get_mut(ctx.session().conn_id())
-                        .expect("must exist for active session");
-                    let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
-                    self.drop_compute_sinks(drop_sinks);
+                    self.clear_transaction(ctx.session_mut());
+                    self.drop_temp_items(ctx.session().conn_id()).await;
                     ctx.session_mut().reset();
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
@@ -404,8 +419,7 @@ impl Coordinator {
                 ctx.retire(ret);
             }
             Plan::Declare(plan) => {
-                let param_types = vec![];
-                self.declare(ctx, plan.name, plan.stmt, plan.sql, param_types);
+                self.declare(ctx, plan.name, plan.stmt, plan.sql, plan.params);
             }
             Plan::Fetch(FetchPlan {
                 name,
@@ -521,8 +535,11 @@ impl Coordinator {
             }
             Plan::ValidateConnection(plan) => {
                 let connection_context = self.connection_context.clone();
+                let connection = plan
+                    .connection
+                    .into_inline_connection(self.catalog().state());
                 mz_ore::task::spawn(|| "coord::validate_connection", async move {
-                    let res = match plan.connection.validate(plan.id, &connection_context).await {
+                    let res = match connection.validate(plan.id, &connection_context).await {
                         Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
                         Err(err) => Err(err.into()),
                     };
@@ -598,10 +615,15 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_role_for_startup(
         &mut self,
-        session: &Session,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_create_role(session, plan).await
+        // This does not set conn_id because it's not yet in active_conns. That is because we can't
+        // make a ConnMeta until we have a role id which we don't have until after the catalog txn
+        // is committed. Passing None here means the audit log won't have a user set in the event's
+        // user field. This seems fine because it is indeed the system that is creating this role,
+        // not a user request, and the user name is still recorded in the plan, so we aren't losing
+        // information.
+        self.sequence_create_role(None, plan).await
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
@@ -633,12 +655,123 @@ impl Coordinator {
     }
 
     fn maybe_send_rbac_notice(&self, session: &Session) {
-        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
+        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session.vars()) {
             if !self.catalog.system_config().enable_ld_rbac_checks() {
                 session.add_notice(AdapterNotice::RbacSystemDisabled);
             } else {
                 session.add_notice(AdapterNotice::RbacUserDisabled);
             }
         }
+    }
+
+    pub(crate) fn insert_constant(
+        catalog: &Catalog,
+        session: &mut Session,
+        id: GlobalId,
+        constants: MirRelationExpr,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // Insert can be queued, so we need to re-verify the id exists.
+        let desc = match catalog.try_get_entry(&id) {
+            Some(table) => {
+                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
+            }
+            None => {
+                return Err(AdapterError::Catalog(catalog::Error {
+                    kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
+                }))
+            }
+        };
+
+        match constants.as_const() {
+            Some((rows, ..)) => {
+                let rows = rows.clone()?;
+                for (row, _) in &rows {
+                    for (i, datum) in row.iter().enumerate() {
+                        desc.constraints_met(i, &datum)?;
+                    }
+                }
+                let diffs_plan = plan::SendDiffsPlan {
+                    id,
+                    updates: rows,
+                    kind: MutationKind::Insert,
+                    returning: Vec::new(),
+                    max_result_size: catalog.system_config().max_result_size(),
+                };
+                Self::send_diffs(session, diffs_plan)
+            }
+            None => panic!(
+                "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
+                constants
+            ),
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn send_diffs(
+        session: &mut Session,
+        mut plan: plan::SendDiffsPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let affected_rows = {
+            let mut affected_rows = Diff::from(0);
+            let mut all_positive_diffs = true;
+            // If all diffs are positive, the number of affected rows is just the
+            // sum of all unconsolidated diffs.
+            for (_, diff) in plan.updates.iter() {
+                if *diff < 0 {
+                    all_positive_diffs = false;
+                    break;
+                }
+
+                affected_rows += diff;
+            }
+
+            if !all_positive_diffs {
+                // Consolidate rows. This is useful e.g. for an UPDATE where the row
+                // doesn't change, and we need to reflect that in the number of
+                // affected rows.
+                differential_dataflow::consolidation::consolidate(&mut plan.updates);
+
+                affected_rows = 0;
+                // With retractions, the number of affected rows is not the number
+                // of rows we see, but the sum of the absolute value of their diffs,
+                // e.g. if one row is retracted and another is added, the total
+                // number of rows affected is 2.
+                for (_, diff) in plan.updates.iter() {
+                    affected_rows += diff.abs();
+                }
+            }
+
+            usize::try_from(affected_rows).expect("positive isize must fit")
+        };
+        event!(
+            Level::TRACE,
+            affected_rows,
+            id = format!("{:?}", plan.id),
+            kind = format!("{:?}", plan.kind),
+            updates = plan.updates.len(),
+            returning = plan.returning.len(),
+        );
+
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+            id: plan.id,
+            rows: plan.updates,
+        }]))?;
+        if !plan.returning.is_empty() {
+            let finishing = RowSetFinishing {
+                order_by: Vec::new(),
+                limit: None,
+                offset: 0,
+                project: (0..plan.returning[0].0.iter().count()).collect(),
+            };
+            return match finishing.finish(plan.returning, plan.max_result_size) {
+                Ok(rows) => Ok(Self::send_immediate_rows(rows)),
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
+        }
+        Ok(match plan.kind {
+            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
+            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
+        })
     }
 }

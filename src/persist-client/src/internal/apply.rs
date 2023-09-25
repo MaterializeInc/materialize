@@ -257,16 +257,16 @@ where
             })
     }
 
-    pub async fn write_rollup_blob(&self, rollup_id: &RollupId) -> EncodedRollup {
-        let rollup = self
+    pub async fn write_rollup_for_state(&self) -> Option<EncodedRollup> {
+        let state = self
             .state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
-                let key = PartialRollupKey::new(state.seqno, rollup_id);
-                self.state_versions
-                    .encode_rollup_blob(&self.shard_metrics, state, key)
+                state.clone_for_rollup()
             });
-        let () = self.state_versions.write_rollup_blob(&rollup).await;
-        rollup
+
+        self.state_versions
+            .write_rollup_for_state(self.shard_metrics.as_ref(), state, &RollupId::new())
+            .await
     }
 
     pub async fn apply_unbatched_cmd<

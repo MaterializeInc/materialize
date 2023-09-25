@@ -11,7 +11,7 @@
 //!
 //! Every Materialize deployment has a pre-installed [`mz_introspection`] cluster, which
 //! has several indexes to speed up common introspection queries. We also have a special
-//! `mz_introspection` role, which can be used by support teams to diagnose a deployment.
+//! `mz_support` role, which can be used by support teams to diagnose a deployment.
 //! For each of these use cases, we have some special restrictions we want to apply. The
 //! logic around these restrictions is defined here.
 //!
@@ -19,19 +19,19 @@
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
 use mz_expr::CollectionPlan;
-use mz_repr::explain::Explainee;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
-use mz_sql::plan::{ExplainPlan, Plan, SubscribeFrom};
+use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, SubscribeFrom};
+use mz_sql::rbac;
 use smallvec::SmallVec;
 
-use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
-use crate::{rbac, AdapterError};
+use crate::AdapterError;
+use mz_catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -52,11 +52,14 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         ),
-        Plan::Explain(ExplainPlan {
-            raw_plan,
-            explainee: Explainee::Query,
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Query { raw_plan, .. },
             ..
         }) => (
+            raw_plan.depends_on(),
+            raw_plan.could_run_expensive_function(),
+        ),
+        Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
             raw_plan.could_run_expensive_function(),
         ),
@@ -75,6 +78,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
@@ -82,6 +86,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
@@ -91,8 +96,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
-        | Plan::CopyRows(_)
-        | Plan::Explain(_)
+        | Plan::ExplainPlan(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
@@ -129,6 +133,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
+
+    // Use transaction cluster if we're mid-transaction
+    if let Some(cluster_id) = session.transaction().cluster() {
+        return TargetCluster::Transaction(cluster_id);
+    }
 
     // Bail if the user has disabled it via the SessionVar.
     if !session.vars().auto_route_introspection_queries() {
@@ -226,7 +235,7 @@ pub fn check_cluster_restrictions(
     }
 }
 
-/// TODO(jkosh44) This function will verify the privileges for the mz_introspection user.
+/// TODO(jkosh44) This function will verify the privileges for the mz_support user.
 ///  All of the privileges are hard coded into this function. In the future if we ever add
 ///  a more robust privileges framework, then this function should be replaced with that
 ///  framework.
@@ -243,21 +252,27 @@ pub fn user_privilege_hack(
     match plan {
         // **Special Cases**
         //
-        // Generally we want to prevent the mz_introspection user from being able to
-        // access user objects. But there are a few special cases where we permit
-        // limited access, which are:
-        //   * SHOW CREATE ... commands, which are very useful for debugging, see
-        //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
-        //     details.
+        // Generally we want to prevent the mz_support user from being able to
+        // access user objects. But there are a few special cases where we
+        // permit limited access, which are are very useful for debugging. More
+        // specifically:
+        //   * SHOW CREATE ... commands. See
+        //     <https://github.com/MaterializeInc/materialize/issues/18027> for
+        //     more details.
+        //   * EXPLAIN PLAN ... and EXPLAIN TIMESTAMP ... and commands. See
+        //     <https://github.com/MaterializeInc/materialize/issues/20478> for
+        //     more details.
         //
-        Plan::ShowCreate(_) => {
+        Plan::ShowCreate(_)
+        | Plan::ShowColumns(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainTimestamp(_) => {
             return Ok(());
         }
 
         Plan::Subscribe(_)
         | Plan::Select(_)
         | Plan::CopyFrom(_)
-        | Plan::Explain(_)
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
@@ -291,6 +306,7 @@ pub fn user_privilege_hack(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
@@ -322,7 +338,6 @@ pub fn user_privilege_hack(
         | Plan::GrantPrivileges(_)
         | Plan::RevokePrivileges(_)
         | Plan::AlterDefaultPrivileges(_)
-        | Plan::CopyRows(_)
         | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzSupport {

@@ -9,7 +9,6 @@
 
 
 import subprocess
-from typing import Optional
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
@@ -19,7 +18,7 @@ from materialize.ui import UIError
 def exists(
     resource: str,
     context: str = DEFAULT_K8S_CONTEXT_NAME,
-    namespace: Optional[str] = None,
+    namespace: str | None = None,
 ) -> None:
     _exists(resource, True, context, namespace)
 
@@ -27,13 +26,13 @@ def exists(
 def not_exists(
     resource: str,
     context: str = DEFAULT_K8S_CONTEXT_NAME,
-    namespace: Optional[str] = None,
+    namespace: str | None = None,
 ) -> None:
     _exists(resource, False, context, namespace)
 
 
 def _exists(
-    resource: str, should_exist: bool, context: str, namespace: Optional[str]
+    resource: str, should_exist: bool, context: str, namespace: str | None
 ) -> None:
     cmd = ["kubectl", "get", "--output", "name", resource, "--context", context]
 

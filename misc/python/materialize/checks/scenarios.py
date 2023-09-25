@@ -8,21 +8,25 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import List, Optional, Type
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import Executor
-from materialize.checks.mzcompose_actions import ConfigureMz
+from materialize.checks.mzcompose_actions import (
+    ConfigureMz,
+    KillClusterdCompute,
+    KillMz,
+    StartClusterdCompute,
+    StartMz,
+    UseClusterdCompute,
+)
 from materialize.checks.mzcompose_actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
-from materialize.checks.mzcompose_actions import KillClusterdCompute
 from materialize.checks.mzcompose_actions import (
     KillClusterdStorage as KillClusterdStorageAction,
 )
-from materialize.checks.mzcompose_actions import KillMz
 from materialize.checks.mzcompose_actions import (
     RestartCockroach as RestartCockroachAction,
 )
@@ -32,17 +36,12 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
 )
-from materialize.checks.mzcompose_actions import (
-    StartClusterdCompute,
-    StartMz,
-    UseClusterdCompute,
-)
 from materialize.util import MzVersion
 
 
 class Scenario:
     def __init__(
-        self, checks: List[Type[Check]], executor: Executor, seed: Optional[str] = None
+        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
     ) -> None:
         self._checks = checks
         self.executor = executor
@@ -54,12 +53,12 @@ class Scenario:
             check_class(self.base_version(), self.rng) for check_class in self.checks()
         ]
 
-    def checks(self) -> List[Type[Check]]:
+    def checks(self) -> list[type[Check]]:
         if self.rng:
             self.rng.shuffle(self._checks)
         return self._checks
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         assert False
 
     def base_version(self) -> MzVersion:
@@ -84,7 +83,7 @@ class Scenario:
 
 
 class NoRestartNoUpgrade(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -95,7 +94,7 @@ class NoRestartNoUpgrade(Scenario):
 
 
 class RestartEntireMz(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -112,7 +111,7 @@ class RestartEntireMz(Scenario):
 
 
 class DropCreateDefaultReplica(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -126,7 +125,7 @@ class DropCreateDefaultReplica(Scenario):
 class RestartClusterdCompute(Scenario):
     """Restart clusterd by having it run in a separate container that is then killed and restarted."""
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             StartClusterdCompute(),
@@ -147,7 +146,7 @@ class RestartClusterdCompute(Scenario):
 class RestartEnvironmentdClusterdStorage(Scenario):
     """Restart environmentd and storage clusterds (as spawned from it), while keeping computed running by placing it in a separate container."""
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             StartClusterdCompute(),
@@ -171,7 +170,7 @@ class RestartEnvironmentdClusterdStorage(Scenario):
 class KillClusterdStorage(Scenario):
     """Kill storage clusterd while it is running inside the enviromentd container. The process orchestrator will (try to) start it again."""
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             StartClusterdCompute(),
@@ -187,7 +186,7 @@ class KillClusterdStorage(Scenario):
 
 
 class RestartCockroach(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -201,7 +200,7 @@ class RestartCockroach(Scenario):
 
 
 class RestartSourcePostgres(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),
@@ -215,7 +214,7 @@ class RestartSourcePostgres(Scenario):
 
 
 class RestartRedpandaDebezium(Scenario):
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             StartMz(),
             Initialize(self),

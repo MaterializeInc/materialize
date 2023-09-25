@@ -26,11 +26,14 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::explain::{
+    DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
+};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::explain::HumanizedExpr;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
@@ -100,6 +103,12 @@ pub enum MirRelationExpr {
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
+        /// If this is a global Get, this will indicate whether we are going to read from Persist or
+        /// from an index. If it's an index, then how downstream dataflow operations will use this
+        /// index is also recorded. This is filled by `prune_and_annotate_dataflow_index_imports`.
+        /// Note that this is not used by the lowering to LIR, but is used only by EXPLAIN.
+        #[mzreflect(ignore)]
+        access_strategy: AccessStrategy,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -367,6 +376,21 @@ impl MirRelationExpr {
         RelationType::new(column_types).with_keys(unique_keys)
     }
 
+    /// Reports the column types of the relation given the column types of the
+    /// input relations.
+    ///
+    /// This method delegates to `try_col_with_input_cols`, panicing if an `Err`
+    /// variant is returned.
+    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ColumnType>
+    where
+        I: Iterator<Item = &'a Vec<ColumnType>>,
+    {
+        match self.try_col_with_input_cols(input_types) {
+            Ok(col_types) => col_types,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
     /// Reports the column types of the relation given the column types of the input relations.
     ///
     /// `input_types` is required to contain the column types for the input relations of
@@ -378,13 +402,16 @@ impl MirRelationExpr {
     ///
     /// It is meant to be used during post-order traversals to compute column types
     /// incrementally.
-    pub fn col_with_input_cols<'a, I>(&self, mut input_types: I) -> Vec<ColumnType>
+    pub fn try_col_with_input_cols<'a, I>(
+        &self,
+        mut input_types: I,
+    ) -> Result<Vec<ColumnType>, String>
     where
         I: Iterator<Item = &'a Vec<ColumnType>>,
     {
         use MirRelationExpr::*;
 
-        match self {
+        let col_types = match self {
             Constant { rows, typ } => {
                 let mut col_types = typ.column_types.clone();
                 let mut seen_null = vec![false; typ.arity()];
@@ -482,13 +509,14 @@ impl MirRelationExpr {
                     for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
                         *base_col = base_col
                             .union(col)
-                            .map_err(|e| format!("{}\nIn {:#?}", e, self))
-                            .unwrap();
+                            .map_err(|e| format!("{}\nin plan:\n{}", e, self.pretty()))?;
                     }
                 }
                 result
             }
-        }
+        };
+
+        Ok(col_types)
     }
 
     /// Reports the unique keys of the relation given the arities and the unique
@@ -820,6 +848,7 @@ impl MirRelationExpr {
                 if let MirRelationExpr::Get {
                     id: first_id,
                     typ: _,
+                    ..
                 } = base_with_project_stripped
                 {
                     if inputs.len() == 1 {
@@ -830,6 +859,7 @@ impl MirRelationExpr {
                                         if let MirRelationExpr::Get {
                                             id: second_id,
                                             typ: _,
+                                            ..
                                         } = input
                                         {
                                             if first_id == second_id {
@@ -1044,6 +1074,7 @@ impl MirRelationExpr {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
         }
     }
 
@@ -1430,9 +1461,9 @@ impl MirRelationExpr {
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> super::MirRelationExpr
+    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
     where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> super::MirRelationExpr,
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
     {
         if let MirRelationExpr::Get { .. } = self {
             // already done
@@ -1442,6 +1473,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get);
             MirRelationExpr::Let {
@@ -1469,6 +1501,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get)?;
             Ok(MirRelationExpr::Let {
@@ -1604,7 +1637,7 @@ impl MirRelationExpr {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_, index_key, _) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
                         for k in index_key {
                             f(k)?;
                         }
@@ -2024,7 +2057,7 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
 }
 
 impl CollectionPlan for MirRelationExpr {
-    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    // !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
     // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
@@ -2237,13 +2270,19 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
 
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        HumanizedExpr::new(self, None).fmt(f)
+    }
+}
+
+impl<'a> fmt::Display for HumanizedExpr<'a, ColumnOrder> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // If you modify this, then please also attend to Display for ColumnOrderWithExpr!
         write!(
             f,
-            "#{} {} {}",
-            self.column,
-            if self.desc { "desc" } else { "asc" },
-            if self.nulls_last {
+            "{} {} {}",
+            self.child(&self.expr.column),
+            if self.expr.desc { "desc" } else { "asc" },
+            if self.expr.nulls_last {
                 "nulls_last"
             } else {
                 "nulls_first"
@@ -2725,8 +2764,13 @@ pub enum JoinImplementation {
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
     /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
-    /// Consists of (`<view id>`, `<keys of index>`, `<constants>`)
-    IndexedFilter(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Vec<Row>),
+    /// Consists of (`<coll_id>`, `<index_id>`, `<index_key>`, `<constants>`)
+    IndexedFilter(
+        GlobalId,
+        GlobalId,
+        Vec<MirScalarExpr>,
+        #[mzreflect(ignore)] Vec<Row>,
+    ),
     /// No implementation yet selected.
     Unimplemented,
 }
@@ -2860,6 +2904,15 @@ impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
 }
 
 impl RowSetFinishing {
+    /// Returns a trivial finishing, i.e., that does nothing to the result set.
+    pub fn trivial(arity: usize) -> RowSetFinishing {
+        RowSetFinishing {
+            order_by: Vec::new(),
+            limit: None,
+            offset: 0,
+            project: (0..arity).collect(),
+        }
+    }
     /// True if the finishing does nothing to any result set.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.limit.is_none()
@@ -3279,6 +3332,20 @@ impl Display for LetRecLimit {
         }
         write!(f, "]")
     }
+}
+
+/// For a global Get, this indicates whether we are going to read from Persist or from an index.
+/// (See comment in MirRelationExpr::Get.)
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+pub enum AccessStrategy {
+    /// It's either a local Get (a CTE), or unknown at the time.
+    /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to
+    /// one of the other variants.
+    UnknownOrLocal,
+    /// The Get will read from Persist.
+    Persist,
+    /// The Get will read from an index or indexes: (index id, how the index will be used).
+    Index(Vec<(GlobalId, IndexUsageType)>),
 }
 
 #[cfg(test)]

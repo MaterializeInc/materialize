@@ -7,18 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
 class CreateManagedCluster(Check):
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.58.0-dev")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -67,10 +67,10 @@ class CreateManagedCluster(Check):
 
 
 class DropManagedCluster(Check):
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.58.0-dev")
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

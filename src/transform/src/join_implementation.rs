@@ -28,10 +28,10 @@ use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::attribute::cardinality::{FactorizerVariable, SymExp};
-use crate::attribute::{Cardinality, RequiredAttributes};
+use crate::attribute::{Cardinality, DerivedAttributesBuilder};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
-use crate::{StatisticsOracle, TransformArgs, TransformError};
+use crate::{StatisticsOracle, TransformCtx, TransformError};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -65,9 +65,9 @@ impl crate::Transform for JoinImplementation {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes), args.stats);
+        let result = self.action_recursive(relation, &mut IndexMap::new(ctx.indexes), ctx.stats);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -169,8 +169,8 @@ impl JoinImplementation {
             // Symbolic terms in the cardinality estimate
             let mut symbolics = std::collections::BTreeSet::new();
             for input in inputs.iter() {
-                let mut builder = RequiredAttributes::default();
-                builder.require::<Cardinality>();
+                let mut builder = DerivedAttributesBuilder::default();
+                builder.require(Cardinality::default());
                 let mut attributes = builder.finish();
 
                 input.visit(&mut attributes)?;
@@ -340,14 +340,14 @@ impl JoinImplementation {
 
                 // Collect available arrangements on this input.
                 match input {
-                    MirRelationExpr::Get { id, typ: _ } => {
+                    MirRelationExpr::Get { id, typ: _, .. } => {
                         available_arrangements[index]
                             .extend(indexes.get(*id).map(|key| key.to_vec()));
                     }
                     MirRelationExpr::ArrangeBy { input, keys } => {
                         // We may use any presented arrangement keys.
                         available_arrangements[index].extend(keys.clone());
-                        if let MirRelationExpr::Get { id, typ: _ } = &**input {
+                        if let MirRelationExpr::Get { id, typ: _, .. } = &**input {
                             available_arrangements[index]
                                 .extend(indexes.get(*id).map(|key| key.to_vec()));
                         }
@@ -480,7 +480,7 @@ mod index_map {
 
         pub fn get(&self, id: Id) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
             match id {
-                Id::Global(id) => self.global.indexes_on(id),
+                Id::Global(id) => Box::new(self.global.indexes_on(id).map(|(_idx_id, key)| key)),
                 Id::Local(id) => Box::new(
                     self.local
                         .get(&id)

@@ -9,7 +9,7 @@
 
 from random import Random
 from textwrap import dedent
-from typing import Any, List, Optional
+from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, CheckDisabled
@@ -57,7 +57,7 @@ class PgCdcBase:
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -201,7 +201,7 @@ class PgCdcBase:
                     ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
                     Explained Query (fast path):
                       Project (#0, #1)
-                        ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
+                        ReadIndex on=materialize.public.postgres_source_tablea postgres_source_tablea_primary_idx=[*** full scan ***]
 
                     Used Indexes:
                       - materialize.public.postgres_source_tablea_primary_idx (*** full scan ***)
@@ -214,13 +214,13 @@ class PgCdcBase:
 
 
 class PgCdc(PgCdcBase, Check):
-    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=True, base_version=base_version, rng=rng)
 
 
 # TODO(def-) Enable this check (with an adequate version limitation) when #18940 is fixed
 class PgCdcNoWait(PgCdcBase, CheckDisabled):
-    def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=False, base_version=base_version, rng=rng)
 
 
@@ -268,7 +268,7 @@ class PgCdcMzNow(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

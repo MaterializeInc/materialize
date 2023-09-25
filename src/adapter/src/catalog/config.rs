@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
+use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
@@ -25,14 +26,13 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::storage;
 use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: storage::Connection,
+    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -69,13 +69,15 @@ pub struct Config<'a> {
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
+    /// Host name or URL for connecting to the HTTP server of this instance.
+    pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will
     /// skip any migrations that require it, which will likely cause tests to
     /// fail.
     ///
     /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
-    pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    pub connection_context: Option<mz_storage_types::connections::ConnectionContext>,
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }

@@ -1666,6 +1666,7 @@ mod grpc {
         )
     }
 
+    #[allow(clippy::unused_async)]
     async fn spawn_server(tcp_listener_stream: TcpListenerStream) -> Arc<PubSubState> {
         let server = PersistGrpcPubSubServer::new(&test_persist_config(), &MetricsRegistry::new());
         let server_state = Arc::clone(&server.state);

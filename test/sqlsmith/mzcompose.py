@@ -13,17 +13,21 @@ import random
 import time
 from datetime import datetime
 from threading import Thread
-from typing import Any, Dict, FrozenSet, List, Tuple
+from typing import Any
 
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.materialized import Materialized
 
 if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
     TOTAL_MEMORY = 12
     NUM_SERVERS = 2
 else:
-    TOTAL_MEMORY = 48
-    NUM_SERVERS = 2
+    TOTAL_MEMORY = 96
+    NUM_SERVERS = 1
 
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
@@ -56,6 +60,7 @@ SERVICES = [
 known_errors = [
     "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
+    "could not translate host name",  # Expected AFTER a crash, the query before this is interesting, not the ones after
     "canceling statement due to statement timeout",
     "value too long for type",
     "list_agg on char not yet supported",
@@ -136,6 +141,7 @@ known_errors = [
     "uint2 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
+    "not supported for type date",
     "not supported for type time",
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
@@ -147,11 +153,10 @@ known_errors = [
     "requested length too large",
     "number of columns must be a positive integer literal",
     "regex_extract requires a string literal as its first argument",
+    "regex parse error",
     "out of valid range",
     '" does not exist',  # role does not exist
     "csv_extract number of columns too large",
-    "coalesce types text and oid cannot be matched",  # with ACL-related functions
-    "coalesce types oid and text cannot be matched",  # with ACL-related functions
 ]
 
 
@@ -162,7 +167,7 @@ def is_known_error(e: str) -> bool:
     return False
 
 
-def run_sqlsmith(c: Composition, cmd: str, aggregate: Dict[str, Any]) -> None:
+def run_sqlsmith(c: Composition, cmd: str, aggregate: dict[str, Any]) -> None:
     result = c.run(
         *cmd,
         capture=True,
@@ -229,8 +234,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     killer = Thread(target=kill_sqlsmith_with_delay)
     killer.start()
 
-    threads: List[Thread] = []
-    aggregate: Dict[str, Any] = {"errors": [], "version": "", "queries": 0}
+    threads: list[Thread] = []
+    aggregate: dict[str, Any] = {"errors": [], "version": "", "queries": 0}
     for i in range(args.num_sqlsmith):
         cmd = [
             "sqlsmith",
@@ -252,7 +257,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for thread in threads:
         thread.join()
 
-    new_errors: Dict[FrozenSet[Tuple[str, Any]], List[Dict[str, Any]]] = {}
+    new_errors: dict[frozenset[tuple[str, Any]], list[dict[str, Any]]] = {}
     for error in aggregate["errors"]:
         if not is_known_error(error["message"]):
             frozen_key = frozenset(
@@ -269,10 +274,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     for frozen_key, errors in new_errors.items():
         key = dict(frozen_key)
-        occurences = f" ({len(errors)} occurences)" if len(errors) > 1 else ""
-        print(
-            f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurences}"
-        )
+        occurrences = f" ({len(errors)} occurrences)" if len(errors) > 1 else ""
+        # Print out crashes differently so that we don't get notified twice in ci_logged_errors_detect
+        if "server closed the connection unexpectedly" in key["message"]:
+            print(f"--- Server crash, check panics and segfaults {occurrences}")
+        else:
+            print(
+                f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurrences}"
+            )
         if len(errors) > 1:
             from_time = datetime.fromtimestamp(errors[0]["timestamp"]).strftime(
                 "%H:%M:%S"

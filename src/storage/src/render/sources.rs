@@ -20,15 +20,15 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
 use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::source::persist_source;
-use mz_storage_client::types::errors::{
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_operators::persist_source;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
-use mz_storage_client::types::parameters::StorageMaxInflightBytesConfig;
-use mz_storage_client::types::sources::encoding::*;
-use mz_storage_client::types::sources::*;
+use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
+use mz_storage_types::sources::encoding::*;
+use mz_storage_types::sources::*;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
@@ -100,10 +100,13 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     let source_name = format!("{}-{}", connection.name(), id);
 
     let params = SourceCreationParams {
-        pg_replication_timeouts: storage_state
+        pg_source_tcp_timeouts: storage_state
             .dataflow_parameters
-            .pg_replication_timeouts
+            .pg_source_tcp_timeouts
             .clone(),
+        pg_source_snapshot_statement_timeout: storage_state
+            .dataflow_parameters
+            .pg_source_snapshot_statement_timeout,
     };
 
     let base_source_config = RawSourceCreationConfig {
@@ -268,8 +271,8 @@ where
     let SourceDesc {
         encoding,
         envelope,
-        metadata_columns,
-        ..
+        connection: _,
+        timestamp_interval: _,
     } = description.desc;
     let (stream, errors, health) = {
         let (key_encoding, value_encoding) = match encoding {
@@ -317,7 +320,6 @@ where
                     key_encoding,
                     value_encoding,
                     dataflow_debug_name.clone(),
-                    metadata_columns,
                     storage_state.decode_metrics.clone(),
                     storage_state.connection_context.clone(),
                 ),
@@ -325,10 +327,8 @@ where
                     source.map(|r| DecodeResult {
                         key: None,
                         value: Some(Ok(r.value)),
-                        position: r.position,
-                        upstream_time_millis: r.upstream_time_millis,
-                        partition: r.partition,
                         metadata: Row::default(),
+                        position_for_upsert: r.position_for_upsert,
                     }),
                     empty(scope),
                     None,
@@ -652,7 +652,7 @@ fn append_metadata_to_value<G: Scope>(
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
-                    RowPacker::for_existing_row(&mut val).extend(res.metadata.into_iter());
+                    RowPacker::for_existing_row(&mut val).extend(&*res.metadata);
                 }
                 val
             })
@@ -669,13 +669,11 @@ fn upsert_commands<G: Scope>(
 ) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, MzOffset), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
-        let order = result.position;
+        let order = result.position_for_upsert;
 
         let key = match result.key {
             Some(Ok(key)) => Ok(key),
-            None => Err(UpsertError::NullKey(UpsertNullKeyError::with_partition_id(
-                result.partition,
-            ))),
+            None => Err(UpsertError::NullKey(UpsertNullKeyError)),
             Some(Err(err)) => Err(UpsertError::KeyDecode(err)),
         };
 
@@ -721,9 +719,9 @@ fn upsert_commands<G: Scope>(
                     Some(Ok(row_buf.clone()))
                 }
             },
-            Some(Err(err)) => Some(Err(UpsertError::Value(UpsertValueError {
+            Some(Err(inner)) => Some(Err(UpsertError::Value(UpsertValueError {
                 for_key: key_row,
-                inner: Box::new(DataflowError::DecodeError(Box::new(err))),
+                inner,
             }))),
             None => None,
         };

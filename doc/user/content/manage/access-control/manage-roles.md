@@ -3,11 +3,9 @@ title: "Manage roles"
 description: "Create and manage roles in Materialize"
 menu:
   main:
-    parent: access-control
+    parent: rbac
     weight: 15
 ---
-
-{{< private-preview />}}
 
 This page outlines how to create and manage roles in Materialize.
 

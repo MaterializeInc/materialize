@@ -131,7 +131,7 @@ pub enum SetExpr<T: AstInfo> {
     },
     Values(Values<T>),
     Show(ShowStatement<T>),
-    // TODO: ANSI SQL supports `TABLE` here.
+    Table(T::ItemName),
 }
 
 impl<T: AstInfo> AstDisplay for SetExpr<T> {
@@ -145,6 +145,10 @@ impl<T: AstInfo> AstDisplay for SetExpr<T> {
             }
             SetExpr::Values(v) => f.write_node(v),
             SetExpr::Show(v) => f.write_node(v),
+            SetExpr::Table(t) => {
+                f.write_str("TABLE ");
+                f.write_node(t)
+            }
             SetExpr::SetOperation {
                 left,
                 right,
@@ -186,12 +190,18 @@ impl_display!(SetOperator);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SelectOptionName {
     ExpectedGroupSize,
+    AggregateInputGroupSize,
+    DistinctOnInputGroupSize,
+    LimitInputGroupSize,
 }
 
 impl AstDisplay for SelectOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             SelectOptionName::ExpectedGroupSize => "EXPECTED GROUP SIZE",
+            SelectOptionName::AggregateInputGroupSize => "AGGREGATE INPUT GROUP SIZE",
+            SelectOptionName::DistinctOnInputGroupSize => "DISTINCT ON INPUT GROUP SIZE",
+            SelectOptionName::LimitInputGroupSize => "LIMIT INPUT GROUP SIZE",
         })
     }
 }

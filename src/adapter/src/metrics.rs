@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -30,8 +30,9 @@ pub struct Metrics {
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
-    pub introspection_logins: IntCounter,
     pub statement_logging_actual_bytes: IntCounterVec,
+    pub slow_message_handling: HistogramVec,
+    pub optimization_notices: IntCounterVec,
 }
 
 impl Metrics {
@@ -55,7 +56,7 @@ impl Metrics {
             queue_busy_seconds: registry.register(metric!(
                 name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
-                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+                buckets: histogram_seconds_buckets(0.000_128, 32.0)
             )),
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
@@ -103,14 +104,22 @@ impl Metrics {
                 name: "mz_statement_logging_unsampled_bytes",
                 help: "The total amount of SQL text that would have been logged if statement logging were unsampled.",
             )),
-            introspection_logins: registry.register(metric!(
-                name: "mz_introspection_logins",
-                help: "Number of times mz_introspection used the psql interface",
-            )),
             statement_logging_actual_bytes: registry.register(metric!(
                 name: "mz_statement_logging_actual_bytes",
                 help: "The total amount of SQL text that was logged by statement logging.",
-            ))
+            )),
+            slow_message_handling: registry.register(metric!(
+                name: "mz_slow_message_handling",
+                help: "Latency for coordinator messages that are 'slow' to process. 'Slow' is \
+                    defined by the LaunchDarkly variable 'coord_slow_message_reporting_threshold'",
+                var_labels: ["message_kind"],
+                buckets: histogram_seconds_buckets(0.128, 32.0),
+            )),
+            optimization_notices: registry.register(metric!(
+                name: "mz_optimization_notices",
+                help: "Number of optimization notices per notice type.",
+                var_labels: ["notice_type"],
+            )),
         }
     }
 }

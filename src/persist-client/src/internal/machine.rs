@@ -39,7 +39,7 @@ use crate::internal::compact::CompactReq;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
     IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
@@ -111,7 +111,11 @@ where
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
-        let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
+        let rollup = self.applier.write_rollup_for_state().await;
+        let Some(rollup) = rollup else {
+            return RoutineMaintenance::default();
+        };
+
         let (applied, maintenance) = self.add_rollup((rollup.seqno, &rollup.to_hollow())).await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
@@ -881,55 +885,96 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub async fn start_reader_heartbeat_task(
+    #[allow(clippy::unused_async)]
+    pub async fn start_reader_heartbeat_tasks(
         self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
-    ) -> JoinHandle<()> {
-        let mut machine = self;
-        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+    ) -> Vec<JoinHandle<()>> {
+        let mut ret = Vec::new();
+        let metrics = Arc::clone(&self.applier.metrics);
+
+        // TODO: In response to a production incident, this runs the heartbeat
+        // task on both the in-context tokio runtime and persist's isolated
+        // runtime. We think we were seeing tasks (including this one) get stuck
+        // indefinitely in tokio while waiting for a runtime worker. This could
+        // happen if some other task in that runtime never yields. It's possible
+        // that one of the two runtimes is healthy while the other isn't (this
+        // was inconclusive in the incident debugging), and the heartbeat task
+        // is fairly lightweight, so run a copy in each in case that helps.
+        //
+        // The real fix here is to find the misbehaving task and fix it. Remove
+        // this duplication when that happens.
+        let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
+        ret.push(mz_ore::task::spawn(|| name, {
+            let machine = self.clone();
+            let reader_id = reader_id.clone();
+            let gc = gc.clone();
+            metrics
+                .tasks
+                .heartbeat_read
+                .instrument_task(Self::reader_heartbeat_task(machine, reader_id, gc))
+        }));
+
+        let isolated_runtime = Arc::clone(&self.isolated_runtime);
         let name = format!(
-            "persist::heartbeat_read({},{})",
-            machine.shard_id(),
+            "persist::heartbeat_read_isolated({},{})",
+            self.shard_id(),
             reader_id
         );
-        isolated_runtime.spawn_named(|| name, async move {
-            let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
+        ret.push(
+            isolated_runtime.spawn_named(
+                || name,
+                metrics
+                    .tasks
+                    .heartbeat_read
+                    .instrument_task(Self::reader_heartbeat_task(self, reader_id, gc)),
+            ),
+        );
 
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) went {}s between heartbeats",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
+        ret
+    }
 
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
-                    .await;
-                maintenance.start_performing(&machine, &gc);
+    async fn reader_heartbeat_task(
+        mut machine: Self,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+    ) {
+        let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
+        loop {
+            let before_sleep = Instant::now();
+            tokio::time::sleep(sleep_duration).await;
 
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) heartbeat call took {}s",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
+            let elapsed_since_before_sleeping = before_sleep.elapsed();
+            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_before_sleeping.as_secs_f64()
+                );
             }
-        })
+
+            let before_heartbeat = Instant::now();
+            let (_seqno, existed, maintenance) = machine
+                .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
+                .await;
+            maintenance.start_performing(&machine, &gc);
+
+            let elapsed_since_heartbeat = before_heartbeat.elapsed();
+            if elapsed_since_heartbeat > Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) heartbeat call took {}s",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_heartbeat.as_secs_f64(),
+                );
+            }
+
+            if !existed {
+                return;
+            }
+        }
     }
 }
 
@@ -1020,7 +1065,6 @@ where
 #[cfg(test)]
 pub mod datadriven {
     use std::collections::BTreeMap;
-    use std::marker::PhantomData;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1029,15 +1073,16 @@ pub mod datadriven {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
-        validate_truncate_batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+        validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
+    use crate::cfg::PersistFeatureFlag;
     use crate::fetch::{fetch_batch_part, Cursor};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
-    use crate::internal::state::TypedState;
+    use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
@@ -1054,6 +1099,7 @@ pub mod datadriven {
         pub machine: Machine<String, (), u64, i64>,
         pub gc: GarbageCollector<String, (), u64, i64>,
         pub batches: BTreeMap<String, HollowBatch<u64>>,
+        pub rollups: BTreeMap<String, EncodedRollup>,
         pub listens: BTreeMap<String, Listen<String, (), u64, i64>>,
         pub routine: Vec<RoutineMaintenance>,
     }
@@ -1068,6 +1114,14 @@ pub mod datadriven {
                 .cfg
                 .dynamic
                 .set_blob_target_size(PersistConfig::DEFAULT_BLOB_TARGET_SIZE);
+            client
+                .cfg
+                .dynamic
+                .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
+            client
+                .cfg
+                .dynamic
+                .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1094,6 +1148,7 @@ pub mod datadriven {
                 machine,
                 gc,
                 batches: BTreeMap::default(),
+                rollups: BTreeMap::default(),
                 listens: BTreeMap::default(),
                 routine: Vec::new(),
             }
@@ -1247,42 +1302,38 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let seqno: SeqNo = args.expect("seqno");
+        let output = args.expect_str("output");
 
-        let mut all_live_states = datadriven
+        let rollup = datadriven
             .machine
             .applier
-            .state_versions
-            .fetch_all_live_states::<u64>(datadriven.shard_id)
+            .write_rollup_for_state()
             .await
-            .expect("shard initialized")
-            .check_ts_codec()
-            .expect("codec matches");
+            .expect("rollup");
 
-        while let Some(state) = all_live_states.next(|_| {}) {
-            if state.seqno == seqno {
-                break;
-            }
-        }
+        datadriven
+            .rollups
+            .insert(output.to_string(), rollup.clone());
 
-        let state = all_live_states.state();
-        if state.seqno != seqno {
-            return Err(anyhow!(
-                "seqno {} cannot be reached while writing rollup",
-                seqno
-            ));
-        }
+        Ok(format!(
+            "state={} diffs=[{}, {})\n",
+            rollup.seqno,
+            rollup._desc.lower().first().expect("seqno"),
+            rollup._desc.upper().first().expect("seqno"),
+        ))
+    }
 
-        let typed_state = TypedState::<String, (), u64, i64> {
-            state: state.clone(),
-            _phantom: PhantomData::default(),
-        };
-        let rollup = datadriven.state_versions.encode_rollup_blob(
-            datadriven.machine.applier.shard_metrics.as_ref(),
-            &typed_state,
-            PartialRollupKey::new(state.seqno, &RollupId::new()),
-        );
-        let () = datadriven.state_versions.write_rollup_blob(&rollup).await;
+    pub async fn add_rollup(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let rollup = datadriven
+            .rollups
+            .get(input)
+            .expect("unknown batch")
+            .clone();
+
         let (applied, maintenance) = datadriven
             .machine
             .add_rollup((rollup.seqno, &rollup.to_hollow()))
@@ -1360,11 +1411,15 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let stats = args.optional_str("stats");
         let batch = datadriven.batches.get(input).expect("unknown batch");
 
         let mut s = String::new();
         for (idx, part) in batch.parts.iter().enumerate() {
             write!(s, "<part {idx}>\n");
+            if stats == Some("lower") && !part.key_lower.is_empty() {
+                writeln!(s, "<key lower={}>", std::str::from_utf8(&part.key_lower)?)
+            }
             let blob_batch = datadriven
                 .client
                 .blob
@@ -1554,34 +1609,48 @@ pub mod datadriven {
             .await
             .map_err(|err| anyhow!("{:?}", err))?;
 
-        let mut updates = Vec::new();
+        let mut result = String::new();
+
         for batch in snapshot {
-            for part in batch.parts {
-                let part = fetch_batch_part(
-                    &datadriven.shard_id,
-                    datadriven.client.blob.as_ref(),
-                    datadriven.client.metrics.as_ref(),
-                    datadriven.machine.applier.shard_metrics.as_ref(),
-                    &datadriven.client.metrics.read.batch_fetcher,
-                    &part.key,
-                    &batch.desc,
-                )
-                .await
-                .expect("invalid batch part");
-                let mut cursor = Cursor::default();
-                while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
-                    t.advance_by(as_of.borrow());
-                    updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
+            writeln!(
+                result,
+                "<batch {:?}-{:?}>",
+                batch.desc.lower().elements(),
+                batch.desc.upper().elements()
+            );
+            for (run, parts) in batch.runs().enumerate() {
+                writeln!(result, "<run {run}>");
+                for (part_id, part) in parts.into_iter().enumerate() {
+                    writeln!(result, "<part {part_id}>");
+                    let part = fetch_batch_part(
+                        &datadriven.shard_id,
+                        datadriven.client.blob.as_ref(),
+                        datadriven.client.metrics.as_ref(),
+                        datadriven.machine.applier.shard_metrics.as_ref(),
+                        &datadriven.client.metrics.read.batch_fetcher,
+                        &part.key,
+                        &batch.desc,
+                    )
+                    .await
+                    .expect("invalid batch part");
+
+                    let mut updates = Vec::new();
+                    let mut cursor = Cursor::default();
+                    while let Some((k, _v, mut t, d)) = cursor.pop(&part) {
+                        t.advance_by(as_of.borrow());
+                        updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
+                    }
+
+                    consolidate_updates(&mut updates);
+
+                    for (k, t, d) in updates {
+                        writeln!(result, "{k} {t} {d}");
+                    }
                 }
             }
         }
-        consolidate_updates(&mut updates);
 
-        let mut s = String::new();
-        for (k, t, d) in updates {
-            write!(s, "{k} {t} {d}\n");
-        }
-        Ok(s)
+        Ok(result)
     }
 
     pub async fn register_listen(
@@ -1663,7 +1732,7 @@ pub mod datadriven {
             .register_leased_reader(
                 &reader_id,
                 "tests",
-                datadriven.client.cfg.reader_lease_duration,
+                datadriven.client.cfg.dynamic.reader_lease_duration(),
                 (datadriven.client.cfg.now)(),
             )
             .await;
@@ -1705,6 +1774,55 @@ pub mod datadriven {
         let (_, maintenance) = datadriven.machine.expire_leased_reader(&reader_id).await;
         datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn compare_and_append_batches(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let expected_upper = args.expect_antichain("expected_upper");
+        let new_upper = args.expect_antichain("new_upper");
+
+        let mut batches: Vec<Batch<String, (), u64, i64>> = args
+            .args
+            .get("batches")
+            .expect("missing batches")
+            .into_iter()
+            .map(|batch| {
+                let hollow = datadriven
+                    .batches
+                    .get(batch)
+                    .expect("unknown batch")
+                    .clone();
+                Batch::new(
+                    Arc::clone(&datadriven.client.blob),
+                    datadriven.shard_id,
+                    datadriven.client.cfg.build_version.clone(),
+                    hollow,
+                )
+            })
+            .collect();
+
+        let mut writer = datadriven
+            .client
+            .open_writer(
+                datadriven.shard_id,
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await?;
+
+        let mut batch_refs: Vec<_> = batches.iter_mut().collect();
+
+        let () = writer
+            .compare_and_append_batch(batch_refs.as_mut_slice(), expected_upper, new_upper)
+            .await?
+            .expect("upper match");
+
+        writer.expire().await;
+
+        Ok("ok\n".into())
     }
 
     pub async fn expire_writer(
@@ -1861,7 +1979,7 @@ pub mod tests {
         // bounded).
         let max_live_diffs = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
-            live_diffs.0.len() < max_live_diffs,
+            live_diffs.0.len() <= max_live_diffs,
             "{} vs {}",
             live_diffs.0.len(),
             max_live_diffs

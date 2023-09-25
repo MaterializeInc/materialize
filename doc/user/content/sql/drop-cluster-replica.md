@@ -7,7 +7,16 @@ menu:
 
 ---
 
-`DROP CLUSTER REPLICA` removes an existing replica for the specified cluster. To remove all active replicas for a cluster, use the [`DROP CLUSTER`](/sql/drop-cluster) command.
+{{< warning >}}
+`DROP CLUSTER REPLICA` is deprecated.
+
+We recommend migrating to a [managed
+cluster](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead
+of manually creating and dropping replicas.
+{{< /warning >}}
+
+`DROP CLUSTER REPLICA` deprovisions an existing replica of the specified cluster. To remove
+the cluster itself, use the [`DROP CLUSTER`](/sql/drop-cluster) command.
 
 ## Syntax
 

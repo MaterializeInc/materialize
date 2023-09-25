@@ -8,28 +8,29 @@
 # by the Apache License, Version 2.0.
 
 import json
+import re
 import time
+from copy import copy
+from datetime import datetime
+from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
-from typing import Dict, Optional, Tuple
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Kafka,
-    Localstack,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -83,6 +84,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-query-without-default-cluster",
         "test-clusterd-death-detection",
         "test-replica-metrics",
+        "test-compute-controller-metrics",
+        "test-metrics-retention-across-restart",
+        "test-concurrent-connections",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -249,7 +253,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.up("clusterd1")
 
     # helper function to get command history metrics
-    def find_command_history_metrics(c: Composition) -> Tuple[int, int, int, int]:
+    def find_command_history_metrics(c: Composition) -> tuple[int, int, int, int]:
         controller_metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -337,11 +341,9 @@ def workflow_test_github_15531(c: Composition) -> None:
     assert controller_command_count > 0, "controller history cannot be empty"
     assert (
         controller_dataflow_count == 1
-    ), "more dataflows than expected in controller history"
+    ), "expected a single dataflow in controller history"
     assert replica_command_count > 0, "replica history cannot be empty"
-    assert (
-        replica_dataflow_count == 1
-    ), "more dataflows than expected in replica history"
+    assert replica_dataflow_count == 1, "expected a single dataflow in replica history"
 
     # execute 400 fast- and slow-path peeks
     for _ in range(20):
@@ -370,8 +372,8 @@ def workflow_test_github_15531(c: Composition) -> None:
             """
         )
 
-    # check that dataflow count is the same and
-    # that history size is well-behaved
+    # Check that history size and dataflow count are well-behaved.
+    # Dataflow count can plausibly be more than 1, if compaction is delayed.
     (
         controller_command_count,
         controller_dataflow_count,
@@ -382,11 +384,17 @@ def workflow_test_github_15531(c: Composition) -> None:
         controller_command_count < 100
     ), "controller history grew more than expected after peeks"
     assert (
+        controller_dataflow_count > 0
+    ), "at least one dataflow expected in controller history"
+    assert (
         controller_dataflow_count < 5
     ), "more dataflows than expected in controller history"
     assert (
         replica_command_count < 100
     ), "replica history grew more than expected after peeks"
+    assert (
+        replica_dataflow_count > 0
+    ), "at least one dataflow expected in replica history"
     assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 
@@ -432,7 +440,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
 
-    def extract_frontiers(output: str) -> Tuple[int, int]:
+    def extract_frontiers(output: str) -> tuple[int, int]:
         j = json.loads(output)
         (upper,) = j["determination"]["upper"]["elements"]
         (since,) = j["determination"]["since"]["elements"]
@@ -657,7 +665,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- generating a SQL-level error, given the partial fix to bucketed
             -- aggregates introduced in PR #17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
-            SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
         )
         c.testdrive(
@@ -928,8 +936,9 @@ def workflow_test_github_17509(c: Composition) -> None:
     assertions are turned off.
 
     This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
-    It is still possible to trigger the behavior described in the issue by opting into
-    a smaller group size with a query hint (e.g., OPTIONS (EXPECTED GROUP SIZE = 1)).
+    The checks here are extended by opting into a smaller group size with a query hint (e.g.,
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
+    initially not covered, but eventually got supported as well.
     """
 
     c.down(destroy_volumes=True)
@@ -1587,7 +1596,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Helper function to get reconciliation metrics for clusterd.
-    def fetch_reconciliation_metrics() -> Tuple[int, int]:
+    def fetch_reconciliation_metrics() -> tuple[int, int]:
         metrics = c.exec(
             "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
@@ -1794,7 +1803,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """Stop a susbscribe started with `start_subscribe`."""
         cursor.execute("ROLLBACK")
 
-    def check_mz_subscriptions(expected: Tuple) -> None:
+    def check_mz_subscriptions(expected: tuple) -> None:
         """
         Check that the expected subscribes exist in mz_subscriptions.
         We identify subscribes by user, cluster, and target table only.
@@ -2012,7 +2021,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
 
 
 class Metrics:
-    metrics: Dict[str, str]
+    metrics: dict[str, str]
 
     def __init__(self, raw: str) -> None:
         self.metrics = {}
@@ -2020,7 +2029,14 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
-    def with_name(self, metric_name: str) -> Dict[str, float]:
+    def for_instance(self, id: str) -> "Metrics":
+        new = copy(self)
+        new.metrics = {
+            k: v for k, v in self.metrics.items() if f'instance_id="{id}"' in k
+        }
+        return new
+
+    def with_name(self, metric_name: str) -> dict[str, float]:
         items = {}
         for key, value in self.metrics.items():
             if key.startswith(metric_name):
@@ -2033,21 +2049,61 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_initial_output_duration(self, collection_id: str) -> Optional[float]:
+    def get_command_count(self, metric: str, command_type: str) -> float:
+        metrics = self.with_name(metric)
+        values = [
+            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
+    def get_response_count(self, metric: str, response_type: str) -> float:
+        metrics = self.with_name(metric)
+        values = [
+            v for k, v in metrics.items() if f'response_type="{response_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
+    def get_replica_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_replica_history_command_count", command_type
+        )
+
+    def get_controller_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_controller_history_command_count", command_type
+        )
+
+    def get_commands_total(self, command_type: str) -> float:
+        return self.get_command_count("mz_compute_commands_total", command_type)
+
+    def get_command_bytes_total(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_command_message_bytes_total", command_type
+        )
+
+    def get_responses_total(self, response_type: str) -> float:
+        return self.get_response_count("mz_compute_responses_total", response_type)
+
+    def get_response_bytes_total(self, response_type: str) -> float:
+        return self.get_response_count(
+            "mz_compute_response_message_bytes_total", response_type
+        )
+
+    def get_peeks_total(self, result: str) -> float:
+        metrics = self.with_name("mz_compute_peeks_total")
+        values = [v for k, v in metrics.items() if f'result="{result}"' in k]
+        assert len(values) == 1
+        return values[0]
+
+    def get_initial_output_duration(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
         values = [
             v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
         ]
         assert len(values) <= 1
         return next(iter(values), None)
-
-    def get_command_count(self, command_type: str) -> float:
-        metrics = self.with_name("mz_compute_replica_history_command_count")
-        values = [
-            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
-        ]
-        assert len(values) <= 1
-        return values[0]
 
 
 def workflow_test_replica_metrics(c: Composition) -> None:
@@ -2092,39 +2148,167 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+
+    count = metrics.get_replica_history_command_count("create_timely")
+    assert count == 0, f"unexpected create_timely count: {count}"
+    count = metrics.get_replica_history_command_count("create_instance")
+    assert count == 1, f"unexpected create_instance count: {count}"
+    count = metrics.get_replica_history_command_count("allow_compaction")
+    assert count > 0, f"unexpected allow_compaction count: {count}"
+    count = metrics.get_replica_history_command_count("create_dataflow")
+    assert count > 0, f"unexpected create_dataflow count: {count}"
+    count = metrics.get_replica_history_command_count("peek")
+    assert count <= 2, f"unexpected peek count: {count}"
+    count = metrics.get_replica_history_command_count("cancel_peek")
+    assert count <= 2, f"unexpected cancel_peek count: {count}"
+    count = metrics.get_replica_history_command_count("initialization_complete")
+    assert count == 0, f"unexpected initialization_complete count: {count}"
+    count = metrics.get_replica_history_command_count("update_configuration")
+    assert count == 1, f"unexpected update_configuration count: {count}"
+
+    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
+    assert count >= 2, f"unexpected dataflow count: {count}"
+
+    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
+    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+
+
+def workflow_test_compute_controller_metrics(c: Composition) -> None:
+    """Test metrics exposed by the compute controller."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp).for_instance("u2")
+
+    # Set up a cluster with a couple dataflows.
+    c.sql(
+        """
+        CREATE CLUSTER test MANAGED, SIZE '1';
+        SET cluster = test;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+
+        CREATE INDEX idx ON t (a);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+        SELECT * FROM t;
+        SELECT * FROM mv;
+        """
+    )
+
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
-    count = metrics.get_command_count("create_timely")
-    assert count == 0, f"unexpected create_timely count: {count}"
-    count = metrics.get_command_count("create_instance")
-    assert count == 1, f"unexpected create_instance count: {count}"
-    count = metrics.get_command_count("allow_compaction")
-    assert count > 0, f"unexpected allow_compaction count: {count}"
-    count = metrics.get_command_count("create_dataflow")
-    assert count > 0, f"unexpected create_dataflow count: {count}"
-    count = metrics.get_command_count("peek")
-    assert count <= 2, f"unexpected peek count: {count}"
-    count = metrics.get_command_count("cancel_peek")
-    assert count == 0, f"unexpected cancel_peek count: {count}"
-    count = metrics.get_command_count("initialization_complete")
-    assert count == 0, f"unexpected initialization_complete count: {count}"
-    count = metrics.get_command_count("update_configuration")
-    assert count == 1, f"unexpected update_configuration count: {count}"
+    # mz_compute_commands_total
+    count = metrics.get_commands_total("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("create_instance")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_commands_total("create_dataflow")
+    assert count == 3, f"got {count}"
+    count = metrics.get_commands_total("peek")
+    assert count == 2, f"got {count}"
+    count = metrics.get_commands_total("cancel_peek")
+    assert count == 2, f"got {count}"
+    count = metrics.get_commands_total("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("update_configuration")
+    assert count == 1, f"got {count}"
 
-    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
-    assert count >= 2, f"unexpected dataflow count: {count}"
+    # mz_compute_command_message_bytes_total
+    count = metrics.get_command_bytes_total("create_timely")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("create_instance")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("create_dataflow")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("peek")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("cancel_peek")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("initialization_complete")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("update_configuration")
+    assert count > 0, f"got {count}"
 
-    index_iod = metrics.get_initial_output_duration(index_id)
-    assert index_iod, f"unexpected index iod: {index_iod}"
-    mv_iod = metrics.get_initial_output_duration(mv_id)
-    assert mv_iod, f"unexpected mv iod: {mv_iod}"
+    # mz_compute_responses_total
+    count = metrics.get_responses_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics.get_responses_total("peek_response")
+    assert count == 2, f"got {count}"
+    count = metrics.get_responses_total("subscribe_response")
+    assert count == 0, f"got {count}"
 
-    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
-    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+    # mz_compute_response_message_bytes_total
+    count = metrics.get_response_bytes_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics.get_response_bytes_total("peek_response")
+    assert count > 0, f"got {count}"
+    count = metrics.get_response_bytes_total("subscribe_response")
+    assert count == 0, f"got {count}"
+
+    count = metrics.get_value("mz_compute_controller_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_collection_count")
+    assert count > 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_peek_count")
+    assert count == 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_subscribe_count")
+    assert count == 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_command_queue_size")
+    assert count < 10, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_response_queue_size")
+    assert count < 10, f"got {count}"
+
+    # mz_compute_controller_history_command_count
+    count = metrics.get_controller_history_command_count("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("create_instance")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_controller_history_command_count("create_dataflow")
+    assert count > 0, f"got {count}"
+    count = metrics.get_controller_history_command_count("peek")
+    assert count <= 2, f"got {count}"
+    count = metrics.get_controller_history_command_count("cancel_peek")
+    assert count <= 2, f"got {count}"
+    count = metrics.get_controller_history_command_count("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("update_configuration")
+    assert count == 1, f"got {count}"
+
+    count = metrics.get_value("mz_compute_controller_history_dataflow_count")
+    assert count >= 2, f"got {count}"
+
+    # mz_compute_peeks_total
+    count = metrics.get_peeks_total("rows")
+    assert count == 2, f"got {count}"
+    count = metrics.get_peeks_total("error")
+    assert count == 0, f"got {count}"
+    count = metrics.get_peeks_total("canceled")
+    assert count == 0, f"got {count}"
+
+    # mz_dataflow_initial_output_duration_seconds
+    duration = metrics.get_initial_output_duration(index_id)
+    assert duration, f"got {duration}"
+    duration = metrics.get_initial_output_duration(mv_id)
+    assert duration, f"got {duration}"
 
     # Drop the dataflows.
     c.sql(
@@ -2134,10 +2318,110 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
-    # Wait for the drop commands to reach the replica.
-    time.sleep(1)
-
-    # Check that the dataflow metrics have been cleaned up.
+    # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None
+
+
+def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
+    """
+    Test that sinces of retained-metrics objects are held back across
+    restarts of environmentd.
+    """
+
+    # There are three kinds of retained-metrics objects currently:
+    #  * tables (like `mz_cluster_replicas`)
+    #  * indexes (like `mz_cluster_replicas_ind`)
+
+    # Generally, metrics tables are indexed in `mz_introspection` and
+    # not indexed in the `default` cluster, so we can use that to
+    # collect the `since` frontiers we want.
+    def collect_sinces() -> tuple[int, int]:
+        explain = c.sql_query(
+            "SET cluster = default;"
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
+        )[0][0]
+        table_since = parse_since_from_explain(explain)
+
+        explain = c.sql_query(
+            "SET cluster = mz_introspection;"
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
+        )[0][0]
+        index_since = parse_since_from_explain(explain)
+
+        return table_since, index_since
+
+    def parse_since_from_explain(explain: str) -> int:
+        since_line = re.compile(r"\s*read frontier:\[(?P<since>\d+) \(.+\)\]")
+        for line in explain.splitlines():
+            if match := since_line.match(line):
+                return int(match.group("since"))
+
+        raise AssertionError(f"since not found in explain: {explain}")
+
+    def validate_since(since: int, name: str) -> None:
+        now = datetime.now()
+        dt = datetime.fromtimestamp(since / 1000.0)
+        diff = now - dt
+
+        assert (
+            diff.days >= 30
+        ), f"{name} greater than expected (since={since}, diff={diff})"
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    table_since1, index_since1 = collect_sinces()
+    validate_since(table_since1, "table_since1")
+    validate_since(index_since1, "index_since1")
+
+    # Restart Materialize.
+    c.kill("materialized")
+    c.up("materialized")
+
+    table_since2, index_since2 = collect_sinces()
+    validate_since(table_since2, "table_since2")
+    validate_since(index_since2, "index_since2")
+
+
+def workflow_test_concurrent_connections(c: Composition) -> None:
+    """
+    Run many concurrent connections, measure their p50 and p99 latency, make
+    sure #21782 does not regress.
+    """
+    num_conns = 2000
+    runtimes: list[float] = [float("inf")] * num_conns
+
+    def worker(c: Composition, i: int) -> None:
+        start_time = time.time()
+        c.sql("SELECT 1")
+        end_time = time.time()
+        runtimes[i] = end_time - start_time
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql(
+        f"ALTER SYSTEM SET max_connections = {num_conns + 4};",
+        port=6877,
+        user="mz_system",
+    )
+
+    threads = []
+    for i in range(num_conns):
+        thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
+        threads.append(thread)
+
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    p = quantiles(runtimes, n=100)
+    print(
+        f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+    )
+    assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
+    assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"

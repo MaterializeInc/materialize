@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -25,7 +24,7 @@ class WideRows(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -57,16 +56,18 @@ class ManyRows(Check):
                 """
                 > CREATE TABLE many_rows (f1 TEXT);
                 > CREATE DEFAULT INDEX ON many_rows;
+                > SET statement_timeout = '120s';
                 > INSERT INTO many_rows SELECT 'a' || generate_series FROM generate_series(1, 1000000);
                 """
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
                 """
+                > SET statement_timeout = '120s';
                 > INSERT INTO many_rows SELECT 'b' || generate_series FROM generate_series(1, 1000000);
                 """,
                 """

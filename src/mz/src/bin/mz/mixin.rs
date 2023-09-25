@@ -17,11 +17,17 @@
 
 use url::Url;
 
-#[derive(Debug, clap::Args)]
-pub struct ProfileArg {
-    /// Use the specified authentication profile.
-    #[clap(long, env = "PROFILE")]
-    pub profile: Option<String>,
+/// Validate if a profile name consist of only ASCII letters, ASCII digits, underscores, and dashes.
+pub fn validate_profile_name(val: &str) -> Result<String, String> {
+    if val.is_empty() {
+        return Err(String::from("Profile name should not be empty"));
+    }
+    for c in val.chars() {
+        if !(c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '_' || c == '-') {
+            return Err(format!("Invalid character '{}' in profile name.\nThe profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes.", c));
+        }
+    }
+    Ok(String::from(val))
 }
 
 #[derive(Debug, clap::Args)]
@@ -32,11 +38,4 @@ pub struct EndpointArgs {
     /// Use the specified admin endpoint.
     #[clap(long, hidden = true, env = "ADMIN_ENDPOINT")]
     pub admin_endpoint: Option<Url>,
-}
-
-#[derive(Debug, clap::Args)]
-pub struct RegionArg {
-    /// Use the specified region.
-    #[clap(long, env = "REGION")]
-    pub region: Option<String>,
 }

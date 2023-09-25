@@ -16,6 +16,10 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
+  # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
+  # a single core open when compiling. But we want to use all of CI's resources, hence setting the
+  # build jobs to "default" which will use all cores.
+  CARGO_BUILD_JOBS: "default"
 
 steps:
   - id: build-x86_64
@@ -717,6 +721,8 @@ steps:
     if: build.tag != "" && build.branch != "main" && build.branch !~ /^v.*\..*\$/
 
     inputs:
+      # Changes to dependencies
+      - Cargo.lock
       # Changes to the SQL syntax
       - src/sql-parser/src
       - src/expr-parser/src
@@ -754,6 +760,9 @@ steps:
     priority: 1
     agents:
       queue: builder-linux-x86_64
+    retry:
+      manual:
+        permit_on_passed: true
     coverage: only
 
   - wait: ~

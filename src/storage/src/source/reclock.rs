@@ -621,9 +621,9 @@ mod tests {
     use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
-    use mz_storage_client::controller::CollectionMetadata;
-    use mz_storage_client::types::sources::{MzOffset, SourceData};
     use mz_storage_client::util::remap_handle::RemapHandle;
+    use mz_storage_types::controller::CollectionMetadata;
+    use mz_storage_types::sources::{MzOffset, SourceData};
     use mz_timely_util::order::Partitioned;
     use once_cell::sync::Lazy;
     use timely::progress::Timestamp as _;
@@ -634,8 +634,10 @@ mod tests {
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
 
     static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
-        let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-        persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
+        let persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        persistcfg
+            .dynamic
+            .set_reader_lease_duration(PERSIST_READER_LEASE_TIMEOUT_MS);
         Arc::new(PersistClientCache::new(
             persistcfg,
             &MetricsRegistry::new(),

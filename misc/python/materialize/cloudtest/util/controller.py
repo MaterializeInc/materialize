@@ -12,10 +12,11 @@ import socket
 import subprocess
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any
 
+from materialize.cloudtest.util.authentication import AuthConfig
 from materialize.cloudtest.util.common import eprint, retry
-from materialize.cloudtest.util.docker_env import docker_env
+from materialize.cloudtest.util.web_request import WebRequests
 
 
 @dataclass
@@ -29,7 +30,7 @@ class Endpoint:
         return f"{self.scheme}://{self.host}:{self.port}"
 
     @property
-    def host_port(self) -> Tuple[str, int]:
+    def host_port(self) -> tuple[str, int]:
         return (self.host, self.port)
 
     @classmethod
@@ -44,7 +45,8 @@ class ControllerDefinition:
     name: str
     default_port: str
     has_configurable_address: bool = True
-    endpoint: Optional[Endpoint] = None
+    endpoint: Endpoint | None = None
+    client_cert: tuple[str, str] | None = None
 
     def default_address(self) -> str:
         return f"http://127.0.0.1:{self.default_port}"
@@ -55,9 +57,22 @@ class ControllerDefinition:
 
         return self.endpoint.base_url
 
+    def requests(
+        self,
+        auth: AuthConfig | None,
+        client_cert: tuple[str, str] | None = None,
+        additional_headers: dict[str, str] | None = None,
+    ) -> WebRequests:
+        return WebRequests(
+            auth,
+            self.configured_base_url(),
+            client_cert=client_cert,
+            additional_headers=additional_headers,
+        )
+
 
 def wait_for_connectable(
-    address: Union[Tuple[Any, int], str],
+    address: tuple[Any, int] | str,
     max_attempts: int = 30,
 ) -> None:
     def f() -> None:
@@ -67,7 +82,7 @@ def wait_for_connectable(
     retry(
         f,
         max_attempts=max_attempts,
-        exception_types=[ConnectionRefusedError, socket.gaierror],
+        exception_types=[ConnectionRefusedError, socket.gaierror, socket.timeout],
         message=f"Error connecting to {address}. Tried {max_attempts} times.",
     )
 
@@ -101,7 +116,7 @@ def parse_url(s: str) -> urllib.parse.ParseResult:
     return parsed
 
 
-def launch_controllers(controller_names: List[str]) -> None:
+def launch_controllers(controller_names: list[str], docker_env: dict[str, str]) -> None:
     try:
         subprocess.run(
             [
@@ -112,7 +127,7 @@ def launch_controllers(controller_names: List[str]) -> None:
             ],
             capture_output=True,
             check=True,
-            env=docker_env(),
+            env=docker_env,
         )
     except subprocess.CalledProcessError as e:
         eprint(e.returncode, e.stdout, e.stderr)
@@ -125,13 +140,13 @@ def wait_for_controllers(*endpoints: Endpoint) -> None:
         wait_for_connectable(endpoint.host_port)
 
 
-def cleanup_controllers() -> None:
+def cleanup_controllers(docker_env: dict[str, str]) -> None:
     try:
         subprocess.run(
             ["bin/compose", "down", "-v"],
             capture_output=True,
             check=True,
-            env=docker_env(),
+            env=docker_env,
         )
     except subprocess.CalledProcessError as e:
         eprint(e.returncode, e.stdout, e.stderr)

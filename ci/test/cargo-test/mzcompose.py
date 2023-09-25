@@ -9,15 +9,13 @@
 
 import os
 
-from materialize import ROOT, spawn, ui
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Postgres,
-    SchemaRegistry,
-    Zookeeper,
-)
+from materialize import MZ_ROOT, spawn, ui
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -68,7 +66,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
         # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
         # aggregate the data.
-        (ROOT / "coverage").mkdir(exist_ok=True)
+        (MZ_ROOT / "coverage").mkdir(exist_ok=True)
         env["CARGO_LLVM_COV_SETUP"] = "no"
         # There is no pure build command in cargo-llvm-cov, so run with
         # --version as a workaround.

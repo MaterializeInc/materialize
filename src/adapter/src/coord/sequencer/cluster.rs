@@ -14,9 +14,10 @@ use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ClusterId, CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaId,
-    ReplicaLocation, ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaLocation,
+    ReplicaLogging,
 };
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
@@ -28,9 +29,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
-use crate::catalog::{
-    ClusterConfig, ClusterVariant, ClusterVariantManaged, Op, SerializedReplicaLocation,
-};
+use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, Op};
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
@@ -63,7 +62,7 @@ impl Coordinator {
                 ClusterVariant::Managed(ClusterVariantManaged {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
-                    logging: logging.into(),
+                    logging,
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
@@ -133,7 +132,7 @@ impl Coordinator {
         )?;
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
-            let id = self.catalog_mut().allocate_replica_id().await?;
+            let id = self.catalog_mut().allocate_user_replica_id().await?;
             self.create_managed_cluster_replica_op(
                 cluster_id,
                 id,
@@ -170,7 +169,7 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = SerializedReplicaLocation::Managed {
+        let location = mz_catalog::ReplicaLocation::Managed {
             size: size.clone(),
             availability_zone: None,
             disk,
@@ -272,7 +271,7 @@ impl Coordinator {
                     workers,
                     compute,
                 } => {
-                    let location = SerializedReplicaLocation::Unmanaged {
+                    let location = mz_catalog::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
                         storage_addrs,
                         computectl_addrs,
@@ -287,7 +286,7 @@ impl Coordinator {
                     compute,
                     disk,
                 } => {
-                    let location = SerializedReplicaLocation::Managed {
+                    let location = mz_catalog::ReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
                         disk,
@@ -322,7 +321,7 @@ impl Coordinator {
 
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
-                id: self.catalog_mut().allocate_replica_id().await?,
+                id: self.catalog_mut().allocate_user_replica_id().await?,
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
@@ -337,7 +336,11 @@ impl Coordinator {
     }
 
     pub(super) async fn create_cluster(&mut self, cluster_id: ClusterId) {
-        let (catalog, controller) = self.catalog_and_controller_mut();
+        let Coordinator {
+            catalog,
+            controller,
+            ..
+        } = self;
         let cluster = catalog.get_cluster(cluster_id);
         let cluster_id = cluster.id;
         let introspection_source_ids: Vec<_> =
@@ -349,6 +352,7 @@ impl Coordinator {
                 mz_controller::clusters::ClusterConfig {
                     arranged_logs: cluster.log_indexes.clone(),
                 },
+                self.variable_length_row_encoding,
             )
             .expect("creating cluster must not fail");
 
@@ -390,7 +394,7 @@ impl Coordinator {
                 workers,
                 compute,
             } => {
-                let location = SerializedReplicaLocation::Unmanaged {
+                let location = mz_catalog::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -412,7 +416,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
-                let location = SerializedReplicaLocation::Managed {
+                let location = mz_catalog::ReplicaLocation::Managed {
                     size,
                     availability_zone,
                     disk,
@@ -447,7 +451,7 @@ impl Coordinator {
             },
         };
 
-        let id = self.catalog_mut().allocate_replica_id().await?;
+        let id = self.catalog_mut().allocate_user_replica_id().await?;
         // Replicas have the same owner as their cluster.
         let owner_id = self.catalog().get_cluster(cluster_id).owner_id();
         let op = catalog::Op::CreateClusterReplica {
@@ -524,7 +528,7 @@ impl Coordinator {
                 new_config.variant = Managed(ClusterVariantManaged {
                     size,
                     availability_zones: Default::default(),
-                    logging: logging.into(),
+                    logging,
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,
@@ -731,7 +735,7 @@ impl Coordinator {
                 }
             }
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                let id = self.catalog_mut().allocate_replica_id().await?;
+                let id = self.catalog_mut().allocate_user_replica_id().await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
@@ -763,7 +767,7 @@ impl Coordinator {
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
-                let id = self.catalog_mut().allocate_replica_id().await?;
+                let id = self.catalog_mut().allocate_user_replica_id().await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,

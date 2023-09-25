@@ -82,13 +82,27 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
 ----
-1  internal_replica_id  text
+1  replica_id  text
 2  size  text
 3  cluster_name  text
 4  replica_name  text
 5  created_at  timestamp␠with␠time␠zone
 6  dropped_at  timestamp␠with␠time␠zone
 7  credits_per_hour  numeric
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
+----
+1  id  text
+2  object_type  text
+3  object_sub_id  uint8
+4  comment  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
+----
+1  object_id  text
+2  dependency_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
@@ -335,6 +349,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  bytes_received  uint8
 8  envelope_state_bytes  uint8
 9  envelope_state_count  uint8
+10  rehydration_latency_ms  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position
@@ -366,6 +381,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  referenced_object_ids  list
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
+----
+1  id  text
+2  name  text
+3  url  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
 ----
 1  id  uuid
@@ -395,12 +417,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  import_id  text
 3  delay_ns  uint8
 4  count  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
-----
-1  export_id  text
-2  import_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_exports' ORDER BY position
@@ -504,7 +520,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  region_name  text
 5  levels  bigint
 6  to_cut  bigint
-7  hint  double␠precision
+7  savings  numeric
+8  hint  double␠precision
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_message_counts' ORDER BY position
@@ -580,11 +597,11 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
+mz_comments
 mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
 mz_compute_delays_histogram_raw
 mz_compute_dependencies
-mz_compute_dependencies_per_worker
 mz_compute_exports
 mz_compute_exports_per_worker
 mz_compute_frontiers
@@ -664,6 +681,8 @@ mz_show_my_system_privileges
 mz_show_object_privileges
 mz_show_role_members
 mz_show_schema_privileges
+mz_show_sinks
+mz_show_sources
 mz_show_system_privileges
 mz_sink_statistics
 mz_sink_status_history
@@ -675,5 +694,7 @@ mz_statement_execution_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_type_pg_metadata
 mz_view_foreign_keys
 mz_view_keys
+mz_webhook_sources

@@ -10,8 +10,6 @@ menu:
 be used to indicate that the privileges should be revoked from all roles
 (including roles that might not exist yet).
 
-{{< private-preview />}}
-
 ## Syntax
 
 {{< diagram "revoke-privilege.svg" >}}

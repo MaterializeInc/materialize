@@ -12,18 +12,18 @@ import os
 import re
 import subprocess
 from collections import OrderedDict
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import junit_xml
 
-from materialize import ROOT, ci_util
+from materialize import MZ_ROOT, ci_util
 
 # - None value indicates that this line is interesting, but we don't know yet
 #   if it can actually be covered.
 # - Positive values indicate that the line can be covered and how often is has
 #   been covered in end-to-end tests.
 # - Negative values indicate that the line has only been covered in unit tests.
-Coverage = Dict[str, OrderedDict[int, Optional[int]]]
+Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )
@@ -31,8 +31,8 @@ SOURCE_RE = re.compile(
 # cases, so ignore such lines. Same for mz_ore::test
 IGNORE_RE = re.compile(
     r"""
-    ( #\[derive\(.*\)\]
-    | #\[mz_ore::test.*\]
+    ( \#\[derive\(.*\)\]
+    | \#\[mz_ore::test.*\]
     )
     """,
     re.VERBOSE,
@@ -103,6 +103,10 @@ def mark_covered_lines(
             not unittests_have_run
         ), "Call mark_covered_lines for unit tests last in order to get correct code coverage reports"
 
+    # There will always be an SF line specifying a file before a DA line
+    # according to the lcov tracing file format definition
+    file = None
+
     for line in open(lcov_file):
         line = line.strip()
         if not line:
@@ -121,20 +125,24 @@ def mark_covered_lines(
         # DA:111,15524
         # DA:112,0
         # DA:113,15901
-        elif method == "DA" and file in coverage:
-            line_str, hit_str = content.split(",", 1)
-            line_nr = int(line_str)
-            hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
-            if line_nr in coverage[file]:
-                if unittests:
-                    if not coverage[file][line_nr]:
-                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) - hit
-                else:
-                    coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
+        elif method == "DA":
+            assert file, "file was not set by a SF line"
+            if file in coverage:
+                line_str, hit_str = content.split(",", 1)
+                line_nr = int(line_str)
+                hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
+                if line_nr in coverage[file]:
+                    if unittests:
+                        if not coverage[file][line_nr]:
+                            coverage[file][line_nr] = (
+                                coverage[file][line_nr] or 0
+                            ) - hit
+                    else:
+                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
 
 
 def get_report(
-    coverage: Coverage, fn: Callable[[OrderedDict[int, Optional[int]], int, str], bool]
+    coverage: Coverage, fn: Callable[[OrderedDict[int, int | None], int, str], bool]
 ) -> str:
     """
     Remove uncovered lines in real files and print a git diff, then restore to
@@ -259,7 +267,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
     test_cases.append(test_case)
 
     junit_suite = junit_xml.TestSuite("Code Coverage", test_cases)
-    junit_report = ROOT / ci_util.junit_report_filename("coverage")
+    junit_report = MZ_ROOT / ci_util.junit_report_filename("coverage")
     with junit_report.open("w") as f:
         junit_xml.to_xml_report_file(f, [junit_suite])
 

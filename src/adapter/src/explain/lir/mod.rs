@@ -9,8 +9,8 @@
 
 //! `EXPLAIN` support for LIR structures.
 
-use mz_compute_client::plan::Plan;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_repr::explain::{Explain, ExplainError};
 
 use crate::explain::Explainable;

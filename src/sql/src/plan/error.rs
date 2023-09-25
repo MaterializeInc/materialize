@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fmt, io};
 
 use itertools::Itertools;
@@ -22,7 +23,7 @@ use mz_postgres_util::PostgresError;
 use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
-use mz_repr::adt::system::Oid;
+use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -35,6 +36,10 @@ use crate::catalog::{
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::pure::error::{
+    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    TestScriptSourcePurificationError,
+};
 use crate::session::vars::VarError;
 
 #[derive(Clone, Debug)]
@@ -63,6 +68,10 @@ pub enum PlanError {
         column: ColumnName,
     },
     AmbiguousColumn(ColumnName),
+    TooManyColumns {
+        max_num_columns: usize,
+        req_num_columns: usize,
+    },
     AmbiguousTable(PartialItemName),
     UnknownColumnInUsingClause {
         column: ColumnName,
@@ -104,6 +113,7 @@ pub enum PlanError {
         object_description: ErrorMessageObjectDescription,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
+    InvalidTimestampPrecision(InvalidTimestampPrecisionError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
     ParserStatement(ParserStatementError),
@@ -128,12 +138,6 @@ pub enum PlanError {
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
     UnacceptableTimelineName(String),
-    UnrecognizedTypeInPostgresSource {
-        cols: Vec<(String, Oid)>,
-    },
-    DanglingTextColumns {
-        items: Vec<PartialItemName>,
-    },
     FetchingCsrSchemaFailed {
         schema_lookup: String,
         cause: Arc<dyn Error + Send + Sync>,
@@ -187,18 +191,6 @@ pub enum PlanError {
     ManagedCluster {
         cluster_name: String,
     },
-    EmptyPublication(String),
-    SubsourceNameConflict {
-        name: UnresolvedItemName,
-        upstream_references: Vec<UnresolvedItemName>,
-    },
-    SubsourceDuplicateReference {
-        name: UnresolvedItemName,
-        target_names: Vec<UnresolvedItemName>,
-    },
-    PostgresDatabaseMissingFilteredSchemas {
-        schemas: Vec<String>,
-    },
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
@@ -208,7 +200,21 @@ pub enum PlanError {
     ShowCommandInView,
     WebhookValidationDoesNotUseColumns,
     WebhookValidationNonDeterministic,
-    PgSourceUserSpecifiedDetails,
+    InternalFunctionCall,
+    CommentTooLong {
+        length: usize,
+        max_size: usize,
+    },
+    InvalidTimestampInterval {
+        min: Duration,
+        max: Duration,
+        requested: Duration,
+    },
+    InvalidGroupSizeHints,
+    PgSourcePurification(PgSourcePurificationError),
+    KafkaSourcePurification(KafkaSourcePurificationError),
+    TestScriptSourcePurification(TestScriptSourcePurificationError),
+    LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -254,15 +260,11 @@ impl PlanError {
                 ))
             }
             Self::VarError(e) => e.detail(),
-            Self::DanglingTextColumns { items } => {
-                let mut items = items.to_owned();
-                items.sort();
-
-                Some(format!(
-                    "the following tables were referenced but not added: {}",
-                    itertools::join(items, ", ")
-                ))
-            }
+            Self::InternalFunctionCall => Some("This function is for the internal use of the database system and cannot be called directly.".into()),
+            Self::PgSourcePurification(e) => e.detail(),
+            Self::KafkaSourcePurification(e) => e.detail(),
+            Self::TestScriptSourcePurification(e) => e.detail(),
+            Self::LoadGeneratorSourcePurification(e) => e.detail(),
             _ => None,
         }
     }
@@ -290,13 +292,6 @@ impl PlanError {
             Self::UnacceptableTimelineName(_) => {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
             }
-            Self::UnrecognizedTypeInPostgresSource {
-                cols: _,
-            } => Some(
-                "Use the TEXT COLUMNS option naming the listed columns, and Materialize can ingest their values \
-                as text."
-                    .into(),
-            ),
             Self::PostgresConnectionErr { cause } => {
                 if let Some(cause) = cause.source() {
                     if let Some(cause) = cause.downcast_ref::<io::Error>() {
@@ -326,9 +321,6 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
-            Self::SubsourceNameConflict { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
-            }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 Some("All keys must be columns on the underlying relation.".into())
             }
@@ -343,7 +335,10 @@ impl PlanError {
             }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
-            Self::PgSourceUserSpecifiedDetails => Some("If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option.".into()),
+            Self::PgSourcePurification(e) => e.hint(),
+            Self::KafkaSourcePurification(e) => e.hint(),
+            Self::TestScriptSourcePurification(e) => e.hint(),
+            Self::LoadGeneratorSourcePurification(e) => e.hint(),
             _ => None,
         }
     }
@@ -386,6 +381,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column reference {} is ambiguous",
                 column.as_str().quoted()
+            ),
+            Self::TooManyColumns { max_num_columns, req_num_columns } => write!(
+                f,
+                "attempt to create relation with too many columns, {} max: {}",
+                req_num_columns, max_num_columns
             ),
             Self::AmbiguousTable(table) => write!(
                 f,
@@ -442,6 +442,7 @@ impl fmt::Display for PlanError {
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
+            Self::InvalidTimestampPrecision(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
             Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
@@ -459,25 +460,6 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
-            Self::UnrecognizedTypeInPostgresSource { cols } => {
-                let mut cols = cols.to_owned();
-                cols.sort();
-
-                write!(
-                    f,
-                    "the following columns contain unsupported types:\n{}",
-                    itertools::join(
-                        cols.into_iter().map(|(col, Oid(oid))| format!("{} (OID {})", col, oid)),
-                        "\n"
-                    )
-                )
-            },
-            Self::DanglingTextColumns { .. } => {
-                write!(
-                    f,
-                    "TEXT COLUMNS can only refer to tables being added to source",
-                )
-            },
             Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
                 write!(f, "failed to fetch schema {schema_lookup} from schema registry")
             }
@@ -528,16 +510,6 @@ impl fmt::Display for PlanError {
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
-            Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
-            Self::SubsourceNameConflict { name, upstream_references } => {
-                write!(f, "multiple tables with name {}: {}", name.to_ast_string_stable(), itertools::join(upstream_references.iter().map(|n| n.to_ast_string_stable()), ", "))
-            },
-            Self::SubsourceDuplicateReference { name, target_names } => {
-                write!(f, "table {} referred to by multiple subsources: {}", name.to_ast_string_stable(), itertools::join(target_names.iter().map(|n| n.to_ast_string_stable()), ", "))
-            },
-            Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
-                write!(f, "FOR SCHEMAS (..) included {}, but PostgreSQL database has no schema with that name", itertools::join(schemas.iter(), ", "))
-            }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..))")
             }
@@ -561,9 +533,20 @@ impl fmt::Display for PlanError {
             Self::WebhookValidationNonDeterministic => f.write_str(
                 "expression provided in CHECK is not deterministic"
             ),
-            Self::PgSourceUserSpecifiedDetails => f.write_str(
-                "must not specify DETAILS option in CREATE SOURCE"
-            ),
+            Self::InternalFunctionCall => f.write_str("cannot call function with arguments of type internal"),
+            Self::CommentTooLong { length, max_size } => {
+                write!(f, "provided comment was {length} bytes long, max size is {max_size} bytes")
+            }
+            Self::InvalidTimestampInterval { min, max, requested } => {
+                write!(f, "invalid timestamp interval of {}ms, must be in the range [{}ms, {}ms]", requested.as_millis(), min.as_millis(), max.as_millis())
+            }
+            Self::InvalidGroupSizeHints => f.write_str("EXPECTED GROUP SIZE cannot be provided \
+                simultaneously with any of AGGREGATE INPUT GROUP SIZE, DISTINCT ON INPUT GROUP SIZE, \
+                or LIMIT INPUT GROUP SIZE"),
+            Self::PgSourcePurification(e) => write!(f, "POSTGRES source validation: {}", e),
+            Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
+            Self::TestScriptSourcePurification(e) => write!(f, "TEST SCRIPT source validation: {}", e),
+            Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
         }
     }
 }
@@ -603,6 +586,12 @@ impl From<InvalidCharLengthError> for PlanError {
 impl From<InvalidVarCharMaxLengthError> for PlanError {
     fn from(e: InvalidVarCharMaxLengthError) -> PlanError {
         PlanError::InvalidVarCharMaxLength(e)
+    }
+}
+
+impl From<InvalidTimestampPrecisionError> for PlanError {
+    fn from(e: InvalidTimestampPrecisionError) -> PlanError {
+        PlanError::InvalidTimestampPrecision(e)
     }
 }
 
@@ -652,6 +641,30 @@ impl From<PostgresError> for PlanError {
 impl From<VarError> for PlanError {
     fn from(e: VarError) -> Self {
         PlanError::VarError(e)
+    }
+}
+
+impl From<PgSourcePurificationError> for PlanError {
+    fn from(e: PgSourcePurificationError) -> Self {
+        PlanError::PgSourcePurification(e)
+    }
+}
+
+impl From<KafkaSourcePurificationError> for PlanError {
+    fn from(e: KafkaSourcePurificationError) -> Self {
+        PlanError::KafkaSourcePurification(e)
+    }
+}
+
+impl From<TestScriptSourcePurificationError> for PlanError {
+    fn from(e: TestScriptSourcePurificationError) -> Self {
+        PlanError::TestScriptSourcePurification(e)
+    }
+}
+
+impl From<LoadGeneratorSourcePurificationError> for PlanError {
+    fn from(e: LoadGeneratorSourcePurificationError) -> Self {
+        PlanError::LoadGeneratorSourcePurification(e)
     }
 }
 

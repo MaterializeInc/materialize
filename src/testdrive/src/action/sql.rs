@@ -20,7 +20,6 @@ use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
 use mz_repr::adt::range::Range;
-use mz_sql::ast::ExplainStage;
 use mz_sql_parser::ast::{Raw, Statement};
 use postgres_array::Array;
 use regex::Regex;
@@ -49,7 +48,9 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         // Do not retry FETCH statements as subsequent executions are likely
         // to return an empty result. The original result would thus be lost.
         Fetch(_) => false,
-        Explain(stmt) if stmt.stage != ExplainStage::Timestamp => false,
+        // EXPLAIN ... PLAN statements should always provide the expected result
+        // on the first try
+        ExplainPlan(_) => false,
         // DDL statements should always provide the expected result on the first try
         CreateConnection(_)
         | CreateCluster(_)
@@ -135,15 +136,24 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Statement::GrantRole { .. }
         | Statement::RevokePrivileges { .. }
         | Statement::RevokeRole { .. } => {
-            let disk_state = state
-                .with_catalog_copy(|catalog| {
-                    catalog.state().dump().expect("state must be dumpable")
-                })
+            let catalog_state = state
+                .with_catalog_copy(|catalog| catalog.state().clone())
                 .await
-                .map_err(|e| anyhow!("failed to dump on-disk catalog state: {e}"))?;
+                .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?;
+
+            // Run internal consistency checks.
+            if let Some(state) = &catalog_state {
+                if let Err(inconsistencies) = state.check_consistency() {
+                    bail!("Internal catalog inconsistencies {inconsistencies:#?}");
+                }
+            }
+
+            // Check that our on-disk state matches the in-memory state.
+            let disk_state =
+                catalog_state.map(|state| state.dump().expect("state must be dumpable"));
             if let Some(disk_state) = disk_state {
                 let mem_state = reqwest::get(&format!(
-                    "http://{}/api/catalog",
+                    "http://{}/api/catalog/dump",
                     state.materialize_internal_http_addr,
                 ))
                 .await?
@@ -161,7 +171,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                         .collect::<Vec<_>>()
                         .join("\n");
 
-                    bail!("the on-disk state of the catalog does not match its in-memory state:\n{diff}");
+                    bail!("the in-memory state of the catalog does not match its on-disk state:\n{diff}");
                 }
             }
         }

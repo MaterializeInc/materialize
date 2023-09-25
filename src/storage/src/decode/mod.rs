@@ -19,21 +19,17 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
-use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_storage_client::types::connections::{ConnectionContext, CsrConnection};
-use mz_storage_client::types::errors::{DecodeError, DecodeErrorKind};
-use mz_storage_client::types::sources::encoding::{
+use mz_storage_types::connections::{ConnectionContext, CsrConnection};
+use mz_storage_types::errors::{DecodeError, DecodeErrorKind};
+use mz_storage_types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
-use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
@@ -73,7 +69,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 
     let mut input_handle = builder.new_input(
         &input.inner,
-        Exchange::new(|(x, _, _): &(SourceOutput<_, _>, _, _)| x.position.hashed()),
+        Exchange::new(|(x, _, _): &(SourceOutput<Option<Vec<u8>>, _>, _, _)| x.key.hashed()),
     );
 
     let channel_tx = Rc::clone(&channel_rx);
@@ -389,7 +385,6 @@ pub fn render_decode_delimited<G>(
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
-    metadata_items: Vec<IncludedColumnSource>,
     metrics: DecodeMetrics,
     connection_context: ConnectionContext,
 ) -> (
@@ -448,8 +443,8 @@ where
 
             while let Some(event) = input.next().await {
                 let AsyncEvent::Data(cap, data) = event else {
-                continue;
-            };
+                    continue;
+                };
 
                 let mut n_errors = 0;
                 let mut n_successes = 0;
@@ -457,10 +452,8 @@ where
                     let SourceOutput {
                         key,
                         value,
-                        position,
-                        upstream_time_millis,
-                        partition,
-                        headers,
+                        metadata,
+                        position_for_upsert: position,
                     } = output;
 
                     let key = match key_decoder.as_mut().zip(key.as_ref()) {
@@ -482,16 +475,8 @@ where
                     let result = DecodeResult {
                         key,
                         value,
-                        position: *position,
-                        upstream_time_millis: *upstream_time_millis,
-                        partition: partition.clone(),
-                        metadata: to_metadata_row(
-                            &metadata_items,
-                            partition.clone(),
-                            *position,
-                            *upstream_time_millis,
-                            headers.as_deref(),
-                        ),
+                        position_for_upsert: *position,
+                        metadata: metadata.clone(),
                     };
                     output_container.push((result, ts.clone(), *diff));
                 }
@@ -525,69 +510,4 @@ where
     });
 
     (output.as_collection(), health, None)
-}
-
-fn to_metadata_row(
-    metadata_items: &[IncludedColumnSource],
-    partition: PartitionId,
-    position: MzOffset,
-    upstream_time_millis: Option<i64>,
-    headers: Option<&[(String, Option<Vec<u8>>)]>,
-) -> Row {
-    let position = position.offset;
-    let mut row = Row::default();
-    let mut packer = row.packer();
-    match partition {
-        PartitionId::Kafka(partition) => {
-            for item in metadata_items.iter() {
-                match item {
-                    IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
-                    IncludedColumnSource::Offset => packer.push(Datum::UInt64(position)),
-                    IncludedColumnSource::Timestamp => {
-                        let ts =
-                            upstream_time_millis.expect("kafka sources always have upstream_time");
-
-                        let d: Datum = NaiveDateTime::from_timestamp_millis(ts)
-                            .and_then(|dt| {
-                                let ct: Option<CheckedTimestamp<NaiveDateTime>> =
-                                    dt.try_into().ok();
-                                ct
-                            })
-                            .into();
-                        packer.push(d)
-                    }
-                    IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
-                    IncludedColumnSource::Headers => {
-                        packer.push_list_with(|r| {
-                            // If the source asked for headers, but we didn't get any, we still
-                            // want to run the `push_dict_with`, to produce an empty map value
-                            //
-                            // This is a `BTreeMap`, so the `push_dict_with` ordering invariant is
-                            // upheld
-                            if let Some(headers) = headers {
-                                for (k, v) in headers {
-                                    match v {
-                                        Some(v) => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(k));
-                                            record_row.push(Datum::Bytes(v));
-                                        }),
-                                        None => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(k));
-                                            record_row.push(Datum::Null);
-                                        }),
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        PartitionId::None => {
-            if !metadata_items.is_empty() {
-                unreachable!("Only Kafka supports metadata items");
-            }
-        }
-    }
-    row
 }

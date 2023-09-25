@@ -17,6 +17,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import psycopg2
+
 import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.events import AdapterLogger
@@ -47,6 +49,7 @@ class MaterializeCredentials(PostgresCredentials):
             "sslmode",
             "keepalives_idle",
             "connect_timeout",
+            "search_path",
             "retries",
         )
 

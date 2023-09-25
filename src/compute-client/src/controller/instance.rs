@@ -17,7 +17,10 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::ClusterStartupEpoch;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -34,13 +37,10 @@ use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
-use crate::types::dataflows::DataflowDescription;
-use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
-use crate::types::sources::SourceInstanceDesc;
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -173,6 +173,16 @@ impl<T> Instance<T> {
         self.collections.iter()
     }
 
+    fn add_collection(&mut self, id: GlobalId, state: CollectionState<T>) {
+        self.collections.insert(id, state);
+        self.report_dependency_updates(id, 1);
+    }
+
+    fn remove_collection(&mut self, id: GlobalId) {
+        self.report_dependency_updates(id, -1);
+        self.collections.remove(&id);
+    }
+
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
@@ -232,6 +242,37 @@ impl<T> Instance<T> {
             .subscribe_count
             .set(u64::cast_from(self.subscribes.len()));
     }
+
+    /// Report updates (inserts or retractions) to the identified collection's dependencies.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the identified collection does not exist.
+    fn report_dependency_updates(&mut self, id: GlobalId, diff: i64) {
+        let collection = self.collections.get(&id).expect("collection must exist");
+
+        let mut dependencies = Vec::new();
+        dependencies.extend(collection.compute_dependencies.iter());
+        dependencies.extend(collection.storage_dependencies.iter());
+
+        let resp = ComputeControllerResponse::DependencyUpdate {
+            id,
+            dependencies,
+            diff,
+        };
+        self.ready_responses.push_back(resp);
+    }
+
+    /// List compute collections that depend on the given collection.
+    pub fn collection_reverse_dependencies(&self, id: GlobalId) -> impl Iterator<Item = &GlobalId> {
+        self.collections_iter().filter_map(move |(id2, state)| {
+            if state.compute_dependencies.contains(&id) {
+                Some(id2)
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl<T> Instance<T>
@@ -244,6 +285,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        variable_length_row_encoding: bool,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -271,12 +313,17 @@ where
         };
 
         instance.send(ComputeCommand::CreateTimely {
-            config: Default::default(),
+            config: TimelyConfig {
+                variable_length_row_encoding,
+                ..Default::default()
+            },
             epoch: ClusterStartupEpoch::new(envd_epoch, 0),
         });
 
         let dummy_logging_config = Default::default();
-        instance.send(ComputeCommand::CreateInstance(dummy_logging_config));
+        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
+            logging: dummy_logging_config,
+        }));
 
         instance
     }
@@ -529,7 +576,7 @@ where
     /// Create the described dataflows and initializes state for their output.
     pub fn create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
+        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
@@ -611,7 +658,7 @@ where
         // Install collection state for each of the exports.
         let mut updates = Vec::new();
         for export_id in dataflow.export_ids() {
-            self.compute.collections.insert(
+            self.compute.add_collection(
                 export_id,
                 CollectionState::new(
                     as_of.clone(),
@@ -769,15 +816,15 @@ where
     /// Cancels an existing peek request.
     pub fn cancel_peek(&mut self, uuid: Uuid) {
         let Some(peek) = self.compute.peeks.get_mut(&uuid) else {
-                tracing::warn!("did not find pending peek for {uuid}");
-                return;
-            };
+            tracing::warn!("did not find pending peek for {uuid}");
+            return;
+        };
 
         // Canceled peeks should not be further responded to.
         let Some(otel_ctx) = peek.otel_ctx.take() else {
-                tracing::warn!("peek {uuid} has already been served");
-                return;
-            };
+            tracing::warn!("peek {uuid} has already been served");
+            return;
+        };
 
         let response = PeekResponse::Canceled;
         let duration = peek.requested_at.elapsed();
@@ -1087,7 +1134,7 @@ where
                         .values()
                         .all(|frontier| frontier.is_empty())
                 {
-                    self.compute.collections.remove(&id);
+                    self.compute.remove_collection(id);
                 }
             }
         }
@@ -1103,14 +1150,14 @@ where
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
         let Ok(coll) = self.compute.collection(id) else {
-                tracing::warn!(
-                    ?replica_id,
-                    "Frontier update for unknown collection {id}: {:?}",
-                    new_frontier.elements(),
-                );
-                tracing::error!("Replica reported an untracked collection frontier");
-                return;
-            };
+            tracing::warn!(
+                ?replica_id,
+                "Frontier update for unknown collection {id}: {:?}",
+                new_frontier.elements(),
+            );
+            tracing::error!("Replica reported an untracked collection frontier");
+            return;
+        };
 
         if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
             if !PartialOrder::less_equal(old_frontier, &new_frontier) {
@@ -1143,20 +1190,14 @@ where
             }
         };
 
-        // Forward the peek response, if we didn't already forward a response
-        // to this peek previously. If the peek is targeting a replica, only
-        // forward the response from that replica.
-        // TODO: we could collect the other responses to assert equivalence?
-        // Trades resources (memory) for reassurances; idk which is best.
+        // Forward the peek response, if we didn't already forward a response to this peek
+        // previously. If the peek is targeting a replica, only forward the response from that
+        // replica.
         //
-        // NOTE: we use the `otel_ctx` from the response, not the
-        // pending peek, because we currently want the parent
-        // to be whatever the compute worker did with this peek. We
-        // still `take` the pending peek's `otel_ctx` to mark it as
-        // served.
-        //
-        // Additionally, we just use the `otel_ctx` from the first worker to
-        // respond.
+        // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
+        // currently want the parent to be whatever the compute worker did with this peek. We still
+        // `take` the pending peek's `otel_ctx` to mark it as served.
+
         let replica_targeted = peek.target_replica.unwrap_or(replica_id) == replica_id;
         let controller_response = if replica_targeted && peek.otel_ctx.take().is_some() {
             let duration = peek.requested_at.elapsed();
@@ -1175,6 +1216,12 @@ where
         peek.unfinished.remove(&replica_id);
         if peek.is_finished() {
             self.remove_peeks(&[uuid].into());
+        }
+
+        // If we are serving a response to the peek, enqueue a `CancelPeek` command to allow other
+        // replicas to stop spending resources on computing this peek.
+        if controller_response.is_some() {
+            self.compute.send(ComputeCommand::CancelPeek { uuid });
         }
 
         controller_response

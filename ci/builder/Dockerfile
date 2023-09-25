@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:jammy-20221130 AS crosstool
+FROM ubuntu:lunar-20230731 as crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -62,13 +62,13 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
     # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
-    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.2.13"/g' .config \
+    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3"/g' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:jammy-20221130
+FROM ubuntu:lunar-20230731
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -97,10 +97,9 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     lld \
     llvm \
     make \
-    npm \
     openssh-client \
     pkg-config \
-    postgresql-client-14 \
+    postgresql-client \
     python3 \
     python3-dev \
     python3-pip \
@@ -110,6 +109,11 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js LTS, for our Python typechecker. This is up here because we don't
+# expect it to change often.
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
@@ -173,6 +177,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.18" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.5.18" --locked cargo-llvm-cov \
@@ -187,12 +192,18 @@ RUN mkdir rust \
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
+# Install the locked version of our typechecker -- it'll be invoked via `npx`,
+# so using the same command here should ensure it's installed and cached in the
+# right place
+COPY pyright-version.sh /workdir/
+RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
+
 # Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
 COPY requirements.txt /workdir/
 
-RUN pip3 install -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+RUN pip3 install --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
 
 # Install APT repo generator.
 
@@ -281,6 +292,10 @@ ENV RUST_BACKTRACE=1
 
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+# remove Ubuntu user causing UID collisions
+# https://bugs.launchpad.net/cloud-images/+bug/2005129
+RUN userdel -r ubuntu
 
 # Ensure that all python output is unbuffered, otherwise it is not
 # logged properly in Buildkite

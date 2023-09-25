@@ -47,6 +47,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
@@ -77,7 +78,7 @@ use crate::plan::expr::{
     ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc, VariadicFunc,
     WindowExpr, WindowExprType,
 };
-use crate::plan::plan_utils::{self, JoinSide};
+use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
@@ -113,7 +114,7 @@ pub fn plan_root_query(
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing, _) = plan_query(&mut qcx, &query)?;
+    let (mut expr, scope, mut finishing, group_size_hints) = plan_query(&mut qcx, &query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -121,6 +122,10 @@ pub fn plan_root_query(
     // reason about demand information in `expr` (i.e., it can't see
     // `finishing.project`).
     try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
+
+    if lifetime.is_maintained() {
+        expr.finish_maintained(&mut finishing, group_size_hints);
+    }
 
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
@@ -687,8 +692,8 @@ fn handle_mutation_using_clause(
     // statement's `FROM` target. This prevents `lateral` subqueries from
     // "seeing" the `FROM` target.
     let (mut using_rel_expr, using_scope) =
-        using.into_iter().fold(Ok(plan_join_identity()), |l, twj| {
-            let (left, left_scope) = l?;
+        using.into_iter().try_fold(plan_join_identity(), |l, twj| {
+            let (left, left_scope) = l;
             plan_join(
                 qcx,
                 left,
@@ -831,6 +836,8 @@ pub fn plan_up_to(
 ) -> Result<MirScalarExpr, PlanError> {
     let scope = Scope::empty();
     let desc = RelationDesc::empty();
+    // Even though this is part of a SUBSCRIBE, we need a QueryLifetime::OneShot (instead of
+    // QueryLifetime::Subscribe), because the UP TO is evaluated only once.
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     transform_ast::transform(scx, &mut up_to)?;
     let ecx = &ExprContext {
@@ -859,6 +866,8 @@ pub fn plan_as_of(
             AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
                 let scope = Scope::empty();
                 let desc = RelationDesc::empty();
+                // Even for a SUBSCRIBE, we need QueryLifetime::OneShot, because the AS OF is
+                // evaluated only once.
                 let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
                 transform_ast::transform(scx, expr)?;
                 let ecx = &ExprContext {
@@ -915,7 +924,7 @@ pub fn plan_webhook_validate_using(
     scx: &StatementContext,
     validate_using: CreateWebhookSourceCheck<Aug>,
 ) -> Result<WebhookValidation, PlanError> {
-    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+    let qcx = QueryContext::root(scx, QueryLifetime::Source);
 
     let CreateWebhookSourceCheck {
         options,
@@ -1005,7 +1014,12 @@ pub fn plan_webhook_validate_using(
             scalar_type,
             nullable: false,
         });
-        let ResolvedItemName::Item { id, full_name: FullItemName { item, .. }, .. } = secret else {
+        let ResolvedItemName::Item {
+            id,
+            full_name: FullItemName { item, .. },
+            ..
+        } = secret
+        else {
             return Err(PlanError::InvalidSecret(Box::new(secret)));
         };
 
@@ -1139,7 +1153,7 @@ pub fn plan_index_exprs<'a>(
     exprs: Vec<Expr<Aug>>,
 ) -> Result<Vec<mz_expr::MirScalarExpr>, PlanError> {
     let scope = Scope::from_source(None, on_desc.iter_names());
-    let qcx = QueryContext::root(scx, QueryLifetime::Static);
+    let qcx = QueryContext::root(scx, QueryLifetime::Index);
 
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -1192,14 +1206,14 @@ fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize
 fn plan_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing, Option<u64>), PlanError> {
+) -> Result<(HirRelationExpr, Scope, RowSetFinishing, GroupSizeHints), PlanError> {
     qcx.checked_recur_mut(|qcx| plan_query_inner(qcx, q))
 }
 
 fn plan_query_inner(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing, Option<u64>), PlanError> {
+) -> Result<(HirRelationExpr, Scope, RowSetFinishing, GroupSizeHints), PlanError> {
     // Plan CTEs and introduce bindings to `qcx.ctes`. Returns shadowed bindings
     // for the identifiers, so that they can be re-installed before returning.
     let cte_bindings = plan_ctes(qcx, q)?;
@@ -1225,13 +1239,11 @@ fn plan_query_inner(
         _ => sql_bail!("OFFSET must be an integer constant"),
     };
 
-    let (mut result, scope, finishing, expected_group_size) = match &q.body {
+    let (mut result, scope, finishing, group_size_hints) = match &q.body {
         SetExpr::Select(s) => {
             // Extract query options.
-            let SelectOptionExtracted {
-                expected_group_size,
-                seen: _,
-            } = SelectOptionExtracted::try_from(s.options.clone())?;
+            let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
+            let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
             let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
             let finishing = RowSetFinishing {
@@ -1240,7 +1252,7 @@ fn plan_query_inner(
                 limit,
                 offset,
             };
-            Ok::<_, PlanError>((plan.expr, plan.scope, finishing, expected_group_size))
+            Ok::<_, PlanError>((plan.expr, plan.scope, finishing, group_size_hints))
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
@@ -1262,7 +1274,12 @@ fn plan_query_inner(
                 project: (0..ecx.relation_type.arity()).collect(),
                 offset,
             };
-            Ok((expr.map(map_exprs), scope, finishing, None))
+            Ok((
+                expr.map(map_exprs),
+                scope,
+                finishing,
+                GroupSizeHints::default(),
+            ))
         }
     }?;
 
@@ -1322,7 +1339,7 @@ fn plan_query_inner(
         }
     }
 
-    Ok((result, scope, finishing, expected_group_size))
+    Ok((result, scope, finishing, group_size_hints))
 }
 
 generate_extracted_config!(
@@ -1449,7 +1466,7 @@ pub fn plan_nested_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (mut expr, scope, finishing, expected_group_size) =
+    let (mut expr, scope, finishing, group_size_hints) =
         qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = HirRelationExpr::TopK {
@@ -1458,7 +1475,7 @@ pub fn plan_nested_query(
             order_key: finishing.order_by,
             limit: finishing.limit,
             offset: finishing.offset,
-            expected_group_size,
+            expected_group_size: group_size_hints.limit_input_group_size,
         };
     }
     Ok((expr.project(finishing.project), scope))
@@ -1621,6 +1638,10 @@ fn plan_set_expr(
             Ok((relation_expr, scope))
         }
         SetExpr::Values(Values(values)) => plan_values(qcx, values),
+        SetExpr::Table(name) => {
+            let (expr, scope) = qcx.resolve_table_name(name.clone())?;
+            Ok((expr, scope))
+        }
         SetExpr::Query(query) => {
             let (expr, scope) = plan_nested_query(qcx, query)?;
             Ok((expr, scope))
@@ -1639,7 +1660,7 @@ fn plan_set_expr(
             //
             // TODO(jkosh44) Add message to error that prints out an equivalent view definition
             // with all show commands expanded into their equivalent SELECT statements.
-            if qcx.lifetime == QueryLifetime::Static {
+            if !qcx.lifetime.allow_show() {
                 return Err(PlanError::ShowCommandInView);
             }
 
@@ -1863,7 +1884,13 @@ struct SelectPlan {
     project: Vec<usize>,
 }
 
-generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
+generate_extracted_config!(
+    SelectOption,
+    (ExpectedGroupSize, u64),
+    (AggregateInputGroupSize, u64),
+    (DistinctOnInputGroupSize, u64),
+    (LimitInputGroupSize, u64)
+);
 
 /// Plans a SELECT query. The SELECT query may contain an intrusive ORDER BY clause.
 ///
@@ -1893,15 +1920,13 @@ fn plan_view_select(
     // don't need to clone the Select.
 
     // Extract query options.
-    let SelectOptionExtracted {
-        expected_group_size,
-        seen: _,
-    } = SelectOptionExtracted::try_from(s.options.clone())?;
+    let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
+    let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, mut from_scope) =
-        s.from.iter().fold(Ok(plan_join_identity()), |l, twj| {
-            let (left, left_scope) = l?;
+        s.from.iter().try_fold(plan_join_identity(), |l, twj| {
+            let (left, left_scope) = l;
             plan_join(
                 qcx,
                 left,
@@ -2067,7 +2092,7 @@ fn plan_view_select(
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
                 agg_exprs,
-                expected_group_size,
+                group_size_hints.aggregate_input_group_size,
             );
             (group_scope, select_all_mapping)
         } else {
@@ -2308,7 +2333,7 @@ fn plan_view_select(
                     group_key: distinct_key,
                     limit: Some(1),
                     offset: 0,
-                    expected_group_size,
+                    expected_group_size: group_size_hints.distinct_on_input_group_size,
                 }
             }
         }
@@ -3503,7 +3528,7 @@ fn plan_using_constraint(
     let on = HirScalarExpr::variadic_and(
         vec![HirScalarExpr::literal_true()]
             .into_iter()
-            .chain(join_exprs.into_iter())
+            .chain(join_exprs)
             .collect(),
     );
 
@@ -4145,7 +4170,7 @@ where
     }
 
     let mut qcx = ecx.derived_query_context();
-    let (mut expr, _scope, finishing, expected_group_size) = plan_query(&mut qcx, query)?;
+    let (mut expr, _scope, finishing, group_size_hints) = plan_query(&mut qcx, query)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = HirRelationExpr::TopK {
             input: Box::new(expr),
@@ -4153,7 +4178,7 @@ where
             order_key: finishing.order_by.clone(),
             limit: finishing.limit,
             offset: finishing.offset,
-            expected_group_size,
+            expected_group_size: group_size_hints.limit_input_group_size,
         };
     }
 
@@ -5287,6 +5312,28 @@ fn scalar_type_from_catalog(
             }
             Ok(ScalarType::VarChar { max_length: length })
         }
+        CatalogType::Timestamp => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) => Some(TimestampPrecision::try_from(*p)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type timestamp supports at most one type modifier");
+            }
+            Ok(ScalarType::Timestamp { precision })
+        }
+        CatalogType::TimestampTz => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) => Some(TimestampPrecision::try_from(*p)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type timestamp with time zone supports at most one type modifier");
+            }
+            Ok(ScalarType::TimestampTz { precision })
+        }
         t => {
             if !modifiers.is_empty() {
                 sql_bail!(
@@ -5368,14 +5415,14 @@ fn scalar_type_from_catalog(
                 CatalogType::RegType => Ok(ScalarType::RegType),
                 CatalogType::String => Ok(ScalarType::String),
                 CatalogType::Time => Ok(ScalarType::Time),
-                CatalogType::Timestamp => Ok(ScalarType::Timestamp),
-                CatalogType::TimestampTz => Ok(ScalarType::TimestampTz),
                 CatalogType::Uuid => Ok(ScalarType::Uuid),
                 CatalogType::Int2Vector => Ok(ScalarType::Int2Vector),
                 CatalogType::MzAclItem => Ok(ScalarType::MzAclItem),
                 CatalogType::Numeric => unreachable!("handled above"),
                 CatalogType::Char => unreachable!("handled above"),
                 CatalogType::VarChar => unreachable!("handled above"),
+                CatalogType::Timestamp => unreachable!("handled above"),
+                CatalogType::TimestampTz => unreachable!("handled above"),
             }
         }
     }
@@ -5582,15 +5629,64 @@ impl Visit<'_, Aug> for WindowFuncCollector {
     }
 }
 
-/// Specifies how long a query will live. This impacts whether the query is
-/// allowed to reason about the time at which it is running, e.g., by calling
-/// the `now()` function.
+/// Specifies how long a query will live.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum QueryLifetime {
-    /// The query's result will be computed at one point in time.
+    /// The query's (or the expression's) result will be computed at one point in time.
     OneShot,
-    /// The query's result will be maintained indefinitely.
-    Static,
+    /// The query (or expression) is used in a dataflow that maintains an index.
+    Index,
+    /// The query (or expression) is used in a dataflow that maintains a materialized view.
+    MaterializedView,
+    /// The query (or expression) is used in a dataflow that maintains a SUBSCRIBE.
+    Subscribe,
+    /// The query (or expression) is part of a (non-materialized) view.
+    View,
+    /// The expression is part of a source definition.
+    Source,
+}
+
+impl QueryLifetime {
+    /// (This used to impact whether the query is allowed to reason about the time at which it is
+    /// running, e.g., by calling the `now()` function. Nowadays, this is decided by a different
+    /// mechanism, see `ExprPrepStyle`.)
+    pub fn is_one_shot(&self) -> bool {
+        let result = match self {
+            QueryLifetime::OneShot => true,
+            QueryLifetime::Index => false,
+            QueryLifetime::MaterializedView => false,
+            QueryLifetime::Subscribe => false,
+            QueryLifetime::View => false,
+            QueryLifetime::Source => false,
+        };
+        assert_eq!(!result, self.is_maintained());
+        result
+    }
+
+    /// Maintained dataflows can't have a finishing applied directly. Therefore, the finishing is
+    /// turned into a `TopK`.
+    pub fn is_maintained(&self) -> bool {
+        match self {
+            QueryLifetime::OneShot => false,
+            QueryLifetime::Index => true,
+            QueryLifetime::MaterializedView => true,
+            QueryLifetime::Subscribe => true,
+            QueryLifetime::View => true,
+            QueryLifetime::Source => true,
+        }
+    }
+
+    /// Most maintained dataflows don't allow SHOW commands currently. However, SUBSCRIBE does.
+    pub fn allow_show(&self) -> bool {
+        match self {
+            QueryLifetime::OneShot => true,
+            QueryLifetime::Index => false,
+            QueryLifetime::MaterializedView => false,
+            QueryLifetime::Subscribe => true, // SUBSCRIBE allows SHOW commands!
+            QueryLifetime::View => false,
+            QueryLifetime::Source => false,
+        }
+    }
 }
 
 /// Description of a CTE sufficient for query planning.

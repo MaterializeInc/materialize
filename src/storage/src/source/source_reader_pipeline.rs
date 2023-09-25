@@ -52,14 +52,12 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::SourceError;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
-    MzOffset, SourceConnection, SourceExport, SourceTimestamp,
-};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::SourceError;
+use mz_storage_types::sources::encoding::SourceDataEncoding;
+use mz_storage_types::sources::{MzOffset, SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -161,7 +159,8 @@ impl RawSourceCreationConfig {
 #[derive(Clone)]
 pub struct SourceCreationParams {
     /// Sets timeouts specific to PG replication streams
-    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
+    pub pg_source_snapshot_statement_timeout: Duration,
 }
 
 /// Creates a source dataflow operator graph from a source connection. The type of SourceConnection
@@ -1098,10 +1097,7 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    ok_streams
-        .into_iter()
-        .zip_eq(err_streams.into_iter())
-        .collect()
+    ok_streams.into_iter().zip_eq(err_streams).collect()
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
@@ -1228,10 +1224,8 @@ async fn handle_message<K, V, T, D>(
                 Ok(SourceOutput::new(
                     message.key,
                     message.value,
+                    message.metadata,
                     offset,
-                    message.upstream_time_millis,
-                    partition.clone(),
-                    message.headers,
                 )),
             )
         }

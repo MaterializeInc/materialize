@@ -35,11 +35,11 @@ use crate::cache::StateCache;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::{Cursor, EncodedPart};
-use crate::internal::encoding::UntypedState;
+use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
+use crate::internal::state::{ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
@@ -227,9 +227,8 @@ pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serializ
         .await;
     let state = state_versions
         .fetch_current_state::<u64>(&shard_id, versions.0.clone())
-        .await
-        .into_proto();
-    Ok(state)
+        .await;
+    Ok(Rollup::from_untyped_state_without_diffs(state).into_proto())
 }
 
 /// Fetches a state rollup of a given shard. If the seqno is not provided, choose the latest;
@@ -253,7 +252,7 @@ pub async fn fetch_state_rollup(
         .get(&rollup_key.complete(&shard_id))
         .await?
         .expect("fetching the specified state rollup");
-    let proto = ProtoStateRollup::decode(rollup_buf).expect("invalid encoded state");
+    let proto = ProtoRollup::decode(rollup_buf).expect("invalid encoded state");
     Ok(proto)
 }
 
@@ -286,7 +285,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
             .await
             .unwrap();
         if let Some(rollup_buf) = rollup_buf {
-            let proto = ProtoStateRollup::decode(rollup_buf).expect("invalid encoded state");
+            let proto = ProtoRollup::decode(rollup_buf).expect("invalid encoded state");
             rollup_states.insert(key.to_string(), proto);
         }
     }
@@ -308,7 +307,7 @@ pub async fn fetch_state_diffs(
         .expect("requested shard should exist")
         .check_ts_codec()?;
     while let Some(_) = state_iter.next(|_| {}) {
-        live_states.push(state_iter.into_proto());
+        live_states.push(state_iter.into_rollup_proto_without_diffs());
     }
 
     Ok(live_states)

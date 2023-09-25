@@ -16,14 +16,14 @@ use std::{cmp, fmt, thread};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::error;
@@ -805,8 +805,10 @@ impl Coordinator {
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
 
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
+        let pg_catalog_schema = (
+            &ResolvedDatabaseSpecifier::Ambient,
+            &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+        );
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
@@ -814,19 +816,23 @@ impl Coordinator {
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
             ),
+            pg_catalog_schema.clone(),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
                 &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
-            ),
         ];
+
         if system_schemas.iter().any(|s| schemas.contains(s)) {
+            // If any of the system schemas is specified, add the rest of the
+            // system schemas.
             schemas.extend(system_schemas);
+        } else if !schemas.is_empty() {
+            // Always include the pg_catalog schema, if schemas is non-empty. The pg_catalog schemas is
+            // sometimes used by applications in followup queries.
+            schemas.insert(pg_catalog_schema);
         }
 
         // Gather the IDs of all items in all used schemas.

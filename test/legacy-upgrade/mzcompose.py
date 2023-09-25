@@ -12,26 +12,23 @@ operational after an upgrade.
 """
 
 import random
-from typing import Dict, List, Tuple
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Materialized,
-    Postgres,
-    SchemaRegistry,
-    TestCerts,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
 
 version_list = VersionsFromDocs()
 all_versions = version_list.all_versions()
 
-mz_options: Dict[MzVersion, str] = {}
+mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),
@@ -108,7 +105,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def test_upgrade_from_version(
     c: Composition,
     from_version: str,
-    priors: List[MzVersion],
+    priors: list[MzVersion],
     filter: str,
     style: str = "",
 ) -> None:
@@ -124,14 +121,14 @@ def test_upgrade_from_version(
                 )
             )
 
-    priors = priors + prior_patch_versions
-    priors.sort()
-    priors = [f"{prior}" for prior in priors]
+    # We need this to be a new variable binding otherwise `pyright` complains of
+    # a type mismatch
+    prior_strings = sorted(str(p) for p in priors + prior_patch_versions)
 
     if len(priors) == 0:
-        priors = ["*"]
+        prior_strings = ["*"]
 
-    version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
+    version_glob = "{" + ",".join(["any_version", *prior_strings, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)
@@ -191,7 +188,7 @@ def test_upgrade_from_version(
         )
 
 
-def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
+def ssl_services() -> tuple[Kafka, SchemaRegistry, Testdrive]:
     """sets"""
 
     kafka = Kafka(

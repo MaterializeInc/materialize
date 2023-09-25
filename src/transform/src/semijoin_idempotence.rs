@@ -32,7 +32,7 @@ use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECU
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Remove redundant semijoin operators
 #[derive(Debug)]
@@ -64,7 +64,7 @@ impl crate::Transform for SemijoinIdempotence {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // We need to call `renumber_bindings` because we will call
         // `MirRelationExpr::collect_expirations`, which relies on this invariant.

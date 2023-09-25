@@ -25,12 +25,14 @@ import os
 import subprocess
 import sys
 from collections import OrderedDict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable, Set
+from typing import Any
 
 import yaml
 
-from materialize import mzbuild, mzcompose, spawn
+from materialize import mzbuild, spawn
+from materialize.mzcompose.composition import Composition
 
 from ..deploy.deploy_util import rust_version
 
@@ -102,6 +104,7 @@ so it is executed.""",
             # Coverage runs are slower
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 2
+
             if step.get("coverage") == "skip":
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
@@ -129,11 +132,11 @@ so it is executed.""",
 class PipelineStep:
     def __init__(self, id: str):
         self.id = id
-        self.extra_inputs: Set[str] = set()
-        self.image_dependencies: Set[mzbuild.ResolvedImage] = set()
-        self.step_dependencies: Set[str] = set()
+        self.extra_inputs: set[str] = set()
+        self.image_dependencies: set[mzbuild.ResolvedImage] = set()
+        self.step_dependencies: set[str] = set()
 
-    def inputs(self) -> Set[str]:
+    def inputs(self) -> set[str]:
         inputs = set()
         inputs.update(self.extra_inputs)
         for image in self.image_dependencies:
@@ -196,7 +199,7 @@ def trim_pipeline(pipeline: Any, coverage: bool) -> None:
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
-                        composition = mzcompose.Composition(repo, name)
+                        composition = Composition(repo, name)
                         for dep in composition.dependencies:
                             step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))

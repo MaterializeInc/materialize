@@ -20,7 +20,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
-use itertools::Itertools;
 use maplit::btreemap;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
@@ -36,9 +35,9 @@ use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sinks::{
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::{
     KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
     StorageSinkDesc,
 };
@@ -225,16 +224,17 @@ impl KafkaSinkSendRetryManager {
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
+    inner: MzClientContext,
 }
 
 impl ClientContext for SinkProducerContext {
     // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
     // implementation.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        MzClientContext.log(level, fac, log_message)
+        self.inner.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        MzClientContext.error(error, reason)
+        self.inner.error(error, reason)
     }
 }
 impl ProducerContext for SinkProducerContext {
@@ -401,6 +401,7 @@ struct KafkaSinkState {
 }
 
 impl KafkaSinkState {
+    // Until `try` blocks, we need this for using `fail_point!` correctly.
     async fn new(
         connection: KafkaSinkConnection,
         sink_name: String,
@@ -425,6 +426,7 @@ impl KafkaSinkState {
         let producer_context = SinkProducerContext {
             metrics: Arc::clone(&metrics),
             retry_manager: Arc::clone(&retry_manager),
+            inner: MzClientContext::default(),
         };
 
         let healthchecker = healthchecker.map(Mutex::new);
@@ -433,6 +435,7 @@ impl KafkaSinkState {
             &healthchecker,
             *sink_id,
             &internal_cmd_tx,
+            #[allow(clippy::redundant_closure_call)]
             (|| async {
                 fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
                     "synthetic error"
@@ -491,7 +494,7 @@ impl KafkaSinkState {
                 .connection
                 .create_with_context(
                     connection_context,
-                    MzClientContext,
+                    MzClientContext::default(),
                     &btreemap! {
                         "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
                         "isolation.level" => "read_committed".into(),
@@ -832,18 +835,7 @@ impl KafkaSinkState {
 
         let mut progress_emitted = false;
 
-        // This only looks at the first entry of the antichain.
-        // If we ever have multi-dimensional time, this is not correct
-        // anymore. There might not even be progress in the first dimension.
-        // We panic, so that future developers introducing multi-dimensional
-        // time in Materialize will notice.
-        let min_frontier = min_frontier
-            .iter()
-            .at_most_one()
-            .expect("more than one element in the frontier")
-            .cloned();
-
-        if let Some(min_frontier) = min_frontier {
+        if let Some(min_frontier) = min_frontier.into_option() {
             // A frontier of `t` means we still might receive updates with `t`. The progress
             // frontier we emit `f` indicates that all future values will be greater than `f`.
             //

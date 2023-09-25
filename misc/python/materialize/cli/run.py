@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 import psutil
 
-from materialize import ROOT, rustc_flags, spawn, ui
+from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
@@ -125,6 +125,12 @@ def main() -> int:
         "--wrapper",
         help="Wrapper command for the program",
     )
+    parser.add_argument(
+        "--monitoring",
+        help="Automatically send monitoring data.",
+        default=False,
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -139,9 +145,9 @@ def main() -> int:
             return build_retcode
 
         if args.release:
-            path = ROOT / "target" / "release" / args.program
+            path = MZ_ROOT / "target" / "release" / args.program
         else:
-            path = ROOT / "target" / "debug" / args.program
+            path = MZ_ROOT / "target" / "debug" / args.program
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -160,8 +166,8 @@ def main() -> int:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
-            mzdata = ROOT / "mzdata"
-            scratch = ROOT / "scratch"
+            mzdata = MZ_ROOT / "mzdata"
+            scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:
@@ -174,9 +180,13 @@ def main() -> int:
             # opposite order.
             if args.reset:
                 # Remove everything in the `mzdata`` directory *except* for
-                # the `prometheus` directory.
+                # the `prometheus` directory and all contents of `tempo`.
                 paths = list(mzdata.glob("prometheus/*"))
-                paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                paths.extend(
+                    p
+                    for p in mzdata.glob("*")
+                    if p.name != "prometheus" and p.name != "tempo"
+                )
                 paths.extend(p for p in scratch.glob("*"))
                 for path in paths:
                     print(f"Removing {path}...")
@@ -213,6 +223,8 @@ def main() -> int:
                 "--bootstrap-role=materialize",
                 *args.args,
             ]
+            if args.monitoring:
+                command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
@@ -233,6 +245,19 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
+    # NB[btv] - Hack to ensure that test results are sorted the same
+    # way as in CI.
+    #
+    # For most system parameters, we don't need to do this, as we can just
+    # use `ALTER SYSTEM` to set them to whatever we want within the SLT (or other)
+    # test itself. However, that doesn't work for `variable_length_row_encoding`,
+    # as it's only read once on startup and doesn't take effect until restart.
+    if os.environ.get("MZ_SYSTEM_PARAMETER_DEFAULT"):
+        os.environ[
+            "MZ_SYSTEM_PARAMETER_DEFAULT"
+        ] += ";variable_length_row_encoding=true"
+    else:
+        os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] = "variable_length_row_encoding=true"
     print(f"$ {' '.join(command)}")
     # We go through a dance here familiar to shell authors where both
     # the parent and child try to put the child into its own process

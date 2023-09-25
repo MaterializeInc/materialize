@@ -298,6 +298,32 @@ DETAIL: The following relations in the query are outside the transaction's time 
 Only the following relations are available:
 "materialize.public.t"
 "materialize.public.t5727"
+"mz_catalog.mz_array_types"
+"mz_catalog.mz_base_types"
+"mz_catalog.mz_columns"
+"mz_catalog.mz_connections"
+"mz_catalog.mz_databases"
+"mz_catalog.mz_functions"
+"mz_catalog.mz_index_columns"
+"mz_catalog.mz_indexes"
+"mz_catalog.mz_list_types"
+"mz_catalog.mz_map_types"
+"mz_catalog.mz_materialized_views"
+"mz_catalog.mz_operators"
+"mz_catalog.mz_pseudo_types"
+"mz_catalog.mz_role_members"
+"mz_catalog.mz_roles"
+"mz_catalog.mz_schemas"
+"mz_catalog.mz_secrets"
+"mz_catalog.mz_sinks"
+"mz_catalog.mz_sources"
+"mz_catalog.mz_system_privileges"
+"mz_catalog.mz_tables"
+"mz_catalog.mz_types"
+"mz_catalog.mz_views"
+"mz_internal.mz_aggregates"
+"mz_internal.mz_object_dependencies"
+"mz_internal.mz_type_pg_metadata"
 
 # Verify that changed tables and views don't change during a transaction.
 
@@ -756,8 +782,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,1
-s_progress,progress,NULL
+s,load-generator,1,materialize_public_s
+s_progress,progress,NULL,NULL
 COMPLETE 2
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
@@ -799,3 +825,152 @@ simple
 SHOW SOURCES
 ----
 COMPLETE 0
+
+# Test that the cluster cannot change mid-transaction.
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+CREATE TABLE t (a INT)
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET cluster cannot be called in an active transaction
+SET CLUSTER TO c
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET cluster cannot be called in an active transaction
+SET LOCAL CLUSTER TO c
+
+statement ok
+ROLLBACK
+
+# Test that the cluster can change at the start of a transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SET CLUSTER TO c
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+statement ok
+SET CLUSTER TO default
+
+statement ok
+BEGIN
+
+statement ok
+SET LOCAL CLUSTER TO c
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+statement ok
+SET CLUSTER TO default
+
+# Test that the cluster is selected at the start of a transaction and doesn't change.
+
+## Auto-routing selects mz_introspection at the start of transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SHOW VIEWS
+
+query T multiline
+EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
+----
+Explained Query:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+    ArrangeBy keys=[[]]
+      Constant
+        total_rows (diffs absed): 100
+        first_rows:
+          - (1)
+          - (2)
+          - (3)
+          - (4)
+          - (5)
+          - (6)
+          - (7)
+          - (8)
+          - (9)
+          - (10)
+          - (11)
+          - (12)
+          - (13)
+          - (14)
+          - (15)
+          - (16)
+          - (17)
+          - (18)
+          - (19)
+          - (20)
+
+Used Indexes:
+  - mz_internal.mz_show_views_ind (*** full scan ***)
+
+EOF
+
+statement ok
+COMMIT
+
+## Auto-routing doesn't select mz_introspection in the middle of a transaction.
+
+# Since mz_views uses custom types, the postgres client will look it up in the catalog on
+# first use. If the first use happens to be in a transaction, then we can get unexpected time
+# domain errors. This is an annoying hack to load the information in the postgres client before
+# we start any transactions.
+statement ok
+SELECT * FROM mz_views LIMIT 0
+----
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t, mz_views
+
+query T multiline
+EXPLAIN SHOW VIEWS
+----
+Explained Query:
+  Project (#3)
+    Filter (#2 = "u3")
+      ReadStorage mz_catalog.mz_views
+
+Source mz_catalog.mz_views
+  filter=((#2 = "u3"))
+
+EOF
+
+statement ok
+COMMIT

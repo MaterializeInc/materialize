@@ -82,7 +82,7 @@ left-hand row according to the usual rules of the selected join type.
 {{< warning >}}
 `LATERAL` subqueries can be very expensive to compute. For best results, do not
 materialize a view containing a `LATERAL` subquery without first inspecting the
-plan via the [`EXPLAIN`](/sql/explain/) statement. In many common patterns
+plan via the [`EXPLAIN PLAN`](/sql/explain-plan/) statement. In many common patterns
 involving `LATERAL` joins, Materialize can optimize away the join entirely.
 {{< /warning >}}
 

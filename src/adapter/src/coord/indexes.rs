@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
@@ -90,10 +90,13 @@ impl DataflowBuilder<'_> {
 }
 
 impl IndexOracle for DataflowBuilder<'_> {
-    fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
+    fn indexes_on(
+        &self,
+        id: GlobalId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_> {
         Box::new(
             self.indexes_on(id)
-                .map(|(_idx_id, idx)| idx.keys.as_slice()),
+                .map(|(idx_id, idx)| (idx_id, idx.keys.as_slice())),
         )
     }
 }

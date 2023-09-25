@@ -93,14 +93,15 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::{Diagnostics, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
     RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
     StorageResponse,
 };
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::{IngestionDescription, SourceData};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -109,7 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
@@ -162,6 +163,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
+        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -202,6 +204,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             Arc::clone(&persist_clients),
         );
         let async_worker = Rc::new(RefCell::new(async_worker));
+        let cluster_memory_limit = instance_context.cluster_memory_limit;
 
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
@@ -226,7 +229,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             sink_statistics: BTreeMap::new(),
             internal_cmd_tx: command_sequencer,
             async_worker,
-            dataflow_parameters: Default::default(),
+            dataflow_parameters: DataflowParameters::new(
+                shared_rocksdb_write_buffer_manager,
+                cluster_memory_limit,
+            ),
             tracing_handle,
         };
 
@@ -705,23 +711,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             sink_description,
                         ));
                     }
-
-                    // Continue with other commands.
-                    return;
                 }
 
-                // Suspensions might come in for source exports; they are suspended and
-                // restarted alongside their primary sources.
-                if self
+                if !self
                     .storage_state
                     .ingestions
                     .values()
                     .any(|v| v.source_exports.contains_key(&id))
                 {
-                    return;
+                    // Our current approach to dropping a source results in a race between shard
+                    // finalization (which happens in the controller) and dataflow shutdown (which
+                    // happens in clusterd). If a source is created and dropped fast enough -or the
+                    // two commands get sufficiently delayed- then it's possible to receive a
+                    // SuspendAndRestart command for an unknown source. We cannot assert that this
+                    // never happens but we log an error here to track how often this happens.
+                    error!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
                 }
-
-                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
@@ -856,17 +861,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.storage_state.dropped_ids.extend(ids);
             }
             InternalStorageCommand::UpdateConfiguration {
-                pg,
+                pg_source_tcp_timeouts,
+                pg_source_snapshot_statement_timeout,
                 rocksdb,
                 storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
                 delay_sources_past_rehydration,
+                shrink_upsert_unused_buffers_by_ratio,
             } => self.storage_state.dataflow_parameters.update(
-                pg,
+                pg_source_tcp_timeouts,
+                pg_source_snapshot_statement_timeout,
                 rocksdb,
                 auto_spill_config,
                 storage_dataflow_max_inflight_bytes_config,
                 delay_sources_past_rehydration,
+                shrink_upsert_unused_buffers_by_ratio,
             ),
         }
     }
@@ -1177,12 +1186,16 @@ impl StorageState {
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
-                        pg: params.pg_replication_timeouts,
+                        pg_source_tcp_timeouts: params.pg_source_tcp_timeouts,
+                        pg_source_snapshot_statement_timeout: params
+                            .pg_source_snapshot_statement_timeout,
                         rocksdb: params.upsert_rocksdb_tuning_config,
                         storage_dataflow_max_inflight_bytes_config: params
                             .storage_dataflow_max_inflight_bytes_config,
                         auto_spill_config: params.upsert_auto_spill_config,
                         delay_sources_past_rehydration: params.delay_sources_past_rehydration,
+                        shrink_upsert_unused_buffers_by_ratio: params
+                            .shrink_upsert_unused_buffers_by_ratio,
                     })
                 }
             }

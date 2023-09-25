@@ -515,7 +515,7 @@ impl Typecheck {
 
                 Ok(typ.column_types.clone())
             }
-            Get { typ, id } => {
+            Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO(mgree) pass QueryContext through to check these types
@@ -716,7 +716,7 @@ impl Typecheck {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_global_id, key, consts) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, key, consts) => {
                         let typ: Vec<ColumnType> = key
                             .iter()
                             .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))
@@ -940,6 +940,7 @@ impl Typecheck {
                 Get {
                     id: Id::Local(id),
                     typ,
+                    ..
                 } => {
                     if !ids.contains(id) {
                         return Ok(());
@@ -1160,19 +1161,19 @@ macro_rules! type_error {
 impl crate::Transform for Typecheck {
     fn transform(
         &self,
-        relation: &mut mz_expr::MirRelationExpr,
-        args: crate::TransformArgs,
+        relation: &mut MirRelationExpr,
+        transform_ctx: &mut crate::TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let mut ctx = self.ctx.borrow_mut();
+        let mut typecheck_ctx = self.ctx.borrow_mut();
 
-        let expected = args
+        let expected = transform_ctx
             .global_id
-            .map_or_else(|| None, |id| ctx.get(&Id::Global(*id)));
+            .map_or_else(|| None, |id| typecheck_ctx.get(&Id::Global(*id)));
 
-        if let Some(id) = args.global_id {
+        if let Some(id) = transform_ctx.global_id {
             if self.disallow_new_globals
                 && expected.is_none()
-                && args.global_id.is_some()
+                && transform_ctx.global_id.is_some()
                 && !id.is_transient()
             {
                 type_error!(
@@ -1183,13 +1184,13 @@ impl crate::Transform for Typecheck {
             }
         }
 
-        let got = self.typecheck(relation, &ctx);
+        let got = self.typecheck(relation, &typecheck_ctx);
 
         let humanizer = mz_repr::explain::DummyHumanizer;
 
         match (got, expected) {
             (Ok(got), Some(expected)) => {
-                let id = args.global_id.unwrap();
+                let id = transform_ctx.global_id.unwrap();
 
                 // contravariant: global types can be updated
                 let diffs = relation_subtype_difference(expected, &got);
@@ -1211,14 +1212,14 @@ impl crate::Transform for Typecheck {
                 }
             }
             (Ok(got), None) => {
-                if let Some(id) = args.global_id {
-                    ctx.insert(Id::Global(*id), got);
+                if let Some(id) = transform_ctx.global_id {
+                    typecheck_ctx.insert(Id::Global(*id), got);
                 }
             }
             (Err(err), _) => {
                 let (expected, binding) = match expected {
                     Some(expected) => {
-                        let id = args.global_id.unwrap();
+                        let id = transform_ctx.global_id.unwrap();
                         (
                             format!("expected type {}\n", columns_pretty(expected, &humanizer)),
                             format!("KNOWN GLOBAL ID {id}"),

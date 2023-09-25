@@ -22,7 +22,7 @@ use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 
@@ -34,6 +34,7 @@ use crate::coord::{
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
     SinkConnectionReady,
 };
+use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -61,9 +62,11 @@ impl Coordinator {
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::GroupCommitInitiate(span) => self.try_group_commit().instrument(span).await,
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard)
+            Message::GroupCommitInitiate(span, permit) => {
+                self.try_group_commit(permit).instrument(span).await
+            }
+            Message::GroupCommitApply(timestamp, responses, write_lock_guard, notifies, permit) => {
+                self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
                     .await;
             }
             Message::AdvanceTimelines => {
@@ -102,6 +105,9 @@ impl Coordinator {
             }
             Message::PeekStageReady { ctx, stage } => {
                 self.sequence_peek_stage(ctx, stage).await;
+            }
+            Message::DrainStatementLog => {
+                self.drain_statement_log().await;
             }
         }
     }
@@ -176,7 +182,7 @@ impl Coordinator {
             });
         }
 
-        if let Err(err) = self.catalog_transact(None, ops).await {
+        if let Err(err) = self.catalog_transact(None::<&Session>, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.schedule_storage_usage_collection();
@@ -326,6 +332,18 @@ impl Coordinator {
                     };
                     self.buffer_builtin_table_updates(updates);
                 }
+            }
+            ControllerResponse::ComputeDependencyUpdate {
+                id,
+                dependencies,
+                diff,
+            } => {
+                let state = self.catalog().state();
+                let updates = dependencies
+                    .into_iter()
+                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
+                    .collect();
+                self.buffer_builtin_table_updates(updates);
             }
         }
     }
@@ -584,7 +602,10 @@ impl Coordinator {
                             .await;
                     }
                 }
-                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
+                Deferred::GroupCommit => {
+                    self.group_commit_initiate(Some(write_lock_guard), None)
+                        .await
+                }
             }
         }
         // N.B. if no deferred plans, write lock is released by drop
@@ -608,7 +629,7 @@ impl Coordinator {
             let old_status = replica.status();
 
             self.catalog_transact(
-                None,
+                None::<&Session>,
                 vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],
@@ -755,6 +776,7 @@ impl Coordinator {
                 in_immediate_multi_stmt_txn: _,
                 key,
                 typ,
+                dataflow_metainfo,
             } => {
                 self.sequence_peek_stage(
                     ctx,
@@ -774,6 +796,7 @@ impl Coordinator {
                         real_time_recency_ts: Some(real_time_recency_ts),
                         key,
                         typ,
+                        dataflow_metainfo,
                     }),
                 )
                 .await;

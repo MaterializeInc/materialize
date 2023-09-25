@@ -164,6 +164,39 @@ impl<'a> FuncRewriter<'a> {
         Self::plan_divide(sum, count)
     }
 
+    /// Same as `plan_avg` but internally uses `mz_avg_promotion_internal_v1`.
+    fn plan_avg_internal_v1(
+        &mut self,
+        expr: Expr<Aug>,
+        filter: Option<Box<Expr<Aug>>>,
+        distinct: bool,
+    ) -> Expr<Aug> {
+        let sum = self
+            .plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                expr.clone(),
+                vec![],
+                filter.clone(),
+                distinct,
+            )
+            .call_unary(
+                self.scx.dangerous_resolve_name(vec![
+                    MZ_INTERNAL_SCHEMA,
+                    "mz_avg_promotion_internal_v1",
+                ]),
+            );
+        let count = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "count"]),
+            expr,
+            vec![],
+            filter,
+            distinct,
+        );
+        Self::plan_divide(sum, count)
+    }
+
     fn plan_variance(
         &mut self,
         expr: Expr<Aug>,
@@ -305,20 +338,25 @@ impl<'a> FuncRewriter<'a> {
             over: None,
         } = func
         {
+            let pg_catalog_id = self
+                .scx
+                .catalog
+                .resolve_schema(None, PG_CATALOG_SCHEMA)
+                .expect("pg_catalog schema exists")
+                .id();
+            let mz_catalog_id = self
+                .scx
+                .catalog
+                .resolve_schema(None, MZ_CATALOG_SCHEMA)
+                .expect("mz_catalog schema exists")
+                .id();
             let name = match name {
                 ResolvedItemName::Item {
                     qualifiers,
                     full_name,
                     ..
                 } => {
-                    if &qualifiers.schema_spec
-                        != self
-                            .scx
-                            .catalog
-                            .resolve_schema(None, PG_CATALOG_SCHEMA)
-                            .expect("pg_catalog schema exists")
-                            .id()
-                    {
+                    if ![*pg_catalog_id, *mz_catalog_id].contains(&qualifiers.schema_spec) {
                         return None;
                     }
                     full_name.item.clone()
@@ -331,6 +369,7 @@ impl<'a> FuncRewriter<'a> {
             let expr = if args.len() == 1 {
                 let arg = args[0].clone();
                 match name.as_str() {
+                    "avg_internal_v1" => self.plan_avg_internal_v1(arg, filter, distinct),
                     "avg" => self.plan_avg(arg, filter, distinct),
                     "variance" | "var_samp" => self.plan_variance(arg, filter, distinct, true),
                     "var_pop" => self.plan_variance(arg, filter, distinct, false),
