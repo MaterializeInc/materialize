@@ -6,6 +6,8 @@ menu:
     parent: "webhooks"
     name: "Segment"
     weight: 10
+aliases:
+  - /sql/create-source/webhook/#connecting-with-segment
 ---
 
 [Segment](https://segment.com/) is a Customer Data Platform (CDP) that collects and routes events
