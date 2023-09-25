@@ -110,7 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{error, info, trace};
+use tracing::{info, trace, warn};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
@@ -725,7 +725,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // two commands get sufficiently delayed- then it's possible to receive a
                     // SuspendAndRestart command for an unknown source. We cannot assert that this
                     // never happens but we log an error here to track how often this happens.
-                    error!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
+                    warn!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
                 }
             }
             InternalStorageCommand::CreateIngestionDataflow {
