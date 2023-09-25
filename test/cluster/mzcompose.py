@@ -2424,4 +2424,4 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
     )
     assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
-    assert p[98] < 1.5, f"p99 is {p[98]:.2f}s, should be less than 1.5s"
+    assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"

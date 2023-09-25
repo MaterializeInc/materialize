@@ -16,7 +16,7 @@ use mz_ore::now::EpochMillis;
 use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{ObjectType, RoleAttributes, RoleMembership, SystemObjectType};
+use mz_sql::catalog::{ObjectType, RoleAttributes, RoleMembership, RoleVars, SystemObjectType};
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
@@ -152,6 +152,7 @@ pub async fn initialize(
             name: role.to_string(),
             attributes: Some(RoleAttributes::new().into_proto()),
             membership: Some(RoleMembership::new().into_proto()),
+            vars: Some(RoleVars::default().into_proto()),
         };
 
         audit_events.push((
@@ -180,6 +181,7 @@ pub async fn initialize(
                     name: role.name.to_string(),
                     attributes: Some(role.attributes.clone().into_proto()),
                     membership: Some(RoleMembership::new().into_proto()),
+                    vars: Some(RoleVars::default().into_proto()),
                 },
             )
         })
@@ -191,6 +193,7 @@ pub async fn initialize(
                 name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
                 attributes: Some(RoleAttributes::new().into_proto()),
                 membership: Some(RoleMembership::new().into_proto()),
+                vars: Some(RoleVars::default().into_proto()),
             },
         )))
         // Optionally insert a privilege for the bootstrap role.

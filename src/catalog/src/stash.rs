@@ -515,6 +515,7 @@ impl ReadOnlyDurableCatalogState for Connection {
                 name: v.name,
                 attributes: v.attributes,
                 membership: v.membership,
+                vars: v.vars,
             })
             .collect::<Result<_, _>>()?;
 

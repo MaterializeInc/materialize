@@ -27,7 +27,7 @@ use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
 use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
@@ -40,6 +40,7 @@ use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as Fronte
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
@@ -55,7 +56,6 @@ use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
 
 mod catalog;
@@ -225,6 +225,7 @@ pub struct InternalHttpConfig {
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
     pub promote_leader: oneshot::Sender<()>,
     pub ready_to_promote: oneshot::Receiver<()>,
+    pub internal_console_redirect_url: Option<String>,
 }
 
 pub struct InternalHttpServer {
@@ -350,6 +351,25 @@ pub async fn handle_leader_promote(
     )
 }
 
+/// This route allows User Impersonation by using Teleport to proxy requests to the Internal HTTP Server.
+/// Teleport is configured to handle the user auth and then set an auth cookie stored in the user's browser
+/// that is tied to the host being proxied (the InternalHTTPServer). This /internal-console route accepts
+/// that request and then redirects the user's browser to a Web Console URL, and the Console code can
+/// then make further requests to the InternalHTTPServer using the teleport auth cookie now in the user's browser
+async fn handle_internal_console_redirect(
+    internal_console_redirect_url: &Option<String>,
+) -> Response {
+    if let Some(redirect_url) = internal_console_redirect_url {
+        Redirect::temporary(redirect_url).into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            "Redirect URL is not correctly configured".to_string(),
+        )
+            .into_response()
+    }
+}
+
 impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
@@ -358,6 +378,7 @@ impl InternalHttpServer {
             active_connection_count,
             promote_leader,
             ready_to_promote,
+            internal_console_redirect_url,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let metrics = Metrics::register_into(&metrics_registry, "mz_internal_http");
@@ -407,6 +428,12 @@ impl InternalHttpServer {
             .route(
                 "/api/catalog/check",
                 routing::get(catalog::handle_catalog_check),
+            )
+            .route(
+                "/api/internal-console",
+                routing::get(|| async move {
+                    handle_internal_console_redirect(&internal_console_redirect_url).await
+                }),
             )
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
             .layer(Extension(adapter_client_rx.shared()))

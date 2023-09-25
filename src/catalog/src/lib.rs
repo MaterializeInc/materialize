@@ -77,7 +77,7 @@
 // Disallow usage of `unwrap()`.
 #![warn(clippy::unwrap_used)]
 
-//! This crate is responsible for durable storing and modifying the catalog contents.
+//! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
 use std::collections::BTreeMap;

@@ -129,7 +129,7 @@ struct CteDesc {
 impl HirRelationExpr {
     /// Rewrite `self` into a `mz_expr::MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
-    #[tracing::instrument(target = "optimizer", level = "debug", name = "hir_to_mir", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "trace", name = "hir_to_mir", skip_all)]
     pub fn lower(self) -> Result<mz_expr::MirRelationExpr, PlanError> {
         let result = match self {
             // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`

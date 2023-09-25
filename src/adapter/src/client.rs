@@ -470,7 +470,7 @@ impl SessionClient {
         let desc =
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
-        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
         let redacted_sql = stmt.to_ast_string_redacted();
         let logging = self.session().mint_logging(sql, redacted_sql, now);

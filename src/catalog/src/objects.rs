@@ -15,7 +15,7 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership};
+use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{CommentObjectId, DatabaseId, QualifiedItemName, SchemaId};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -46,6 +46,7 @@ pub struct Role {
     pub name: String,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
+    pub vars: RoleVars,
 }
 
 #[derive(Debug, Clone)]
@@ -846,6 +847,7 @@ pub struct RoleValue {
     pub(crate) name: String,
     pub(crate) attributes: RoleAttributes,
     pub(crate) membership: RoleMembership,
+    pub(crate) vars: RoleVars,
 }
 
 impl From<Role> for RoleValue {
@@ -854,6 +856,7 @@ impl From<Role> for RoleValue {
             name: role.name,
             attributes: role.attributes,
             membership: role.membership,
+            vars: role.vars,
         }
     }
 }
@@ -864,6 +867,7 @@ impl RustType<proto::RoleValue> for RoleValue {
             name: self.name.to_string(),
             attributes: Some(self.attributes.into_proto()),
             membership: Some(self.membership.into_proto()),
+            vars: Some(self.vars.into_proto()),
         }
     }
 
@@ -876,6 +880,7 @@ impl RustType<proto::RoleValue> for RoleValue {
             membership: proto
                 .membership
                 .into_rust_if_some("RoleValue::membership")?,
+            vars: proto.vars.into_rust_if_some("RoleValue::vars")?,
         })
     }
 }

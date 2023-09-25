@@ -52,7 +52,7 @@ use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::{PlanError, PlanNotice};
-use crate::session::vars::SystemVars;
+use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -412,8 +412,6 @@ pub trait CatalogSchema {
     fn privileges(&self) -> &PrivilegeMap;
 }
 
-// TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
-//  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
 pub struct RoleAttributes {
@@ -473,6 +471,63 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
         attributes.inherit = proto.inherit;
 
         Ok(attributes)
+    }
+}
+
+/// Default variable values for a [`CatalogRole`].
+#[derive(Default, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct RoleVars {
+    /// Map of variable names to their value.
+    pub map: BTreeMap<String, OwnedVarInput>,
+}
+
+impl RustType<proto::role_vars::entry::Val> for OwnedVarInput {
+    fn into_proto(&self) -> proto::role_vars::entry::Val {
+        match self.clone() {
+            OwnedVarInput::Flat(v) => proto::role_vars::entry::Val::Flat(v),
+            OwnedVarInput::SqlSet(entries) => {
+                proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries })
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::role_vars::entry::Val) -> Result<Self, TryFromProtoError> {
+        let result = match proto {
+            proto::role_vars::entry::Val::Flat(v) => OwnedVarInput::Flat(v),
+            proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries }) => {
+                OwnedVarInput::SqlSet(entries)
+            }
+        };
+        Ok(result)
+    }
+}
+
+impl RustType<proto::RoleVars> for RoleVars {
+    fn into_proto(&self) -> proto::RoleVars {
+        let entries = self
+            .map
+            .clone()
+            .into_iter()
+            .map(|(key, val)| proto::role_vars::Entry {
+                key,
+                val: Some(val.into_proto()),
+            })
+            .collect();
+
+        proto::RoleVars { entries }
+    }
+
+    fn from_proto(proto: proto::RoleVars) -> Result<Self, TryFromProtoError> {
+        let map = proto
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let val = entry.val.into_rust_if_some("role_vars::Entry::Val")?;
+                Ok::<_, TryFromProtoError>((entry.key, val))
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(RoleVars { map })
     }
 }
 

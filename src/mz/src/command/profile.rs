@@ -153,7 +153,6 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 /// 2. By opening the browser and creating the credentials in the console.
 pub async fn init(
     scx: &mut Context,
-    profile_name: Option<String>,
     no_browser: bool,
     admin_endpoint: Option<Url>,
     cloud_endpoint: Option<Url>,
@@ -171,9 +170,11 @@ pub async fn init(
         cloud_endpoint: cloud_endpoint.map(|url| url.to_string()),
     };
 
-    scx.config_file()
+    let config_file = scx.config_file();
+    config_file
         .add_profile(
-            profile_name.map_or(scx.config_file().profile().to_string(), |n| n),
+            scx.get_global_profile()
+                .map_or(config_file.profile().to_string(), |n| n),
             new_profile,
         )
         .await?;
@@ -201,7 +202,10 @@ pub fn list(cx: &mut Context) -> Result<(), Error> {
 /// Removes the profile from the configuration file.
 pub async fn remove(cx: &mut Context) -> Result<(), Error> {
     cx.config_file()
-        .remove_profile(cx.config_file().profile())
+        .remove_profile(
+            &cx.get_global_profile()
+                .unwrap_or(cx.config_file().profile().to_string()),
+        )
         .await
 }
 
@@ -258,14 +262,15 @@ pub fn config_get(
     cx: &mut ProfileContext,
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
-    let value = cx.config_file().get_profile_param(name).unwrap();
+    let profile = cx.get_profile();
+    let value = cx.config_file().get_profile_param(name, &profile)?;
     cx.output_formatter().output_scalar(value)?;
     Ok(())
 }
 
 /// Shows all the possible field and its values in the profile configuration.
 pub fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
-    let profile_params = cx.config_file().list_profile_params()?;
+    let profile_params = cx.config_file().list_profile_params(&cx.get_profile())?;
     let output = cx.output_formatter();
 
     // Structure to format the output. The name of the field equals the column name.
@@ -297,7 +302,9 @@ pub async fn config_set(
     cx: &mut ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name, Some(value)).await
+    cx.config_file()
+        .set_profile_param(&cx.get_profile(), name, Some(value))
+        .await
 }
 
 /// Represents the args to remove the value from a profile configuration field.
@@ -311,5 +318,7 @@ pub async fn config_remove(
     cx: &mut ProfileContext,
     ConfigRemoveArgs { name }: ConfigRemoveArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name, None).await
+    cx.config_file()
+        .set_profile_param(&cx.get_profile(), name, None)
+        .await
 }

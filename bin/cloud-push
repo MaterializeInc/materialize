@@ -31,6 +31,6 @@ done
 
 echo "Deploy this build to staging by running:"
 echo
-echo "    $ bin/mz --profile=staging login --endpoint=https://staging.cloud.materialize.com"
-echo "    $ bin/mz --profile=staging region enable aws/us-east-1 --version $username:latest"
+echo "    $ bin/mz profile init --endpoint=https://staging.cloud.materialize.com --profile=staging"
+echo "    $ bin/mz region enable --version $username:latest --region=aws/us-east-1 --profile=staging"
 echo

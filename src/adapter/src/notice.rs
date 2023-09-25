@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
 use mz_ore::str::{separated, StrExt};
+use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
@@ -121,6 +122,64 @@ pub enum AdapterNotice {
 }
 
 impl AdapterNotice {
+    pub fn into_response(self) -> ErrorResponse {
+        ErrorResponse {
+            severity: self.severity(),
+            code: self.code(),
+            message: self.to_string(),
+            detail: self.detail(),
+            hint: self.hint(),
+            position: None,
+        }
+    }
+
+    /// Returns the severity for a notice.
+    pub fn severity(&self) -> Severity {
+        match self {
+            AdapterNotice::DatabaseAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::SchemaAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::TableAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
+            AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
+            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
+            AdapterNotice::UserRequested { severity } => match severity {
+                NoticeSeverity::Debug => Severity::Debug,
+                NoticeSeverity::Info => Severity::Info,
+                NoticeSeverity::Log => Severity::Log,
+                NoticeSeverity::Notice => Severity::Notice,
+                NoticeSeverity::Warning => Severity::Warning,
+            },
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
+            AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
+            AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
+            AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
+            AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
+            AdapterNotice::QueryTrace { .. } => Severity::Notice,
+            AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
+            AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
+            AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
+            AdapterNotice::RbacSystemDisabled => Severity::Notice,
+            AdapterNotice::RbacUserDisabled => Severity::Notice,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
+            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
+            AdapterNotice::CannotRevoke { .. } => Severity::Warning,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
+            AdapterNotice::PlanNotice(notice) => match notice {
+                PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+                PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
+            },
+            AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
+            AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
+            AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
+            AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+        }
+    }
+
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {

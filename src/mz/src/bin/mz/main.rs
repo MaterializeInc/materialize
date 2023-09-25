@@ -136,6 +136,8 @@ mod clap_clippy_hack {
         pub(crate) command: Command,
         #[clap(long, env = "REGION", global = true)]
         pub(crate) region: Option<String>,
+        #[clap(long, env = "PROFILE", global = true, value_parser = mixin::validate_profile_name)]
+        pub(crate) profile: Option<String>,
     }
 
     /// Specifies an output format.
@@ -198,6 +200,7 @@ async fn main() -> Result<(), Error> {
         output_format: args.format.into(),
         no_color: args.no_color,
         region: args.region,
+        profile: args.profile,
     })
     .await?;
 

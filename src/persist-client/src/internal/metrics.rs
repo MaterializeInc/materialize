@@ -20,7 +20,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
-    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -29,9 +29,11 @@ use mz_persist::location::{
 use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
-use prometheus::core::{AtomicI64, AtomicU64};
+use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
+use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
+use tokio_metrics::TaskMonitor;
 use tracing::instrument;
 
 use crate::internal::paths::BlobKey;
@@ -82,6 +84,8 @@ pub struct Metrics {
     pub pushdown: PushdownMetrics,
     /// Metrics for blob caching.
     pub blob_cache_mem: BlobMemCache,
+    /// Metrics for tokio tasks.
+    pub tasks: TasksMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -133,6 +137,7 @@ impl Metrics {
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
+            tasks: TasksMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -2292,6 +2297,110 @@ impl Consensus for MetricsConsensus {
             .truncated_count
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
+    }
+}
+
+/// A standard set of metrics for an async task. Call [TaskMetrics::instrument_task] to instrument
+/// a future and report its metrics for this task type.
+#[derive(Debug, Clone)]
+pub struct TaskMetrics {
+    f64_gauges: Vec<(Gauge, fn(&tokio_metrics::TaskMetrics) -> f64)>,
+    u64_gauges: Vec<(
+        GenericGauge<AtomicU64>,
+        fn(&tokio_metrics::TaskMetrics) -> u64,
+    )>,
+    monitor: TaskMonitor,
+}
+
+impl TaskMetrics {
+    pub fn new(name: &str) -> Self {
+        let monitor = TaskMonitor::new();
+        Self {
+            f64_gauges: vec![
+                (
+                    Gauge::make_collector(metric!(
+                        name: "mz_persist_task_total_idle_duration",
+                        help: "Seconds of time spent idling, ie. waiting for a task to be woken up.",
+                        const_labels: {"name" => name}
+                    )),
+                    |m| m.total_idle_duration.as_secs_f64(),
+                ),
+                (
+                    Gauge::make_collector(metric!(
+                        name: "mz_persist_task_total_scheduled_duration",
+                        help: "Seconds of time spent scheduled, ie. ready to poll but not yet polled.",
+                        const_labels: {"name" => name}
+                    )),
+                    |m| m.total_scheduled_duration.as_secs_f64(),
+                ),
+            ],
+            u64_gauges: vec![
+                (
+                    MakeCollector::make_collector(metric!(
+                        name: "mz_persist_task_total_scheduled_count",
+                        help: "The total number of task schedules. Useful for computing the average scheduled time.",
+                        const_labels: {"name" => name}
+                    )),
+                    |m| m.total_scheduled_count,
+                ),
+                (
+                    MakeCollector::make_collector(metric!(
+                        name: "mz_persist_task_total_idled_count",
+                        help: "The total number of task idles. Useful for computing the average idle time.",
+                        const_labels: {"name" => name}
+                    ,
+                    )),
+                    |m| m.total_idled_count,
+                ),
+            ],
+            monitor,
+        }
+    }
+
+    /// Instrument the provided future. The expectation is that the result will be executed
+    /// as a task. (See [TaskMonitor::instrument] for more context.)
+    pub fn instrument_task<F>(&self, task: F) -> tokio_metrics::Instrumented<F> {
+        self.monitor.instrument(task)
+    }
+}
+
+impl Collector for TaskMetrics {
+    fn desc(&self) -> Vec<&Desc> {
+        let mut descs = Vec::with_capacity(self.f64_gauges.len() + self.u64_gauges.len());
+        for (g, _) in &self.f64_gauges {
+            descs.extend(g.desc());
+        }
+        for (g, _) in &self.u64_gauges {
+            descs.extend(g.desc());
+        }
+        descs
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        let mut families = Vec::with_capacity(self.f64_gauges.len() + self.u64_gauges.len());
+        let metrics = self.monitor.cumulative();
+        for (g, metrics_fn) in &self.f64_gauges {
+            g.set(metrics_fn(&metrics));
+            families.extend(g.collect());
+        }
+        for (g, metrics_fn) in &self.u64_gauges {
+            g.set(metrics_fn(&metrics));
+            families.extend(g.collect());
+        }
+        families
+    }
+}
+
+#[derive(Debug)]
+pub struct TasksMetrics {
+    pub heartbeat_read: TaskMetrics,
+}
+
+impl TasksMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let heartbeat_read = TaskMetrics::new("heartbeat_read");
+        registry.register_collector(heartbeat_read.clone());
+        TasksMetrics { heartbeat_read }
     }
 }
 

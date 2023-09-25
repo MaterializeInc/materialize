@@ -1477,6 +1477,33 @@ impl AstDisplay for RoleAttribute {
 }
 impl_display!(RoleAttribute);
 
+/// `ALTER ROLE role_name [SET | RESET] ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SetRoleVar {
+    /// `SET name TO value`
+    Set { name: Ident, value: SetVariableTo },
+    /// `RESET name`
+    Reset { name: Ident },
+}
+
+impl AstDisplay for SetRoleVar {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            SetRoleVar::Set { name, value } => {
+                f.write_str("SET ");
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(value);
+            }
+            SetRoleVar::Reset { name } => {
+                f.write_str("RESET ");
+                f.write_node(name);
+            }
+        }
+    }
+}
+impl_display!(SetRoleVar);
+
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
@@ -2136,15 +2163,23 @@ pub struct AlterRoleStatement<T: AstInfo> {
     pub name: T::RoleName,
     /// Any options that were attached, in the order they were presented.
     pub options: Vec<RoleAttribute>,
+    /// A variable that we want to provide a default value for this role.
+    pub variable: Option<SetRoleVar>,
 }
 
 impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ROLE ");
         f.write_node(&self.name);
+
         for option in &self.options {
             f.write_str(" ");
             option.fmt(f)
+        }
+
+        if let Some(variable) = &self.variable {
+            f.write_str(" ");
+            f.write_node(variable);
         }
     }
 }
@@ -3045,13 +3080,13 @@ pub enum ExplainStage {
 
 impl ExplainStage {
     /// Return the tracing path that corresponds to a given stage.
-    pub fn path(&self) -> &'static str {
+    pub fn path(&self) -> Option<&'static str> {
         match self {
-            ExplainStage::RawPlan => "optimize/raw",
-            ExplainStage::DecorrelatedPlan => "optimize/hir_to_mir",
-            ExplainStage::OptimizedPlan => "optimize/global",
-            ExplainStage::PhysicalPlan => "optimize/finalize_dataflow",
-            ExplainStage::Trace => unreachable!(),
+            ExplainStage::RawPlan => Some("optimize/raw"),
+            ExplainStage::DecorrelatedPlan => Some("optimize/hir_to_mir"),
+            ExplainStage::OptimizedPlan => Some("optimize/global"),
+            ExplainStage::PhysicalPlan => Some("optimize/finalize_dataflow"),
+            ExplainStage::Trace => None,
         }
     }
 }

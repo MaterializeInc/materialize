@@ -147,7 +147,7 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ### `mz_compute_dependencies`
