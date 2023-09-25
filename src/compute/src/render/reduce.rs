@@ -20,14 +20,15 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Collection;
 use mz_compute_types::plan::reduce::{
-    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
-    ReducePlan, ReductionType,
+    reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
+    MonotonicPlan, ReducePlan, ReductionType,
 };
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
@@ -40,7 +41,7 @@ use crate::render::context::{
     Arrangement, CollectionBundle, Context, KeyValArrangement, SpecializedArrangement,
 };
 use crate::render::errors::MaybeValidatingRow;
-use crate::render::reduce::monoids::ReductionMonoid;
+use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::ArrangementFlavor;
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
@@ -571,7 +572,14 @@ where
                     let count = usize::try_from(*w).unwrap_or(0);
                     std::iter::repeat(v.iter().next().unwrap()).take(count)
                 });
-                row_buf.packer().push(func.eval(iter, &RowArena::new()));
+                row_buf.packer().push(
+                    // Note that this is not necessarily a window aggregation, in which case
+                    // `eval_fast_window_agg` delegates to the normal `eval`.
+                    func.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
+                        iter,
+                        &RowArena::new(),
+                    ),
+                );
                 target.push((row_buf.clone(), 1));
             }
         });
@@ -913,10 +921,7 @@ where
                     let mut row_packer = row_buf.packer();
                     let accum = &input[0].1;
                     for monoid in accum.iter() {
-                        use ReductionMonoid::*;
-                        match monoid {
-                            Min(row) | Max(row) => row_packer.extend(row.iter()),
-                        }
+                        row_packer.extend(monoid.finalize().iter());
                     }
                     output.push((row_buf.clone(), 1));
                 }
@@ -964,180 +969,15 @@ where
         // generally the count, and then two aggregation-specific values. The size could be
         // reduced if we want to specialize for the aggregations.
 
-        let float_scale = f64::from(1 << 24);
-
         // Instantiate a default vector for diffs with the correct types at each
         // position.
         let zero_diffs: (Vec<_>, Diff) = (
             full_aggrs
                 .iter()
-                .map(|f| match f.func {
-                    AggregateFunc::Any | AggregateFunc::All => Accum::Bool {
-                        trues: 0,
-                        falses: 0,
-                    },
-                    AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => Accum::Float {
-                        accum: 0,
-                        pos_infs: 0,
-                        neg_infs: 0,
-                        nans: 0,
-                        non_nulls: 0,
-                    },
-                    AggregateFunc::SumNumeric => Accum::Numeric {
-                        accum: OrderedDecimal(NumericAgg::zero()),
-                        pos_infs: 0,
-                        neg_infs: 0,
-                        nans: 0,
-                        non_nulls: 0,
-                    },
-                    _ => Accum::SimpleNumber {
-                        accum: 0,
-                        non_nulls: 0,
-                    },
-                })
+                .map(|f| accumulable_zero(&f.func))
                 .collect(),
             0,
         );
-
-        // Two aggregation-specific values for each aggregation.
-        let datum_to_accumulator = move |datum: Datum, aggr: &AggregateFunc| {
-            match aggr {
-                AggregateFunc::Count => Accum::SimpleNumber {
-                    accum: 0, // unused for AggregateFunc::Count
-                    non_nulls: if datum.is_null() { 0 } else { 1 },
-                },
-                AggregateFunc::Any | AggregateFunc::All => match datum {
-                    Datum::True => Accum::Bool {
-                        trues: 1,
-                        falses: 0,
-                    },
-                    Datum::Null => Accum::Bool {
-                        trues: 0,
-                        falses: 0,
-                    },
-                    Datum::False => Accum::Bool {
-                        trues: 0,
-                        falses: 1,
-                    },
-                    x => panic!("Invalid argument to AggregateFunc::Any: {x:?}"),
-                },
-                AggregateFunc::Dummy => match datum {
-                    Datum::Dummy => Accum::SimpleNumber {
-                        accum: 0,
-                        non_nulls: 0,
-                    },
-                    x => panic!("Invalid argument to AggregateFunc::Dummy: {x:?}"),
-                },
-                AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
-                    let n = match datum {
-                        Datum::Float32(n) => f64::from(*n),
-                        Datum::Float64(n) => *n,
-                        Datum::Null => 0f64,
-                        x => panic!("Invalid argument to AggregateFunc::{aggr:?}: {x:?}"),
-                    };
-
-                    let nans = Diff::from(n.is_nan());
-                    let pos_infs = Diff::from(n == f64::INFINITY);
-                    let neg_infs = Diff::from(n == f64::NEG_INFINITY);
-                    let non_nulls = Diff::from(datum != Datum::Null);
-
-                    // Map the floating point value onto a fixed precision domain
-                    // All special values should map to zero, since they are tracked separately
-                    let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
-                        0
-                    } else {
-                        // This operation will truncate to i128::MAX if out of range.
-                        // TODO(benesch): rewrite to avoid `as`.
-                        #[allow(clippy::as_conversions)]
-                        {
-                            (n * float_scale) as i128
-                        }
-                    };
-
-                    Accum::Float {
-                        accum,
-                        pos_infs,
-                        neg_infs,
-                        nans,
-                        non_nulls,
-                    }
-                }
-                AggregateFunc::SumNumeric => match datum {
-                    Datum::Numeric(n) => {
-                        let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
-                            if n.0.is_negative() {
-                                (NumericAgg::zero(), 0, 1, 0)
-                            } else {
-                                (NumericAgg::zero(), 1, 0, 0)
-                            }
-                        } else if n.0.is_nan() {
-                            (NumericAgg::zero(), 0, 0, 1)
-                        } else {
-                            // Take a narrow decimal (datum) into a wide decimal
-                            // (aggregator).
-                            let mut cx_agg = numeric::cx_agg();
-                            (cx_agg.to_width(n.0), 0, 0, 0)
-                        };
-
-                        Accum::Numeric {
-                            accum: OrderedDecimal(accum),
-                            pos_infs,
-                            neg_infs,
-                            nans,
-                            non_nulls: 1,
-                        }
-                    }
-                    Datum::Null => Accum::Numeric {
-                        accum: OrderedDecimal(NumericAgg::zero()),
-                        pos_infs: 0,
-                        neg_infs: 0,
-                        nans: 0,
-                        non_nulls: 0,
-                    },
-                    x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
-                },
-                _ => {
-                    // Other accumulations need to disentangle the accumulable
-                    // value from its NULL-ness, which is not quite as easily
-                    // accumulated.
-                    match datum {
-                        Datum::Int16(i) => Accum::SimpleNumber {
-                            accum: i128::from(i),
-                            non_nulls: 1,
-                        },
-                        Datum::Int32(i) => Accum::SimpleNumber {
-                            accum: i128::from(i),
-                            non_nulls: 1,
-                        },
-                        Datum::Int64(i) => Accum::SimpleNumber {
-                            accum: i128::from(i),
-                            non_nulls: 1,
-                        },
-                        Datum::UInt16(u) => Accum::SimpleNumber {
-                            accum: i128::from(u),
-                            non_nulls: 1,
-                        },
-                        Datum::UInt32(u) => Accum::SimpleNumber {
-                            accum: i128::from(u),
-                            non_nulls: 1,
-                        },
-                        Datum::UInt64(u) => Accum::SimpleNumber {
-                            accum: i128::from(u),
-                            non_nulls: 1,
-                        },
-                        Datum::MzTimestamp(t) => Accum::SimpleNumber {
-                            accum: i128::from(u64::from(t)),
-                            non_nulls: 1,
-                        },
-                        Datum::Null => Accum::SimpleNumber {
-                            accum: 0,
-                            non_nulls: 0,
-                        },
-                        x => panic!("Accumulating non-integer data: {x:?}"),
-                    }
-                }
-            }
-        };
 
         let mut to_aggregate = Vec::new();
         if simple_aggrs.len() > 0 {
@@ -1158,7 +998,7 @@ where
                             datum = row_iter.next().unwrap();
                         }
                         let datum = datum.1;
-                        diffs.0[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                        diffs.0[*accumulable_index] = datum_to_accumulator(&aggr.func, datum);
                         diffs.1 = 1;
                     }
                     ((key, ()), diffs)
@@ -1188,7 +1028,7 @@ where
                     move |(key, row)| {
                         let datum = row.iter().next().unwrap();
                         let mut diffs = zero_diffs.clone();
-                        diffs.0[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                        diffs.0[accumulable_index] = datum_to_accumulator(&aggr.func, datum);
                         diffs.1 = 1;
                         ((key, ()), diffs)
                     }
@@ -1217,192 +1057,7 @@ where
                         let mut row_packer = row_buf.packer();
 
                         for (aggr, accum) in full_aggrs.iter().zip(accums) {
-                            // The finished value depends on the aggregation function in a variety of ways.
-                            // For all aggregates but count, if only null values were
-                            // accumulated, then the output is null.
-                            let value = if total > 0
-                                && accum.is_zero()
-                                && aggr.func != AggregateFunc::Count
-                            {
-                                Datum::Null
-                            } else {
-                                match (&aggr.func, &accum) {
-                                    (
-                                        AggregateFunc::Count,
-                                        Accum::SimpleNumber { non_nulls, .. },
-                                    ) => Datum::Int64(*non_nulls),
-                                    (AggregateFunc::All, Accum::Bool { falses, trues }) => {
-                                        // If any false, else if all true, else must be no false and some nulls.
-                                        if *falses > 0 {
-                                            Datum::False
-                                        } else if *trues == total {
-                                            Datum::True
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
-                                        // If any true, else if all false, else must be no true and some nulls.
-                                        if *trues > 0 {
-                                            Datum::True
-                                        } else if *falses == total {
-                                            Datum::False
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    (AggregateFunc::Dummy, _) => Datum::Dummy,
-                                    // If any non-nulls, just report the aggregate.
-                                    (
-                                        AggregateFunc::SumInt16,
-                                        Accum::SimpleNumber { accum, .. },
-                                    )
-                                    | (
-                                        AggregateFunc::SumInt32,
-                                        Accum::SimpleNumber { accum, .. },
-                                    ) => {
-                                        // This conversion is safe, as long as we have less than 2^32
-                                        // summands.
-                                        // TODO(benesch): are we guaranteed to have less than 2^32 summands?
-                                        // If so, rewrite to avoid `as`.
-                                        #[allow(clippy::as_conversions)]
-                                        Datum::Int64(*accum as i64)
-                                    }
-                                    (
-                                        AggregateFunc::SumInt64,
-                                        Accum::SimpleNumber { accum, .. },
-                                    ) => Datum::from(*accum),
-                                    (
-                                        AggregateFunc::SumUInt16,
-                                        Accum::SimpleNumber { accum, .. },
-                                    )
-                                    | (
-                                        AggregateFunc::SumUInt32,
-                                        Accum::SimpleNumber { accum, .. },
-                                    ) => {
-                                        if !accum.is_negative() {
-                                            // Our semantics of overflow are not clearly articulated wrt.
-                                            // unsigned vs. signed types (#17758). We adopt an unsigned
-                                            // wrapping behavior to match what we do above for signed types.
-                                            // TODO(vmarcos): remove potentially dangerous usage of `as`.
-                                            #[allow(clippy::as_conversions)]
-                                            Datum::UInt64(*accum as u64)
-                                        } else {
-                                            // Note that we return a value here, but an error in the other
-                                            // operator of the reduce_pair. Therefore, we expect that this
-                                            // value will never be exposed as an output.
-                                            Datum::Null
-                                        }
-                                    }
-                                    (
-                                        AggregateFunc::SumUInt64,
-                                        Accum::SimpleNumber { accum, .. },
-                                    ) => {
-                                        if !accum.is_negative() {
-                                            Datum::from(*accum)
-                                        } else {
-                                            // Note that we return a value here, but an error in the other
-                                            // operator of the reduce_pair. Therefore, we expect that this
-                                            // value will never be exposed as an output.
-                                            Datum::Null
-                                        }
-                                    }
-                                    (
-                                        AggregateFunc::SumFloat32,
-                                        Accum::Float {
-                                            accum,
-                                            pos_infs,
-                                            neg_infs,
-                                            nans,
-                                            non_nulls: _,
-                                        },
-                                    ) => {
-                                        if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
-                                            // NaNs are NaNs and cases where we've seen a
-                                            // mixture of positive and negative infinities.
-                                            Datum::from(f32::NAN)
-                                        } else if *pos_infs > 0 {
-                                            Datum::from(f32::INFINITY)
-                                        } else if *neg_infs > 0 {
-                                            Datum::from(f32::NEG_INFINITY)
-                                        } else {
-                                            // TODO(benesch): remove potentially dangerous usage of `as`.
-                                            #[allow(clippy::as_conversions)]
-                                            {
-                                                Datum::from(((*accum as f64) / float_scale) as f32)
-                                            }
-                                        }
-                                    }
-                                    (
-                                        AggregateFunc::SumFloat64,
-                                        Accum::Float {
-                                            accum,
-                                            pos_infs,
-                                            neg_infs,
-                                            nans,
-                                            non_nulls: _,
-                                        },
-                                    ) => {
-                                        if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
-                                            // NaNs are NaNs and cases where we've seen a
-                                            // mixture of positive and negative infinities.
-                                            Datum::from(f64::NAN)
-                                        } else if *pos_infs > 0 {
-                                            Datum::from(f64::INFINITY)
-                                        } else if *neg_infs > 0 {
-                                            Datum::from(f64::NEG_INFINITY)
-                                        } else {
-                                            // TODO(benesch): remove potentially dangerous usage of `as`.
-                                            #[allow(clippy::as_conversions)]
-                                            {
-                                                Datum::from((*accum as f64) / float_scale)
-                                            }
-                                        }
-                                    }
-                                    (
-                                        AggregateFunc::SumNumeric,
-                                        Accum::Numeric {
-                                            accum,
-                                            pos_infs,
-                                            neg_infs,
-                                            nans,
-                                            non_nulls: _,
-                                        },
-                                    ) => {
-                                        let mut cx_datum = numeric::cx_datum();
-                                        let d = cx_datum.to_width(accum.0);
-                                        // Take a wide decimal (aggregator) into a
-                                        // narrow decimal (datum). If this operation
-                                        // overflows the datum, this new value will be
-                                        // +/- infinity. However, the aggregator tracks
-                                        // the amount of overflow, making it invertible.
-                                        let inf_d = d.is_infinite();
-                                        let neg_d = d.is_negative();
-                                        let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
-                                        let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
-                                        if *nans > 0 || (pos_inf && neg_inf) {
-                                            // NaNs are NaNs and cases where we've seen a
-                                            // mixture of positive and negative infinities.
-                                            Datum::from(Numeric::nan())
-                                        } else if pos_inf {
-                                            Datum::from(Numeric::infinity())
-                                        } else if neg_inf {
-                                            let mut cx = numeric::cx_datum();
-                                            let mut d = Numeric::infinity();
-                                            cx.neg(&mut d);
-                                            Datum::from(d)
-                                        } else {
-                                            Datum::from(d)
-                                        }
-                                    }
-                                    _ => panic!(
-                                        "Unexpected accumulation (aggr={:?}, accum={accum:?})",
-                                        aggr.func
-                                    ),
-                                }
-                            };
-
-                            row_packer.push(value);
+                            row_packer.push(finalize_accum(&aggr.func, accum, total));
                         }
                         output.push((row_buf.clone(), 1));
                     }
@@ -1448,6 +1103,339 @@ where
             arranged_output,
             arranged_errs.as_collection(|_key, error| error.clone()),
         )
+    }
+}
+
+fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
+    match aggr_func {
+        AggregateFunc::Any | AggregateFunc::All => Accum::Bool {
+            trues: 0,
+            falses: 0,
+        },
+        AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => Accum::Float {
+            accum: 0,
+            pos_infs: 0,
+            neg_infs: 0,
+            nans: 0,
+            non_nulls: 0,
+        },
+        AggregateFunc::SumNumeric => Accum::Numeric {
+            accum: OrderedDecimal(NumericAgg::zero()),
+            pos_infs: 0,
+            neg_infs: 0,
+            nans: 0,
+            non_nulls: 0,
+        },
+        _ => Accum::SimpleNumber {
+            accum: 0,
+            non_nulls: 0,
+        },
+    }
+}
+
+static FLOAT_SCALE: Lazy<f64> = Lazy::new(|| f64::from(1 << 24));
+
+fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
+    match aggregate_func {
+        AggregateFunc::Count => Accum::SimpleNumber {
+            accum: 0, // unused for AggregateFunc::Count
+            non_nulls: if datum.is_null() { 0 } else { 1 },
+        },
+        AggregateFunc::Any | AggregateFunc::All => match datum {
+            Datum::True => Accum::Bool {
+                trues: 1,
+                falses: 0,
+            },
+            Datum::Null => Accum::Bool {
+                trues: 0,
+                falses: 0,
+            },
+            Datum::False => Accum::Bool {
+                trues: 0,
+                falses: 1,
+            },
+            x => panic!("Invalid argument to AggregateFunc::Any: {x:?}"),
+        },
+        AggregateFunc::Dummy => match datum {
+            Datum::Dummy => Accum::SimpleNumber {
+                accum: 0,
+                non_nulls: 0,
+            },
+            x => panic!("Invalid argument to AggregateFunc::Dummy: {x:?}"),
+        },
+        AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
+            let n = match datum {
+                Datum::Float32(n) => f64::from(*n),
+                Datum::Float64(n) => *n,
+                Datum::Null => 0f64,
+                x => panic!("Invalid argument to AggregateFunc::{aggregate_func:?}: {x:?}"),
+            };
+
+            let nans = Diff::from(n.is_nan());
+            let pos_infs = Diff::from(n == f64::INFINITY);
+            let neg_infs = Diff::from(n == f64::NEG_INFINITY);
+            let non_nulls = Diff::from(datum != Datum::Null);
+
+            // Map the floating point value onto a fixed precision domain
+            // All special values should map to zero, since they are tracked separately
+            let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
+                0
+            } else {
+                // This operation will truncate to i128::MAX if out of range.
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
+                {
+                    (n * *FLOAT_SCALE) as i128
+                }
+            };
+
+            Accum::Float {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            }
+        }
+        AggregateFunc::SumNumeric => match datum {
+            Datum::Numeric(n) => {
+                let (accum, pos_infs, neg_infs, nans) = if n.0.is_infinite() {
+                    if n.0.is_negative() {
+                        (NumericAgg::zero(), 0, 1, 0)
+                    } else {
+                        (NumericAgg::zero(), 1, 0, 0)
+                    }
+                } else if n.0.is_nan() {
+                    (NumericAgg::zero(), 0, 0, 1)
+                } else {
+                    // Take a narrow decimal (datum) into a wide decimal
+                    // (aggregator).
+                    let mut cx_agg = numeric::cx_agg();
+                    (cx_agg.to_width(n.0), 0, 0, 0)
+                };
+
+                Accum::Numeric {
+                    accum: OrderedDecimal(accum),
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls: 1,
+                }
+            }
+            Datum::Null => Accum::Numeric {
+                accum: OrderedDecimal(NumericAgg::zero()),
+                pos_infs: 0,
+                neg_infs: 0,
+                nans: 0,
+                non_nulls: 0,
+            },
+            x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
+        },
+        _ => {
+            // Other accumulations need to disentangle the accumulable
+            // value from its NULL-ness, which is not quite as easily
+            // accumulated.
+            match datum {
+                Datum::Int16(i) => Accum::SimpleNumber {
+                    accum: i128::from(i),
+                    non_nulls: 1,
+                },
+                Datum::Int32(i) => Accum::SimpleNumber {
+                    accum: i128::from(i),
+                    non_nulls: 1,
+                },
+                Datum::Int64(i) => Accum::SimpleNumber {
+                    accum: i128::from(i),
+                    non_nulls: 1,
+                },
+                Datum::UInt16(u) => Accum::SimpleNumber {
+                    accum: i128::from(u),
+                    non_nulls: 1,
+                },
+                Datum::UInt32(u) => Accum::SimpleNumber {
+                    accum: i128::from(u),
+                    non_nulls: 1,
+                },
+                Datum::UInt64(u) => Accum::SimpleNumber {
+                    accum: i128::from(u),
+                    non_nulls: 1,
+                },
+                Datum::MzTimestamp(t) => Accum::SimpleNumber {
+                    accum: i128::from(u64::from(t)),
+                    non_nulls: 1,
+                },
+                Datum::Null => Accum::SimpleNumber {
+                    accum: 0,
+                    non_nulls: 0,
+                },
+                x => panic!("Accumulating non-integer data: {x:?}"),
+            }
+        }
+    }
+}
+
+fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Diff) -> Datum<'a> {
+    // The finished value depends on the aggregation function in a variety of ways.
+    // For all aggregates but count, if only null values were
+    // accumulated, then the output is null.
+    if total > 0 && accum.is_zero() && *aggr_func != AggregateFunc::Count {
+        Datum::Null
+    } else {
+        match (&aggr_func, &accum) {
+            (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
+                Datum::Int64(*non_nulls)
+            }
+            (AggregateFunc::All, Accum::Bool { falses, trues }) => {
+                // If any false, else if all true, else must be no false and some nulls.
+                if *falses > 0 {
+                    Datum::False
+                } else if *trues == total {
+                    Datum::True
+                } else {
+                    Datum::Null
+                }
+            }
+            (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
+                // If any true, else if all false, else must be no true and some nulls.
+                if *trues > 0 {
+                    Datum::True
+                } else if *falses == total {
+                    Datum::False
+                } else {
+                    Datum::Null
+                }
+            }
+            (AggregateFunc::Dummy, _) => Datum::Dummy,
+            // If any non-nulls, just report the aggregate.
+            (AggregateFunc::SumInt16, Accum::SimpleNumber { accum, .. })
+            | (AggregateFunc::SumInt32, Accum::SimpleNumber { accum, .. }) => {
+                // This conversion is safe, as long as we have less than 2^32
+                // summands.
+                // TODO(benesch): are we guaranteed to have less than 2^32 summands?
+                // If so, rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
+                Datum::Int64(*accum as i64)
+            }
+            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(*accum),
+            (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
+            | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. }) => {
+                if !accum.is_negative() {
+                    // Our semantics of overflow are not clearly articulated wrt.
+                    // unsigned vs. signed types (#17758). We adopt an unsigned
+                    // wrapping behavior to match what we do above for signed types.
+                    // TODO(vmarcos): remove potentially dangerous usage of `as`.
+                    #[allow(clippy::as_conversions)]
+                    Datum::UInt64(*accum as u64)
+                } else {
+                    // Note that we return a value here, but an error in the other
+                    // operator of the reduce_pair. Therefore, we expect that this
+                    // value will never be exposed as an output.
+                    Datum::Null
+                }
+            }
+            (AggregateFunc::SumUInt64, Accum::SimpleNumber { accum, .. }) => {
+                if !accum.is_negative() {
+                    Datum::from(*accum)
+                } else {
+                    // Note that we return a value here, but an error in the other
+                    // operator of the reduce_pair. Therefore, we expect that this
+                    // value will never be exposed as an output.
+                    Datum::Null
+                }
+            }
+            (
+                AggregateFunc::SumFloat32,
+                Accum::Float {
+                    accum,
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls: _,
+                },
+            ) => {
+                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                    // NaNs are NaNs and cases where we've seen a
+                    // mixture of positive and negative infinities.
+                    Datum::from(f32::NAN)
+                } else if *pos_infs > 0 {
+                    Datum::from(f32::INFINITY)
+                } else if *neg_infs > 0 {
+                    Datum::from(f32::NEG_INFINITY)
+                } else {
+                    // TODO(benesch): remove potentially dangerous usage of `as`.
+                    #[allow(clippy::as_conversions)]
+                    {
+                        Datum::from(((*accum as f64) / *FLOAT_SCALE) as f32)
+                    }
+                }
+            }
+            (
+                AggregateFunc::SumFloat64,
+                Accum::Float {
+                    accum,
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls: _,
+                },
+            ) => {
+                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                    // NaNs are NaNs and cases where we've seen a
+                    // mixture of positive and negative infinities.
+                    Datum::from(f64::NAN)
+                } else if *pos_infs > 0 {
+                    Datum::from(f64::INFINITY)
+                } else if *neg_infs > 0 {
+                    Datum::from(f64::NEG_INFINITY)
+                } else {
+                    // TODO(benesch): remove potentially dangerous usage of `as`.
+                    #[allow(clippy::as_conversions)]
+                    {
+                        Datum::from((*accum as f64) / *FLOAT_SCALE)
+                    }
+                }
+            }
+            (
+                AggregateFunc::SumNumeric,
+                Accum::Numeric {
+                    accum,
+                    pos_infs,
+                    neg_infs,
+                    nans,
+                    non_nulls: _,
+                },
+            ) => {
+                let mut cx_datum = numeric::cx_datum();
+                let d = cx_datum.to_width(accum.0);
+                // Take a wide decimal (aggregator) into a
+                // narrow decimal (datum). If this operation
+                // overflows the datum, this new value will be
+                // +/- infinity. However, the aggregator tracks
+                // the amount of overflow, making it invertible.
+                let inf_d = d.is_infinite();
+                let neg_d = d.is_negative();
+                let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
+                let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
+                if *nans > 0 || (pos_inf && neg_inf) {
+                    // NaNs are NaNs and cases where we've seen a
+                    // mixture of positive and negative infinities.
+                    Datum::from(Numeric::nan())
+                } else if pos_inf {
+                    Datum::from(Numeric::infinity())
+                } else if neg_inf {
+                    let mut cx = numeric::cx_datum();
+                    let mut d = Numeric::infinity();
+                    cx.neg(&mut d);
+                    Datum::from(d)
+                } else {
+                    Datum::from(d)
+                }
+            }
+            _ => panic!(
+                "Unexpected accumulation (aggr={:?}, accum={accum:?})",
+                aggr_func
+            ),
+        }
     }
 }
 
@@ -1704,7 +1692,7 @@ impl Multiply<Diff> for Accum {
 }
 
 /// Monoids for in-place compaction of monotonic streams.
-pub mod monoids {
+mod monoids {
 
     // We can improve the performance of some aggregations through the use of algebra.
     // In particular, we can move some of the aggregations in to the `diff` field of
@@ -1845,7 +1833,127 @@ pub mod monoids {
             | AggregateFunc::DenseRank { .. }
             | AggregateFunc::LagLead { .. }
             | AggregateFunc::FirstValue { .. }
-            | AggregateFunc::LastValue { .. } => None,
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::WindowAggregate { .. } => None,
+        }
+    }
+
+    impl ReductionMonoid {
+        pub fn finalize(&self) -> &Row {
+            use ReductionMonoid::*;
+            match &self {
+                Min(row) | Max(row) => row,
+            }
+        }
+    }
+}
+
+mod window_agg_helpers {
+    use crate::render::reduce::*;
+
+    /// TODO: It would be better for performance to do the branching that is in the methods of this
+    /// enum at the place where we are calling `eval_fast_window_agg`. Then we wouldn't need an enum
+    /// here, and would parameterize `eval_fast_window_agg` with one of the implementations
+    /// directly.
+    pub enum OneByOneAggrImpls {
+        Accumulable(AccumulableOneByOneAggr),
+        Hierarchical(HierarchicalOneByOneAggr),
+        Basic(mz_expr::NaiveOneByOneAggr),
+    }
+
+    impl mz_expr::OneByOneAggr for OneByOneAggrImpls {
+        fn new(agg: &AggregateFunc, reverse: bool) -> Self {
+            match reduction_type(agg) {
+                ReductionType::Basic => {
+                    OneByOneAggrImpls::Basic(mz_expr::NaiveOneByOneAggr::new(agg, reverse))
+                }
+                ReductionType::Accumulable => {
+                    OneByOneAggrImpls::Accumulable(AccumulableOneByOneAggr::new(agg))
+                }
+                ReductionType::Hierarchical => {
+                    OneByOneAggrImpls::Hierarchical(HierarchicalOneByOneAggr::new(agg))
+                }
+            }
+        }
+
+        fn give(&mut self, d: &Datum) {
+            match self {
+                OneByOneAggrImpls::Basic(i) => i.give(d),
+                OneByOneAggrImpls::Accumulable(i) => i.give(d),
+                OneByOneAggrImpls::Hierarchical(i) => i.give(d),
+            }
+        }
+
+        fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
+            // Note that the `reverse` parameter is currently forwarded only for Basic aggregations.
+            match self {
+                OneByOneAggrImpls::Basic(i) => i.get_current_aggregate(temp_storage),
+                OneByOneAggrImpls::Accumulable(i) => i.get_current_aggregate(temp_storage),
+                OneByOneAggrImpls::Hierarchical(i) => i.get_current_aggregate(temp_storage),
+            }
+        }
+    }
+
+    pub struct AccumulableOneByOneAggr {
+        aggr_func: AggregateFunc,
+        accum: Accum,
+        total: Diff,
+    }
+
+    impl AccumulableOneByOneAggr {
+        fn new(aggr_func: &AggregateFunc) -> Self {
+            AccumulableOneByOneAggr {
+                aggr_func: aggr_func.clone(),
+                accum: accumulable_zero(aggr_func),
+                total: 0,
+            }
+        }
+
+        fn give(&mut self, d: &Datum) {
+            self.accum
+                .plus_equals(&datum_to_accumulator(&self.aggr_func, d.clone()));
+            self.total += 1;
+        }
+
+        fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
+            temp_storage.make_datum(|packer| {
+                packer.push(finalize_accum(&self.aggr_func, &self.accum, self.total));
+            })
+        }
+    }
+
+    pub struct HierarchicalOneByOneAggr {
+        aggr_func: AggregateFunc,
+        monoid: Option<ReductionMonoid>,
+    }
+
+    impl HierarchicalOneByOneAggr {
+        fn new(aggr_func: &AggregateFunc) -> Self {
+            HierarchicalOneByOneAggr {
+                aggr_func: aggr_func.clone(),
+                monoid: None,
+            }
+        }
+
+        fn give(&mut self, d: &Datum) {
+            let mut row_buf = Row::default();
+            row_buf.packer().push(d);
+            let m = get_monoid(row_buf, &self.aggr_func).unwrap();
+            match &mut self.monoid {
+                None => {
+                    self.monoid = Some(m);
+                }
+                Some(state) => {
+                    state.plus_equals(&m);
+                }
+            }
+        }
+
+        fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
+            temp_storage.make_datum(|packer| match &self.monoid {
+                None => packer.push(Datum::Null),
+                Some(monoid) => packer.extend(monoid.finalize().iter()),
+            })
         }
     }
 }

@@ -2950,7 +2950,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
                 Ok((e, AggregateFunc::StringAgg { order_by }))
             }) => String, 3538;
-            params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")) => Bytes, 3545;
+            params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg on BYTEA")) => Bytes, 3545;
         },
         "sum" => Aggregate {
             params!(Int16) => AggregateFunc::SumInt16 => Int64, 2109;

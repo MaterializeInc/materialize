@@ -965,6 +965,124 @@ impl HirScalarExpr {
                     let partition_by = expr.partition_by;
                     let order_by = expr.order_by;
 
+                    // argument lowering for scalar window functions
+                    // (We need to specify the & _ in the arguments because of this problem:
+                    // https://users.rust-lang.org/t/the-implementation-of-fnonce-is-not-general-enough/72141/3 )
+                    let scalar_lower_args =
+                        |_id_gen: &mut _,
+                         _col_map: &_,
+                         _cte_map: &mut _,
+                         _get_inner: &mut _,
+                         _subquery_map: &Option<&_>,
+                         order_by_mir: Vec<MirScalarExpr>,
+                         original_row_record,
+                         original_row_record_type: ScalarType| {
+                            let agg_input = MirScalarExpr::CallVariadic {
+                                func: mz_expr::VariadicFunc::ListCreate {
+                                    elem_type: original_row_record_type.clone(),
+                                },
+                                exprs: vec![original_row_record],
+                            };
+                            let mut agg_input = vec![agg_input];
+                            agg_input.extend(order_by_mir.clone());
+                            let agg_input = MirScalarExpr::CallVariadic {
+                                func: mz_expr::VariadicFunc::RecordCreate {
+                                    field_names: (0..1)
+                                        .map(|_| ColumnName::from("?column?"))
+                                        .collect_vec(),
+                                },
+                                exprs: agg_input,
+                            };
+                            let list_type = ScalarType::List {
+                                element_type: Box::new(original_row_record_type),
+                                custom_id: None,
+                            };
+                            let agg_input_type = ScalarType::Record {
+                                fields: std::iter::once(&list_type)
+                                    .map(|t| {
+                                        (ColumnName::from("?column?"), t.clone().nullable(false))
+                                    })
+                                    .collect_vec(),
+                                custom_id: None,
+                            }
+                            .nullable(false);
+
+                            Ok((agg_input, agg_input_type))
+                        };
+
+                    // argument lowering for value window functions and aggregate window functions
+                    let value_or_aggr_lower_args = |hir_encoded_args: Box<HirScalarExpr>| {
+                        |id_gen: &mut _,
+                         col_map: &_,
+                         cte_map: &mut _,
+                         get_inner: &mut _,
+                         subquery_map: &Option<&_>,
+                         order_by_mir: Vec<MirScalarExpr>,
+                         original_row_record,
+                         original_row_record_type| {
+                            // Creates [((OriginalRow, EncodedArgs), OrderByExprs...)]
+
+                            // Compute the encoded args for all rows
+                            let mir_encoded_args = hir_encoded_args.applied_to(
+                                id_gen,
+                                col_map,
+                                cte_map,
+                                get_inner,
+                                subquery_map,
+                            )?;
+                            let mir_encoded_args_type = mir_encoded_args
+                                .typ(&get_inner.typ().column_types)
+                                .scalar_type;
+
+                            // Build a new record with the original row in a record in a list + the encoded args in a record
+                            let fn_input_record_fields =
+                                [original_row_record_type, mir_encoded_args_type]
+                                    .iter()
+                                    .map(|t| {
+                                        (ColumnName::from("?column?"), t.clone().nullable(false))
+                                    })
+                                    .collect_vec();
+                            let fn_input_record = MirScalarExpr::CallVariadic {
+                                func: mz_expr::VariadicFunc::RecordCreate {
+                                    field_names: fn_input_record_fields
+                                        .iter()
+                                        .map(|(n, _)| n.clone())
+                                        .collect_vec(),
+                                },
+                                exprs: vec![original_row_record, mir_encoded_args],
+                            };
+                            let fn_input_record_type = ScalarType::Record {
+                                fields: fn_input_record_fields,
+                                custom_id: None,
+                            }
+                            .nullable(false);
+
+                            // Build a new record with the record above + the ORDER BY exprs
+                            // This follows the standard encoding of ORDER BY exprs used by aggregate functions
+                            let mut agg_input = vec![fn_input_record];
+                            agg_input.extend(order_by_mir.clone());
+                            let agg_input = MirScalarExpr::CallVariadic {
+                                func: mz_expr::VariadicFunc::RecordCreate {
+                                    field_names: (0..2)
+                                        .map(|_| ColumnName::from("?column?"))
+                                        .collect_vec(),
+                                },
+                                exprs: agg_input,
+                            };
+
+                            let agg_input_type = ScalarType::Record {
+                                fields: vec![(
+                                    ColumnName::from("?column?"),
+                                    fn_input_record_type.nullable(false),
+                                )],
+                                custom_id: None,
+                            }
+                            .nullable(false);
+
+                            Ok((agg_input, agg_input_type))
+                        }
+                    };
+
                     match expr.func {
                         WindowExprType::Scalar(scalar_window_expr) => {
                             let mir_aggr_func = scalar_window_expr.into_expr();
@@ -977,49 +1095,7 @@ impl HirScalarExpr {
                                 partition_by,
                                 order_by,
                                 mir_aggr_func,
-                                |_id_gen,
-                                 _col_map,
-                                 _cte_map,
-                                 _get_inner,
-                                 _subquery_map,
-                                 order_by_mir,
-                                 original_row_record,
-                                 original_row_record_type| {
-                                    let agg_input = MirScalarExpr::CallVariadic {
-                                        func: mz_expr::VariadicFunc::ListCreate {
-                                            elem_type: original_row_record_type.clone(),
-                                        },
-                                        exprs: vec![original_row_record],
-                                    };
-                                    let mut agg_input = vec![agg_input];
-                                    agg_input.extend(order_by_mir.clone());
-                                    let agg_input = MirScalarExpr::CallVariadic {
-                                        func: mz_expr::VariadicFunc::RecordCreate {
-                                            field_names: (0..1)
-                                                .map(|_| ColumnName::from("?column?"))
-                                                .collect_vec(),
-                                        },
-                                        exprs: agg_input,
-                                    };
-                                    let list_type = ScalarType::List {
-                                        element_type: Box::new(original_row_record_type),
-                                        custom_id: None,
-                                    };
-                                    let agg_input_type = ScalarType::Record {
-                                        fields: std::iter::once(&list_type)
-                                            .map(|t| {
-                                                (
-                                                    ColumnName::from("?column?"),
-                                                    t.clone().nullable(false),
-                                                )
-                                            })
-                                            .collect_vec(),
-                                        custom_id: None,
-                                    }
-                                    .nullable(false);
-
-                                    Ok((agg_input, agg_input_type))
-                                },
+                                scalar_lower_args,
                             )?
                         }
                         WindowExprType::Value(value_window_expr) => {
@@ -1034,78 +1110,22 @@ impl HirScalarExpr {
                                 partition_by,
                                 order_by,
                                 mir_aggr_func,
-                                |id_gen,
-                                 col_map,
-                                 cte_map,
-                                 get_inner,
-                                 subquery_map,
-                                 order_by_mir,
-                                 original_row_record,
-                                 original_row_record_type| {
-                                    // Creates [((OriginalRow, EncodedArgs), OrderByExprs...)]
+                                value_or_aggr_lower_args(hir_encoded_args),
+                            )?
+                        }
+                        WindowExprType::Aggregate(aggr_window_expr) => {
+                            let (hir_encoded_args, mir_aggr_func) = aggr_window_expr.into_expr();
 
-                                    // Compute the encoded args for all rows
-                                    let mir_encoded_args = hir_encoded_args.applied_to(
-                                        id_gen,
-                                        col_map,
-                                        cte_map,
-                                        get_inner,
-                                        subquery_map,
-                                    )?;
-                                    let mir_encoded_args_type = mir_encoded_args
-                                        .typ(&get_inner.typ().column_types)
-                                        .scalar_type;
-
-                                    // Build a new record with the original row in a record in a list + the encoded args in a record
-                                    let fn_input_record_fields =
-                                        [original_row_record_type, mir_encoded_args_type]
-                                            .iter()
-                                            .map(|t| {
-                                                (
-                                                    ColumnName::from("?column?"),
-                                                    t.clone().nullable(false),
-                                                )
-                                            })
-                                            .collect_vec();
-                                    let fn_input_record = MirScalarExpr::CallVariadic {
-                                        func: mz_expr::VariadicFunc::RecordCreate {
-                                            field_names: fn_input_record_fields
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect_vec(),
-                                        },
-                                        exprs: vec![original_row_record, mir_encoded_args],
-                                    };
-                                    let fn_input_record_type = ScalarType::Record {
-                                        fields: fn_input_record_fields,
-                                        custom_id: None,
-                                    }
-                                    .nullable(false);
-
-                                    // Build a new record with the record above + the ORDER BY exprs
-                                    // This follows the standard encoding of ORDER BY exprs used by aggregate functions
-                                    let mut agg_input = vec![fn_input_record];
-                                    agg_input.extend(order_by_mir.clone());
-                                    let agg_input = MirScalarExpr::CallVariadic {
-                                        func: mz_expr::VariadicFunc::RecordCreate {
-                                            field_names: (0..2)
-                                                .map(|_| ColumnName::from("?column?"))
-                                                .collect_vec(),
-                                        },
-                                        exprs: agg_input,
-                                    };
-
-                                    let agg_input_type = ScalarType::Record {
-                                        fields: vec![(
-                                            ColumnName::from("?column?"),
-                                            fn_input_record_type.nullable(false),
-                                        )],
-                                        custom_id: None,
-                                    }
-                                    .nullable(false);
-
-                                    Ok((agg_input, agg_input_type))
-                                },
+                            Self::window_func_applied_to(
+                                id_gen,
+                                col_map,
+                                cte_map,
+                                inner,
+                                subquery_map,
+                                partition_by,
+                                order_by,
+                                mir_aggr_func,
+                                value_or_aggr_lower_args(hir_encoded_args),
                             )?
                         }
                     }
@@ -1137,6 +1157,38 @@ impl HirScalarExpr {
             ScalarType,
         ) -> Result<(MirScalarExpr, ColumnType), PlanError>,
     {
+        // Example MIRs for a window function (specifically, a window aggregation):
+        //
+        // CREATE TABLE t7(x INT, y INT);
+        //
+        // explain decorrelated plan for select sum(x*y) over (partition by x+y order by x-y, x/y) from t7;
+        //
+        // Decorrelated Plan
+        // Project (#3)
+        //   Map (#2)
+        //     Project (#3..=#5)
+        //       Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2))
+        //         FlatMap unnest_list(#1)
+        //           Reduce group_by=[#2] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), (#0 * #1)), (#0 - #1), (#0 / #1)))]
+        //             Map ((#0 + #1))
+        //               CrossJoin
+        //                 Constant
+        //                   - ()
+        //                 Get materialize.public.t7
+        //
+        // The same query after optimizations:
+        //
+        // explain select sum(x*y) over (partition by x+y order by x-y, x/y) from t7;
+        //
+        // Optimized Plan
+        // Explained Query:
+        //   Project (#2)
+        //     Map (record_get[0](#1))
+        //       FlatMap unnest_list(#0)
+        //         Project (#1)
+        //           Reduce group_by=[(#0 + #1)] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), (#0 * #1)), (#0 - #1), (#0 / #1)))]
+        //             ReadStorage materialize.public.t7
+
         *inner = inner
             .take_dangerous()
             .let_in_fallible(id_gen, |id_gen, mut get_inner| {

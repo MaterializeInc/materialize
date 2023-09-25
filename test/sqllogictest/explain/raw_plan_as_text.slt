@@ -518,6 +518,18 @@ EOF
 
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
+SELECT
+    sum(b + 8) over (partition by b%6 order by b + 33 desc rows between 2 preceding and 3 following)
+FROM t;
+----
+Project (#2)
+  Map (sum((#1 + 8)) over (partition by [(#1 % 6)] order by [(#1 + 33) desc nulls_first] rows between 2 preceding and 3 following))
+    Get materialize.public.t
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
