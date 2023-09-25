@@ -52,14 +52,28 @@ identifier = 'redpanda'
 weight = 20
 
 [[menu.main]]
-identifier = "network-security"
-name = "Network security"
-parent = 'ingest-data'
-weight= 30
-
-[[menu.main]]
 identifier = "webhooks"
 name = "Webhooks"
+parent = 'ingest-data'
+weight = 30
+
+[[menu.main]]
+identifier = "eventbridge"
+name = "Amazon EventBridge"
+parent = 'webhooks'
+weight = 5
+url = "/sql/create-source/webhook/#connecting-with-amazon-eventbridge"
+
+[[menu.main]]
+identifier = "segment"
+name = "Segment"
+parent = 'webhooks'
+weight = 15
+url = "/sql/create-source/webhook/#connecting-with-segment"
+
+[[menu.main]]
+identifier = "network-security"
+name = "Network security"
 parent = 'ingest-data'
 weight= 35
 
