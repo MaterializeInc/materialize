@@ -1636,7 +1636,6 @@ feature_flags!(
         enable_disk_cluster_replicas,
         "`WITH (DISK)` for cluster replicas"
     ),
-    (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
     (
         enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"

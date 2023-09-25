@@ -10,11 +10,6 @@
 # The underlying LDBC SNB BI benchmark is under the Apache 2.0 license
 # as well; see materialize/test/ldbc-bi/LICENSE.txt.
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive TO true;
-----
-COMPLETE 0
-
 ######################################################################
 # TABLE DEFINITIONS
 ######################################################################
