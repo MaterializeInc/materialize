@@ -77,8 +77,15 @@
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
+use std::io::Write;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use mz_build_id::BuildId;
+use mz_ore::cast::{CastFrom, TryCastFrom};
+use prost::Message;
 
 mod pprof_types;
 mod time;
@@ -104,7 +111,7 @@ pub struct Mapping {
     pub memory_end: usize,
     pub file_offset: u64,
     pub pathname: Option<String>,
-    pub build_id: Option<Vec<u8>>,
+    pub build_id: Option<BuildId>,
 }
 
 #[derive(Default)]
@@ -163,6 +170,140 @@ mz_fg_version: 1
         }
 
         builder
+    }
+
+    /// Converts the profile into the pprof format.
+    ///
+    /// pprof encodes profiles as gzipped protobuf messages of the Profile message type
+    /// (see `pprof/profile.proto`).
+    pub fn to_pprof(
+        &self,
+        sample_type: (&str, &str),
+        period_type: (&str, &str),
+        anno_key: Option<String>,
+    ) -> Vec<u8> {
+        use crate::pprof_types as proto;
+
+        let mut profile = proto::Profile::default();
+
+        const SAMPLE_TYPE_IDX: i64 = 1;
+        const SAMPLE_UNIT_IDX: i64 = 2;
+        const PERIOD_TYPE_IDX: i64 = 3;
+        const PERIOD_UNIT_IDX: i64 = 4;
+        const ANNO_KEY_IDX: i64 = 5;
+
+        let anno_key = anno_key.unwrap_or_else(|| "annotation".into());
+        profile.string_table = vec![
+            "".into(),
+            sample_type.0.into(),
+            sample_type.1.into(),
+            period_type.0.into(),
+            period_type.1.into(),
+            anno_key,
+        ];
+
+        profile.sample_type = vec![proto::ValueType {
+            r#type: SAMPLE_TYPE_IDX,
+            unit: SAMPLE_UNIT_IDX,
+        }];
+        profile.period_type = Some(proto::ValueType {
+            r#type: PERIOD_TYPE_IDX,
+            unit: PERIOD_UNIT_IDX,
+        });
+
+        profile.time_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("now is later than UNIX epoch")
+            .as_nanos()
+            .try_into()
+            .expect("the year 2554 is far away");
+
+        let mut filename_indices = BTreeMap::new();
+        let mut build_id_indices = BTreeMap::new();
+        for (mapping, mapping_id) in self.mappings.iter().zip(1..) {
+            let pathname = mapping.pathname.as_deref().unwrap_or("");
+            let filename_idx = *filename_indices.entry(pathname).or_insert_with(|| {
+                let index = profile.string_table.len();
+                profile.string_table.push(pathname.to_string());
+                i64::try_from(index).expect("must fit")
+            });
+
+            let build_id_idx = match &mapping.build_id {
+                Some(build_id) => *build_id_indices
+                    .entry(&mapping.build_id)
+                    .or_insert_with(|| {
+                        let index = profile.string_table.len();
+                        profile.string_table.push(build_id.to_string());
+                        i64::try_from(index).expect("must fit")
+                    }),
+                None => 0,
+            };
+
+            profile.mapping.push(proto::Mapping {
+                id: mapping_id,
+                memory_start: u64::cast_from(mapping.memory_start),
+                memory_limit: u64::cast_from(mapping.memory_end),
+                file_offset: mapping.file_offset,
+                filename: filename_idx,
+                build_id: build_id_idx,
+                ..Default::default()
+            });
+        }
+
+        let mut location_ids = BTreeMap::new();
+        let mut anno_indices = BTreeMap::new();
+        for (stack, anno) in self.iter() {
+            let mut sample = proto::Sample::default();
+
+            let value = stack.weight.trunc();
+            let value = i64::try_cast_from(value).expect("no exabyte heap sizes");
+            sample.value.push(value);
+
+            for addr in stack.addrs.iter().rev() {
+                let addr = u64::cast_from(*addr);
+
+                let loc_id = *location_ids.entry(addr).or_insert_with(|| {
+                    // pprof_types.proto says the location id may be the address, but Polar Signals
+                    // insists that location ids are sequential, starting with 1.
+                    let id = u64::cast_from(profile.location.len()) + 1;
+                    let mapping_id = profile
+                        .mapping
+                        .iter()
+                        .find(|m| m.memory_start <= addr && m.memory_limit > addr)
+                        .map_or(0, |m| m.id);
+                    profile.location.push(proto::Location {
+                        id,
+                        mapping_id,
+                        address: addr,
+                        ..Default::default()
+                    });
+                    id
+                });
+
+                sample.location_id.push(loc_id);
+
+                if let Some(anno) = anno {
+                    let index = anno_indices.entry(anno).or_insert_with(|| {
+                        let index = profile.string_table.len();
+                        profile.string_table.push(anno.into());
+                        i64::try_from(index).expect("must fit")
+                    });
+                    sample.label.push(proto::Label {
+                        key: ANNO_KEY_IDX,
+                        str: *index,
+                        ..Default::default()
+                    })
+                }
+            }
+
+            profile.sample.push(sample);
+        }
+
+        let encoded = profile.encode_to_vec();
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&encoded).unwrap();
+        gz.finish().unwrap()
     }
 }
 

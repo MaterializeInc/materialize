@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use libc::size_t;
+use mz_build_id::BuildId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -52,7 +53,7 @@ pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
 });
 
 #[cfg(target_os = "linux")]
-static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, Vec<u8>>>> = Lazy::new(|| {
+static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, BuildId>>> = Lazy::new(|| {
     // SAFETY: We are on Linux, and this is the only place in the program this
     // function is called.
     match unsafe { mz_build_id::all_build_ids() } {
@@ -65,7 +66,7 @@ static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, Vec<u8>>>> = Lazy::new(|| {
 });
 
 #[cfg(not(target_os = "linux"))]
-static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, Vec<u8>>>> = Lazy::new(|| {
+static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, BuildId>>> = Lazy::new(|| {
     error!("build ID fetching is only supported on Linux");
     None
 });
