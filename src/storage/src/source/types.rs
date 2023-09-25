@@ -39,8 +39,8 @@ use crate::source::RawSourceCreationConfig;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
-    type Key: timely::Data + MaybeLength;
-    type Value: timely::Data + MaybeLength;
+    type Key: timely::ExchangeData + MaybeLength;
+    type Value: timely::ExchangeData + MaybeLength;
     type Time: SourceTimestamp;
 
     /// Renders the source in the provided timely scope.
@@ -142,7 +142,7 @@ impl HealthStatusUpdate {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceMessage<Key, Value> {
     /// The message key
     pub key: Key,
