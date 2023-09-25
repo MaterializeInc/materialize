@@ -13,13 +13,13 @@ from typing import TextIO
 
 import pg8000
 
-log: TextIO | None
+logging: TextIO | None
 lock: threading.Lock
 
 
 def initialize_logging() -> None:
-    global log, lock
-    log = open("parallel-workload-queries.log", "w")
+    global logging, lock
+    logging = open("parallel-workload-queries.log", "w")
     lock = threading.Lock()
 
 
@@ -62,19 +62,26 @@ class Executor:
         except Exception as e:
             raise QueryError(str(e), "rollback")
 
+    def log(self, msg: str) -> None:
+        global logging, lock
+
+        if not logging:
+            return
+
+        thread_name = threading.current_thread().getName()
+
+        with lock:
+            print(f"[{thread_name}] {msg}", file=logging)
+            logging.flush()
+
     def execute(
         self, query: str, extra_info: str = "", explainable: bool = False
     ) -> None:
-        global log, lock
         if explainable and self.rng.choice([True, False]):
             query = f"EXPLAIN {query}"
         query += ";"
-        thread_name = threading.current_thread().getName()
         extra_info_str = f" ({extra_info})" if extra_info else ""
-        if log:
-            with lock:
-                print(f"[{thread_name}] {query}{extra_info_str}", file=log)
-                log.flush()
+        self.log(f"{query}{extra_info_str}")
         try:
             self.cur.execute(query)
         except Exception as e:
