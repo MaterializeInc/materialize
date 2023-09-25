@@ -20,7 +20,7 @@ use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
-use mz_storage_client::client::Update;
+use mz_storage_client::client::TimestamplessUpdate;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{warn, Instrument, Span};
 
@@ -341,20 +341,16 @@ impl Coordinator {
             .map(|(id, updates)| {
                 let updates = updates
                     .into_iter()
-                    .map(|(row, diff)| Update {
-                        row,
-                        diff,
-                        timestamp,
-                    })
+                    .map(|(row, diff)| TimestamplessUpdate { row, diff })
                     .collect();
-                (id, updates, advance_to)
+                (id, updates)
             })
             .collect();
 
         let append_fut = self
             .controller
             .storage
-            .append_table(appends)
+            .append_table(timestamp, advance_to, appends)
             .expect("invalid updates");
         if should_block {
             // We may panic here if the storage controller has shut down, because we cannot

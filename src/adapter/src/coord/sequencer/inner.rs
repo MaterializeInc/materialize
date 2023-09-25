@@ -263,15 +263,18 @@ impl Coordinator {
 
                     self.controller
                         .storage
-                        .create_collections(vec![(
-                            source_id,
-                            CollectionDescription {
-                                desc: source.desc.clone(),
-                                data_source,
-                                since: None,
-                                status_collection_id,
-                            },
-                        )])
+                        .create_collections(
+                            None,
+                            vec![(
+                                source_id,
+                                CollectionDescription {
+                                    desc: source.desc.clone(),
+                                    data_source,
+                                    since: None,
+                                    status_collection_id,
+                                },
+                            )],
+                        )
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
@@ -567,7 +570,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
-                let since_ts = self.peek_local_write_ts();
+                let register_ts = self.get_local_write_ts().await.timestamp;
 
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),
@@ -575,14 +578,9 @@ impl Coordinator {
                 );
                 self.controller
                     .storage
-                    .create_collections(vec![(table_id, collection_desc)])
+                    .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
-
-                let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
-                self.controller
-                    .storage
-                    .set_read_policy(vec![(table_id, policy)]);
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
@@ -591,16 +589,24 @@ impl Coordinator {
                 .await;
 
                 // Advance the new table to a timestamp higher than the current read timestamp so
-                // that the table is immediately readable.
-                let upper = since_ts.step_forward();
-                let appends = vec![(table_id, Vec::new(), upper)];
+                // that the table is immediately readable. Since we're applying the register ts, do
+                // this through group commit so all the other tables are immediately readable again,
+                // too.
+                let upper = register_ts.step_forward();
+                let appends = vec![(table_id, Vec::new())];
                 self.controller
                     .storage
-                    .append_table(appends)
+                    .append_table(register_ts, upper, appends)
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")
                     .unwrap_or_terminate("cannot fail to append");
+                self.apply_local_write(register_ts).await;
+
+                // Kick off a group commit so the new rest of the tables catch up to the new oracle read
+                // ts.
+                self.trigger_group_commit();
+
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -1048,15 +1054,18 @@ impl Coordinator {
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
-                    .create_collections(vec![(
-                        id,
-                        CollectionDescription {
-                            desc,
-                            data_source: DataSource::Other(DataSourceOther::Compute),
-                            since: Some(as_of.clone()),
-                            status_collection_id: None,
-                        },
-                    )])
+                    .create_collections(
+                        None,
+                        vec![(
+                            id,
+                            CollectionDescription {
+                                desc,
+                                data_source: DataSource::Other(DataSourceOther::Compute),
+                                since: Some(as_of.clone()),
+                                status_collection_id: None,
+                            },
+                        )],
+                    )
                     .await
                     .unwrap_or_terminate("cannot fail to append");
 
@@ -4529,15 +4538,18 @@ impl Coordinator {
 
                     self.controller
                         .storage
-                        .create_collections(vec![(
-                            source_id,
-                            CollectionDescription {
-                                desc: source.desc.clone(),
-                                data_source,
-                                since: None,
-                                status_collection_id,
-                            },
-                        )])
+                        .create_collections(
+                            None,
+                            vec![(
+                                source_id,
+                                CollectionDescription {
+                                    desc: source.desc.clone(),
+                                    data_source,
+                                    since: None,
+                                    status_collection_id,
+                                },
+                            )],
+                        )
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 

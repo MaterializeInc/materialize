@@ -231,10 +231,12 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandle(GlobalId),
-    Append(
-        Vec<(GlobalId, Vec<Update<T>>, T)>,
-        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
-    ),
+    Append {
+        write_ts: T,
+        advance_to: T,
+        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    },
     Shutdown,
 }
 
@@ -293,9 +295,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                                         // using it.
                                         write_handles.remove(&id);
                                     }
-                                    PersistTableWriteCmd::Append(updates, response) => {
+                                    PersistTableWriteCmd::Append{write_ts, advance_to, updates, tx} => {
                                         let mut ids = BTreeSet::new();
-                                        for (id, update, upper) in updates {
+                                        for (id, updates_no_ts) in updates {
                                             ids.insert(id);
                                             let (old_span, updates, old_upper) =
                                                 all_updates.entry(id).or_insert_with(|| {
@@ -316,10 +318,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                                                 // nothing.
                                                 old_span.follows_from(span.id());
                                             }
-                                            updates.extend(update);
-                                            old_upper.join_assign(&Antichain::from_elem(upper));
+                                            let updates_with_ts = updates_no_ts.into_iter().map(|x| Update{ row: x.row, timestamp: write_ts.clone(), diff: x.diff });
+                                            updates.extend(updates_with_ts);
+                                            old_upper.join_assign(&Antichain::from_elem(advance_to.clone()));
                                         }
-                                        all_responses.push((ids, response));
+                                        all_responses.push((ids, tx));
                                     }
                                     PersistTableWriteCmd::Shutdown => {
                                         shutdown = true;
@@ -453,7 +456,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     pub(crate) fn append(
         &self,
-        updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
+        write_ts: T,
+        advance_to: T,
+        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if updates.is_empty() {
@@ -461,7 +466,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                 .expect("rx has not been dropped at this point");
             rx
         } else {
-            self.send(PersistTableWriteCmd::Append(updates, tx));
+            self.send(PersistTableWriteCmd::Append {
+                write_ts,
+                advance_to,
+                updates,
+                tx,
+            });
             rx
         }
     }
