@@ -75,7 +75,6 @@ use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
@@ -3049,17 +3048,59 @@ impl Coordinator {
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let pipeline_result = {
-            self.explain_query_optimizer_pipeline(
-                raw_plan,
-                broken,
-                target_cluster,
+        let catalog = self.catalog();
+        let cluster_id = catalog
+            .resolve_target_cluster(target_cluster, ctx.session())?
+            .id;
+        let source_ids = raw_plan.depends_on();
+        let id_bundle = self
+            .index_oracle(cluster_id)
+            .sufficient_collections(&source_ids);
+
+        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
+            && raw_plan.contains_temporal()
+        {
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
+            timeline_context = TimelineContext::TimestampDependent;
+        }
+
+        // Acquire a timestamp (necessary for loading statistics).
+        let timestamp_context = self
+            .sequence_peek_timestamp(
                 ctx.session_mut(),
-                &row_set_finishing,
-            )
-            .with_subscriber(&optimizer_trace)
-            .await
-        };
+                &QueryWhen::Immediately,
+                cluster_id,
+                timeline_context,
+                &id_bundle,
+                &source_ids,
+                None, // no real-time recency
+            )?
+            .timestamp_context;
+        let query_as_of = timestamp_context.antichain();
+
+        // Load cardinality statistics.
+        let stats = self
+            .statistics_oracle(ctx.session(), &source_ids, query_as_of.clone(), true)
+            .await?;
+
+        let pipeline_result = tracing::dispatcher::with_default(
+            &tracing::dispatcher::Dispatch::from(&optimizer_trace),
+            || {
+                self.explain_query_optimizer_pipeline(
+                    raw_plan,
+                    broken,
+                    cluster_id,
+                    timestamp_context,
+                    query_as_of,
+                    ctx.session_mut(),
+                    stats,
+                    &row_set_finishing,
+                )
+            },
+        );
 
         let (used_indexes, fast_path_plan, dataflow_metainfo) = match pipeline_result {
             Ok((used_indexes, fast_path_plan, dataflow_metainfo)) => {
@@ -3130,12 +3171,15 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "info", name = "optimize", skip_all)]
-    async fn explain_query_optimizer_pipeline(
+    fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
         no_errors: bool,
-        target_cluster: TargetCluster,
+        cluster_id: mz_storage_types::instances::StorageInstanceId,
+        timestamp_context: TimestampContext<Timestamp>,
+        query_as_of: Antichain<Timestamp>,
         session: &mut Session,
+        stats: Box<dyn StatisticsOracle>,
         finishing: &Option<RowSetFinishing>,
     ) -> Result<(UsedIndexes, Option<FastPathPlan>, DataflowMetainfo), AdapterError> {
         use mz_repr::explain::trace_plan;
@@ -3161,11 +3205,8 @@ impl Coordinator {
             }
         }
 
-        let catalog = self.catalog();
-        let cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
         // Set parameter values for optimizing one-shot SELECT queries.
         let explainee_id = GlobalId::Explain;
-        let is_oneshot = true;
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
@@ -3179,22 +3220,6 @@ impl Coordinator {
         let decorrelated_plan = catch_unwind(no_errors, "hir_to_mir", || {
             raw_plan.optimize_and_lower(&OptimizerConfig {})
         })?;
-
-        let mut timeline_context =
-            self.validate_timeline_context(decorrelated_plan.depends_on())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && decorrelated_plan.contains_temporal()
-        {
-            // If the source IDs are timestamp independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timestamp dependent. This is
-            // required because `source_ids` doesn't contain functions.
-            timeline_context = TimelineContext::TimestampDependent;
-        }
-
-        let source_ids = decorrelated_plan.depends_on();
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(no_errors, "local", || {
@@ -3222,25 +3247,6 @@ impl Coordinator {
             |r| prep_relation_expr(state, r, style),
             |s| prep_scalar_expr(state, s, style),
         )?;
-
-        // Acquire a timestamp (necessary for loading statistics).
-        let timestamp_context = self
-            .sequence_peek_timestamp(
-                session,
-                &QueryWhen::Immediately,
-                cluster_id,
-                timeline_context,
-                &id_bundle,
-                &source_ids,
-                None, // no real-time recency
-            )?
-            .timestamp_context;
-        let query_as_of = timestamp_context.antichain();
-
-        // Load cardinality statistics.
-        let stats = self
-            .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
-            .await?;
 
         // Execute the `optimize/global` stage.
         let dataflow_metainfo = catch_unwind(no_errors, "global", || {
