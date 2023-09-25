@@ -28,9 +28,13 @@ use crate::client::{Client, Error};
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Region {
+    /// The connection info and metadata corresponding to this Region
     /// may not be set if the region is in the process
-    /// of being created
+    /// of being created (see [RegionState] for details)
     pub region_info: Option<RegionInfo>,
+
+    /// The state of this Region
+    pub region_state: RegionState,
 }
 
 /// Connection details for an active region
@@ -51,16 +55,41 @@ pub struct RegionInfo {
     pub enabled_at: Option<DateTime<Utc>>,
 }
 
+/// The state of a customer region
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegionState {
+    /// Enabled region
+    Enabled,
+
+    /// Enablement Pending
+    /// [region_info][Region::region_info] field will be `null` while the region is in this state
+    EnablementPending,
+
+    /// Deletion Pending
+    /// [region_info][Region::region_info] field will be `null` while the region is in this state
+    DeletionPending,
+
+    /// Soft deleted; Pending hard deletion
+    /// [region_info][Region::region_info] field will be `null` while the region is in this state
+    SoftDeleted,
+}
+
 impl Client {
     /// Get a customer region in a partciular cloud region for the current user.
     pub async fn get_region(&self, provider: CloudProvider) -> Result<Region, Error> {
         // Send request to the subdomain
         let req = self
-            .build_region_request(Method::GET, ["api", "region"], &provider)
+            .build_region_request(Method::GET, ["api", "region"], &provider, Some(1))
             .await?;
 
-        match self.send_request(req).await {
-            Ok(region) => Ok(region),
+        match self.send_request::<Region>(req).await {
+            Ok(region) => match region.region_state {
+                RegionState::SoftDeleted => Err(Error::EmptyRegion),
+                RegionState::DeletionPending => Err(Error::EmptyRegion),
+                RegionState::Enabled => Ok(region),
+                RegionState::EnablementPending => Ok(region),
+            },
             Err(Error::SuccesfullButNoContent) => Err(Error::EmptyRegion),
             Err(e) => Err(e),
         }
@@ -110,7 +139,7 @@ impl Client {
         };
 
         let req = self
-            .build_region_request(Method::PATCH, ["api", "region"], &cloud_provider)
+            .build_region_request(Method::PATCH, ["api", "region"], &cloud_provider, Some(1))
             .await?;
         let req = req.json(&body);
         // Creating a region can take some time
@@ -149,7 +178,7 @@ impl Client {
             loops += 1;
 
             let req = self
-                .build_region_request(Method::DELETE, ["api", "region"], &cloud_provider)
+                .build_region_request(Method::DELETE, ["api", "region"], &cloud_provider, Some(1))
                 .await?;
 
             // This timeout corresponds to the same in our cloud services tests.
