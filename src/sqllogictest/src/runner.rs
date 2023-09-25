@@ -1023,6 +1023,7 @@ impl<'a> RunnerInner<'a> {
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
             http_host_name: Some(host_name),
+            internal_console_redirect_url: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
