@@ -141,6 +141,7 @@ known_errors = [
     "uint2 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
+    "not supported for type date",
     "not supported for type time",
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
