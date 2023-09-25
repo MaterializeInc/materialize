@@ -323,6 +323,7 @@ impl Listeners {
 
         let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
         let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
+        let stash_schema = None;
 
         // Start the internal HTTP server.
         //
@@ -351,7 +352,11 @@ impl Listeners {
             let mut stash = match config
                 .controller
                 .postgres_factory
-                .open_savepoint(config.adapter_stash_url.clone(), tls.clone())
+                .open_savepoint(
+                    config.adapter_stash_url.clone(),
+                    stash_schema.clone(),
+                    tls.clone(),
+                )
                 .await
             {
                 Ok(stash) => stash,
@@ -416,7 +421,7 @@ impl Listeners {
         let stash = config
             .controller
             .postgres_factory
-            .open(config.adapter_stash_url.clone(), None, tls)
+            .open(config.adapter_stash_url.clone(), stash_schema, tls)
             .await?;
 
         // Load the adapter catalog from disk.

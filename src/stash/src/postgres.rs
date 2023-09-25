@@ -303,9 +303,10 @@ impl StashFactory {
     pub async fn open_savepoint(
         &self,
         url: String,
+        schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Savepoint, url, None, tls)
+        self.open_inner(TransactionMode::Savepoint, url, schema, tls)
             .await
     }
 
@@ -331,7 +332,7 @@ impl StashFactory {
         let mut conn = Stash {
             txn_mode,
             config: Arc::clone(&config),
-            schema,
+            schema: schema.clone(),
             tls: tls.clone(),
             client: None,
             reconnect: tokio::time::interval(RECONNECT_INTERVAL),
@@ -372,7 +373,7 @@ impl StashFactory {
                 while let Some(_) = sinces_rx.recv().await {}
             });
         } else {
-            Consolidator::start(config, tls, sinces_rx);
+            Consolidator::start(config, schema, tls, sinces_rx);
         }
 
         Ok(conn)
@@ -485,7 +486,7 @@ impl Stash {
         Fut: Future<Output = T>,
     {
         let factory = DebugStashFactory::try_new().await?;
-        let stash = factory.try_open_debug().await?;
+        let stash = factory.try_open().await?;
         Ok(f(stash).await)
     }
 
@@ -1098,6 +1099,7 @@ impl From<tokio_postgres::Error> for StashError {
 struct Consolidator {
     config: Arc<tokio::sync::Mutex<Config>>,
     tls: MakeTlsConnector,
+    schema: Option<String>,
     sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     consolidations: BTreeMap<Id, (Antichain<Timestamp>, Vec<oneshot::Sender<()>>)>,
 
@@ -1111,11 +1113,13 @@ struct Consolidator {
 impl Consolidator {
     fn start(
         config: Arc<tokio::sync::Mutex<Config>>,
+        schema: Option<String>,
         tls: MakeTlsConnector,
         sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     ) {
         let cons = Self {
             config,
+            schema,
             tls,
             sinces_rx,
             client: None,
@@ -1265,6 +1269,11 @@ impl Consolidator {
                 }
             },
         );
+        if let Some(schema) = &self.schema {
+            client
+                .execute(format!("SET search_path TO {schema}").as_str(), &[])
+                .await?;
+        }
         self.stmt_candidates = Some(
             client
                 .prepare(
@@ -1348,10 +1357,11 @@ impl DebugStashFactory {
             .expect("unable to create debug stash factory")
     }
 
-    /// Returns a new Stash.
-    pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
+    async fn try_open_inner(&self, mode: TransactionMode) -> Result<Stash, StashError> {
+        debug!("debug stash open: {mode:?}, {}", self.schema);
         self.stash_factory
-            .open(
+            .open_inner(
+                mode,
                 self.url.clone(),
                 Some(self.schema.clone()),
                 self.tls.clone(),
@@ -1360,11 +1370,34 @@ impl DebugStashFactory {
     }
 
     /// Returns a new Stash.
+    pub async fn try_open(&self) -> Result<Stash, StashError> {
+        self.try_open_inner(TransactionMode::Writeable).await
+    }
+
+    /// Returns the factory's Stash.
     ///
     /// # Panics
     /// Panics if it is unable to create a new stash.
-    pub async fn open_debug(&self) -> Stash {
-        self.try_open_debug()
+    pub async fn open(&self) -> Stash {
+        self.try_open().await.expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash in readonly mode.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_readonly(&self) -> Stash {
+        self.try_open_inner(TransactionMode::Readonly)
+            .await
+            .expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash in savepoint mode.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_savepoint(&self) -> Stash {
+        self.try_open_inner(TransactionMode::Savepoint)
             .await
             .expect("unable to open debug stash")
     }

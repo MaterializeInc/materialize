@@ -7897,7 +7897,7 @@ mod tests {
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
         {
-            let stash = debug_stash_factory.open_debug().await;
+            let stash = debug_stash_factory.open().await;
             let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -7919,7 +7919,7 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 2);
         }
         {
-            let stash = debug_stash_factory.open_debug().await;
+            let stash = debug_stash_factory.open().await;
             let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -8775,7 +8775,7 @@ mod tests {
         let debug_stash_factory = DebugStashFactory::new().await;
         let id = GlobalId::User(1);
         {
-            let stash = debug_stash_factory.open_debug().await;
+            let stash = debug_stash_factory.open().await;
             let mut catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -8806,7 +8806,7 @@ mod tests {
                 .expect("failed to transact");
         }
         {
-            let stash = debug_stash_factory.open_debug().await;
+            let stash = debug_stash_factory.open().await;
             let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -8902,7 +8902,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
         let debug_stash_factory = DebugStashFactory::new().await;
-        let stash = debug_stash_factory.open_debug().await;
+        let stash = debug_stash_factory.open().await;
         let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
             .await
             .expect("unable to open debug catalog");
@@ -8925,7 +8925,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
         let debug_stash_factory = DebugStashFactory::new().await;
-        let stash = debug_stash_factory.open_debug().await;
+        let stash = debug_stash_factory.open().await;
         let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
             .await
             .expect("unable to open debug catalog");
