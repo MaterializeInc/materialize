@@ -52,7 +52,7 @@ TIMESTAMP_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33"],
+    ["2023-06-01 11:22:33.44444"],
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
     TIMESTAMPTZ_TYPE_IDENTIFIER,
@@ -60,7 +60,7 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33"],
+    ["2023-06-01 11:22:33.44444", "2023-09-01 14:00:02.46464646"],
     has_time_zone=True,
 )
 INTERVAL_TYPE = DateTimeDataType(
