@@ -4728,6 +4728,7 @@ dependencies = [
  "backtrace",
  "bytesize",
  "cfg-if",
+ "flate2",
  "headers",
  "http",
  "include_dir",
