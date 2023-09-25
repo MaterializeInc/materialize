@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! In-memory metadata storage for the coordinator.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::time::Instant;
@@ -65,6 +67,11 @@ use crate::session::Session;
 use crate::util::{index_sql, ResultExt};
 use crate::AdapterError;
 
+/// The in-memory representation of the Catalog. This struct is not directly used to persist
+/// metadata to persistent storage. For persistent metadata see [`mz_catalog::DurableCatalogState`].
+///
+/// [`Serialize`] is implemented to create human readable dumps of the in-memory state, not for
+/// storing the contents of this struct on disk.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
     pub(super) database_by_name: BTreeMap<String, DatabaseId>,
