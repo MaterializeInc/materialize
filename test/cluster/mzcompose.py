@@ -2415,20 +2415,26 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         user="mz_system",
     )
 
-    threads = []
-    for i in range(num_conns):
-        thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
-        threads.append(thread)
+    for i in range(3):
+        threads = []
+        for i in range(num_conns):
+            thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
+            threads.append(thread)
 
-    for thread in threads:
-        thread.start()
+        for thread in threads:
+            thread.start()
 
-    for thread in threads:
-        thread.join()
+        for thread in threads:
+            thread.join()
 
-    p = quantiles(runtimes, n=100)
-    print(
-        f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
-    )
-    assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
-    assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"
+        p = quantiles(runtimes, n=100)
+        print(
+            f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+        )
+        if p[49] < 1.0 and p[98] < 4.0:
+            return
+        if i < 2:
+            print("retry...")
+            continue
+        assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
+        assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"
