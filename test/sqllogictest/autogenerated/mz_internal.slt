@@ -598,6 +598,7 @@ mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_comments
+mz_compute_delays_average
 mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
 mz_compute_delays_histogram_raw
