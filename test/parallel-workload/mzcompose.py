@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -16,7 +17,9 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(
-        external_cockroach=True, restart="on-failure", ports=["6975:6875", "6977:6877"]
+        external_cockroach=True,
+        restart="on-failure",
+        ports=["6975:6875", "6976:6876", "6977:6877"],
     ),
 ]
 
@@ -27,24 +30,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
     c.up("cockroach", "materialized")
-    try:
-        run(
-            "localhost",
-            c.default_port("materialized"),
-            c.port("materialized", 6877),
-            args.seed,
-            args.runtime,
-            Complexity(args.complexity),
-            Scenario(args.scenario),
-            args.threads,
-            c,
-        )
-    except Exception as e:
-        print("--- Execution of parallel-workload failed")
-        print(e)
-        # Don't fail the entire run. We ran into a crash,
-        # ci-logged-errors-detect will handle this if it's an unknown failure.
-        return
+    # try:
+    run(
+        "localhost",
+        c.default_port("materialized"),
+        c.port("materialized", 6877),
+        c.port("materialized", 6876),
+        args.seed,
+        args.runtime,
+        Complexity(args.complexity),
+        Scenario(args.scenario),
+        args.threads,
+        c,
+    )
+    # TODO: Only ignore errors that will be handled by parallel-workload, not others
+    # except Exception:
+    #     print("--- Execution of parallel-workload failed")
+    #     print_exc()
+    #     # Don't fail the entire run. We ran into a crash,
+    #     # ci-logged-errors-detect will handle this if it's an unknown failure.
+    #     return
     # Restart mz
     c.kill("materialized")
     c.up("materialized")
