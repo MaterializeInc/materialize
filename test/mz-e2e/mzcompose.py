@@ -137,7 +137,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Try to remove the username if it exist before trying to create one.
         try:
-            output = c.run("mz", "user", "remove",  user_email, capture_stderr=False)
+            output = c.run("mz", "user", "remove", user_email, capture_stderr=False)
             print("Warning: Email was present.")
         except:
             # It is ok if the command fails.
