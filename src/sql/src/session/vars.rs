@@ -81,6 +81,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
+use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_tracing::CloneableEnvFilter;
@@ -1711,7 +1712,7 @@ impl<'a> VarInput<'a> {
 }
 
 /// An owned version of [`VarInput`].
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum OwnedVarInput {
     /// See [`VarInput::Flat`].
     Flat(String),
@@ -4354,6 +4355,70 @@ impl ClientSeverity {
             ClientSeverity::Error.as_str(),
         ]
     }
+
+    /// Checks if a message of a given severity level should be sent to a client.
+    ///
+    /// The ordering of severity levels used for client-level filtering differs from the
+    /// one used for server-side logging in two aspects: INFO messages are always sent,
+    /// and the LOG severity is considered as below NOTICE, while it is above ERROR for
+    /// server-side logs.
+    ///
+    /// Postgres only considers the session setting after the client authentication
+    /// handshake is completed. Since this function is only called after client authentication
+    /// is done, we are not treating this case right now, but be aware if refactoring it.
+    pub fn should_output_to_client(&self, severity: &Severity) -> bool {
+        match (self, severity) {
+            // INFO messages are always sent
+            (_, Severity::Info) => true,
+            (ClientSeverity::Error, Severity::Error | Severity::Fatal | Severity::Panic) => true,
+            (
+                ClientSeverity::Warning,
+                Severity::Error | Severity::Fatal | Severity::Panic | Severity::Warning,
+            ) => true,
+            (
+                ClientSeverity::Notice,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice,
+            ) => true,
+            (
+                ClientSeverity::Info,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice,
+            ) => true,
+            (
+                ClientSeverity::Log,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice
+                | Severity::Log,
+            ) => true,
+            (
+                ClientSeverity::Debug1
+                | ClientSeverity::Debug2
+                | ClientSeverity::Debug3
+                | ClientSeverity::Debug4
+                | ClientSeverity::Debug5,
+                _,
+            ) => true,
+
+            (
+                ClientSeverity::Error,
+                Severity::Warning | Severity::Notice | Severity::Log | Severity::Debug,
+            ) => false,
+            (ClientSeverity::Warning, Severity::Notice | Severity::Log | Severity::Debug) => false,
+            (ClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
+            (ClientSeverity::Info, Severity::Log | Severity::Debug) => false,
+            (ClientSeverity::Log, Severity::Debug) => false,
+        }
+    }
 }
 
 impl Value for ClientSeverity {
@@ -4756,5 +4821,47 @@ impl Value for IntervalStyle {
 
     fn format(&self) -> String {
         self.as_str().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_should_output_to_client() {
+        #[rustfmt::skip]
+        let test_cases = [
+            (ClientSeverity::Debug1, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug2, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug3, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug4, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug5, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Log, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Log, vec![Severity::Debug], false),
+            (ClientSeverity::Info, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Info, vec![Severity::Debug, Severity::Log], false),
+            (ClientSeverity::Notice, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Notice, vec![Severity::Debug, Severity::Log], false),
+            (ClientSeverity::Warning, vec![Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Warning, vec![Severity::Debug, Severity::Log, Severity::Notice], false),
+            (ClientSeverity::Error, vec![Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Error, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning], false),
+        ];
+
+        for test_case in test_cases {
+            run_test(test_case)
+        }
+
+        fn run_test(test_case: (ClientSeverity, Vec<Severity>, bool)) {
+            let client_min_messages_setting = test_case.0;
+            let expected = test_case.2;
+            for message_severity in test_case.1 {
+                assert!(
+                    client_min_messages_setting.should_output_to_client(&message_severity)
+                        == expected
+                )
+            }
+        }
     }
 }

@@ -12,13 +12,15 @@
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
-use async_trait::async_trait;
+use crate::error::ErrorExt;
+use crate::task;
+use anyhow::bail;
 use futures::stream::{Stream, StreamExt};
-use mz_ore::error::ErrorExt;
-use mz_ore::task;
+use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -52,6 +54,7 @@ pub trait ConnectionStream: Stream<Item = io::Result<TcpStream>> + Unpin + Send 
 impl<T> ConnectionStream for T where T: Stream<Item = io::Result<TcpStream>> + Unpin + Send {}
 
 /// A handle to a listener created by [`listen`].
+#[derive(Debug)]
 pub struct ListenerHandle {
     local_addr: SocketAddr,
     _trigger: oneshot::Sender<()>,
@@ -133,14 +136,105 @@ where
     }
 }
 
-#[async_trait]
-impl Server for mz_pgwire::Server {
-    const NAME: &'static str = "pgwire";
+/// Configures a server's TLS encryption and authentication.
+#[derive(Clone, Debug)]
+pub struct TlsConfig {
+    /// The SSL context used to manage incoming TLS negotiations.
+    pub context: SslContext,
+    /// The TLS mode.
+    pub mode: TlsMode,
+}
 
-    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
-        // Using fully-qualified syntax means we won't accidentally call
-        // ourselves (i.e., silently infinitely recurse) if the name or type of
-        // `mz_pgwire::Server::handle_connection` changes.
-        Box::pin(mz_pgwire::Server::handle_connection(self, conn))
+/// Specifies how strictly to enforce TLS encryption.
+#[derive(Debug, Clone, Copy)]
+pub enum TlsMode {
+    /// Allow TLS encryption.
+    Allow,
+    /// Require that clients negotiate TLS encryption.
+    Require,
+}
+
+/// Configures TLS encryption for connections.
+#[derive(Debug, Clone)]
+pub struct TlsCertConfig {
+    /// The path to the TLS certificate.
+    pub cert: PathBuf,
+    /// The path to the TLS key.
+    pub key: PathBuf,
+}
+
+impl TlsCertConfig {
+    /// Returns the SSL context to use in TlsConfigs.
+    pub fn context(&self) -> Result<SslContext, anyhow::Error> {
+        // Mozilla publishes three presets: old, intermediate, and modern. They
+        // recommend the intermediate preset for general purpose servers, which
+        // is what we use, as it is compatible with nearly every client released
+        // in the last five years but does not include any known-problematic
+        // ciphers. We once tried to use the modern preset, but it was
+        // incompatible with Fivetran, and presumably other JDBC-based tools.
+        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+        builder.set_certificate_chain_file(&self.cert)?;
+        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
+        Ok(builder.build().into_context())
+    }
+}
+
+/// Command line arguments for TLS.
+#[derive(Debug, Clone, clap::Parser)]
+pub struct TlsCliArgs {
+    /// How stringently to demand TLS authentication and encryption.
+    ///
+    /// If set to "disable", then environmentd rejects HTTP and PostgreSQL
+    /// connections that negotiate TLS.
+    ///
+    /// If set to "require", then environmentd requires that all HTTP and
+    /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
+    /// rejected.
+    #[clap(
+        long, env = "TLS_MODE",
+        possible_values = &["disable", "require"],
+        default_value = "disable",
+        default_value_ifs = &[
+            ("frontegg-tenant", None, Some("require")),
+        ],
+        value_name = "MODE",
+    )]
+    tls_mode: String,
+    /// Certificate file for TLS connections.
+    #[clap(
+        long,
+        env = "TLS_CERT",
+        requires = "tls-key",
+        required_if_eq_any(&[("tls-mode", "require")]),
+        value_name = "PATH"
+    )]
+    tls_cert: Option<PathBuf>,
+    /// Private key file for TLS connections.
+    #[clap(
+        long,
+        env = "TLS_KEY",
+        requires = "tls-cert",
+        required_if_eq_any(&[("tls-mode", "require")]),
+        value_name = "PATH"
+    )]
+    tls_key: Option<PathBuf>,
+}
+
+impl TlsCliArgs {
+    /// Convert args into configuration.
+    pub fn into_config(self) -> Result<Option<TlsCertConfig>, anyhow::Error> {
+        if self.tls_mode == "disable" {
+            if self.tls_cert.is_some() {
+                bail!("cannot specify --tls-mode=disable and --tls-cert simultaneously");
+            }
+            if self.tls_key.is_some() {
+                bail!("cannot specify --tls-mode=disable and --tls-key simultaneously");
+            }
+            Ok(None)
+        } else {
+            let cert = self.tls_cert.unwrap();
+            let key = self.tls_key.unwrap();
+            Ok(Some(TlsCertConfig { cert, key }))
+        }
     }
 }

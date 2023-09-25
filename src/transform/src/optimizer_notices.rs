@@ -98,6 +98,17 @@ impl OptimizerNotice {
             OptimizerNotice::IndexKeyEmpty => true,
         }
     }
+
+    /// A notice name, which will be applied as the label on the metric that is counting notices
+    /// labelled by notice type.
+    pub fn metric_label(&self) -> &str {
+        match self {
+            OptimizerNotice::IndexTooWideForLiteralConstraints(..) => {
+                "IndexTooWideForLiteralConstraints"
+            }
+            OptimizerNotice::IndexKeyEmpty => "IndexKeyEmpty",
+        }
+    }
 }
 
 #[derive(Debug)]

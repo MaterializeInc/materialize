@@ -50,6 +50,8 @@ pub struct ContextLoadArgs {
     pub no_color: bool,
     /// Global optional region.
     pub region: Option<String>,
+    /// Global optional profile.
+    pub profile: Option<String>,
 }
 
 /// Context for a basic command.
@@ -58,6 +60,7 @@ pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
     region: Option<String>,
+    profile: Option<String>,
 }
 
 impl Context {
@@ -68,6 +71,7 @@ impl Context {
             output_format,
             no_color,
             region,
+            profile,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
         let config_file_path = match config_file_path {
@@ -79,6 +83,7 @@ impl Context {
             config_file,
             output_formatter: OutputFormatter::new(output_format, no_color),
             region,
+            profile,
         })
     }
 
@@ -108,12 +113,21 @@ impl Context {
         Ok(None)
     }
 
+    /// Returns the global profile option.
+    pub fn get_global_profile(&self) -> Option<String> {
+        self.profile.clone()
+    }
+
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
-    pub fn activate_profile(self, name: Option<String>) -> Result<ProfileContext, Error> {
-        let profile_name = name.unwrap_or_else(|| self.config_file.profile().into());
+    pub fn activate_profile(self) -> Result<ProfileContext, Error> {
+        let profile_name = self
+            .profile
+            .clone()
+            .unwrap_or_else(|| self.config_file.profile().into());
         let config_file = self.config_file.clone();
+
         let profile = config_file.load_profile(&profile_name)?;
 
         // Parse the endpoint form the string in the config to URL.
@@ -235,6 +249,15 @@ impl ProfileContext {
     pub fn output_formatter(&self) -> &OutputFormatter {
         &self.context.output_formatter
     }
+
+    /// Returns the context profile.
+    /// If a global profile has been set, it will return the global profile.
+    /// Otherwise returns the config's profile.
+    pub fn get_profile(&self) -> String {
+        self.context
+            .get_global_profile()
+            .unwrap_or(self.config_file().profile().to_string())
+    }
 }
 
 /// Context for a command that requires a valid authentication profile
@@ -294,6 +317,14 @@ impl RegionContext {
     /// Returns the configuration file loaded by this context.
     pub fn config_file(&self) -> &ConfigFile {
         self.context.config_file()
+    }
+
+    /// Returns the region profile.
+    /// As in the context, if a global profile has been set,
+    /// it will return the global profile.
+    /// Otherwise returns the config's profile.
+    pub fn get_profile(&self) -> String {
+        self.context.get_profile()
     }
 
     /// Returns the output_formatter associated with this context.

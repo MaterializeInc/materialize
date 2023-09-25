@@ -1539,7 +1539,7 @@ fn test_max_request_size() {
 
     // pgwire
     {
-        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param_size = mz_pgwire_common::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -3033,4 +3033,37 @@ fn copy_from() {
         .query("SELECT * FROM copy_from_test", &[])
         .expect("success");
     assert_eq!(rows.len(), 2);
+}
+
+// Test that a cluster dropped mid transaction results in an error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn concurrent_cluster_drop() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut txn_client = server.connect(postgres::NoTls).unwrap();
+    let mut drop_client = server.connect(postgres::NoTls).unwrap();
+
+    txn_client
+        .execute("CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));", &[])
+        .expect("failed to create cluster");
+    txn_client
+        .execute("CREATE TABLE t (a INT);", &[])
+        .expect("failed to create cluster");
+
+    txn_client
+        .execute("SET CLUSTER TO c", &[])
+        .expect("success");
+    txn_client.execute("BEGIN", &[]).expect("success");
+    let _ = txn_client.query("SELECT * FROM t", &[]).expect("success");
+
+    drop_client.execute("DROP CLUSTER c", &[]).expect("success");
+
+    let err = txn_client
+        .execute("SELECT * FROM t", &[])
+        .expect_err("error");
+
+    assert_eq!(
+        err.as_db_error().unwrap().message(),
+        "the transaction's active cluster has been dropped"
+    );
 }

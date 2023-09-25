@@ -28,7 +28,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
-use tracing::{error, event, info, warn, Level};
+use tracing::{debug, event, info, warn, Level};
 
 use crate::upgrade;
 use crate::{
@@ -921,6 +921,7 @@ impl Stash {
                             35 => upgrade::v35_to_v36::upgrade(&mut tx).await?,
                             36 => upgrade::v36_to_v37::upgrade(),
                             37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
+                            38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -1165,7 +1166,7 @@ impl Consolidator {
                             Ok(()) => break,
                             Err(e) => {
                                 attempt += 1;
-                                error!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
+                                debug!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
                                 self.client = None;
                                 retry.next().await;
                             }

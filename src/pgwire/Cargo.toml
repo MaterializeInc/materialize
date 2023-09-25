@@ -17,14 +17,15 @@ itertools = "0.10.5"
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-ore = { path = "../ore", features = ["tracing_"] }
+mz-ore = { path = "../ore", features = ["tracing_", "server"] }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
+mz-pgwire-common = { path = "../pgwire-common" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 postgres = { version = "0.19.5" }
-tokio = "1.24.2"
+tokio = "1.32.0"
 tokio-stream = "0.1.11"
 tokio-openssl = "0.6.3"
 tokio-util = { version = "0.7.4", features = ["codec"] }

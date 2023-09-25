@@ -443,6 +443,8 @@ pub enum TargetCluster {
     Introspection,
     /// The current user's active cluster.
     Active,
+    /// The cluster selected at the start of a transaction.
+    Transaction(ClusterId),
 }
 
 /// A struct to hold information about the validity of plans and if they should be abandoned after

@@ -60,8 +60,8 @@ use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
     CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-    EnvironmentId, IdReference, NameReference, RoleAttributes, RoleMembership, SessionCatalog,
-    SystemObjectType, TypeReference,
+    EnvironmentId, IdReference, NameReference, RoleAttributes, RoleMembership, RoleVars,
+    SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -2033,11 +2033,16 @@ pub struct Role {
     pub oid: u32,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
+    pub vars: RoleVars,
 }
 
 impl Role {
     pub fn is_user(&self) -> bool {
         self.id.is_user()
+    }
+
+    pub fn vars<'a>(&'a self) -> impl Iterator<Item = (&'a str, &'a OwnedVarInput)> {
+        self.vars.map.iter().map(|(name, val)| (name.as_str(), val))
     }
 }
 
@@ -2048,6 +2053,7 @@ impl From<Role> for mz_catalog::Role {
             name: role.name,
             attributes: role.attributes,
             membership: role.membership,
+            vars: role.vars,
         }
     }
 }
@@ -3712,6 +3718,7 @@ impl Catalog {
             name,
             attributes,
             membership,
+            vars,
         } in roles
         {
             let oid = catalog.allocate_oid()?;
@@ -3724,6 +3731,7 @@ impl Catalog {
                     oid,
                     attributes,
                     membership,
+                    vars,
                 },
             );
         }
@@ -5412,6 +5420,10 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
+    pub fn get_mz_introspections_cluster_id(&self) -> &ClusterId {
+        &self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER).id
+    }
+
     /// Resolves a [`Cluster`] for a TargetCluster.
     pub fn resolve_target_cluster(
         &self,
@@ -5423,6 +5435,9 @@ impl Catalog {
                 Ok(self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER))
             }
             TargetCluster::Active => self.active_cluster(session),
+            TargetCluster::Transaction(cluster_id) => self
+                .try_get_cluster(cluster_id)
+                .ok_or(AdapterError::ConcurrentClusterDrop),
         }
     }
 
@@ -6384,8 +6399,13 @@ impl Catalog {
                         )));
                     }
                     let membership = RoleMembership::new();
-                    let id =
-                        tx.insert_user_role(name.clone(), attributes.clone(), membership.clone())?;
+                    let vars = RoleVars::default();
+                    let id = tx.insert_user_role(
+                        name.clone(),
+                        attributes.clone(),
+                        membership.clone(),
+                        vars.clone(),
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -6409,6 +6429,7 @@ impl Catalog {
                             oid,
                             attributes,
                             membership,
+                            vars,
                         },
                     );
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {

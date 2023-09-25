@@ -55,11 +55,12 @@ k8s-openapi = { version = "0.19.0", features = ["schemars", "v1_25"] }
 kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
 kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
+mio = { version = "0.8.8", features = ["net", "os-ext"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -98,7 +99,7 @@ syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extr
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.18", features = ["extra-traits", "full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
-tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.32.0", features = ["full", "stats", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
@@ -158,11 +159,12 @@ k8s-openapi = { version = "0.19.0", features = ["schemars", "v1_25"] }
 kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
 kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.142", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.11.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
+mio = { version = "0.8.8", features = ["net", "os-ext"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
@@ -202,7 +204,7 @@ syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.18", features = ["extra
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.32.0", features = ["full", "stats", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.11", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
