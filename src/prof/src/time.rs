@@ -49,7 +49,7 @@ pub async unsafe fn prof_time(
             Some(thread_name.as_ref())
         };
         let stack = WeightedStack { addrs, weight };
-        profile.push(stack, anno);
+        profile.push_stack(stack, anno);
     }
 
     Ok(profile)

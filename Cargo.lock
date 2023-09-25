@@ -4805,6 +4805,7 @@ dependencies = [
  "include_dir",
  "libc",
  "mime",
+ "mz-build-id",
  "mz-build-info",
  "mz-http-util",
  "mz-npm",
