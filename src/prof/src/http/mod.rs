@@ -24,9 +24,9 @@ use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
-        use disabled::{handle_get, handle_post};
+        use disabled::{handle_get, handle_post, handle_get_heap};
     } else {
-        use enabled::{handle_get, handle_post};
+        use enabled::{handle_get, handle_post, handle_get_heap};
     }
 }
 
@@ -58,6 +58,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             "/",
             routing::post(move |form| handle_post(form, build_info)),
         )
+        .route("/heap", routing::get(handle_get_heap))
         .route("/static/*path", routing::get(handle_static))
 }
 
@@ -223,6 +224,14 @@ mod disabled {
                 format!("unrecognized `action` parameter: {}", action),
             )),
         }
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn handle_get_heap() -> Result<(), (StatusCode, String)> {
+        Err((
+            StatusCode::BAD_REQUEST,
+            "This software was compiled without heap profiling support.".to_string(),
+        ))
     }
 }
 
@@ -431,6 +440,18 @@ mod enabled {
             )),
             None => Ok(render_template(prof_ctl, build_info).await.into_response()),
         }
+    }
+
+    pub async fn handle_get_heap() -> Result<impl IntoResponse, (StatusCode, String)> {
+        let mut prof_ctl = PROF_CTL.as_ref().unwrap().lock().await;
+        let dump_file = prof_ctl
+            .dump()
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let dump_reader = BufReader::new(dump_file);
+        let profile = parse_jeheap(dump_reader)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
+        Ok(pprof)
     }
 
     async fn render_template(
