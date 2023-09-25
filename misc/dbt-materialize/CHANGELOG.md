@@ -9,6 +9,8 @@
 
 * Support cancelling outstanding queries when pressing Ctrl+C.
 
+* Make `dbt init` generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/).
+
 ## 1.5.1 - 2023-07-24
 
 * Enable the `indexes` config for `table` materializations.
