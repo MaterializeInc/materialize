@@ -18,11 +18,13 @@ To run the mz-e2e test manually, a set of environment variables need to be made 
 
 ```
 export MZ_CLI_APP_PASSWORD=...
-export NIGHTLY_CANARY_USERNAME=...
+export NIGHTLY_MZ_USERNAME=...
 export BUILDKITE_COMMIT=...
 ```
 
-- `MZ_CLI_APP_PASSWORD` and `NIGHTLY_CANARY_USERNAME` are stored as Pulumi secrets in the i2 repository.
+- `MZ_CLI_APP_PASSWORD` is stored as Pulumi secrets in the i2 repository.
+
+- `NIGHTLY_MZ_USERNAME` is not defined in the i2 repository. A default is used "infra+bot@materialize.com".
 
 - `BUILDKITE_COMMIT` must be the full Git SHA whose containers are already available on DockerHub.
 
@@ -32,7 +34,7 @@ your own cloud account, if you do not mind your region being destroyed by the te
 Once the environment variables have been set, you can run:
 
 ```
-cd test/cloud-canary
+cd test/mz-e2e
 ./mzcompose run default
 ```
 

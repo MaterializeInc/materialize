@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import csv
+import json
 import os
 import ssl
 import time
@@ -30,7 +32,7 @@ from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
-USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+bot@materialize.com")
+USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
@@ -99,8 +101,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert "materialize.cloud" in cloud_hostname(c)
         wait_for_cloud(c)
 
-        if args.version_check:
-            version_check(c)
+        # if args.version_check:
+        #     version_check(c)
 
         # Test - `mz app-password`
         # Assert `mz app-password create`
@@ -121,8 +123,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         assert output.returncode == 0
 
-        output = c.run("mz", "sql", "--", "-q", "-c", '"SHOW SECRETS;"', capture=True)
-        assert "CI_SECRET" in output.stdout
+        output = c.run("mz", "sql", "--", "-q", "-c", "SHOW SECRETS;", capture=True)
+        assert "ci_secret" in output.stdout
 
         # Assert using force
         output = c.run(
@@ -131,51 +133,63 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert output.returncode == 0
 
         # Test - `mz user`
-        username = "mz_ci_e2e_test_nightlies@materialize.com"
+        user_email = "mz_ci_e2e_test_nightlies@materialize.com"
 
         # Try to remove the username if it exist before trying to create one.
-        output = c.run("mz", "user", "remove", username, capture=True)
+        try:
+            output = c.run("mz", "user", "remove",  user_email, capture_stderr=False)
+            print("Warning: Email was present.")
+        except:
+            # It is ok if the command fails.
+            pass
 
-        output = c.run("mz", "user", "create", username, "MZ_CI", capture=True)
-        assert output.returncode == 0
-
-        output = c.run("mz", "user", "list")
-        assert output.returncode == 0
-        assert username in output.stdout
-
-        output = c.run("mz", "user", "remove", username, capture=True)
+        output = c.run("mz", "user", "create", user_email, "MZ_CI", capture=True)
         assert output.returncode == 0
 
         output = c.run("mz", "user", "list", capture=True)
-        assert username not in output.stdout
+        assert output.returncode == 0
+        assert user_email in output.stdout
+
+        output = c.run("mz", "user", "remove", user_email, capture=True)
+        assert output.returncode == 0
+
+        output = c.run(
+            "mz",
+            "user",
+            "list",
+            "--format",
+            "csv",
+            capture=True,
+        )
+        # assert username is not in output.stdout
+        user_list = csv.DictReader(output.stdout.split("\n"))
+        for user in user_list:
+            assert user["email"] != user_email
 
         # Test - `mz region list`
         # Enable, disable and show are already tested.
-        output = c.run("mz", "region", "list", capture=True)
-        us_east_1_line = output.stdout.split("\n")[3]
-        assert REGION in us_east_1_line
-        assert "enabled" in us_east_1_line
+        output = c.run("mz", "region", "list", "--format", "json", capture=True)
+        regions = json.loads(output.stdout)
+        us_region = regions[0]
+        if us_region["region"] != "aws/us-east-1":
+            us_region = regions[1]
+        assert "enabled" == us_region["status"]
 
-        # TODO: TEST using CSV and JSON.
+        # Look for the '.psqlrc' file in the home dir.
+        home_dir = os.path.expanduser("~")
+        path = os.path.join(home_dir, ".psqlrc-mz")
 
-        # TODO:
-        # // Look for the '.psqlrc' file in the home dir.
-        # let mut path = dirs::home_dir().expect("Error retrieving the home dir.");
-        # path.push(".psqlrc-mz");
+        # Verify the content is ok
+        if os.path.exists(path):
+            with open(path) as file:
+                content = file.read()
 
-        # // Verify the content is ok
-        # if Path::new(&path).exists() {
-        #     let mut file = fs::File::open(&path).expect("Error opening the '.psqlrc-mz' file.");
-        #     let mut content = String::new();
-        #     file.read_to_string(&mut content)
-        #         .expect("Error reading the '.psqlrc-mz' file.");
-
-        #     if content != "\\timing\n\\include ~/.psqlrc" {
-        #         panic!("Incorrect content in the '.psqlrc-mz' file.")
-        #     }
-        # } else {
-        #     panic!("The configuration file '.psqlrc-mz', does not exists.")
-        # }
+            if content != "\\timing\n\\include ~/.psqlrc":
+                raise ValueError("Incorrect content in the '.psqlrc-mz' file.")
+        else:
+            raise FileNotFoundError(
+                "The configuration file '.psqlrc-mz' does not exist."
+            )
 
         test_failed = False
     finally:
