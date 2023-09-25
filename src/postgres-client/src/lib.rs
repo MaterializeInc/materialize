@@ -96,9 +96,9 @@ use std::time::{Duration, Instant};
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{
     Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
-    RecyclingMethod, Runtime,
+    RecyclingMethod, Runtime, Status,
 };
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::SYSTEM_TIME;
 use tracing::debug;
 
@@ -235,9 +235,19 @@ impl PostgresClient {
         })
     }
 
+    fn status_metrics(&self, status: Status) {
+        self.metrics
+            .connpool_available
+            .set(f64::cast_lossy(status.available));
+        self.metrics.connpool_size.set(u64::cast_from(status.size));
+        // Don't bother reporting the maximum size of the pool... we know that from config.
+    }
+
     /// Gets connection from the pool or waits for one to become available.
     pub async fn get_connection(&self) -> Result<Object, PoolError> {
         let start = Instant::now();
+        // note that getting the pool size here requires briefly locking the pool
+        self.status_metrics(self.pool.status());
         let res = self.pool.get().await;
         if let Err(PoolError::Backend(err)) = &res {
             debug!("error establishing connection: {}", err);
@@ -247,10 +257,7 @@ impl PostgresClient {
             .connpool_acquire_seconds
             .inc_by(start.elapsed().as_secs_f64());
         self.metrics.connpool_acquires.inc();
-        // note that getting the pool size here requires briefly locking the pool
-        self.metrics
-            .connpool_size
-            .set(u64::cast_from(self.pool.status().size));
+        self.status_metrics(self.pool.status());
         res
     }
 }

@@ -4844,6 +4844,7 @@ dependencies = [
  "deadpool-postgres",
  "mz-ore",
  "mz-tls-util",
+ "prometheus",
  "tokio",
  "tracing",
  "workspace-hack",
