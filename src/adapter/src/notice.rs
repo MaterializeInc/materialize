@@ -180,6 +180,7 @@ impl AdapterNotice {
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+            AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
         }
     }
 
