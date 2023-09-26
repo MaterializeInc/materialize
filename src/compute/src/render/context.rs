@@ -30,6 +30,7 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
 use mz_timely_util::probe::ProbeNotify;
 use timely::communication::message::RefOrMut;
+use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
@@ -1025,37 +1026,20 @@ where
             self.collection =
                 Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until));
         }
-        for (key, permutation, thinning) in collections.arranged {
+        for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
-                let key2 = key.clone();
 
                 let (key_types, val_types) =
-                    derive_key_val_types(&permutation, &thinning, collections.types.as_ref());
+                    derive_key_val_types(&key, &thinning, collections.types.as_ref());
 
                 let (oks, errs) = self
                     .collection
                     .clone()
                     .expect("Collection constructed above");
-
-                let mut row_buf = Row::default();
-
-                let mut datums = DatumVec::new();
-                let (oks_keyed, errs_keyed) = oks.map_fallible("FormArrangementKey", move |row| {
-                    // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
-                    let datums = datums.borrow_with(&row);
-                    let temp_storage = RowArena::new();
-                    row_buf
-                        .packer()
-                        .try_extend(key2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                    let key_row = row_buf.clone();
-                    row_buf.packer().extend(thinning.iter().map(|c| datums[*c]));
-                    let val_row = row_buf.clone();
-                    Ok::<(Row, Row), DataflowError>((key_row, val_row))
-                });
-
-                let oks = Self::specialized_arrange(&name, oks_keyed, key_types, val_types);
+                let (oks, errs_keyed) =
+                    Self::specialized_arrange(&name, oks, &key, &thinning, key_types, val_types);
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
                 let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
@@ -1070,26 +1054,88 @@ where
     /// type descriptions.
     fn specialized_arrange(
         name: &String,
-        oks: Collection<S, (Row, Row), i64>,
-        _key_types: Vec<ColumnType>,
+        oks: Collection<S, Row, i64>,
+        key: &Vec<MirScalarExpr>,
+        thinning: &Vec<usize>,
+        key_types: Vec<ColumnType>,
         _val_types: Vec<ColumnType>,
-    ) -> SpecializedArrangement<S> {
-        // TODO(vmarcos) Specialize arrangements to types here!
-        let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
-        let flavor = SpecializedArrangement::RowRow(oks);
-        flavor
+    ) -> (SpecializedArrangement<S>, Collection<S, DataflowError, i64>) {
+        if Bytes9::valid_schema(&key_types) {
+            // 9-byte key specialization.
+            let (oks, errs) = oks.map_fallible(
+                "FormArrangementKey [9-byte]",
+                specialized_arrangement_key(
+                    key.clone(),
+                    thinning.clone(),
+                    Some(key_types.clone()),
+                    None,
+                ),
+            );
+            let name = &format!("{} [9-byte]", name);
+            let oks = oks.mz_arrange::<RowSpine<Bytes9, Row, _, _>>(name);
+            (SpecializedArrangement::Bytes9Row(key_types, oks), errs)
+        } else {
+            // Catch-all: Just use RowRow.
+            let (oks, errs) = oks.map_fallible(
+                "FormArrangementKey",
+                specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
+            );
+            let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
+            (SpecializedArrangement::RowRow(oks), errs)
+        }
     }
 }
 
 /// Derives the column types of the key and values of an arrangement based on its column
 /// permutation, value thinning, and column types describing the full row schema.
 fn derive_key_val_types(
-    _permutation: &BTreeMap<usize, usize>,
-    _thinning: &Vec<usize>,
-    _types: Option<&Vec<ColumnType>>,
+    key: &Vec<MirScalarExpr>,
+    thinning: &Vec<usize>,
+    types: Option<&Vec<ColumnType>>,
 ) -> (Vec<ColumnType>, Vec<ColumnType>) {
-    // TODO(vmarcos): Calculate types here!
-    (Vec::new(), Vec::new())
+    let mut key_types = Vec::new();
+    let mut val_types = Vec::new();
+    if let Some(types) = types {
+        for i in 0..key.len() {
+            key_types.push(key[i].typ(types).clone());
+        }
+        for c in thinning.iter() {
+            val_types.push(types[*c].clone());
+        }
+    }
+    (key_types, val_types)
+}
+
+/// Obtains a function that maps input rows to (key, value) pairs according to
+/// the given key and thinning expressions. This function allows for specialization
+/// of key and value types and is intended to use to form arrangement keys.
+fn specialized_arrangement_key<K, V>(
+    key: Vec<MirScalarExpr>,
+    thinning: Vec<usize>,
+    key_types: Option<Vec<ColumnType>>,
+    val_types: Option<Vec<ColumnType>>,
+) -> impl FnMut(Row) -> Result<(K, V), DataflowError>
+where
+    K: Columnation + Data + FromRowByTypes,
+    V: Columnation + Data + FromRowByTypes,
+{
+    let mut key_buf = Row::default();
+    let mut key_datums = DatumVec::new();
+    let mut datums = DatumVec::new();
+    move |row| {
+        // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
+        let datums = datums.borrow_with(&row);
+        let temp_storage = RowArena::new();
+        key_buf
+            .packer()
+            .try_extend(key.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+        let key_datums = key_datums.borrow_with(&key_buf);
+        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+        Ok::<(K, V), DataflowError>((
+            K::from_datum_iter(key_datums.iter(), key_types.as_deref()),
+            V::from_datum_iter(val_datum_iter, val_types.as_deref()),
+        ))
+    }
 }
 
 struct PendingWork<C>

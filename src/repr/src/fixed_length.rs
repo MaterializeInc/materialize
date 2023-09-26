@@ -537,6 +537,19 @@ pub(super) fn fixed_length(typ: &ScalarType) -> Option<usize> {
     }
 }
 
+impl<const N: usize> BytesN<N> {
+    /// Evaluates whether the provided schema can be represented by a BytesN instance.
+    pub fn valid_schema(types: &[ColumnType]) -> bool {
+        if types.len() == 1 {
+            let typ = types.first().expect("must contain one element");
+            if let Some(len) = fixed_length(&typ.scalar_type) {
+                return len < N;
+            }
+        }
+        false
+    }
+}
+
 impl<const N: usize> IntoRowByTypes for BytesN<N> {
     /// This implementation employs the schema provided by `types` to decode
     /// the N-byte value into `row_buf`, returning a reference to it.
