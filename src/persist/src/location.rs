@@ -10,6 +10,7 @@
 //! Abstractions over files, cloud storage, etc used in persistence.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -17,6 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
+use mz_ore::task::JoinHandleExt;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -320,6 +322,18 @@ pub enum CaSResult {
     ExpectationMismatch,
 }
 
+/// Wraps all calls to a backing store in a new tokio task. This adds extra overhead,
+/// but insulates the system from callers who fail to drive futures promptly to completion,
+/// which can cause timeouts or resource exhaustion in a store.
+#[derive(Debug)]
+pub struct Tasked<A>(pub Arc<A>);
+
+impl<A> Tasked<A> {
+    fn clone_backing(&self) -> Arc<A> {
+        Arc::clone(&self.0)
+    }
+}
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -370,6 +384,60 @@ pub trait Consensus: std::fmt::Debug {
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
+}
+
+#[async_trait]
+impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::head",
+            async move { backing.head(&key).await },
+        )
+        .wait_and_assert_finished()
+        .await
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &str,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<CaSResult, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::cas", async move {
+            backing.compare_and_set(&key, expected, new).await
+        })
+        .wait_and_assert_finished()
+        .await
+    }
+
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::scan", async move {
+            backing.scan(&key, from, limit).await
+        })
+        .wait_and_assert_finished()
+        .await
+    }
+
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::truncate", async move {
+            backing.truncate(&key, seqno).await
+        })
+        .wait_and_assert_finished()
+        .await
+    }
 }
 
 /// Metadata about a particular blob stored by persist

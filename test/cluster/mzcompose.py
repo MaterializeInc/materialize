@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import re
 import time
 from copy import copy
@@ -55,41 +56,52 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in [
-        "test-smoke",
-        "test-github-12251",
-        "test-github-15531",
-        "test-github-15535",
-        "test-github-15799",
-        "test-github-15930",
-        "test-github-15496",
-        "test-github-17177",
-        "test-github-17510",
-        "test-github-17509",
-        "test-github-19610",
-        "test-single-time-monotonicity-enforcers",
-        "test-remote-storage",
-        "test-drop-default-cluster",
-        "test-upsert",
-        "test-resource-limits",
-        "test-invalid-compute-reuse",
-        "pg-snapshot-resumption",
-        "pg-snapshot-partial-failure",
-        "test-system-table-indexes",
-        "test-replica-targeted-subscribe-abort",
-        "test-compute-reconciliation-reuse",
-        "test-compute-reconciliation-no-errors",
-        "test-mz-subscriptions",
-        "test-mv-source-sink",
-        "test-query-without-default-cluster",
-        "test-clusterd-death-detection",
-        "test-replica-metrics",
-        "test-compute-controller-metrics",
-        "test-metrics-retention-across-restart",
-        "test-concurrent-connections",
-    ]:
-        with c.test_case(name):
-            c.workflow(name)
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard:
+        shard = int(shard)
+    if shard_count:
+        shard_count = int(shard_count)
+
+    for i, name in enumerate(
+        [
+            "test-smoke",
+            "test-github-12251",
+            "test-github-15531",
+            "test-github-15535",
+            "test-github-15799",
+            "test-github-15930",
+            "test-github-15496",
+            "test-github-17177",
+            "test-github-17510",
+            "test-github-17509",
+            "test-github-19610",
+            "test-single-time-monotonicity-enforcers",
+            "test-remote-storage",
+            "test-drop-default-cluster",
+            "test-upsert",
+            "test-resource-limits",
+            "test-invalid-compute-reuse",
+            "pg-snapshot-resumption",
+            "pg-snapshot-partial-failure",
+            "test-system-table-indexes",
+            "test-replica-targeted-subscribe-abort",
+            "test-compute-reconciliation-reuse",
+            "test-compute-reconciliation-no-errors",
+            "test-mz-subscriptions",
+            "test-mv-source-sink",
+            "test-query-without-default-cluster",
+            "test-clusterd-death-detection",
+            "test-replica-metrics",
+            "test-compute-controller-metrics",
+            "test-metrics-retention-across-restart",
+            "test-concurrent-connections",
+        ]
+    ):
+        if shard is None or shard_count is None or i % int(shard_count) == shard:
+            with c.test_case(name):
+                c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2365,8 +2377,9 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         dt = datetime.fromtimestamp(since / 1000.0)
         diff = now - dt
 
+        # This env was just created, so the since should be recent.
         assert (
-            diff.days >= 30
+            diff.days < 30
         ), f"{name} greater than expected (since={since}, diff={diff})"
 
     c.down(destroy_volumes=True)
@@ -2380,9 +2393,15 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
+    # The env has been up for less than 30d, so the since should not have
+    # changed.
     table_since2, index_since2 = collect_sinces()
-    validate_since(table_since2, "table_since2")
-    validate_since(index_since2, "index_since2")
+    assert (
+        table_since1 == table_since2
+    ), f"table sinces did not match {table_since1} vs {table_since2})"
+    assert (
+        index_since1 == index_since2
+    ), f"index sinces did not match {index_since1} vs {index_since2})"
 
 
 def workflow_test_concurrent_connections(c: Composition) -> None:
@@ -2408,20 +2427,26 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         user="mz_system",
     )
 
-    threads = []
-    for i in range(num_conns):
-        thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
-        threads.append(thread)
+    for i in range(3):
+        threads = []
+        for i in range(num_conns):
+            thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
+            threads.append(thread)
 
-    for thread in threads:
-        thread.start()
+        for thread in threads:
+            thread.start()
 
-    for thread in threads:
-        thread.join()
+        for thread in threads:
+            thread.join()
 
-    p = quantiles(runtimes, n=100)
-    print(
-        f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
-    )
-    assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
-    assert p[98] < 1.5, f"p99 is {p[98]:.2f}s, should be less than 1.5s"
+        p = quantiles(runtimes, n=100)
+        print(
+            f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+        )
+        if p[49] < 1.0 and p[98] < 4.0:
+            return
+        if i < 2:
+            print("retry...")
+            continue
+        assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
+        assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"

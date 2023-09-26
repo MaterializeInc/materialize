@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
 use mz_ore::str::{separated, StrExt};
+use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::strconv;
 use mz_sql::ast::NoticeSeverity;
@@ -118,9 +119,71 @@ pub enum AdapterNotice {
         url: url::Url,
     },
     DroppedInUseIndex(DroppedInUseIndex),
+    PerReplicaLogRead {
+        log_names: Vec<String>,
+    },
 }
 
 impl AdapterNotice {
+    pub fn into_response(self) -> ErrorResponse {
+        ErrorResponse {
+            severity: self.severity(),
+            code: self.code(),
+            message: self.to_string(),
+            detail: self.detail(),
+            hint: self.hint(),
+            position: None,
+        }
+    }
+
+    /// Returns the severity for a notice.
+    pub fn severity(&self) -> Severity {
+        match self {
+            AdapterNotice::DatabaseAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::SchemaAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::TableAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
+            AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
+            AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
+            AdapterNotice::UserRequested { severity } => match severity {
+                NoticeSeverity::Debug => Severity::Debug,
+                NoticeSeverity::Info => Severity::Info,
+                NoticeSeverity::Log => Severity::Log,
+                NoticeSeverity::Notice => Severity::Notice,
+                NoticeSeverity::Warning => Severity::Warning,
+            },
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
+            AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
+            AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
+            AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
+            AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
+            AdapterNotice::QueryTrace { .. } => Severity::Notice,
+            AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
+            AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
+            AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
+            AdapterNotice::RbacSystemDisabled => Severity::Notice,
+            AdapterNotice::RbacUserDisabled => Severity::Notice,
+            AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
+            AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
+            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
+            AdapterNotice::CannotRevoke { .. } => Severity::Warning,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
+            AdapterNotice::PlanNotice(notice) => match notice {
+                PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
+                PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
+            },
+            AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
+            AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
+            AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
+            AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+            AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
+        }
+    }
+
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
@@ -200,6 +263,7 @@ impl AdapterNotice {
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
+            AdapterNotice::PerReplicaLogRead { .. } => SqlState::WARNING,
         }
     }
 }
@@ -349,7 +413,10 @@ impl fmt::Display for AdapterNotice {
                 index_name,
                 dependant_objects,
             }) => {
-                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index will be dropped from the catalog, but it will continue to be maintained and take up resources!", separated(", ", dependant_objects))
+                write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!", separated(", ", dependant_objects))
+            }
+            AdapterNotice::PerReplicaLogRead { log_names } => {
+                write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
             }
         }
     }

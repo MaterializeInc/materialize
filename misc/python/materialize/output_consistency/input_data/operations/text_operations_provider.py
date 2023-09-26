@@ -258,6 +258,22 @@ TEXT_OPERATION_TYPES.append(
 
 TEXT_OPERATION_TYPES.append(
     DbFunction(
+        "regexp_replace",
+        [TextOperationParam(), REGEX_PARAM, TextOperationParam()],
+        ArrayReturnTypeSpec(DataTypeCategory.TEXT),
+    )
+)
+
+TEXT_OPERATION_TYPES.append(
+    DbFunction(
+        "regexp_split_to_array",
+        [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
+        ArrayReturnTypeSpec(DataTypeCategory.ARRAY),
+    )
+)
+
+TEXT_OPERATION_TYPES.append(
+    DbFunction(
         "repeat",
         [
             TextOperationParam(),

@@ -246,7 +246,7 @@ materialize.public.byzantine_view "CREATE VIEW \"materialize\".\"public\".\"byza
 > SHOW CREATE VIEW oppositional_view
 name                                 create_sql
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '   an adversarial string   \"materialize\".\"public\".\"mz_data\"   '"
+materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '\n  an adversarial string\n  \"materialize\".\"public\".\"mz_data\"\n  '"
 
 # 🔬 Name collisions
 

@@ -94,7 +94,7 @@ pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
-pub use statement::ddl::PlannedRoleAttributes;
+pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
@@ -140,6 +140,7 @@ pub enum Plan {
     ExplainTimestamp(ExplainTimestampPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
+    AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -155,6 +156,7 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterItemSwap(AlterItemSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -200,6 +202,13 @@ impl Plan {
                     PlanKind::AlterClusterRename,
                     PlanKind::AlterClusterReplicaRename,
                     PlanKind::AlterItemRename,
+                    PlanKind::AlterNoop,
+                ]
+            }
+            StatementKind::AlterObjectSwap => {
+                vec![
+                    PlanKind::AlterClusterSwap,
+                    PlanKind::AlterItemSwap,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -354,6 +363,7 @@ impl Plan {
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterSwap(_) => "alter cluster swap",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
@@ -361,6 +371,7 @@ impl Plan {
             Plan::AlterSink(_) => "alter sink",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
+            Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -955,6 +966,23 @@ pub struct AlterItemRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterClusterSwapPlan {
+    pub id_a: ClusterId,
+    pub id_b: ClusterId,
+    pub name_a: String,
+    pub name_b: String,
+}
+
+#[derive(Debug)]
+pub struct AlterItemSwapPlan {
+    pub id_a: GlobalId,
+    pub id_b: GlobalId,
+    pub full_name_a: FullItemName,
+    pub full_name_b: FullItemName,
+    pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
 pub struct AlterSecretPlan {
     pub id: GlobalId,
     pub secret_as: MirScalarExpr,
@@ -978,7 +1006,7 @@ pub struct AlterSystemResetAllPlan {}
 pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
-    pub attributes: PlannedRoleAttributes,
+    pub option: PlannedAlterRoleOption,
 }
 
 #[derive(Debug)]

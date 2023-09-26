@@ -168,48 +168,6 @@ CREATE ROLE usr WITH badopt
                      ^
 
 parse-statement
-ALTER ROLE arjun
-----
-ALTER ROLE arjun
-=>
-AlterRole(AlterRoleStatement { name: Ident("arjun"), options: [] })
-
-parse-statement
-ALTER ROLE frank SUPERUSER
-----
-ALTER ROLE frank SUPERUSER
-=>
-AlterRole(AlterRoleStatement { name: Ident("frank"), options: [SuperUser] })
-
-parse-statement
-ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
-----
-ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
-=>
-AlterRole(AlterRoleStatement { name: Ident("other_usr"), options: [Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole] })
-
-parse-statement
-ALTER ROLE bad.qualification
-----
-error: Expected end of statement, found dot
-ALTER ROLE bad.qualification
-              ^
-
-parse-statement
-ALTER ROLE usr WITH LOGIN
-----
-ALTER ROLE usr LOGIN
-=>
-AlterRole(AlterRoleStatement { name: Ident("usr"), options: [Login] })
-
-parse-statement
-ALTER ROLE usr WITH badopt
-----
-error: Expected end of statement, found identifier "badopt"
-ALTER ROLE usr WITH badopt
-                    ^
-
-parse-statement
 DROP ROLE IF EXISTS usr
 ----
 DROP ROLE IF EXISTS usr

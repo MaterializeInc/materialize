@@ -88,7 +88,7 @@ use crate::plan::{
     transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
     WebhookValidationSecret,
 };
-use crate::session::vars::{self, FeatureFlag};
+use crate::session::vars::FeatureFlag;
 
 #[derive(Debug)]
 pub struct PlannedQuery<E> {
@@ -1397,9 +1397,6 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
-            qcx.scx
-                .require_feature_flag(&vars::ENABLE_WITH_MUTUALLY_RECURSIVE)?;
-
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {
                 let cte_name = normalize::ident(cte.name.clone());

@@ -39,7 +39,7 @@ use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformErr
 /// information to dataflow sources and lifts monotonicity information.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment ="global")
 )]
@@ -103,7 +103,7 @@ pub fn optimize_dataflow(
 /// Inline views used in one other view, and in no exported objects.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment = "inline_views")
 )]
@@ -209,7 +209,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 /// dataflow using the supplied set of indexes.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment = optimizer.name)
 )]
@@ -250,7 +250,7 @@ fn optimize_dataflow_relations(
 /// not depended on by other views to dataflow inputs.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment ="demand")
 )]
@@ -349,7 +349,7 @@ where
 /// Pushes predicate to dataflow inputs.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment ="filters")
 )]
@@ -419,7 +419,7 @@ where
 /// Propagates information about monotonic inputs through operators.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment ="monotonic")
 )]
@@ -471,7 +471,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 /// `ArrangeBy`s at the top of unused Let bindings.
 #[tracing::instrument(
     target = "optimizer",
-    level = "debug",
+    level = "trace",
     skip_all,
     fields(path.segment = "index_imports")
 )]

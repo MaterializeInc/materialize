@@ -82,7 +82,7 @@ use std::fmt::Write;
 use std::io::Write as _;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
@@ -113,7 +113,7 @@ use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
-use reqwest::Url;
+use reqwest::{redirect, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio_postgres::error::SqlState;
@@ -943,7 +943,6 @@ fn test_cancel_long_running_query() {
 fn test_cancellation_cancels_dataflows(query: &str) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -1028,7 +1027,6 @@ fn test_cancel_insert_select() {
 fn test_closing_connection_cancels_dataflows(query: String) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
@@ -1539,7 +1537,7 @@ fn test_max_request_size() {
 
     // pgwire
     {
-        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param_size = mz_pgwire_common::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2014,6 +2012,46 @@ fn test_concurrent_id_reuse() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("SELECT 1").unwrap();
+}
+
+#[mz_ore::test]
+fn test_internal_console_redirect() {
+    let test_url =
+        Url::parse("https://test_org.test_region.internal.console.materialize.com").unwrap();
+
+    let config = util::Config::default()
+        .unsafe_mode()
+        .with_internal_console_redirect_url(Some(test_url.to_string()));
+    let server = util::start_server(config.clone()).unwrap();
+
+    let redirected = Arc::new(AtomicBool::new(false));
+    let cloned = Arc::clone(&redirected);
+    // Reqwest will default follow redirects, so we want to avoid that and introspect
+    // the redirect to make sure it's pointing to our test_url
+    let custom_redirect_policy = redirect::Policy::custom(move |attempt| {
+        tracing::debug!("Got redirect request to URL: {:?}", attempt.url());
+        if attempt.url() == &test_url {
+            cloned.store(true, Ordering::Relaxed);
+        }
+        attempt.stop()
+    });
+
+    let res = Client::builder()
+        .redirect(custom_redirect_policy)
+        .build()
+        .unwrap()
+        .get(
+            Url::parse(&format!(
+                "http://{}/api/internal-console",
+                server.inner.internal_http_local_addr()
+            ))
+            .unwrap(),
+        )
+        .send()
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(redirected.load(Ordering::Relaxed), true);
 }
 
 #[mz_ore::test]
@@ -3033,4 +3071,37 @@ fn copy_from() {
         .query("SELECT * FROM copy_from_test", &[])
         .expect("success");
     assert_eq!(rows.len(), 2);
+}
+
+// Test that a cluster dropped mid transaction results in an error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn concurrent_cluster_drop() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut txn_client = server.connect(postgres::NoTls).unwrap();
+    let mut drop_client = server.connect(postgres::NoTls).unwrap();
+
+    txn_client
+        .execute("CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));", &[])
+        .expect("failed to create cluster");
+    txn_client
+        .execute("CREATE TABLE t (a INT);", &[])
+        .expect("failed to create cluster");
+
+    txn_client
+        .execute("SET CLUSTER TO c", &[])
+        .expect("success");
+    txn_client.execute("BEGIN", &[]).expect("success");
+    let _ = txn_client.query("SELECT * FROM t", &[]).expect("success");
+
+    drop_client.execute("DROP CLUSTER c", &[]).expect("success");
+
+    let err = txn_client
+        .execute("SELECT * FROM t", &[])
+        .expect_err("error");
+
+    assert_eq!(
+        err.as_db_error().unwrap().message(),
+        "the transaction's active cluster has been dropped"
+    );
 }

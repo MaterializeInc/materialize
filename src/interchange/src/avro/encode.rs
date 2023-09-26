@@ -110,6 +110,18 @@ fn encode_message_unchecked(
     buf
 }
 
+#[derive(Debug, Default)]
+pub struct AvroSchemaOptions {
+    // Optional avro fullname on the generated key schema.
+    pub avro_key_fullname: Option<String>,
+    // Optional avro fullname on the generated value schema.
+    pub avro_value_fullname: Option<String>,
+    // Boolean flag to set null defaults for nullable types
+    pub set_null_defaults: bool,
+    // Boolean flag to indicate debezium envelope
+    pub is_debezium: bool,
+}
+
 /// Generates key and value Avro schemas
 pub struct AvroSchemaGenerator {
     value_columns: Vec<(ColumnName, ColumnType)>,
@@ -119,20 +131,24 @@ pub struct AvroSchemaGenerator {
 
 impl AvroSchemaGenerator {
     pub fn new(
-        key_fullname: Option<&str>,
-        value_fullname: Option<&str>,
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
-        debezium: bool,
+        AvroSchemaOptions {
+            is_debezium,
+            avro_value_fullname,
+            avro_key_fullname,
+            set_null_defaults,
+        }: AvroSchemaOptions,
     ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
-        if debezium {
+        if is_debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
         }
         let row_schema = build_row_schema_json(
             &value_columns,
-            value_fullname.unwrap_or("envelope"),
+            avro_value_fullname.as_deref().unwrap_or("envelope"),
             &ENVELOPE_CUSTOM_NAMES,
+            set_null_defaults,
         )?;
         let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
         let key_info = match key_desc {
@@ -141,8 +157,9 @@ impl AvroSchemaGenerator {
                 let columns = column_names_and_types(key_desc);
                 let row_schema = build_row_schema_json(
                     &columns,
-                    key_fullname.unwrap_or("row"),
+                    avro_key_fullname.as_deref().unwrap_or("row"),
                     &BTreeMap::new(),
+                    set_null_defaults,
                 )?;
                 Some(KeyInfo {
                     schema: Schema::parse(&row_schema).expect("valid schema constructed"),

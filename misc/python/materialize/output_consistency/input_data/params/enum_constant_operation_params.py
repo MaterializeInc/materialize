@@ -55,3 +55,7 @@ TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
 REPETITIONS_PARAM = EnumConstantOperationParam(
     {"0", "1", "2", "10", "100", "-2"}, add_quotes=False
 )
+
+PRECISION_PARAM = EnumConstantOperationParam(
+    {"0", "1", "2", "3", "6", "9"}, add_quotes=False
+)

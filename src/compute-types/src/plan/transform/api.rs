@@ -39,8 +39,12 @@ pub trait Transform<T = mz_repr::Timestamp> {
         config: &TransformConfig,
         plan: &mut Plan<T>,
     ) -> Result<(), RecursionLimitError> {
-        use tracing::{span, Level};
-        let _span = span!(Level::TRACE, "transform", path.segment = self.name()).entered();
+        let _span = tracing::span!(target: "optimizer",
+            tracing::Level::TRACE,
+            "transform",
+            path.segment = self.name(),
+        )
+        .entered();
         self.do_transform(config, plan)
     }
 

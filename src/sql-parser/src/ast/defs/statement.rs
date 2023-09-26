@@ -65,6 +65,7 @@ pub enum Statement<T: AstInfo> {
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
+    AlterObjectSwap(AlterObjectSwapStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     AlterSetCluster(AlterSetClusterStatement<T>),
@@ -132,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
+            Statement::AlterObjectSwap(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSetCluster(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
@@ -201,6 +203,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
+        StatementKind::AlterObjectSwap => "alter_object_swap",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
@@ -1477,6 +1480,33 @@ impl AstDisplay for RoleAttribute {
 }
 impl_display!(RoleAttribute);
 
+/// `ALTER ROLE role_name [SET | RESET] ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SetRoleVar {
+    /// `SET name TO value`
+    Set { name: Ident, value: SetVariableTo },
+    /// `RESET name`
+    Reset { name: Ident },
+}
+
+impl AstDisplay for SetRoleVar {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            SetRoleVar::Set { name, value } => {
+                f.write_str("SET ");
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(value);
+            }
+            SetRoleVar::Reset { name } => {
+                f.write_str("RESET ");
+                f.write_node(name);
+            }
+        }
+    }
+}
+impl_display!(SetRoleVar);
+
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
@@ -1897,6 +1927,27 @@ impl AstDisplay for AlterObjectRenameStatement {
 }
 impl_display!(AlterObjectRenameStatement);
 
+/// `ALTER <OBJECT> SWAP ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterObjectSwapStatement {
+    pub object_type: ObjectType,
+    pub name_a: UnresolvedObjectName,
+    pub name_b: UnresolvedObjectName,
+}
+
+impl AstDisplay for AlterObjectSwapStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+        f.write_str(" SWAP ");
+
+        f.write_node(&self.name_a);
+        f.write_str(" ");
+        f.write_node(&self.name_b);
+    }
+}
+impl_display!(AlterObjectSwapStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction<T: AstInfo> {
     SetOptions(Vec<IndexOption<T>>),
@@ -2134,21 +2185,45 @@ impl_display!(AlterConnectionStatement);
 pub struct AlterRoleStatement<T: AstInfo> {
     /// The specified role.
     pub name: T::RoleName,
-    /// Any options that were attached, in the order they were presented.
-    pub options: Vec<RoleAttribute>,
+    /// Alterations we're making to the role.
+    pub option: AlterRoleOption,
 }
 
 impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ROLE ");
         f.write_node(&self.name);
-        for option in &self.options {
-            f.write_str(" ");
-            option.fmt(f)
-        }
+        f.write_node(&self.option);
     }
 }
 impl_display_t!(AlterRoleStatement);
+
+/// `ALTER ROLE ... [ WITH | SET ] ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterRoleOption {
+    /// Any options that were attached, in the order they were presented.
+    Attributes(Vec<RoleAttribute>),
+    /// A variable that we want to provide a default value for this role.
+    Variable(SetRoleVar),
+}
+
+impl AstDisplay for AlterRoleOption {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AlterRoleOption::Attributes(attrs) => {
+                for attr in attrs {
+                    f.write_str(" ");
+                    attr.fmt(f)
+                }
+            }
+            AlterRoleOption::Variable(var) => {
+                f.write_str(" ");
+                f.write_node(var);
+            }
+        }
+    }
+}
+impl_display!(AlterRoleOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -3045,13 +3120,13 @@ pub enum ExplainStage {
 
 impl ExplainStage {
     /// Return the tracing path that corresponds to a given stage.
-    pub fn path(&self) -> &'static str {
+    pub fn path(&self) -> Option<&'static str> {
         match self {
-            ExplainStage::RawPlan => "optimize/raw",
-            ExplainStage::DecorrelatedPlan => "optimize/hir_to_mir",
-            ExplainStage::OptimizedPlan => "optimize/global",
-            ExplainStage::PhysicalPlan => "optimize/finalize_dataflow",
-            ExplainStage::Trace => unreachable!(),
+            ExplainStage::RawPlan => Some("optimize/raw"),
+            ExplainStage::DecorrelatedPlan => Some("optimize/hir_to_mir"),
+            ExplainStage::OptimizedPlan => Some("optimize/global"),
+            ExplainStage::PhysicalPlan => Some("optimize/finalize_dataflow"),
+            ExplainStage::Trace => None,
         }
     }
 }

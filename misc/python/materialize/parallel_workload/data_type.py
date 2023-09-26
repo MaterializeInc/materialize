@@ -80,8 +80,54 @@ class Text(DataType):
 
     @staticmethod
     def value(rng: random.Random, in_query: bool = False) -> Any:
+        result = rng.choice(
+            [
+                # "NULL", # TODO: Reenable after #21937 is fixed
+                "0.0",
+                "True",
+                # "",
+                "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀",
+                rng.randint(-100, 100),
+            ]
+        )
+        return f"'{result}'" if in_query else str(result)
+
+
+class Jsonb(DataType):
+    @staticmethod
+    def name() -> str:
+        return "jsonb"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
         result = rng.randint(-100, 100)
-        return f"'{result}'" if in_query else result
+        return f"'{result}'::jsonb"
+
+
+class Bytea(DataType):
+    @staticmethod
+    def name() -> str:
+        return "bytea"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        result = rng.randint(-100, 100)
+        return f"'{result}'::bytea"
+
+
+class TextTextMap(DataType):
+    @staticmethod
+    def name() -> str:
+        return "map[text=>text]"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        values = [
+            f"{Text.value(rng)} => {Text.value(rng)}"
+            for i in range(0, rng.randint(0, 10))
+        ]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::map[text=>text]"
 
 
 DATA_TYPES = DataType.__subclasses__()

@@ -100,6 +100,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
@@ -109,6 +110,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::PurifiedAlterSource { .. }
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
+        | Plan::AlterItemSwap(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)
@@ -133,6 +135,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::ValidateConnection(_)
         | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
+
+    // Use transaction cluster if we're mid-transaction
+    if let Some(cluster_id) = session.transaction().cluster() {
+        return TargetCluster::Transaction(cluster_id);
+    }
 
     // Bail if the user has disabled it via the SessionVar.
     if !session.vars().auto_route_introspection_queries() {
@@ -309,6 +316,7 @@ pub fn user_privilege_hack(
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
@@ -319,6 +327,7 @@ pub fn user_privilege_hack(
         | Plan::AlterSource(_)
         | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
+        | Plan::AlterItemSwap(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)

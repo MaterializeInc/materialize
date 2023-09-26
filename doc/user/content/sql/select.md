@@ -124,7 +124,9 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions, and some [Top K patterns](/guides/top-k), more efficiently with this information.
+`AGGREGATE INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in an aggregation. Materialize can render `min` and `max` expressions more efficiently with this information.
+`DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/guides/top-k) based on `DISTINCT ON` more efficiently with this information.
+`LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/guides/top-k) based on `LIMIT` more efficiently with this information.
 
 For examples, see the [Optimization](/transform-data/optimization/#query-hints) page.
 

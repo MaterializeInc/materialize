@@ -55,7 +55,7 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv1. The index will be dropped from the catalog, but it will continue to be maintained and take up resources!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv1. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
@@ -72,14 +72,14 @@ CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv2. The index will be dropped from the catalog, but it will continue to be maintained and take up resources!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.mv2. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.v1_idx_a. The index will be dropped from the catalog, but it will continue to be maintained and take up resources!"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"The dropped index materialize.public.t_idx_a is being used by the following objects: materialize.public.v1_idx_a. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}

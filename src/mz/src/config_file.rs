@@ -168,7 +168,10 @@ impl ConfigFile {
     }
 
     /// Returns a list of all the possible profile configuration values
-    pub fn list_profile_params(&self) -> Result<Vec<(&str, Option<String>)>, Error> {
+    pub fn list_profile_params(
+        &self,
+        profile_name: &str,
+    ) -> Result<Vec<(&str, Option<String>)>, Error> {
         // Use the parsed profile rather than reading from the editable.
         // If there is a missing field it is more difficult to detect.
         let profile = self
@@ -176,7 +179,7 @@ impl ConfigFile {
             .profiles
             .clone()
             .ok_or(Error::ProfilesMissing)?
-            .get(self.profile())
+            .get(profile_name)
             .ok_or(Error::ProfileMissing(self.profile().to_string()))?
             .clone();
 
@@ -192,28 +195,37 @@ impl ConfigFile {
     }
 
     /// Gets the value of a profile's configuration parameter.
-    pub fn get_profile_param(&self, name: &str) -> Result<Option<&str>, Error> {
-        let profile = self.load_profile(self.profile())?;
+    pub fn get_profile_param<'a>(
+        &'a self,
+        name: &str,
+        profile: &'a str,
+    ) -> Result<Option<&str>, Error> {
+        let profile = self.load_profile(profile)?;
         let value = (PROFILE_PARAMS[name].get)(profile.parsed);
 
         Ok(value)
     }
 
     /// Sets the value of a profile's configuration parameter.
-    pub async fn set_profile_param(&self, name: &str, value: Option<&str>) -> Result<(), Error> {
+    pub async fn set_profile_param(
+        &self,
+        profile_name: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), Error> {
         let mut editable = self.editable.clone();
 
         // Update the value
         match value {
             None => {
-                let profile = editable["profiles"][self.profile()]
+                let profile = editable["profiles"][profile_name]
                     .as_table_mut()
                     .ok_or(Error::ProfileMissing(name.to_string()))?;
                 if profile.contains_key(name) {
                     profile.remove(name);
                 }
             }
-            Some(value) => editable["profiles"][self.profile()][name] = toml_edit::value(value),
+            Some(value) => editable["profiles"][profile_name][name] = toml_edit::value(value),
         }
 
         fs::write(&self.path, editable.to_string()).await?;
@@ -308,13 +320,11 @@ impl Profile<'_> {
 
     /// Returns the admin endpoint in the profile configuration.
     pub fn admin_endpoint(&self) -> Option<&str> {
-        // TODO: return default admin endpoint if unset.
         (PROFILE_PARAMS["admin-endpoint"].get)(self.parsed)
     }
 
     /// Returns the cloud endpoint in the profile configuration.
     pub fn cloud_endpoint(&self) -> Option<&str> {
-        // TODO: return default cloud endpoint if unset.
         (PROFILE_PARAMS["cloud-endpoint"].get)(self.parsed)
     }
 }

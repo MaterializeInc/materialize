@@ -121,12 +121,12 @@ impl fmt::Display for CastTimestampToTimestampTz {
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampToTimestamp {
+pub struct AdjustTimestampPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
+impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
     type Input = CheckedTimestamp<NaiveDateTime>;
     type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
@@ -134,6 +134,10 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
         &self,
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        // This should never have been called if precisions are same.
+        // Adding a soft_assert to flag if there are such instances.
+        mz_ore::soft_assert!(self.to != self.from);
+
         let updated = a.round_to_precision(self.to)?;
         Ok(updated)
     }
@@ -158,9 +162,9 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestamp {
     }
 }
 
-impl fmt::Display for CastTimestampToTimestamp {
+impl fmt::Display for AdjustTimestampPrecision {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_to_timestamp")
+        f.write_str("adjust_timestamp_precision")
     }
 }
 
@@ -217,12 +221,12 @@ impl fmt::Display for CastTimestampTzToTimestamp {
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct CastTimestampTzToTimestampTz {
+pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
+impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
     type Input = CheckedTimestamp<DateTime<Utc>>;
     type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
@@ -230,6 +234,10 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
         &self,
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        // This should never have been called if precisions are same.
+        // Adding a soft_assert to flag if there are such instances.
+        mz_ore::soft_assert!(self.to != self.from);
+
         let updated = a.round_to_precision(self.to)?;
         Ok(updated)
     }
@@ -254,9 +262,9 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestampTz {
     }
 }
 
-impl fmt::Display for CastTimestampTzToTimestampTz {
+impl fmt::Display for AdjustTimestampTzPrecision {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("timestamp_with_time_zone_to_timestamp_with_time_zone")
+        f.write_str("adjust_timestamp_with_time_zone_precision")
     }
 }
 

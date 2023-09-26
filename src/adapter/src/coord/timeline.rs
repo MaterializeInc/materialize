@@ -805,8 +805,10 @@ impl Coordinator {
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
 
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
+        let pg_catalog_schema = (
+            &ResolvedDatabaseSpecifier::Ambient,
+            &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+        );
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
@@ -814,19 +816,23 @@ impl Coordinator {
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
             ),
+            pg_catalog_schema.clone(),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
                 &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
-            ),
         ];
+
         if system_schemas.iter().any(|s| schemas.contains(s)) {
+            // If any of the system schemas is specified, add the rest of the
+            // system schemas.
             schemas.extend(system_schemas);
+        } else if !schemas.is_empty() {
+            // Always include the pg_catalog schema, if schemas is non-empty. The pg_catalog schemas is
+            // sometimes used by applications in followup queries.
+            schemas.insert(pg_catalog_schema);
         }
 
         // Gather the IDs of all items in all used schemas.

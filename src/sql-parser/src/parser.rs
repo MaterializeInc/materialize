@@ -2034,7 +2034,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_config_option(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AVRO])? {
+        let name = match self.expect_one_of_keywords(&[AVRO, NULL])? {
             AVRO => {
                 let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
                     KEY => CsrConfigOptionName::AvroKeyFullname,
@@ -2043,6 +2043,10 @@ impl<'a> Parser<'a> {
                 };
                 self.expect_keyword(FULLNAME)?;
                 name
+            }
+            NULL => {
+                self.expect_keyword(DEFAULTS)?;
+                CsrConfigOptionName::NullDefaults
             }
             _ => unreachable!(),
         };
@@ -4094,6 +4098,13 @@ impl<'a> Parser<'a> {
     fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let object_type = self.expect_object_type().map_no_statement_parser_err()?;
 
+        // ALTER ... SWAP works the same for all items, hence this separate branch.
+        if self.parse_keyword(SWAP) {
+            return self
+                .parse_alter_swap(object_type)
+                .map_parser_err(StatementKind::AlterObjectSwap);
+        }
+
         match object_type {
             ObjectType::Role => self
                 .parse_alter_role()
@@ -4736,9 +4747,29 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
-        let _ = self.parse_keyword(WITH);
-        let options = self.parse_role_attributes();
-        Ok(Statement::AlterRole(AlterRoleStatement { name, options }))
+
+        let option = match self.parse_one_of_keywords(&[SET, RESET, WITH]) {
+            Some(SET) => {
+                let name = self.parse_identifier()?;
+                self.expect_keyword_or_token(TO, &Token::Eq)?;
+                let value = self.parse_set_variable_to()?;
+                let var = SetRoleVar::Set { name, value };
+                AlterRoleOption::Variable(var)
+            }
+            Some(RESET) => {
+                let name = self.parse_identifier()?;
+                let var = SetRoleVar::Reset { name };
+                AlterRoleOption::Variable(var)
+            }
+            Some(WITH) | None => {
+                let _ = self.parse_keyword(WITH);
+                let attrs = self.parse_role_attributes();
+                AlterRoleOption::Attributes(attrs)
+            }
+            Some(k) => unreachable!("unmatched keyword: {k}"),
+        };
+
+        Ok(Statement::AlterRole(AlterRoleStatement { name, option }))
     }
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4844,6 +4875,85 @@ impl<'a> Parser<'a> {
                 }))
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn parse_alter_swap(&mut self, object_type: ObjectType) -> Result<Statement<Raw>, ParserError> {
+        match object_type {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Func => {
+                let name_a = self.parse_item_name()?;
+                let name_b = self.parse_item_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Item(name_a),
+                    name_b: UnresolvedObjectName::Item(name_b),
+                }))
+            }
+            ObjectType::Cluster => {
+                let name_a = self.parse_identifier()?;
+                let name_b = self.parse_identifier()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Cluster(name_a),
+                    name_b: UnresolvedObjectName::Cluster(name_b),
+                }))
+            }
+            ObjectType::ClusterReplica => {
+                let name_a = self.parse_cluster_replica_name()?;
+                let name_b = self.parse_cluster_replica_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::ClusterReplica(name_a),
+                    name_b: UnresolvedObjectName::ClusterReplica(name_b),
+                }))
+            }
+            ObjectType::Database => {
+                let name_a = self.parse_database_name()?;
+                let name_b = self.parse_database_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Database(name_a),
+                    name_b: UnresolvedObjectName::Database(name_b),
+                }))
+            }
+            ObjectType::Schema => {
+                let name_a = self.parse_schema_name()?;
+                let name_b = self.parse_schema_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Schema(name_a),
+                    name_b: UnresolvedObjectName::Schema(name_b),
+                }))
+            }
+            ObjectType::Role => {
+                let name_a = self.parse_identifier()?;
+                let name_b = self.parse_identifier()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Role(name_a),
+                    name_b: UnresolvedObjectName::Role(name_b),
+                }))
+            }
+            ObjectType::Subsource => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "Unexpected object type 'SUBSOURCE'"
+            ),
         }
     }
 

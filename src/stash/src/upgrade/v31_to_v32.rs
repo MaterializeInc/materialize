@@ -179,7 +179,7 @@ mod tests {
     async fn smoke_test() {
         // Connect to the Stash.
         let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open_debug().await;
+        let mut stash = factory.open().await;
 
         // Insert a cluster.
         let cluster_replica_v31: TypedCollection<
