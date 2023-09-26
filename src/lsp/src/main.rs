@@ -1,6 +1,6 @@
 use dashmap::DashMap;
-use lsp::functions::FUNCTIONS;
-use lsp::snippets::SNIPPETS;
+use mz_lsp::functions::FUNCTIONS;
+use mz_lsp::snippets::SNIPPETS;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -240,6 +240,5 @@ async fn main() {
     })
     .finish();
 
-    serde_json::json!({"test": 20});
     Server::new(stdin, stdout, socket).serve(service).await;
 }

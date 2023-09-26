@@ -3168,26 +3168,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lsp"
-version = "0.1.0"
-dependencies = [
- "dashmap",
- "env_logger",
- "im-rc",
- "log",
- "mz-ore",
- "mz-sql-lexer",
- "mz-sql-parser",
- "once_cell",
- "ropey",
- "serde",
- "serde_json",
- "tokio",
- "tower-lsp",
- "workspace-hack",
-]
-
-[[package]]
 name = "lsp-types"
 version = "0.94.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4337,6 +4317,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.107",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-lsp"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "env_logger",
+ "im-rc",
+ "log",
+ "mz-ore",
+ "mz-sql-lexer",
+ "mz-sql-parser",
+ "once_cell",
+ "ropey",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
  "workspace-hack",
 ]
 
