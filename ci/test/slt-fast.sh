@@ -160,7 +160,7 @@ tests_without_views=(
     test/sqllogictest/timestamp.slt
     test/sqllogictest/timestamptz.slt
     test/sqllogictest/timezone.slt
-    test/sqllogictest/tpch.slt
+    test/sqllogictest/tpch_select.slt
     test/sqllogictest/transactions.slt
     test/sqllogictest/type-promotion.slt
     test/sqllogictest/typeof.slt
