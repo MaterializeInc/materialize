@@ -24,10 +24,6 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
@@ -36,27 +32,7 @@ USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
-SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(
-        # We use materialize/environmentd and not materialize/materialized here
-        # in order to ensure a perfect match to the container that should be
-        # deployed to the cloud
-        image=f"materialize/environmentd:{VERSION}",
-        external_cockroach=True,
-        persist_blob_url="file:///mzdata/persist/blob",
-        options=[
-            "--orchestrator-process-secrets-directory=/mzdata/secrets",
-            "--orchestrator-process-scratch-directory=/scratch",
-        ],
-    ),
-    Testdrive(),  # Overriden below
-    Mz(
-        region=REGION,
-        environment=ENVIRONMENT,
-        app_password=APP_PASSWORD,
-    ),
-]
+SERVICES = []
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -68,24 +44,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         help="Destroy the region at the end of the workflow.",
     )
-    parser.add_argument(
-        "--version-check",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Perform a version check.",
-    )
-
-    parser.add_argument(
-        "td_files",
-        nargs="*",
-        default=["*.td"],
-        help="run against the specified files",
-    )
 
     args = parser.parse_args()
 
+    # Look for the '.psqlrc' file in the home dir.
+    home_dir = os.path.expanduser("~")
+    psql_config_path = os.path.join(home_dir, ".psqlrc-mz")
+
     if args.cleanup:
         workflow_disable_region(c)
+        if os.path.exists(psql_config_path):
+            os.remove(psql_config_path)
 
     test_failed = True
     try:
@@ -101,9 +70,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert "materialize.cloud" in cloud_hostname(c)
         wait_for_cloud(c)
 
-        # if args.version_check:
-        #     version_check(c)
-
         # Test - `mz app-password`
         # Assert `mz app-password create`
         new_app_password_name = "Materialize CLI (mz) - Nightlies"
@@ -111,6 +77,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "mz", "app-password", "create", new_app_password_name, capture=True
         )
         assert "mzp_" in output.stdout
+        pg8000.connect(
+            host=cloud_hostname(c),
+            user=USERNAME,
+            password=output.stdout,
+            port=6875,
+            ssl_context=ssl.SSLContext(),
+        )
 
         # Assert `mz app-password list`
         output = c.run("mz", "app-password", "list", capture=True)
@@ -175,13 +148,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             us_region = regions[1]
         assert "enabled" == us_region["status"]
 
-        # Look for the '.psqlrc' file in the home dir.
-        home_dir = os.path.expanduser("~")
-        path = os.path.join(home_dir, ".psqlrc-mz")
-
         # Verify the content is ok
-        if os.path.exists(path):
-            with open(path) as file:
+        if os.path.exists(psql_config_path):
+            with open(psql_config_path) as file:
                 content = file.read()
 
             if content != "\\timing\n\\include ~/.psqlrc":
