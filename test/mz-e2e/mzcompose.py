@@ -28,7 +28,7 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
-ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]

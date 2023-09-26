@@ -39,6 +39,15 @@ class Mz(Service):
             mode="w",
             delete=False,
         )
+
+        # Production env does not require to specify an endpoint.
+        if environment == "production":
+            cloud_endpoint = None
+            admin_endpoint = None
+        else:
+            cloud_endpoint = f"https://api.{environment}.cloud.materialize.com"
+            admin_endpoint = f"https://admin.{environment}.cloud.materialize.com"
+
         toml.dump(
             {
                 "profile": "default",
@@ -46,8 +55,8 @@ class Mz(Service):
                     "default": {
                         "app-password": app_password,
                         "region": region,
-                        "cloud-endpoint": f"https://api.{environment}.cloud.materialize.com",
-                        "admin-endpoint": f"https://admin.{environment}.cloud.materialize.com",
+                        "cloud-endpoint": cloud_endpoint,
+                        "admin-endpoint": admin_endpoint,
                     },
                 },
             },
