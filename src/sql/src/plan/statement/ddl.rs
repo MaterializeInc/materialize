@@ -19,7 +19,7 @@ use std::iter;
 use itertools::Itertools;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
-use mz_interchange::avro::AvroSchemaGenerator;
+use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
 use mz_ore::str::StrExt;
@@ -2344,7 +2344,8 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
 generate_extracted_config!(
     CsrConfigOption,
     (AvroKeyFullname, String),
-    (AvroValueFullname, String)
+    (AvroValueFullname, String),
+    (NullDefaults, bool, Default(false))
 );
 
 fn kafka_sink_builder(
@@ -2444,6 +2445,7 @@ fn kafka_sink_builder(
             let CsrConfigOptionExtracted {
                 avro_key_fullname,
                 avro_value_fullname,
+                null_defaults,
                 ..
             } = options.try_into()?;
 
@@ -2457,14 +2459,19 @@ fn kafka_sink_builder(
                 sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
             }
 
+            let options = AvroSchemaOptions {
+                avro_key_fullname,
+                avro_value_fullname,
+                set_null_defaults: null_defaults,
+                is_debezium: matches!(envelope, SinkEnvelope::Debezium),
+            };
+
             let schema_generator = AvroSchemaGenerator::new(
-                avro_key_fullname.as_deref(),
-                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
-                matches!(envelope, SinkEnvelope::Debezium),
+                options,
             )?;
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator

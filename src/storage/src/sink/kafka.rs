@@ -21,7 +21,7 @@ use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use maplit::btreemap;
-use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
+use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{
@@ -1007,14 +1007,14 @@ where
             key_schema_id,
             value_schema_id,
         }) => {
-            let schema_generator = AvroSchemaGenerator::new(
-                None,
-                None,
-                key_desc,
-                value_desc,
-                matches!(envelope, Some(SinkEnvelope::Debezium)),
-            )
-            .expect("avro schema validated");
+            let options = AvroSchemaOptions {
+                avro_key_fullname: None,
+                avro_value_fullname: None,
+                set_null_defaults: false,
+                is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
+            };
+            let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
+                .expect("avro schema validated");
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
                 stream,

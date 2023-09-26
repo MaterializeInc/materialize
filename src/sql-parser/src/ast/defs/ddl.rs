@@ -139,6 +139,7 @@ impl_display_t!(ProtobufSchema);
 pub enum CsrConfigOptionName {
     AvroKeyFullname,
     AvroValueFullname,
+    NullDefaults,
 }
 
 impl AstDisplay for CsrConfigOptionName {
@@ -146,6 +147,7 @@ impl AstDisplay for CsrConfigOptionName {
         f.write_str(match self {
             CsrConfigOptionName::AvroKeyFullname => "AVRO KEY FULLNAME",
             CsrConfigOptionName::AvroValueFullname => "AVRO VALUE FULLNAME",
+            CsrConfigOptionName::NullDefaults => "NULL DEFAULTS",
         })
     }
 }
