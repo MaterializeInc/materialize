@@ -185,6 +185,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
+            "--internal-http-listen-addr=0.0.0.0:6878",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
             # Materialize too! If you are adding a command-line option that is
