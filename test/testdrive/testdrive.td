@@ -200,3 +200,12 @@ COMMIT;
 
 > SELECT COUNT(*) FROM postgres_connect;
 2
+
+# Comments don't affect following lines
+> CREATE TABLE t (x int)
+
+> INSERT INTO t VALUES (0)
+
+> SELECT *
+  FROM t -- this is a comment
+  WHERE x = 1
