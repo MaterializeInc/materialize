@@ -871,6 +871,15 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Cluster(*id)],
             ..Default::default()
         },
+        Plan::AlterClusterSwap(plan::AlterClusterSwapPlan {
+            id_a,
+            id_b,
+            name_a: _,
+            name_b: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Cluster(*id_a), ObjectId::Cluster(*id_b)],
+            ..Default::default()
+        },
         Plan::AlterClusterReplicaRename(plan::AlterClusterReplicaRenamePlan {
             cluster_id,
             replica_id,
@@ -887,6 +896,16 @@ fn generate_rbac_requirements(
             object_type: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
+            ..Default::default()
+        },
+        Plan::AlterItemSwap(plan::AlterItemSwapPlan {
+            id_a,
+            id_b,
+            full_name_a: _,
+            full_name_b: _,
+            object_type: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id_a), ObjectId::Item(*id_b)],
             ..Default::default()
         },
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {

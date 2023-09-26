@@ -140,6 +140,7 @@ pub enum Plan {
     ExplainTimestamp(ExplainTimestampPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
+    AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -155,6 +156,7 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterItemSwap(AlterItemSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -200,6 +202,13 @@ impl Plan {
                     PlanKind::AlterClusterRename,
                     PlanKind::AlterClusterReplicaRename,
                     PlanKind::AlterItemRename,
+                    PlanKind::AlterNoop,
+                ]
+            }
+            StatementKind::AlterObjectSwap => {
+                vec![
+                    PlanKind::AlterClusterSwap,
+                    PlanKind::AlterItemSwap,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -354,6 +363,7 @@ impl Plan {
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterSwap(_) => "alter cluster swap",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
@@ -361,6 +371,7 @@ impl Plan {
             Plan::AlterSink(_) => "alter sink",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
+            Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -951,6 +962,23 @@ pub struct AlterItemRenamePlan {
     pub id: GlobalId,
     pub current_full_name: FullItemName,
     pub to_name: String,
+    pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterSwapPlan {
+    pub id_a: ClusterId,
+    pub id_b: ClusterId,
+    pub name_a: String,
+    pub name_b: String,
+}
+
+#[derive(Debug)]
+pub struct AlterItemSwapPlan {
+    pub id_a: GlobalId,
+    pub id_b: GlobalId,
+    pub full_name_a: FullItemName,
+    pub full_name_b: FullItemName,
     pub object_type: ObjectType,
 }
 
