@@ -135,20 +135,20 @@ impl AvroSchemaGenerator {
         value_desc: RelationDesc,
         AvroSchemaOptions {
             is_debezium,
-            avro_value_nullname,
+            avro_value_fullname,
             avro_key_fullname,
-            set_null_defaults
-            }: AvroSchemaOptions,
+            set_null_defaults,
+        }: AvroSchemaOptions,
     ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
-        if options.is_debezium {
+        if is_debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
         }
         let row_schema = build_row_schema_json(
             &value_columns,
-            options.avro_value_fullname.as_deref().unwrap_or("envelope"),
+            avro_value_fullname.as_deref().unwrap_or("envelope"),
             &ENVELOPE_CUSTOM_NAMES,
-            options.set_null_defaults,
+            set_null_defaults,
         )?;
         let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
         let key_info = match key_desc {
@@ -157,9 +157,9 @@ impl AvroSchemaGenerator {
                 let columns = column_names_and_types(key_desc);
                 let row_schema = build_row_schema_json(
                     &columns,
-                    options.avro_key_fullname.as_deref().unwrap_or("row"),
+                    avro_key_fullname.as_deref().unwrap_or("row"),
                     &BTreeMap::new(),
-                    options.set_null_defaults,
+                    set_null_defaults,
                 )?;
                 Some(KeyInfo {
                     schema: Schema::parse(&row_schema).expect("valid schema constructed"),

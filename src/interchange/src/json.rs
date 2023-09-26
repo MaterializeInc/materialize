@@ -372,6 +372,9 @@ fn build_row_schema_field_type(
         ScalarType::MzAclItem => json!("string"),
     };
     if typ.nullable {
+        // Should be revisited if we ever support a different kind of union scheme.
+        // Currently adding the "null" at the beginning means we can set the default
+        // value to "null" if such a preference is set.
         field_type = json!(["null", field_type]);
     }
     field_type
