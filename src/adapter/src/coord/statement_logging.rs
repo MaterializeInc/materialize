@@ -379,11 +379,13 @@ impl Coordinator {
             .executions_begun
             .get_mut(&id)
             .expect("set_statement_execution_cluster must not be called after execution ends");
+        if record.cluster_id == Some(cluster_id) {
+            return;
+        }
         let retraction = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((retraction, -1));
-        assert!(record.cluster_id.is_none());
         record.cluster_id = Some(cluster_id);
         let update = Self::pack_statement_began_execution_update(record);
         self.statement_logging
