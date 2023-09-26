@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Plans for the TPC-H workload modeled as plain old SELECT statements.
+
 # PRIMARY KEY annotations (which are in the spec) are currently
 # removed from this slt, because we don't support them at the moment.
 # (Note that _in slts_ they are actually supported, but it's better
