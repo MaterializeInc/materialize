@@ -79,6 +79,7 @@ class KafkaTransactionLogGreaterThan1:
             self.assert_error(
                 c, "retriable transaction error", "running a single Kafka broker"
             )
+            c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink

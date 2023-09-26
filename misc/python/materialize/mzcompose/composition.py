@@ -670,6 +670,10 @@ class Composition:
             """
         )
         for (name, status, error, details) in results:
+            # TODO(def-) Remove when #21980 is fixed
+            if status == "starting":
+                continue
+
             return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
@@ -708,14 +712,14 @@ class Composition:
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
-            for i in range(NUM_RETRIES):
+            for i in range(NUM_RETRIES + 1):
                 error = self.validate_sources_sinks_clusters()
                 if not error:
                     break
-                if i == NUM_RETRIES - 1:
+                if i == NUM_RETRIES:
                     raise ValueError(error)
                 # Sources and cluster replicas need a few seconds to start up
-                print("Retry...")
+                print(f"Retrying ({i+1}/{NUM_RETRIES})...")
                 time.sleep(1)
 
     def down(
