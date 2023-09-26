@@ -24,6 +24,7 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.mz import Mz
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
@@ -32,8 +33,13 @@ USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
-SERVICES = []
-
+SERVICES = [
+    Mz(
+        region=REGION,
+        environment=ENVIRONMENT,
+        app_password=APP_PASSWORD,
+    ),
+]
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Deploy the current source to the cloud and run tests."""
