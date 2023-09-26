@@ -73,6 +73,21 @@ impl Coordinator {
         responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster.
+        let target_cluster =
+            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
+        let target_cluster_id = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, ctx.session())
+            .ok()
+            .map(|cluster| cluster.id());
+
+        if let (Some(cluster_id), Some(statement_id)) = (target_cluster_id, ctx.extra().contents())
+        {
+            self.set_statement_execution_cluster(statement_id, cluster_id);
+        }
+
         let session_catalog = self.catalog.for_session(ctx.session());
 
         if let Err(e) = introspection::user_privilege_hack(
@@ -86,16 +101,6 @@ impl Coordinator {
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
             return ctx.retire(Err(e));
         }
-
-        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
-        // session var is set, then we automatically run the query on the mz_introspection cluster.
-        let target_cluster =
-            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
-        let target_cluster_id = self
-            .catalog()
-            .resolve_target_cluster(target_cluster, ctx.session())
-            .ok()
-            .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
             &session_catalog,
