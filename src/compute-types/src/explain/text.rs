@@ -391,7 +391,21 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
             let arrangement = Arrangement::from(arrangement);
             writeln!(f, "{}arrangements[{}]={}", ctx.indent, i, arrangement)?;
         }
-
+        // types field
+        if let Some(types) = self.types.as_ref() {
+            if types.len() > 0 {
+                write!(f, "{}types=[", ctx.indent)?;
+                write!(
+                    f,
+                    "{}",
+                    separated(
+                        ", ",
+                        types.iter().map(|c| ctx.humanizer.humanize_column_type(c))
+                    )
+                )?;
+                writeln!(f, "]")?;
+            }
+        }
         Ok(())
     }
 }
