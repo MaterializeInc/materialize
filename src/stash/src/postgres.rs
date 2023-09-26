@@ -1413,6 +1413,19 @@ impl DebugStashFactory {
             .await
             .expect("unable to open debug stash")
     }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+    pub fn tls(&self) -> &MakeTlsConnector {
+        &self.tls
+    }
+    pub fn stash_factory(&self) -> &StashFactory {
+        &self.stash_factory
+    }
 }
 
 impl Drop for DebugStashFactory {

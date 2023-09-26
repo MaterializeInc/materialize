@@ -114,6 +114,7 @@ const INFORMATION_SCHEMA_ID: u64 = 5;
 ///
 /// Note: We should only use the latest types here from the `super::objects` module, we should
 /// __not__ use any versioned protos, e.g. `objects_v15`.
+// TODO(jkosh44) This should not use stash implementation details.
 #[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize(
     tx: &mut Transaction<'_>,

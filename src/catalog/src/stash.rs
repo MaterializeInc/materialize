@@ -110,7 +110,11 @@ impl OpenableConnection {
             self.stash = Some(
                 self.config
                     .stash_factory
-                    .open_savepoint(self.config.stash_url.clone(), self.config.tls.clone())
+                    .open_savepoint(
+                        self.config.stash_url.clone(),
+                        self.config.schema.clone(),
+                        self.config.tls.clone(),
+                    )
                     .await?,
             );
         }
@@ -1094,10 +1098,26 @@ impl DebugOpenableConnection<'_> {
         }
     }
 
+    /// Opens the inner stash in read-only mode.
+    async fn open_stash_read_only(&mut self) -> Result<&mut Stash, StashError> {
+        if !matches!(&self.stash, Some(stash) if stash.is_readonly()) {
+            self.stash = Some(self.debug_stash_factory.open_readonly().await);
+        }
+        Ok(self.stash.as_mut().expect("opened above"))
+    }
+
+    /// Opens the inner stash in savepoint mode.
+    async fn open_stash_savepoint(&mut self) -> Result<&mut Stash, StashError> {
+        if !matches!(&self.stash, Some(stash) if stash.is_savepoint()) {
+            self.stash = Some(self.debug_stash_factory.open_savepoint().await);
+        }
+        Ok(self.stash.as_mut().expect("opened above"))
+    }
+
     /// Opens the inner stash in a writeable mode.
     async fn open_stash(&mut self) -> Result<&mut Stash, StashError> {
         if !matches!(&self.stash, Some(stash) if stash.is_writeable()) {
-            self.stash = Some(self.debug_stash_factory.try_open_debug().await?);
+            self.stash = Some(self.debug_stash_factory.open().await);
         }
         Ok(self.stash.as_mut().expect("opened above"))
     }
@@ -1107,19 +1127,23 @@ impl DebugOpenableConnection<'_> {
 impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
     async fn open_check(
         &mut self,
-        _now: NowFn,
-        _bootstrap_args: &BootstrapArgs,
-        _deploy_generation: Option<u64>,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
-        panic!("cannot open debug catalog state in check mode");
+        self.open_stash_savepoint().await?;
+        let stash = self.stash.take().expect("opened above");
+        retry_open(stash, now, bootstrap_args, deploy_generation).await
     }
 
     async fn open_read_only(
         &mut self,
-        _now: NowFn,
-        _bootstrap_args: &BootstrapArgs,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
     ) -> Result<Connection, Error> {
-        panic!("cannot open debug catalog state in read-only mode");
+        self.open_stash_read_only().await?;
+        let stash = self.stash.take().expect("opened above");
+        retry_open(stash, now, bootstrap_args, None).await
     }
 
     async fn open(
