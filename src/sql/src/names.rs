@@ -1244,6 +1244,7 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
+                        self.ids.insert(array_item.id());
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
                             qualifiers: array_item.name().qualifiers.clone(),
