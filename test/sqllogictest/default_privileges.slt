@@ -367,7 +367,7 @@ statement ok
 DROP VIEW v
 
 statement ok
-CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -425,7 +425,7 @@ statement ok
 DROP VIEW d1.s11.v
 
 statement ok
-CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -483,7 +483,7 @@ statement ok
 DROP VIEW d2.s22.v
 
 statement ok
-CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -542,7 +542,7 @@ statement ok
 DROP VIEW d1.s1.v
 
 statement ok
-CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -601,7 +601,7 @@ statement ok
 DROP VIEW d2.s2.v
 
 statement ok
-CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -661,7 +661,7 @@ DROP VIEW materialize.public.v;
 COMPLETE 0
 
 simple conn=r6,user=r6
-CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -725,7 +725,7 @@ DROP VIEW materialize.public.v;
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -788,7 +788,7 @@ DROP VIEW d1.s1.v;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -849,7 +849,7 @@ DROP VIEW d2.s2.v;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -910,7 +910,7 @@ DROP VIEW d1.s1.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -970,7 +970,7 @@ DROP VIEW d1.s11.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1031,7 +1031,7 @@ DROP VIEW d2.s2.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1091,7 +1091,7 @@ DROP VIEW d2.s22.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1273,7 +1273,7 @@ statement ok
 DROP VIEW v
 
 statement ok
-CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -1317,7 +1317,7 @@ statement ok
 DROP VIEW d1.s11.v
 
 statement ok
-CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -1361,7 +1361,7 @@ statement ok
 DROP VIEW d2.s22.v
 
 statement ok
-CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -1405,7 +1405,7 @@ statement ok
 DROP VIEW d1.s1.v
 
 statement ok
-CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -1449,7 +1449,7 @@ statement ok
 DROP VIEW d2.s2.v
 
 statement ok
-CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name = 'mv'
@@ -1501,7 +1501,7 @@ DROP VIEW materialize.public.v;
 COMPLETE 0
 
 simple conn=r6,user=r6
-CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1561,7 +1561,7 @@ DROP VIEW materialize.public.v;
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW materialize.public.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1621,7 +1621,7 @@ DROP VIEW d1.s1.v;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1681,7 +1681,7 @@ DROP VIEW d2.s2.v;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1741,7 +1741,7 @@ DROP VIEW d1.s1.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d1.s1.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1801,7 +1801,7 @@ DROP VIEW d1.s11.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d1.s11.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1861,7 +1861,7 @@ DROP VIEW d2.s2.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d2.s2.mv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1921,7 +1921,7 @@ DROP VIEW d2.s22.v;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW d2.s22.mv AS SELECT 1;
 ----
 COMPLETE 0
 

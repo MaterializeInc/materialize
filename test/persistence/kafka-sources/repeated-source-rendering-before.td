@@ -42,7 +42,7 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
 10
 
 # Verify that we cannot create multiple materializations of a persisted source.
-#! CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
+#! EXPLAIN CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
 # contains:Cannot re-materialize source re_created
 
 > DROP VIEW a_view;

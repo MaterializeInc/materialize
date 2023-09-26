@@ -94,7 +94,7 @@ statement ok
 create table t1(f1 int, f2 int);
 
 statement ok
-create materialized view mv1 as select * from (select * from t1 order by f1 limit 10 offset 2) order by f1 limit 3 offset 1;
+EXPLAIN CREATE MATERIALIZED VIEW mv1 as select * from (select * from t1 order by f1 limit 10 offset 2) order by f1 limit 3 offset 1;
 ----
 
 query T multiline

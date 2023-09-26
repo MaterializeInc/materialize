@@ -38,10 +38,10 @@ EOF
 # Propagating monotonicity analysis through materialized views
 
 statement ok
-CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT counter % 3 as f1 FROM counter GROUP BY counter % 3;
+EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT counter % 3 as f1 FROM counter GROUP BY counter % 3;
 
 statement ok
-CREATE MATERIALIZED VIEW v2 AS SELECT f1 as counter FROM v1 WHERE f1 % 7 = 0;
+EXPLAIN CREATE MATERIALIZED VIEW v2 AS SELECT f1 as counter FROM v1 WHERE f1 % 7 = 0;
 
 query T multiline
 EXPLAIN SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);

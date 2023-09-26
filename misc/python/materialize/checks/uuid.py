@@ -33,7 +33,7 @@ class UUID(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW uuid_view1 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW uuid_view1 AS SELECT
                     f1,
                     uuid_generate_v5(f2, f3) as f2,
                     uuid_generate_v5('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13', 'foobar') as f3
@@ -41,7 +41,7 @@ class UUID(Check):
                 > INSERT INTO uuid_table VALUES (uuid_generate_v5(NULL, 'foo'), NULL, 'foo');
             """,
                 """
-                > CREATE MATERIALIZED VIEW uuid_view2 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW uuid_view2 AS SELECT
                     f1,
                     uuid_generate_v5(f2, f3) as f2,
                     uuid_generate_v5('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13', 'foobar') as f3

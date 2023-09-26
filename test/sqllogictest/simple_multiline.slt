@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 simple conn=materialize,user=materialize
-CREATE MATERIALIZED VIEW mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1;
 ----
 COMPLETE 0
 

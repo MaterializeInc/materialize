@@ -30,7 +30,7 @@ class NumericTypes(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW numeric_types_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW numeric_types_view1 AS
                   SELECT
                   smallint_col, -32768::smallint AS smallint2, 32767::smallint AS smallint3,
                   integer_col, -2147483648::integer AS integer2, 2147483647::integer AS integer3,
@@ -46,7 +46,7 @@ class NumericTypes(Check):
                 > INSERT INTO numeric_types_table SELECT * FROM numeric_types_table;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW numeric_types_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW numeric_types_view2 AS
                   SELECT
                   smallint_col, -32768::smallint AS smallint2, 32767::smallint AS smallint3,
                   integer_col, -2147483648::integer AS integer2, 2147483647::integer AS integer3,

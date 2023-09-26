@@ -719,7 +719,7 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
-# CREATE MATERIALIZED VIEW
+# EXPLAIN CREATE MATERIALIZED VIEW
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM PUBLIC;
@@ -732,12 +732,12 @@ REVOKE USAGE ON TYPE ty FROM joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
@@ -747,12 +747,12 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
@@ -767,12 +767,12 @@ GRANT USAGE ON TYPE ty TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
@@ -782,12 +782,12 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for CLUSTER "default"
 
 simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 db error: ERROR: permission denied for CLUSTER "default"
 
@@ -797,12 +797,12 @@ GRANT CREATE ON CLUSTER default TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE MATERIALIZED VIEW mv1 AS SELECT ROW(1)::ty;
+EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT ROW(1)::ty;
 ----
 COMPLETE 0
 
@@ -1825,7 +1825,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM materialize;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT 1
 ----
 COMPLETE 0
 

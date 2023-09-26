@@ -44,14 +44,14 @@ contains:system cluster 'mz_system' cannot be modified
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
 
-> CREATE MATERIALIZED VIEW mv AS SELECT AVG(50)
+> EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT AVG(50)
 
 > SET CLUSTER TO mz_introspection
 
 > SHOW MATERIALIZED VIEWS
 mv default
 
-#! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+#! EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_introspection' cannot be modified
 
 > SET CLUSTER TO mz_system
@@ -60,7 +60,7 @@ mv default
 > SHOW MATERIALIZED VIEWS
 mv default
 
-#! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+#! EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_system' cannot be modified
 
 > SET CLUSTER TO default

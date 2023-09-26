@@ -30,7 +30,7 @@ class TemporalTypes(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW date_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW date_view1 AS
                   SELECT
                   date_col, '2010-10-10'::date AS date_col2,
                   time_col, '10:10:10'::time AS time_col2,
@@ -47,7 +47,7 @@ class TemporalTypes(Check):
                 > INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11+01', '2011-11-11 11:11:11+01', INTERVAL '1 day');
                 """,
                 """
-                > CREATE MATERIALIZED VIEW date_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW date_view2 AS
                   SELECT
                   date_col, '2010-10-10'::date AS date_col2,
                   time_col, '10:10:10'::time AS time_col2,
@@ -103,7 +103,7 @@ class TemporalPrecisionTypes(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW date_prec_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW date_prec_view1 AS
                   SELECT
                   timestamp_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamp(3) AS timestamp_prec_col2,
                   timestamptz_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamptz(1) AS timestamptz_prec_col2
@@ -114,7 +114,7 @@ class TemporalPrecisionTypes(Check):
                 > INSERT INTO temporal_prec_types VALUES ('2011-11-11 11:11:11.23456789+01', '2011-11-11 11:11:11.23456789+01');
                 """,
                 """
-                > CREATE MATERIALIZED VIEW date_prec_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW date_prec_view2 AS
                   SELECT
                   timestamp_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamp(3) AS timestamp_prec_col2,
                   timestamptz_prec_col, '2010-10-10 10:10:10.123456789+01'::timestamptz(1) AS timestamptz_prec_col2

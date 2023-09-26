@@ -18,7 +18,7 @@ CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (0, 10)
 
 # Select out rows when each are valid.
 statement ok
-CREATE MATERIALIZED VIEW valid AS
+EXPLAIN CREATE MATERIALIZED VIEW valid AS
 SELECT *
 FROM intervals
 WHERE mz_now() BETWEEN a AND b;
@@ -63,7 +63,7 @@ statement ok
 CREATE VIEW intervals_max (a, b) AS VALUES (0, 18446744073709551615)
 
 statement ok
-CREATE MATERIALIZED VIEW valid_max AS
+EXPLAIN CREATE MATERIALIZED VIEW valid_max AS
 SELECT *
 FROM intervals_max
 WHERE mz_now() BETWEEN a AND b
@@ -82,7 +82,7 @@ CREATE TABLE events (
 );
 
 statement ok
-CREATE MATERIALIZED VIEW valid_events AS
+EXPLAIN CREATE MATERIALIZED VIEW valid_events AS
 SELECT content, count(*)
 FROM events
 WHERE mz_now() >= insert_ts

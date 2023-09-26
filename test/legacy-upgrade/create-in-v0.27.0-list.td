@@ -10,4 +10,4 @@
 #
 # CREATE a view containing LIST
 
-> CREATE MATERIALIZED VIEW list_view AS SELECT LIST[[1,2],[3]] AS f1, LIST[['1','2'],['abc']] AS f2;
+> EXPLAIN CREATE MATERIALIZED VIEW list_view AS SELECT LIST[[1,2],[3]] AS f1, LIST[['1','2'],['abc']] AS f2;

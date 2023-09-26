@@ -11,7 +11,7 @@
 # From https://github.com/MaterializeInc/materialize/issues/5316
 > CREATE TABLE t1 (f1 INTEGER)
 > CREATE TABLE t2 (f2 INTEGER)
-> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1, t2
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1, t2
 > DROP TABLE t1, t2 CASCADE
 
 # Test CREATE OR REPLACE statement that attempts to depend

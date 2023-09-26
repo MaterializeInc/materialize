@@ -38,7 +38,7 @@ statement ok
 CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS
+EXPLAIN CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 statement ok
@@ -51,7 +51,7 @@ FROM t
 GROUP BY a
 
 statement ok
-CREATE MATERIALIZED VIEW hierarchical_group_by_mv AS
+EXPLAIN CREATE MATERIALIZED VIEW hierarchical_group_by_mv AS
 SELECT * FROM hierarchical_group_by
 
 statement ok
@@ -62,7 +62,7 @@ SELECT
 FROM t
 
 statement ok
-CREATE MATERIALIZED VIEW hierarchical_global_mv AS
+EXPLAIN CREATE MATERIALIZED VIEW hierarchical_global_mv AS
 SELECT * FROM hierarchical_global
 
 statement ok
@@ -79,7 +79,7 @@ FROM t
 GROUP BY a
 
 statement ok
-CREATE MATERIALIZED VIEW collated_group_by_mv AS
+EXPLAIN CREATE MATERIALIZED VIEW collated_group_by_mv AS
 SELECT * FROM collated_group_by
 
 statement ok
@@ -94,7 +94,7 @@ SELECT
 FROM t
 
 statement ok
-CREATE MATERIALIZED VIEW collated_global_mv AS
+EXPLAIN CREATE MATERIALIZED VIEW collated_global_mv AS
 SELECT * FROM collated_global
 
 mode cockroach

@@ -10,7 +10,7 @@
 #
 # CREATE a view containing subqueries/derived tables of various types
 
-> CREATE MATERIALIZED VIEW subquery_view AS
+> EXPLAIN CREATE MATERIALIZED VIEW subquery_view AS
   SELECT (SELECT 1)
   FROM (SELECT 2) AS derived
   WHERE 2 NOT IN (SELECT 3)

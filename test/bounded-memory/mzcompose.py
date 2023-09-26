@@ -71,7 +71,7 @@ class PgCdcScenario(Scenario):
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES;
 
-        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+        > EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
         """
     )
 
@@ -117,7 +117,7 @@ class KafkaScenario(Scenario):
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;
 
-        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
+        > EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
         """
     )
 
@@ -306,7 +306,7 @@ SCENARIOS = [
             ALTER SYSTEM SET max_result_size = 2147483648;
 
             > CREATE TABLE t1 (f1 STRING, f2 STRING)
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+            > EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
             """
         )
         + "\n".join(

@@ -277,7 +277,7 @@ SELECT * FROM v
 
 # Nor can you create indexes on that cluster.
 statement error unknown cluster 'bad'
-CREATE MATERIALIZED VIEW v2 AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW v2 AS SELECT 1
 
 # But you can create unmaterialized views on that cluster.
 statement ok

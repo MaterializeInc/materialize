@@ -34,12 +34,12 @@ class DeltaJoin(Check):
             for s in [
                 """
                 > INSERT INTO delta_join_table1 VALUES (2, 2);
-                > CREATE MATERIALIZED VIEW delta_join_view1 AS SELECT * FROM delta_join_table1, delta_join_table2 WHERE delta_join_table1.f1 = delta_join_table2.f3;
+                > EXPLAIN CREATE MATERIALIZED VIEW delta_join_view1 AS SELECT * FROM delta_join_table1, delta_join_table2 WHERE delta_join_table1.f1 = delta_join_table2.f3;
                 > INSERT INTO delta_join_table2 VALUES (2, 2);
                 """,
                 """
                 > INSERT INTO delta_join_table1 VALUES (3, 3);
-                > CREATE MATERIALIZED VIEW delta_join_view2 AS SELECT * FROM delta_join_table1, delta_join_table2 WHERE delta_join_table1.f1 = delta_join_table2.f3;
+                > EXPLAIN CREATE MATERIALIZED VIEW delta_join_view2 AS SELECT * FROM delta_join_table1, delta_join_table2 WHERE delta_join_table1.f1 = delta_join_table2.f3;
                 > INSERT INTO delta_join_table2 VALUES (3, 3);
                 """,
             ]
@@ -83,12 +83,12 @@ class LinearJoin(Check):
             for s in [
                 """
                 > INSERT INTO linear_join_table1 VALUES (2);
-                > CREATE MATERIALIZED VIEW linear_join_view1 AS SELECT * FROM linear_join_table1, linear_join_table2 WHERE linear_join_table1.f1 = linear_join_table2.f2;
+                > EXPLAIN CREATE MATERIALIZED VIEW linear_join_view1 AS SELECT * FROM linear_join_table1, linear_join_table2 WHERE linear_join_table1.f1 = linear_join_table2.f2;
                 > INSERT INTO linear_join_table2 VALUES (2);
                 """,
                 """
                 > INSERT INTO linear_join_table1 VALUES (3);
-                > CREATE MATERIALIZED VIEW linear_join_view2 AS SELECT * FROM linear_join_table1, linear_join_table2 WHERE linear_join_table1.f1 = linear_join_table2.f2;
+                > EXPLAIN CREATE MATERIALIZED VIEW linear_join_view2 AS SELECT * FROM linear_join_table1, linear_join_table2 WHERE linear_join_table1.f1 = linear_join_table2.f2;
                 > INSERT INTO linear_join_table2 VALUES (3);
                 """,
             ]

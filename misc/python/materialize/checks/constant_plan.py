@@ -27,10 +27,10 @@ class ConstantPlan(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW constant_plan_view1 AS SELECT * FROM constant_plan1 WHERE FALSE
+                > EXPLAIN CREATE MATERIALIZED VIEW constant_plan_view1 AS SELECT * FROM constant_plan1 WHERE FALSE
                 """,
                 """
-                > CREATE MATERIALIZED VIEW constant_plan_view2 AS (VALUES (1), (2), (3))
+                > EXPLAIN CREATE MATERIALIZED VIEW constant_plan_view2 AS (VALUES (1), (2), (3))
                 """,
             ]
         ]

@@ -38,7 +38,7 @@ $ kafka-create-topic topic=data
 
 > SELECT * FROM data_view
 
-> CREATE MATERIALIZED VIEW test1 AS
+> EXPLAIN CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW VIEWS
@@ -76,13 +76,13 @@ sum   false   numeric
 > SHOW VIEWS LIKE '%data%'
 data_view
 
-> SHOW CREATE MATERIALIZED VIEW test1
+> SHOW EXPLAIN CREATE MATERIALIZED VIEW test1
 name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"default\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+materialize.public.test1  "EXPLAIN CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"default\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
-> CREATE MATERIALIZED VIEW test2 AS
+> EXPLAIN CREATE MATERIALIZED VIEW test2 AS
   SELECT b, 1 + sum(a + 1) FROM data_view GROUP BY b
 
 > SELECT * FROM test2
@@ -111,7 +111,7 @@ b  min
 1  1
 2  1
 
-> CREATE MATERIALIZED VIEW test4 AS
+> EXPLAIN CREATE MATERIALIZED VIEW test4 AS
   SELECT b, max(a) FROM data_view GROUP BY b
 
 > SELECT * FROM test4
@@ -211,7 +211,7 @@ b  c
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.
-> CREATE MATERIALIZED VIEW test6 AS SELECT (-c + 2*b) AS d FROM test5
+> EXPLAIN CREATE MATERIALIZED VIEW test6 AS SELECT (-c + 2*b) AS d FROM test5
 
 > SELECT * from test6
 d
@@ -358,7 +358,7 @@ mat_data_progress progress  <null>                        <null>
 
 # Can create both materialized and unmaterialized views from materialized
 # source.
-> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data
+> EXPLAIN CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data
 
 > SELECT * from test7
 count

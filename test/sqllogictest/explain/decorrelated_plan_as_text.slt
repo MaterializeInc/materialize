@@ -24,7 +24,7 @@ statement ok
 CREATE INDEX v_a_idx ON v(a)
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS
+EXPLAIN CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 mode cockroach

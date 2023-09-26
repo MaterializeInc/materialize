@@ -218,8 +218,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
             INSERT INTO t VALUES (1, 2, 3, 4, 5, 6, '7'), (3, 4, 5, 6, 7, 8, '9'), (5, 6, 7, 8, 9, 10, '11'), (7, 8, 9, 10, 11, 12, '13'), (9, 10, 11, 12, 13, 14, '15'), (11, 12, 13, 14, 15, 16, '17'), (13, 14, 15, 16, 17, 18, '19'), (15, 16, 17, 18, 19, 20, '21');
-            CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t;
-            CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
+            EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t;
+            EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
             CREATE DEFAULT INDEX ON mv;
             """,
             service=mz_server,

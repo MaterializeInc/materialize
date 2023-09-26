@@ -43,7 +43,7 @@ class CreateManagedCluster(Check):
 
                 > SET cluster=create_managed_cluster1
                 > CREATE DEFAULT INDEX ON create_managed_cluster1_table;
-                > CREATE MATERIALIZED VIEW create_managed_cluster1_view AS SELECT SUM(f1) FROM create_managed_cluster1_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW create_managed_cluster1_view AS SELECT SUM(f1) FROM create_managed_cluster1_table;
 
                 > SELECT * FROM create_managed_cluster1_table;
                 123
@@ -52,7 +52,7 @@ class CreateManagedCluster(Check):
 
                 > SET cluster=create_managed_cluster2
                 > CREATE DEFAULT INDEX ON create_managed_cluster2_table;
-                > CREATE MATERIALIZED VIEW create_managed_cluster2_view AS SELECT SUM(f1) FROM create_managed_cluster2_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW create_managed_cluster2_view AS SELECT SUM(f1) FROM create_managed_cluster2_table;
 
                 > SELECT * FROM create_managed_cluster2_table;
                 234
@@ -86,11 +86,11 @@ class DropManagedCluster(Check):
 
                 > SET cluster=drop_managed_cluster1
                 > CREATE DEFAULT INDEX ON drop_managed_cluster1_table;
-                > CREATE MATERIALIZED VIEW drop_managed_cluster1_view AS SELECT SUM(f1) FROM drop_managed_cluster1_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW drop_managed_cluster1_view AS SELECT SUM(f1) FROM drop_managed_cluster1_table;
 
                 > SET cluster=drop_managed_cluster2
                 > CREATE DEFAULT INDEX ON drop_managed_cluster2_table;
-                > CREATE MATERIALIZED VIEW drop_managed_cluster2_view AS SELECT SUM(f1) FROM drop_managed_cluster2_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW drop_managed_cluster2_view AS SELECT SUM(f1) FROM drop_managed_cluster2_table;
 
                 > DROP CLUSTER drop_managed_cluster1 CASCADE;
                 """,

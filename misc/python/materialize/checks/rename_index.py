@@ -20,7 +20,7 @@ class RenameIndex(Check):
                 > CREATE TABLE rename_index_table (f1 INTEGER,f2 INTEGER);
                 > CREATE INDEX rename_index_index1 ON rename_index_table (f2);
                 > INSERT INTO rename_index_table VALUES (1,1);
-                > CREATE MATERIALIZED VIEW rename_index_view1 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_index_view1 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
                 """
             )
         )
@@ -33,7 +33,7 @@ class RenameIndex(Check):
                 > INSERT INTO rename_index_table VALUES (2,2);
                 > ALTER INDEX rename_index_index1 RENAME TO rename_index_index2;
                 > CREATE INDEX rename_index_index1 ON rename_index_table (f2);
-                > CREATE MATERIALIZED VIEW rename_index_view2 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_index_view2 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
                 > INSERT INTO rename_index_table VALUES (3,3);
                 """,
                 """
@@ -45,7 +45,7 @@ class RenameIndex(Check):
                 ALTER INDEX rename_index_index2 OWNER TO materialize;
 
                 > INSERT INTO rename_index_table VALUES (4,4);
-                > CREATE MATERIALIZED VIEW rename_index_view3 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_index_view3 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
                 > ALTER INDEX rename_index_index2 RENAME TO rename_index_index3;
                 > ALTER INDEX rename_index_index1 RENAME TO rename_index_index2;
                 > INSERT INTO rename_index_table VALUES (5,5);

@@ -30,12 +30,12 @@ class CreateTable(Check):
                 """
                 > CREATE TABLE create_table2 (f1 INTEGER, f2 INTEGER NOT NULL DEFAULT 1234);
                 > INSERT INTO create_table2 VALUES (2,2);
-                > CREATE MATERIALIZED VIEW create_table_view1 AS SELECT create_table1.f1 FROM create_table1, create_table2;
+                > EXPLAIN CREATE MATERIALIZED VIEW create_table_view1 AS SELECT create_table1.f1 FROM create_table1, create_table2;
                 """,
                 """
                 > CREATE TABLE create_table3 (f1 INTEGER, f2 INTEGER NOT NULL DEFAULT 1234);
                 > INSERT INTO create_table3 VALUES (3,3);
-                > CREATE MATERIALIZED VIEW create_table_view2 AS SELECT create_table2.f1 FROM create_table2, create_table3;
+                > EXPLAIN CREATE MATERIALIZED VIEW create_table_view2 AS SELECT create_table2.f1 FROM create_table2, create_table3;
 
                 """,
             ]

@@ -11,7 +11,7 @@
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE TABLE t (a text, b text)
-> CREATE MATERIALIZED VIEW simple_view AS SELECT * from t;
+> EXPLAIN CREATE MATERIALIZED VIEW simple_view AS SELECT * from t;
 
 > CREATE SINK simple_view_sink FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic-${testdrive.seed}')

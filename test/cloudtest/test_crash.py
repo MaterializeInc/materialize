@@ -44,7 +44,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             $ kafka-ingest format=bytes topic=crash
             CDE
 
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1;
+            > EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1;
 
             $ kafka-ingest format=bytes topic=crash
             DEF
@@ -154,7 +154,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     )
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
     mz.environmentd.sql(
-        "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_internal.mz_panic(f1) FROM crash_table"
+        "EXPLAIN CREATE MATERIALIZED VIEW crash_view AS SELECT mz_internal.mz_panic(f1) FROM crash_table"
     )
     mz.environmentd.sql("INSERT INTO crash_table VALUES ('forced panic')")
 

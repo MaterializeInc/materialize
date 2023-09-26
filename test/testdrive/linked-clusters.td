@@ -14,7 +14,7 @@ SELECT ${arg.replicas} > 1;
 $ set-sql-timeout duration=1s
 
 # Create a basic view for use throughout the test.
-> CREATE MATERIALIZED VIEW v AS SELECT 1 AS a
+> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT 1 AS a
 
 # Test that only the default replicas exist at start.
 > SELECT name FROM (SHOW CLUSTERS)
@@ -98,7 +98,7 @@ contains:cannot modify linked cluster "materialize_public_lg2"
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE CLUSTER REPLICA materialize_public_lg2.new SIZE 'small'
 contains:cannot create more than one replica of a cluster containing sources or sinks
-! CREATE MATERIALIZED VIEW w IN CLUSTER materialize_public_lg2 AS SELECT 1
+! EXPLAIN CREATE MATERIALIZED VIEW w IN CLUSTER materialize_public_lg2 AS SELECT 1
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE INDEX IN CLUSTER materialize_public_lg2 ON v (a)
 contains:cannot modify linked cluster "materialize_public_lg2"

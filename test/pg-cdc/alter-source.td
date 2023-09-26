@@ -222,8 +222,8 @@ INSERT INTO table_b VALUES (3, 'three');
 # IF EXISTS works with multiple tables
 > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_c, table_d;
 
-> CREATE MATERIALIZED VIEW mv_e AS SELECT pk + 1 FROM table_e;
-> CREATE MATERIALIZED VIEW mv_f AS SELECT pk + 1 FROM table_f;
+> EXPLAIN CREATE MATERIALIZED VIEW mv_e AS SELECT pk + 1 FROM table_e;
+> EXPLAIN CREATE MATERIALIZED VIEW mv_f AS SELECT pk + 1 FROM table_f;
 
 # Makes progress after dropping subsources
 $ postgres-execute connection=postgres://postgres:postgres@postgres

@@ -40,9 +40,9 @@ $ kafka-create-topic topic=data2 partitions=2
     )
     FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW view_rt AS SELECT b, sum(a) FROM data_rt GROUP BY b
+> EXPLAIN CREATE MATERIALIZED VIEW view_rt AS SELECT b, sum(a) FROM data_rt GROUP BY b
 
-> CREATE MATERIALIZED VIEW view_empty AS SELECT b, sum(a) FROM data_empty GROUP BY b
+> EXPLAIN CREATE MATERIALIZED VIEW view_empty AS SELECT b, sum(a) FROM data_empty GROUP BY b
 
 > SELECT * FROM view_empty;
 b sum

@@ -44,7 +44,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             $ kafka-ingest format=bytes topic=shared-fate repeat=1000
             CDE${{kafka-ingest.iteration}}
 
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1;
+            > EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1;
 
             $ kafka-ingest format=bytes topic=shared-fate repeat=1000
             DEF${{kafka-ingest.iteration}}

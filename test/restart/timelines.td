@@ -101,7 +101,7 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE 'user')
 
-> CREATE MATERIALIZED VIEW foo AS SELECT a, b FROM data_foo
+> EXPLAIN CREATE MATERIALIZED VIEW foo AS SELECT a, b FROM data_foo
 
 $ kafka-ingest format=avro topic=foo schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[],"counts":[{"time":1,"count":1}]}}

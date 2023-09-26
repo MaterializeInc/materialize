@@ -58,7 +58,7 @@ contains:unknown catalog item 'UID'
 
 # Exclude FETCH from the retry logic
 
-> CREATE MATERIALIZED VIEW v1 AS VALUES (1),(2),(3);
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS VALUES (1),(2),(3);
 
 > BEGIN
 
@@ -82,7 +82,7 @@ contains:unknown catalog item 'UID'
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
+> EXPLAIN CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
 > CREATE SINK sort_messages_sink FROM sort_messages
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sort-messages-sink-${testdrive.seed}')
@@ -169,7 +169,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 
 # kafka-verify with regexp (the set-regexp from above is used)
 
-> CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
+> EXPLAIN CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-verify-regexp-sink-${testdrive.seed}')

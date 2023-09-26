@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Plans for the TPC-H workload modeled as CREATE MATERIALIZED VIEW
+# Plans for the TPC-H workload modeled as EXPLAIN CREATE MATERIALIZED VIEW
 # statements.
 
 # PRIMARY KEY annotations (which are in the spec) are currently
@@ -167,7 +167,7 @@ CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
 query T multiline
 -- Query 01
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q01 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q01 AS
 SELECT
 	l_returnflag,
 	l_linestatus,
@@ -207,7 +207,7 @@ EOF
 query T multiline
 -- Query 02
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q02 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q02 AS
 SELECT
     s_acctbal,
     s_name,
@@ -316,7 +316,7 @@ EOF
 query T multiline
 -- Query 03
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q03 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q03 AS
 SELECT
     l_orderkey,
     sum(l_extendedprice * (1 - l_discount)) AS revenue,
@@ -369,7 +369,7 @@ EOF
 query T multiline
 -- Query 04
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q04 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q04 AS
 SELECT
     o_orderpriority,
     count(*) AS order_count
@@ -424,7 +424,7 @@ EOF
 query T multiline
 -- Query 05
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q05 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q05 AS
 SELECT
     n_name,
     sum(l_extendedprice * (1 - l_discount)) AS revenue
@@ -486,7 +486,7 @@ EOF
 query T multiline
 -- Query 06
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q06 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q06 AS
 SELECT
     sum(l_extendedprice * l_discount) AS revenue
 FROM
@@ -524,7 +524,7 @@ EOF
 query T multiline
 -- Query 07
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q07 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q07 AS
 SELECT
     supp_nation,
     cust_nation,
@@ -611,7 +611,7 @@ EOF
 query T multiline
 -- Query 08
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q08 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q08 AS
 SELECT
     o_year,
     sum(case
@@ -704,7 +704,7 @@ EOF
 query T multiline
 -- Query 09
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q09 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q09 AS
 SELECT
     nation,
     o_year,
@@ -781,7 +781,7 @@ EOF
 query T multiline
 -- Query 10
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q10 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q10 AS
 SELECT
     c_custkey,
     c_name,
@@ -849,7 +849,7 @@ EOF
 query T multiline
 -- Query 11
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q11 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q11 AS
 SELECT
     ps_partkey,
     sum(ps_supplycost * ps_availqty) AS value
@@ -920,7 +920,7 @@ EOF
 query T multiline
 -- Query 12
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q12 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q12 AS
 SELECT
     l_shipmode,
     sum(case
@@ -972,7 +972,7 @@ EOF
 query T multiline
 -- Query 13
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q13 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q13 AS
 SELECT
     c_count,
     count(*) AS custdist
@@ -1039,7 +1039,7 @@ EOF
 query T multiline
 -- Query 14
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q14 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q14 AS
 SELECT
     100.00 * sum(case
         when p_type like 'PROMO%'
@@ -1103,7 +1103,7 @@ create view revenue (supplier_no, total_revenue) as
 query T multiline
 -- Query 15
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q15 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q15 AS
 SELECT
     s_suppkey,
     s_name,
@@ -1159,7 +1159,7 @@ drop view revenue
 query T multiline
 -- Query 16
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q16 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q16 AS
 SELECT
     p_brand,
     p_type,
@@ -1243,7 +1243,7 @@ EOF
 query T multiline
 -- Query 17
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q17 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q17 AS
 SELECT
   sum(l_extendedprice) / 7.0 AS avg_yearly
 FROM
@@ -1319,7 +1319,7 @@ EOF
 query T multiline
 -- Query 18
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q18 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q18 AS
 SELECT
     c_name,
     c_custkey,
@@ -1404,7 +1404,7 @@ EOF
 query T multiline
 -- Query 19
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q19 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q19 AS
 SELECT
     sum(l_extendedprice* (1 - l_discount)) AS revenue
 FROM
@@ -1476,7 +1476,7 @@ EOF
 query T multiline
 -- Query 20
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q20 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q20 AS
 SELECT
     s_name,
     s_address
@@ -1590,7 +1590,7 @@ EOF
 query T multiline
 -- Query 21
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q21 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q21 AS
 SELECT
     s_name,
     count(*) AS numwait
@@ -1712,7 +1712,7 @@ EOF
 query T multiline
 -- Query 22
 EXPLAIN WITH(humanized_exprs, arity, join_impls)
-CREATE MATERIALIZED VIEW Q22 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q22 AS
 SELECT
     cntrycode,
     count(*) AS numcust,
@@ -1822,7 +1822,7 @@ EOF
 query T multiline
 -- Query 20
 EXPLAIN RAW PLAN FOR
-CREATE MATERIALIZED VIEW Q20 AS
+EXPLAIN CREATE MATERIALIZED VIEW Q20 AS
 SELECT
     s_name,
     s_address

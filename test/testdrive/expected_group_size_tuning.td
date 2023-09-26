@@ -14,7 +14,7 @@
 > CREATE SOURCE lgtpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1) FOR ALL TABLES WITH (SIZE = '1');
 
 # Create a set of materialized views for testing based on the TPC-H schema.
-> CREATE MATERIALIZED VIEW lineitem_by_orderkey AS
+> EXPLAIN CREATE MATERIALIZED VIEW lineitem_by_orderkey AS
   SELECT l1.l_orderkey,
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2
@@ -24,7 +24,7 @@
   FROM lineitem l1
   GROUP BY l1.l_orderkey;
 
-> CREATE MATERIALIZED VIEW lineitem_by_partsuppkey AS
+> EXPLAIN CREATE MATERIALIZED VIEW lineitem_by_partsuppkey AS
   SELECT l1.l_partkey,
         l_suppkey,
         MAX(l1.l_extendedprice),
@@ -36,7 +36,7 @@
   FROM lineitem l1
   GROUP BY l1.l_partkey, l_suppkey;
 
-> CREATE MATERIALIZED VIEW lineitem_by_partkey AS
+> EXPLAIN CREATE MATERIALIZED VIEW lineitem_by_partkey AS
   SELECT l1.l_partkey,
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2
@@ -46,7 +46,7 @@
   FROM lineitem l1
   GROUP BY l1.l_partkey;
 
-> CREATE MATERIALIZED VIEW lineitem_by_suppkey AS
+> EXPLAIN CREATE MATERIALIZED VIEW lineitem_by_suppkey AS
   SELECT l1.l_suppkey,
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2
@@ -109,7 +109,7 @@
 # Create partly hinted versions of the views and check that the advice gets revised accordingly.
 > DROP MATERIALIZED VIEW lineitem_by_suppkey;
 
-> CREATE MATERIALIZED VIEW lineitem_by_suppkey AS
+> EXPLAIN CREATE MATERIALIZED VIEW lineitem_by_suppkey AS
   SELECT l1.l_suppkey,
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2
@@ -122,7 +122,7 @@
 
 > DROP MATERIALIZED VIEW IF EXISTS lineitem_by_orderkey;
 
-> CREATE MATERIALIZED VIEW lineitem_by_orderkey AS
+> EXPLAIN CREATE MATERIALIZED VIEW lineitem_by_orderkey AS
   SELECT l1.l_orderkey,
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2

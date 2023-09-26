@@ -24,7 +24,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 
 > CREATE TABLE t (a int)
 
-> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
 
 > SELECT count_all > 0
   FROM (SELECT SUM(count) as count_all
@@ -106,7 +106,7 @@ true
     time > 0
 16
 
-> CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
+> EXPLAIN CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
@@ -182,7 +182,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test that mz_compute_exports contains correct dataflow IDs.
 
-> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t
+> EXPLAIN CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t
 
 > SELECT count(*)
   FROM
@@ -260,7 +260,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b
 
-> CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+> EXPLAIN CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 

@@ -18,7 +18,7 @@
   SELECT a FROM numeric_insertions
     EXCEPT (SELECT a FROM numeric_deletions);
 
-> CREATE MATERIALIZED VIEW numeric_values_sum AS
+> EXPLAIN CREATE MATERIALIZED VIEW numeric_values_sum AS
     SELECT sum(a) AS sum_a FROM numeric_values;
 
 > INSERT INTO numeric_insertions VALUES
@@ -190,7 +190,7 @@ sum_a
   SELECT a FROM numeric_scaled_insertions
     EXCEPT (SELECT a FROM numeric_scaled_deletions);
 
-> CREATE MATERIALIZED VIEW numeric_scaled_values_sum AS
+> EXPLAIN CREATE MATERIALIZED VIEW numeric_scaled_values_sum AS
     SELECT sum(a)::numeric(39, 3) AS sum_a FROM numeric_scaled_values;
 
 > INSERT INTO numeric_scaled_insertions VALUES ('1.2'), ('2.3'), ('3.4001');
@@ -259,7 +259,7 @@ sum_a
     EXCEPT (SELECT a FROM numeric_scaled_input_deletions)
   );
 
-> CREATE MATERIALIZED VIEW numeric_scaled_inputs_sum AS
+> EXPLAIN CREATE MATERIALIZED VIEW numeric_scaled_inputs_sum AS
     SELECT sum(a) AS sum_a FROM numeric_scaled_inputs;
 
 > INSERT INTO numeric_scaled_input_insertions VALUES ('1.2'), ('2.3'), ('3.4');

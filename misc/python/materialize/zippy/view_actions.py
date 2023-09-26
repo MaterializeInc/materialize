@@ -108,7 +108,7 @@ class CreateView(Action):
         c.testdrive(
             dedent(
                 f"""
-                > CREATE MATERIALIZED VIEW {self.view.name} AS
+                > EXPLAIN CREATE MATERIALIZED VIEW {self.view.name} AS
                   SELECT {aggregates}
                   FROM {first_input.name}
                   {outer_join}

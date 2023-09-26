@@ -36,9 +36,9 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
   ENVELOPE NONE
   WITH (TIMESTAMP INTERVAL '100ms')
 
-> CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1 ORDER BY f1;
+> EXPLAIN CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1 ORDER BY f1;
 
-> CREATE MATERIALIZED VIEW fetch_concurrent_two_sources2_view AS SELECT * FROM fetch_concurrent_two_sources2 ORDER BY f1;
+> EXPLAIN CREATE MATERIALIZED VIEW fetch_concurrent_two_sources2_view AS SELECT * FROM fetch_concurrent_two_sources2 ORDER BY f1;
 
 
 $ kafka-ingest format=avro topic=fetch-concurrent-two-sources schema=${int} timestamp=1

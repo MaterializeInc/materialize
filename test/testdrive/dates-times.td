@@ -56,7 +56,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW data_view as SELECT * from data
+> EXPLAIN CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
 > SELECT * FROM data_view
 1970-01-01 "1970-01-01 18:03:20" "1970-01-01 00:01:05"
@@ -75,7 +75,7 @@ $ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=
 {"d": 0} {"d": 0, "ts_millis": 65000000, "ts_micros": 65000000}
 {"d": 18135} {"d": 18135, "ts_millis": 1566865029000000, "ts_micros": 1566865029000000}
 
-> CREATE MATERIALIZED VIEW ts_precision AS
+> EXPLAIN CREATE MATERIALIZED VIEW ts_precision AS
   SELECT
     TRUE AS key,
     '1970-01-01T00:00:00.123456'::timestamp AS ts,

@@ -117,7 +117,7 @@ class Subscribe(Generator):
         print("> DROP TABLE IF EXISTS t1 CASCADE;")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (-1);")
-        print("> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;")
+        print("> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;")
 
         for i in cls.all():
             print(
@@ -479,7 +479,7 @@ class KafkaSinks(Generator):
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
         for i in cls.all():
-            print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
+            print(f"> EXPLAIN CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -525,7 +525,7 @@ class KafkaSinksSameSource(Generator):
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinksSameSource.COUNT * 10};"
         )
-        print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
+        print("> EXPLAIN CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');"""
         )
@@ -561,7 +561,7 @@ class Columns(Generator):
         )
         print("> INSERT INTO t VALUES (" + ", ".join(str(i) for i in cls.all()) + ");")
         print(
-            "> CREATE MATERIALIZED VIEW v AS SELECT "
+            "> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT "
             + ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
             + " FROM t;"
         )
@@ -787,11 +787,11 @@ class ViewsMaterializedNested(Generator):
         )
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
-        print("> CREATE MATERIALIZED VIEW v0 (f1) AS SELECT f1 FROM t;")
+        print("> EXPLAIN CREATE MATERIALIZED VIEW v0 (f1) AS SELECT f1 FROM t;")
 
         for i in cls.all():
             print(
-                f"> CREATE MATERIALIZED VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i-1};"
+                f"> EXPLAIN CREATE MATERIALIZED VIEW v{i} AS SELECT f1 + 1 AS f1 FROM v{i-1};"
             )
 
         print(f"> SELECT * FROM v{cls.COUNT};")
@@ -1079,7 +1079,7 @@ class GroupBy(Generator):
         column_list_select = ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
         column_list_group_by = ", ".join(f"f{i} + 1" for i in cls.all())
         print(
-            f"> CREATE MATERIALIZED VIEW v AS SELECT COUNT(*), {column_list_select} FROM t1 GROUP BY {column_list_group_by};"
+            f"> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT COUNT(*), {column_list_select} FROM t1 GROUP BY {column_list_group_by};"
         )
         print("> CREATE DEFAULT INDEX ON v")
         print("> SELECT * FROM v")
@@ -1132,7 +1132,7 @@ class CaseWhen(Generator):
         print("> INSERT INTO t DEFAULT VALUES")
 
         print(
-            "> CREATE MATERIALIZED VIEW v AS SELECT CASE "
+            "> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT CASE "
             + " ".join(f"WHEN f{i} IS NOT NULL THEN f{i}" for i in cls.all())
             + " ELSE 123 END FROM t"
         )
@@ -1150,7 +1150,7 @@ class Coalesce(Generator):
         print("> INSERT INTO t DEFAULT VALUES")
 
         print(
-            "> CREATE MATERIALIZED VIEW v AS SELECT COALESCE("
+            "> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT COALESCE("
             + ",".join(f"f{i}" for i in cls.all())
             + ", 123) FROM t"
         )
@@ -1166,7 +1166,7 @@ class Concat(Generator):
         print("> INSERT INTO t VALUES (REPEAT('A', 1024))")
 
         print(
-            "> CREATE MATERIALIZED VIEW v AS SELECT CONCAT("
+            "> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT CONCAT("
             + ",".join("f" for i in cls.all())
             + ") AS c FROM t"
         )
@@ -1196,7 +1196,7 @@ class ArrayAgg(Generator):
 
             > INSERT INTO t DEFAULT VALUES;
 
-            > CREATE MATERIALIZED VIEW v2 AS SELECT {
+            > EXPLAIN CREATE MATERIALIZED VIEW v2 AS SELECT {
                 ", ".join(
                     f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
                     for i in cls.all()
@@ -1311,7 +1311,7 @@ class RowsJoinOneToOne(Generator):
     @classmethod
     def body(cls) -> None:
         print(
-            f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
+            f"> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
         print(
             "> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
@@ -1325,7 +1325,7 @@ class RowsJoinOneToMany(Generator):
     @classmethod
     def body(cls) -> None:
         print(
-            f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
+            f"> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
         print("> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
         print(f"{cls.COUNT}")
@@ -1337,7 +1337,7 @@ class RowsJoinCross(Generator):
     @classmethod
     def body(cls) -> None:
         print(
-            f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
+            f"> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
         print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
         print(f"{cls.COUNT**2}")
@@ -1353,7 +1353,7 @@ class RowsJoinLargeRetraction(Generator):
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
         print(
-            "> CREATE MATERIALIZED VIEW v1 AS SELECT a1.f1 AS col1 , a2.f1 AS col2 FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f1;"
+            "> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT a1.f1 AS col1 , a2.f1 AS col2 FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = a2.f1;"
         )
 
         print("> SELECT COUNT(*) > 0 FROM v1;")
@@ -1371,7 +1371,7 @@ class RowsJoinDifferential(Generator):
     @classmethod
     def body(cls) -> None:
         print(
-            f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
+            f"> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
         print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
         print(f"{cls.COUNT}")
@@ -1383,7 +1383,7 @@ class RowsJoinOuter(Generator):
     @classmethod
     def body(cls) -> None:
         print(
-            f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
+            f"> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
         print("> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
         print(f"{cls.COUNT}")
@@ -1611,7 +1611,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                          > CREATE DEFAULT INDEX ON ten;
 
-                         > CREATE MATERIALIZED VIEW v_{cluster_name} AS
+                         > EXPLAIN CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
                          > CREATE CONNECTION IF NOT EXISTS kafka_conn

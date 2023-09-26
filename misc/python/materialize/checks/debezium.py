@@ -61,7 +61,7 @@ class DebeziumPostgres(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO debezium_table SELECT 'B', generate_series, 1, REPEAT('X', 16) FROM generate_series(1,1000);
 
-                > CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1 GROUP BY f1, f3;
+                > EXPLAIN CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1 GROUP BY f1, f3;
 
                 > SELECT * FROM debezium_view1;
                 A 1 16000
@@ -92,7 +92,7 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                > CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2 GROUP BY f1, f3;
+                > EXPLAIN CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2 GROUP BY f1, f3;
                 """,
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -112,7 +112,7 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                > CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3 GROUP BY f1, f3;
+                > EXPLAIN CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3 GROUP BY f1, f3;
                 """,
             ]
         ]

@@ -16,7 +16,7 @@ statement ok
 CREATE INDEX a ON tablea(id);
 
 statement ok
-CREATE MATERIALIZED VIEW foobar26 AS
+EXPLAIN CREATE MATERIALIZED VIEW foobar26 AS
   SELECT tableA.id
     FROM tableA
    WHERE ((1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric)) <= mz_now()

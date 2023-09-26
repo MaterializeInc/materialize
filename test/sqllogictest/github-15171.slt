@@ -10,13 +10,13 @@
 mode cockroach
 
 statement error cannot materialize call to mz_version
-create materialized view temp as select mz_version()
+EXPLAIN CREATE MATERIALIZED VIEW temp as select mz_version()
 
 statement error cannot materialize call to mz_version
-create materialized view temp as select 1 where mz_version() = ''
+EXPLAIN CREATE MATERIALIZED VIEW temp as select 1 where mz_version() = ''
 
 statement error cannot materialize call to current_timestamp
-create materialized view temp as select 1 where current_timestamp() > current_timestamp()
+EXPLAIN CREATE MATERIALIZED VIEW temp as select 1 where current_timestamp() > current_timestamp()
 
 statement error cannot materialize call to current_timestamp
-create materialized view temp as select 1 where current_timestamp() > mz_now()
+EXPLAIN CREATE MATERIALIZED VIEW temp as select 1 where current_timestamp() > mz_now()

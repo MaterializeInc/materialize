@@ -29,7 +29,7 @@ class DoubleType(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW double_type_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW double_type_view1 AS
                   SELECT
                   double_col, '-Inf'::double AS minus_inf, '+Inf'::double AS plus_inf, 'NaN'::double AS nan, '1E-307'::double AS c1, '1E+307'::double AS c2
                   FROM double_type_table
@@ -40,7 +40,7 @@ class DoubleType(Check):
                 > INSERT INTO double_type_table SELECT * FROM double_type_table;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW double_type_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW double_type_view2 AS
                   SELECT
                   double_col, '-Inf'::double AS minus_inf, '+Inf'::double AS plus_inf, 'NaN'::double AS nan, '1E-307'::double AS c1, '1E+307'::double AS c2
                   FROM double_type_table
@@ -145,7 +145,7 @@ class RealType(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW real_type_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW real_type_view1 AS
                   SELECT
                   real_col, '-Inf'::real AS minus_inf, '+Inf'::real AS plus_inf, 'NaN'::real AS nan, 1E-37 AS c1, 1E+37 AS c2
                   FROM real_type_table
@@ -156,7 +156,7 @@ class RealType(Check):
                 > INSERT INTO real_type_table SELECT * FROM real_type_table;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW real_type_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW real_type_view2 AS
                   SELECT
                   real_col, '-Inf'::real AS minus_inf, '+Inf'::real AS plus_inf, 'NaN'::real AS nan, 1E-37 AS c1, 1E+37 AS c2
                   FROM real_type_table

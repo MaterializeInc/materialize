@@ -10,10 +10,10 @@
 mode cockroach
 
 statement ok
-CREATE MATERIALIZED VIEW test_view1 AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW test_view1 AS SELECT 1
 
 statement ok
-CREATE MATERIALIZED VIEW test_view2 AS SELECT 2
+EXPLAIN CREATE MATERIALIZED VIEW test_view2 AS SELECT 2
 
 query TTT colnames
 SELECT schemaname, matviewname, definition FROM pg_catalog.pg_matviews WHERE matviewname LIKE 'test_%'

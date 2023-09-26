@@ -32,7 +32,7 @@
 > INSERT INTO "customer" VALUES (1),(14),(15);
 > INSERT INTO lineitem VALUES ( 176);
 
-> CREATE MATERIALIZED VIEW v1 AS
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS
   SELECT * FROM lineitem JOIN orders ON ( l_orderkey = o_orderkey ) JOIN customer ON ( o_custkey = c_custkey );
 
 > INSERT INTO orders VALUES ( 176, 14);

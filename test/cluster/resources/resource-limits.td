@@ -228,9 +228,9 @@ ALTER SYSTEM SET max_materialized_views = 1
 > SHOW max_materialized_views
 1
 
-> CREATE MATERIALIZED VIEW mv1 AS SELECT 1
+> EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT 1
 
-! CREATE MATERIALIZED VIEW mv2 AS SELECT 2
+! EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT 2
 contains:creating materialized view would violate max_materialized_views limit (desired: 2, limit: 1, current: 1)
 
 $ postgres-execute connection=mz_system
@@ -239,7 +239,7 @@ ALTER SYSTEM SET max_materialized_views = 2
 > SHOW max_materialized_views
 2
 
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 2
+> EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT 2
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = 667

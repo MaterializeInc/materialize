@@ -21,7 +21,7 @@ goofus,gallant
   (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
-> CREATE MATERIALIZED VIEW v AS
+> EXPLAIN CREATE MATERIALIZED VIEW v AS
   SELECT column1 || column2 AS c FROM src
 
 > SELECT * FROM v

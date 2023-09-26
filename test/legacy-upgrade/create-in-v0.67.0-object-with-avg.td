@@ -14,7 +14,7 @@
 # Since we're creating in v0.67, these views should not get migrated.
 
 > CREATE VIEW view_with_avg_post_v0_67 (a) AS SELECT avg(position) FROM mz_catalog.mz_columns;
-> CREATE MATERIALIZED VIEW mat_view_with_avg_post_v0_67 (a) AS SELECT avg(position) FROM mz_catalog.mz_columns;
+> EXPLAIN CREATE MATERIALIZED VIEW mat_view_with_avg_post_v0_67 (a) AS SELECT avg(position) FROM mz_catalog.mz_columns;
 
 # HACK: We create views of the same names in `create-in-v0.27.0-object-with-avg`, when running with
 # versions <0.67 those views function calls of AVG(...) should get migrated to use AVG_INTERNAL_V1.
@@ -23,4 +23,4 @@
 # views with AVG_INTERNAL_V1(...) in versions >=0.67 so our aforementioned check continues to work.
 
 > CREATE VIEW view_with_avg_internal (a) AS SELECT avg_internal_v1(position) FROM mz_catalog.mz_columns;
-> CREATE MATERIALIZED VIEW mat_view_with_avg_internal (a) AS SELECT avg_internal_v1(position) FROM mz_catalog.mz_columns;
+> EXPLAIN CREATE MATERIALIZED VIEW mat_view_with_avg_internal (a) AS SELECT avg_internal_v1(position) FROM mz_catalog.mz_columns;

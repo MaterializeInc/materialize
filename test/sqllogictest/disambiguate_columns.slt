@@ -25,19 +25,19 @@ statement error cannot use wildcard expansions or NATURAL JOINs in a view that d
 CREATE VIEW v AS SELECT * FROM (SELECT id, oid FROM mz_sources);
 
 statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM mz_schemas;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM mz_schemas;
 
 statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
-CREATE MATERIALIZED VIEW mv AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
 
 statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
-CREATE MATERIALIZED VIEW mv AS SELECT (mz_tables).* FROM mz_tables;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT (mz_tables).* FROM mz_tables;
 
 statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
-CREATE MATERIALIZED VIEW mv AS SELECT mz_connections.* FROM mz_connections;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT mz_connections.* FROM mz_connections;
 
 statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM (SELECT id, oid FROM mz_sources);
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM (SELECT id, oid FROM mz_sources);
 
 statement ok
 CREATE VIEW v1 AS SELECT oid FROM mz_objects;

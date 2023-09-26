@@ -85,27 +85,27 @@ $ kafka-ingest format=avro topic=data partition=7 schema=${schema}
 {"a": 8}
 {"a": 1}
 
-> CREATE MATERIALIZED VIEW direct_view1a AS SELECT a + 0 AS a FROM direct_source1;
+> EXPLAIN CREATE MATERIALIZED VIEW direct_view1a AS SELECT a + 0 AS a FROM direct_source1;
 
 # Sleep so that the views are not all created at the same time
 
 > SELECT mz_internal.mz_sleep(2);
 <null>
 
-> CREATE MATERIALIZED VIEW direct_view1b AS SELECT a + 0 AS a FROM direct_source1;
+> EXPLAIN CREATE MATERIALIZED VIEW direct_view1b AS SELECT a + 0 AS a FROM direct_source1;
 
-> CREATE MATERIALIZED VIEW derived_view1a AS SELECT a + 0 AS a FROM direct_view1a;
+> EXPLAIN CREATE MATERIALIZED VIEW derived_view1a AS SELECT a + 0 AS a FROM direct_view1a;
 
 > SELECT mz_internal.mz_sleep(2);
 <null>
 
-> CREATE MATERIALIZED VIEW derived_view1b AS SELECT a + 0 AS a FROM direct_view1b;
+> EXPLAIN CREATE MATERIALIZED VIEW derived_view1b AS SELECT a + 0 AS a FROM direct_view1b;
 
-> CREATE MATERIALIZED VIEW join_view1 AS SELECT a1.a + 0 AS a FROM direct_source1 AS a1, direct_view1a;
+> EXPLAIN CREATE MATERIALIZED VIEW join_view1 AS SELECT a1.a + 0 AS a FROM direct_source1 AS a1, direct_view1a;
 
-> CREATE MATERIALIZED VIEW join_view2 AS SELECT a1.a + 0 AS a FROM direct_view1a AS a1, direct_view1b;
+> EXPLAIN CREATE MATERIALIZED VIEW join_view2 AS SELECT a1.a + 0 AS a FROM direct_view1a AS a1, direct_view1b;
 
-> CREATE MATERIALIZED VIEW join_view3 AS SELECT a2.a + 0 AS a FROM direct_view1a, derived_view1b AS a2;
+> EXPLAIN CREATE MATERIALIZED VIEW join_view3 AS SELECT a2.a + 0 AS a FROM direct_view1a, derived_view1b AS a2;
 
 $ kafka-ingest format=avro topic=data partition=8 schema=${schema}
 {"a": 2}
@@ -125,19 +125,19 @@ $ kafka-ingest format=avro topic=data partition=11 schema=${schema}
 {"a": 10}
 {"a": 1}
 
-> CREATE MATERIALIZED VIEW check_v1 AS SELECT a + 0 AS a FROM direct_source1 EXCEPT ALL SELECT a - 0 AS a FROM direct_source1;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v1 AS SELECT a + 0 AS a FROM direct_source1 EXCEPT ALL SELECT a - 0 AS a FROM direct_source1;
 
-> CREATE MATERIALIZED VIEW check_v2 AS SELECT a + 0 AS a FROM direct_view1a EXCEPT ALL SELECT a - 0 AS a FROM direct_view1a;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v2 AS SELECT a + 0 AS a FROM direct_view1a EXCEPT ALL SELECT a - 0 AS a FROM direct_view1a;
 
-> CREATE MATERIALIZED VIEW check_v3 AS SELECT a + 0 AS a FROM direct_view1a EXCEPT ALL SELECT a - 0 AS a FROM direct_view1b;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v3 AS SELECT a + 0 AS a FROM direct_view1a EXCEPT ALL SELECT a - 0 AS a FROM direct_view1b;
 
-> CREATE MATERIALIZED VIEW check_v4 AS SELECT a + 0 AS a FROM derived_view1a EXCEPT ALL SELECT a - 0 AS a FROM derived_view1a;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v4 AS SELECT a + 0 AS a FROM derived_view1a EXCEPT ALL SELECT a - 0 AS a FROM derived_view1a;
 
-> CREATE MATERIALIZED VIEW check_v5 AS SELECT a + 0 AS a FROM derived_view1a EXCEPT ALL SELECT a - 0 AS a FROM derived_view1b;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v5 AS SELECT a + 0 AS a FROM derived_view1a EXCEPT ALL SELECT a - 0 AS a FROM derived_view1b;
 
-> CREATE MATERIALIZED VIEW check_v6 AS SELECT a + 0 AS a FROM join_view1 EXCEPT ALL SELECT a - 0 AS a FROM join_view2;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v6 AS SELECT a + 0 AS a FROM join_view1 EXCEPT ALL SELECT a - 0 AS a FROM join_view2;
 
-> CREATE MATERIALIZED VIEW check_v7 AS SELECT a + 0 AS a FROM join_view2 EXCEPT ALL SELECT a - 0 AS a FROM join_view3;
+> EXPLAIN CREATE MATERIALIZED VIEW check_v7 AS SELECT a + 0 AS a FROM join_view2 EXCEPT ALL SELECT a - 0 AS a FROM join_view3;
 
 $ kafka-ingest format=avro topic=data partition=12 schema=${schema}
 {"a": 31}

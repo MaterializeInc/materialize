@@ -31,7 +31,7 @@
 
 # Test that frontiers of materialized views are reported.
 
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1
+> EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1
 
 > SELECT
     mvs.name,
@@ -307,7 +307,7 @@ mv1  r3
 
 # Test that collections with empty frontiers are omitted.
 
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1
+> EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT 1
 
 > SELECT
     count(*)

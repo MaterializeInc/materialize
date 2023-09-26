@@ -125,7 +125,7 @@ $ kafka-ingest topic=static format=bytes
 # Regression for #8942
 # Ensure that non-materialized, transitive views are not included. Here,
 # unindexed should not be included in the timedomain.
-> CREATE MATERIALIZED VIEW v_materialized AS SELECT count(*) FROM unindexed
+> EXPLAIN CREATE MATERIALIZED VIEW v_materialized AS SELECT count(*) FROM unindexed
 # Wait for the view to be updated, since we can't retry in the transaction if
 # it returns a 0 timestamp error.
 > SELECT * FROM v_materialized

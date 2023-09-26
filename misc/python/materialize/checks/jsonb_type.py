@@ -28,7 +28,7 @@ class JsonbType(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW jsonb_type_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW jsonb_type_view1 AS
                     WITH cte AS (SELECT '{"object_element":{"a":"b"},"array_element": [1,2], "string_element":"abc", "number_element":123.456, "boolean_element": true, "null_element":null}'::JSONB AS cte_jsonb_col)
                     SELECT
                       jsonb_col AS c1,
@@ -47,7 +47,7 @@ class JsonbType(Check):
                 > INSERT INTO jsonb_type_table SELECT * FROM jsonb_type_table LIMIT 1;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW jsonb_type_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW jsonb_type_view2 AS
                     WITH cte AS (SELECT '{"object_element":{"a":"b"},"array_element": [1,2], "string_element":"abc", "number_element":123.456, "boolean_element": true, "null_element":null}'::JSONB AS cte_jsonb_col)
                     SELECT
                       jsonb_col AS c1,

@@ -65,7 +65,7 @@ contains:cannot be run inside a transaction block
 
 > COMMIT
 
-> CREATE MATERIALIZED VIEW v (a, b, c) AS SELECT 11, 12::real, 'f';
+> EXPLAIN CREATE MATERIALIZED VIEW v (a, b, c) AS SELECT 11, 12::real, 'f';
 
 > INSERT INTO t (i, f, t) SELECT a, b, c FROM v;
 
@@ -99,7 +99,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW source_data_mat_view AS
+> EXPLAIN CREATE MATERIALIZED VIEW source_data_mat_view AS
   SELECT * FROM source_data;
 
 ! INSERT INTO t SELECT * FROM source_data_mat_view;

@@ -33,19 +33,19 @@ class Aggregation(Check):
                 """
                     > SET search_path=aggregation_schema;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.order_by1 AS SELECT * FROM t1 ORDER BY f3 DESC, f2 ASC , f1 DESC LIMIT 999999999;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.order_by1 AS SELECT * FROM t1 ORDER BY f3 DESC, f2 ASC , f1 DESC LIMIT 999999999;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.limit_one1 AS SELECT * FROM t1 LIMIT 1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.limit_one1 AS SELECT * FROM t1 LIMIT 1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.limit_many1 AS SELECT * FROM t1 LIMIT 999999999;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.limit_many1 AS SELECT * FROM t1 LIMIT 999999999;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.top_level_distinct1 AS SELECT DISTINCT f1, f2 FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.top_level_distinct1 AS SELECT DISTINCT f1, f2 FROM t1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.global_count1 AS SELECT COUNT(*) FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.global_count1 AS SELECT COUNT(*) FROM t1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation1 AS SELECT COUNT(f1), MIN(f1), MAX(f1), SUM(f1) FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation1 AS SELECT COUNT(f1), MIN(f1), MAX(f1), SUM(f1) FROM t1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation_distinct1 AS SELECT COUNT(DISTINCT f1), MIN(DISTINCT f1), MAX(DISTINCT f1), SUM(DISTINCT f1) FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation_distinct1 AS SELECT COUNT(DISTINCT f1), MIN(DISTINCT f1), MAX(DISTINCT f1), SUM(DISTINCT f1) FROM t1;
 
                     > INSERT INTO aggregation_schema.t1 VALUES (2,2,2), (3,3,3), (NULL, NULL, NULL);
                     """,
@@ -54,19 +54,19 @@ class Aggregation(Check):
 
                     > INSERT INTO aggregation_schema.t1 VALUES (3,3,3), (4,4,4), (NULL, NULL, NULL);
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.order_by2 AS SELECT * FROM t1 ORDER BY f3 DESC, f2 ASC , f1 DESC LIMIT 999999999;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.order_by2 AS SELECT * FROM t1 ORDER BY f3 DESC, f2 ASC , f1 DESC LIMIT 999999999;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.limit_one2 AS SELECT * FROM t1 LIMIT 1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.limit_one2 AS SELECT * FROM t1 LIMIT 1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.limit_many2 AS SELECT * FROM t1 LIMIT 999999999;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.limit_many2 AS SELECT * FROM t1 LIMIT 999999999;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.top_level_distinct2 AS SELECT DISTINCT f1, f2 FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.top_level_distinct2 AS SELECT DISTINCT f1, f2 FROM t1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.global_count2 AS SELECT COUNT(*) FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.global_count2 AS SELECT COUNT(*) FROM t1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation2 AS SELECT COUNT(f1), MIN(f1), MAX(f1), SUM(f1) FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation2 AS SELECT COUNT(f1), MIN(f1), MAX(f1), SUM(f1) FROM t1;
 
-                    > CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation_distinct2 AS SELECT COUNT(DISTINCT f1), MIN(DISTINCT f1), MAX(DISTINCT f1), SUM(DISTINCT f1) FROM t1;
+                    > EXPLAIN CREATE MATERIALIZED VIEW aggregation_schema.global_aggregation_distinct2 AS SELECT COUNT(DISTINCT f1), MIN(DISTINCT f1), MAX(DISTINCT f1), SUM(DISTINCT f1) FROM t1;
 
                     > INSERT INTO aggregation_schema.t1 VALUES (5,5,5), (6,6,6), (NULL, NULL, NULL);
                     """,

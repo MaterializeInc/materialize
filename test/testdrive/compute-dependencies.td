@@ -23,7 +23,7 @@
 > CREATE TABLE t2 (b int)
 
 > CREATE VIEW v1 AS SELECT * FROM t1, t2
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v1
+> EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v1
 
 > SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
@@ -63,7 +63,7 @@ mv1             t2
 # Test that compute object without dependencies don't show up in
 # `mz_compute_dependencies`.
 
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
+> EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
 
 > SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
 

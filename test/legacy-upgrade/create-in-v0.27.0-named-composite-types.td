@@ -13,8 +13,8 @@
 
 > CREATE TYPE composite_type AS (a int, b text, c float8);
 
-> CREATE MATERIALIZED VIEW composite_type_view AS SELECT (1, 'abc', 2.0)::composite_type as f1;
+> EXPLAIN CREATE MATERIALIZED VIEW composite_type_view AS SELECT (1, 'abc', 2.0)::composite_type as f1;
 
 > CREATE TYPE nested_composite_type AS (a int, b composite_type);
 
-> CREATE MATERIALIZED VIEW nested_composite_type_view AS SELECT (3, (1, 'abc', 2.0))::nested_composite_type as f1;
+> EXPLAIN CREATE MATERIALIZED VIEW nested_composite_type_view AS SELECT (3, (1, 'abc', 2.0))::nested_composite_type as f1;

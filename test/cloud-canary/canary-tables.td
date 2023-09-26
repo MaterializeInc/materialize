@@ -13,7 +13,7 @@
 
 > INSERT INTO table1 SELECT generate_series FROM generate_series(1, 10000);
 
-> CREATE MATERIALIZED VIEW table_view1 AS SELECT COUNT(*) FROM table1;
+> EXPLAIN CREATE MATERIALIZED VIEW table_view1 AS SELECT COUNT(*) FROM table1;
 
 > CREATE DEFAULT INDEX ON table_view1;
 

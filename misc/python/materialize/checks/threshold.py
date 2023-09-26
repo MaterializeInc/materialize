@@ -34,12 +34,12 @@ class Threshold(Check):
             for s in [
                 """
                 > INSERT INTO threshold_table1 VALUES (1);
-                > CREATE MATERIALIZED VIEW threshold_view1 AS SELECT * FROM threshold_table1 EXCEPT SELECT * FROM threshold_table2;
+                > EXPLAIN CREATE MATERIALIZED VIEW threshold_view1 AS SELECT * FROM threshold_table1 EXCEPT SELECT * FROM threshold_table2;
                 > INSERT INTO threshold_table2 VALUES (2);
                 """,
                 """
                 > INSERT INTO threshold_table1 VALUES (2);
-                > CREATE MATERIALIZED VIEW threshold_view2 AS SELECT * FROM threshold_table2 EXCEPT ALL SELECT * FROM threshold_table1;
+                > EXPLAIN CREATE MATERIALIZED VIEW threshold_view2 AS SELECT * FROM threshold_table2 EXCEPT ALL SELECT * FROM threshold_table1;
                 > INSERT INTO threshold_table2 VALUES (3);
                 """,
             ]

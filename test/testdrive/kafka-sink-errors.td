@@ -14,7 +14,7 @@ ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 # Test various errors that can happen at CREATE SINK time and check how they are reported to the user
 #
 
-> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (1);
+> EXPLAIN CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (1);
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');

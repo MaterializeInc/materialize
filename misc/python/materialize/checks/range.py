@@ -71,7 +71,7 @@ class Range(Check):
 
     def manipulate(self) -> list[Testdrive]:
         manipulation = """
-                > CREATE MATERIALIZED VIEW $view_name$ AS
+                > EXPLAIN CREATE MATERIALIZED VIEW $view_name$ AS
                   SELECT
                     index,
                     i4_range,

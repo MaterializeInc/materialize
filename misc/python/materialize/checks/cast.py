@@ -28,11 +28,11 @@ class Cast(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW cast_view1 AS SELECT f1::bool AS c1, f1::int AS c2, f1::float AS c3, f1::numeric AS c4, f1::real AS c5, f1::text AS c6, f1::uint2 AS c7, f1::uint4 AS c8, f1::uint8 AS c9, f1::text AS c10, cast(f1 AS bool) AS c11 FROM cast_table WHERE f1 >= 0;
+                > EXPLAIN CREATE MATERIALIZED VIEW cast_view1 AS SELECT f1::bool AS c1, f1::int AS c2, f1::float AS c3, f1::numeric AS c4, f1::real AS c5, f1::text AS c6, f1::uint2 AS c7, f1::uint4 AS c8, f1::uint8 AS c9, f1::text AS c10, cast(f1 AS bool) AS c11 FROM cast_table WHERE f1 >= 0;
                 > INSERT INTO cast_table VALUES (1);
             """,
                 """
-                > CREATE MATERIALIZED VIEW cast_view2 AS SELECT f1::bool AS c1, f1::int AS c2, f1::float AS c3, f1::numeric AS c4, f1::real AS c5, f1::text AS c6, f1::text AS c7, cast(f1 AS bool) AS c8 FROM cast_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW cast_view2 AS SELECT f1::bool AS c1, f1::int AS c2, f1::float AS c3, f1::numeric AS c4, f1::real AS c5, f1::text AS c6, f1::text AS c7, cast(f1 AS bool) AS c8 FROM cast_table;
                 > INSERT INTO cast_table VALUES (-1);
             """,
             ]

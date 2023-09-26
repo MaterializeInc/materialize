@@ -31,7 +31,7 @@ class MaterializedViews(Check):
                 """
                 > INSERT INTO materialized_views_table SELECT 'T2A' || generate_series FROM generate_series(1, 10000);
 
-                > CREATE MATERIALIZED VIEW materialized_view1 AS SELECT LEFT(f1, 3), COUNT(*) FROM materialized_views_table GROUP BY LEFT(f1, 3);
+                > EXPLAIN CREATE MATERIALIZED VIEW materialized_view1 AS SELECT LEFT(f1, 3), COUNT(*) FROM materialized_views_table GROUP BY LEFT(f1, 3);
 
                 > DELETE FROM materialized_views_table WHERE LEFT(f1, 3) = 'T1A';
 
@@ -42,7 +42,7 @@ class MaterializedViews(Check):
                 """
                 > DELETE FROM materialized_views_table WHERE LEFT(f1, 3) = 'T2A';
 
-                > CREATE MATERIALIZED VIEW materialized_view2 AS SELECT LEFT(f1, 3), COUNT(*) FROM materialized_views_table GROUP BY LEFT(f1, 3);
+                > EXPLAIN CREATE MATERIALIZED VIEW materialized_view2 AS SELECT LEFT(f1, 3), COUNT(*) FROM materialized_views_table GROUP BY LEFT(f1, 3);
 
                 > INSERT INTO materialized_views_table SELECT 'T3B' || generate_series FROM generate_series(1, 10000);
                 """,

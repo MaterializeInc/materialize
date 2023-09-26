@@ -232,7 +232,7 @@ SET CLUSTER TO mz_introspection
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 ----
 db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
@@ -242,7 +242,7 @@ SET CLUSTER TO mz_system
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
+EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 ----
 db error: ERROR: system cluster 'mz_system' cannot be modified
 

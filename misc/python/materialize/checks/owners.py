@@ -35,7 +35,7 @@ class Owners(Check):
             CREATE TABLE owner_t{i} (c1 int, c2 owner_type{i})
             CREATE INDEX owner_i{i} ON owner_t{i} (c2)
             CREATE VIEW owner_v{i} AS SELECT * FROM owner_t{i}
-            CREATE MATERIALIZED VIEW owner_mv{i} AS SELECT * FROM owner_t{i}
+            EXPLAIN CREATE MATERIALIZED VIEW owner_mv{i} AS SELECT * FROM owner_t{i}
             CREATE SECRET owner_secret{i} AS 'MY_SECRET'
             """
         )

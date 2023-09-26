@@ -38,7 +38,7 @@ goofus,gallant
 > CREATE VIEW v2 AS
   SELECT a || b AS c FROM src_materialized
 
-> CREATE MATERIALIZED VIEW v3 AS
+> EXPLAIN CREATE MATERIALIZED VIEW v3 AS
   SELECT a || b AS c FROM src
 
 # We should refuse to create a sink with invalid WITH options
@@ -127,7 +127,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "jackjill"}}}
 
 # Test Avro serialization of unsigned values.
-> CREATE MATERIALIZED VIEW unsigned (a, b, c, d, e, f) AS
+> EXPLAIN CREATE MATERIALIZED VIEW unsigned (a, b, c, d, e, f) AS
   VALUES ('1'::uint2, '2'::uint2, '3'::uint4, '4'::uint4, '5'::uint8, '6'::uint8)
 > CREATE SINK snk_unsigned FROM unsigned
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk2')
@@ -138,7 +138,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_unsigned sort-messag
 
 # Test the case where we have non +/- 1 multiplicities
 
-> CREATE MATERIALIZED VIEW v4 AS
+> EXPLAIN CREATE MATERIALIZED VIEW v4 AS
   SELECT true AS c FROM src
 
 > CREATE SINK snk4 FROM v4
@@ -182,7 +182,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk6 sort-messages=true
 
 # Test that we are correctly handling SNAPSHOT on views with empty upper
 # frontier
-> CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
+> EXPLAIN CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
 
 > CREATE SINK snk7 FROM foo
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk7-${testdrive.seed}')

@@ -39,7 +39,7 @@ statement ok
 CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (-3, 10), (5, 18446744073709551616)
 
 statement ok
-CREATE MATERIALIZED VIEW valid AS
+EXPLAIN CREATE MATERIALIZED VIEW valid AS
 SELECT *
 FROM intervals
 WHERE mz_now() BETWEEN a AND b;

@@ -183,7 +183,7 @@ class View(DBObject):
 
     def create(self, exe: Executor) -> None:
         if self.materialized:
-            query = "CREATE MATERIALIZED VIEW"
+            query = "EXPLAIN CREATE MATERIALIZED VIEW"
         else:
             query = "CREATE VIEW"
         columns_str = ", ".join(

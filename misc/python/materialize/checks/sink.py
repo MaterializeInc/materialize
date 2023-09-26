@@ -49,7 +49,7 @@ class SinkUpsert(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
+                > EXPLAIN CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
 
                 > CREATE SINK sink_sink1 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
@@ -213,7 +213,7 @@ class SinkTables(Check):
                 > SET statement_timeout = '120s';
                 > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
 
-                > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
@@ -254,21 +254,21 @@ class SinkTables(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE MATERIALIZED VIEW sink_large_transaction_view2
+                > EXPLAIN CREATE MATERIALIZED VIEW sink_large_transaction_view2
                   AS
                   SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
                   FROM (
                     SELECT (before).f1, (before).f2 FROM sink_large_transaction_source
                   )
 
-                > CREATE MATERIALIZED VIEW sink_large_transaction_view3
+                > EXPLAIN CREATE MATERIALIZED VIEW sink_large_transaction_view3
                   AS
                   SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
                   FROM (
                     SELECT (after).f1, (after).f2 FROM sink_large_transaction_source
                   )
 
-                > CREATE MATERIALIZED VIEW sink_large_transaction_view4
+                > EXPLAIN CREATE MATERIALIZED VIEW sink_large_transaction_view4
                   AS
                   SELECT LEFT(f2, 1), SUM(c)
                   FROM (

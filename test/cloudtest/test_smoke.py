@@ -55,11 +55,11 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                   FORMAT BYTES
                   ENVELOPE NONE;
 
-                > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+                > EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
                 > SELECT * FROM v1;
                 1
 
-                > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1;
+                > EXPLAIN CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM s1;
                 > SELECT * FROM v2;
                 1
 

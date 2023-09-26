@@ -462,7 +462,7 @@ ALTER VIEW jv OWNER TO group_materialize
 ## Materialized Views
 
 statement ok
-CREATE MATERIALIZED VIEW mmv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mmv AS SELECT 1;
 
 query T
 SELECT mz_roles.name
@@ -501,7 +501,7 @@ statement ok
 DROP MATERIALIZED VIEW ICs
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW jmv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW jmv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -1408,7 +1408,7 @@ GRANT CREATE ON CLUSTER default TO owner;
 COMPLETE 0
 
 simple conn=owner5,user=owner
-CREATE MATERIALIZED VIEW mvv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mvv AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -2238,7 +2238,7 @@ statement ok
 DROP VIEW v;
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1 AS a;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1 AS a;
 
 statement ok
 CREATE INDEX i ON mv(a);
@@ -2716,7 +2716,7 @@ DROP OWNED BY materialize;
 db error: ERROR: cannot drop "materialize.public.t" without CASCADE: still depended upon by non-owned catalog items "materialize.public.v"
 
 simple conn=mz_system,user=mz_system
-CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
 ----
 COMPLETE 0
 
@@ -2789,7 +2789,7 @@ statement ok
 CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
 
 statement ok
-CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2824,7 +2824,7 @@ GRANT CREATE ON SCHEMA public TO joe
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
 ----
 COMPLETE 0
 

@@ -16,7 +16,7 @@
 # will verify that views can be persisted and reloaded from the catalog, so the
 # very presence of this once-buggy view is a sufficient test.
 
-> CREATE MATERIALIZED VIEW v AS
+> EXPLAIN CREATE MATERIALIZED VIEW v AS
   SELECT CAST (column1::jsonb->>'arrival_time' AS timestamptz) arrival_time
   FROM (VALUES ('{"arrival_time":"2020-05-04T13:07:41-04:00"}')) _
 

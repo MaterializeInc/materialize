@@ -28,7 +28,7 @@ class TextByteaTypes(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW string_bytea_types_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW string_bytea_types_view1 AS
                   SELECT text_col, bytea_col, 'това'::TEXT, '\\xAAAA'::BYTEA
                   FROM text_bytea_types_table
                   WHERE text_col >= ''::TEXT AND bytea_col >= ''::BYTEA;
@@ -52,8 +52,8 @@ class TextByteaTypes(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW CREATE MATERIALIZED VIEW string_bytea_types_view1;
-                materialize.public.string_bytea_types_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"string_bytea_types_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"text_col\\", \\"bytea_col\\", 'това'::\\"pg_catalog\\".\\"text\\", '\\\\xAAAA'::\\"pg_catalog\\".\\"bytea\\" FROM \\"materialize\\".\\"public\\".\\"text_bytea_types_table\\" WHERE \\"text_col\\" >= ''::\\"pg_catalog\\".\\"text\\" AND \\"bytea_col\\" >= ''::\\"pg_catalog\\".\\"bytea\\""
+                > SHOW EXPLAIN CREATE MATERIALIZED VIEW string_bytea_types_view1;
+                materialize.public.string_bytea_types_view1 "EXPLAIN CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"string_bytea_types_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"text_col\\", \\"bytea_col\\", 'това'::\\"pg_catalog\\".\\"text\\", '\\\\xAAAA'::\\"pg_catalog\\".\\"bytea\\" FROM \\"materialize\\".\\"public\\".\\"text_bytea_types_table\\" WHERE \\"text_col\\" >= ''::\\"pg_catalog\\".\\"text\\" AND \\"bytea_col\\" >= ''::\\"pg_catalog\\".\\"bytea\\""
 
                 > SELECT text_col, text, LENGTH(bytea_col), LENGTH(bytea) FROM string_bytea_types_view1;
                 aaaa това 2 2

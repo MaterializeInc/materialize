@@ -38,7 +38,7 @@ contains:cannot change the size of a source or sink created with IN CLUSTER
 # Create indexes and materialized views in a storage cluster is banned.
 ! CREATE INDEX bad IN CLUSTER storage ON t (a)
 contains:cannot create this kind of item in a cluster that contains sources or sinks
-! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
+! EXPLAIN CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
 contains:cannot create this kind of item in a cluster that contains sources or sinks
 
 # Executing queries on a storage cluster is banned.
@@ -54,7 +54,7 @@ contains:cannot create more than one replica of a cluster containing sources or 
 # source has been dropped.
 > DROP SOURCE loadgen;
 > CREATE INDEX idx IN CLUSTER storage ON t (a)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT generate_series(1, 1)
+> EXPLAIN CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT generate_series(1, 1)
 
 # As is running queries.
 > SELECT generate_series(1, 1)
@@ -123,9 +123,9 @@ b
 aa
 bb
 
-> CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1
+> EXPLAIN CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1
 
-> CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2
+> EXPLAIN CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2
 
 > CREATE SINK sink1
   IN CLUSTER storage

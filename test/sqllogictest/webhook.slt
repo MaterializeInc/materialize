@@ -114,7 +114,7 @@ headers false map
 
 # Make sure that webhook_cluster only contains sources.
 statement error cannot create this kind of item in a cluster that contains sources or sinks
-CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
+EXPLAIN CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
     SELECT body FROM webhook_text_include_headers
 );
 
@@ -366,7 +366,7 @@ statement ok
 CREATE CLUSTER compute_cluster REPLICAS (r1 (SIZE '1'));
 
 statement ok
-CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute_cluster AS SELECT name FROM mz_objects;
+EXPLAIN CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute_cluster AS SELECT name FROM mz_objects;
 
 statement error cannot create source in cluster containing indexes or materialized views
 CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK

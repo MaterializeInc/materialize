@@ -28,7 +28,7 @@ ALTER SYSTEM SET enable_repeat_row = true
 COMPLETE 0
 
 statement ok
-CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
+EXPLAIN CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
   SELECT data FROM t_base, repeat_row(diff);
 
 # see also: https://github.com/MaterializeInc/materialize/issues/17758

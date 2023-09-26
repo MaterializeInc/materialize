@@ -25,7 +25,7 @@ DistinctByErrorCheck
 # from cte.slt
 > CREATE TABLE squares (x int, y int)
 > CREATE TABLE roots (x int, y int);
-> CREATE MATERIALIZED VIEW v AS
+> EXPLAIN CREATE MATERIALIZED VIEW v AS
   SELECT * FROM squares
   WHERE x IN (
       WITH squares_y AS (
@@ -62,7 +62,7 @@ JoinStage
 
 > CREATE DEFAULT INDEX ON v
 
-> CREATE MATERIALIZED VIEW mv AS
+> EXPLAIN CREATE MATERIALIZED VIEW mv AS
   SELECT * FROM t WHERE a IS NOT NULL
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
@@ -102,16 +102,16 @@ JoinStage
 
 # from materialized_views.slt
 # Disabled because of https://github.com/MaterializeInc/materialize/issues/20188
-#> CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
-#> CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
-#> CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);
-#> CREATE MATERIALIZED VIEW mat_objects AS SELECT name FROM (SHOW OBJECTS);
-#> CREATE MATERIALIZED VIEW mat_schemas AS SELECT name FROM (SHOW SCHEMAS);
-#> CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
-#> CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
-#> CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
-#> CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
-#> CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_objects AS SELECT name FROM (SHOW OBJECTS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_schemas AS SELECT name FROM (SHOW SCHEMAS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
+#> EXPLAIN CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
 #
 #> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 #ArrangeBy[[Column(0)]]
@@ -131,7 +131,7 @@ JoinStage
 # from mztimestamp.slt
 > CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (-3, 10), (5, 18446744073709551616)
 
-> CREATE MATERIALIZED VIEW valid AS
+> EXPLAIN CREATE MATERIALIZED VIEW valid AS
   SELECT *
   FROM intervals
   WHERE mz_now() BETWEEN a AND b;
@@ -143,13 +143,13 @@ JoinStage
 # from outer_join_simpliciation.slt
 > create table foo_raw (a int4, b int8, u text)
 > create table bar_raw (a int4, v text)
-> create materialized view foo as select * from foo_raw where a is not null and b is not null;
-> create materialized view bar as select distinct on (a) a, v from bar_raw
-> create materialized view ban_nn as select * from bar where a is not null
+> EXPLAIN CREATE MATERIALIZED VIEW foo as select * from foo_raw where a is not null and b is not null;
+> EXPLAIN CREATE MATERIALIZED VIEW bar as select distinct on (a) a, v from bar_raw
+> EXPLAIN CREATE MATERIALIZED VIEW ban_nn as select * from bar where a is not null
 > create table baz_raw (b int8, c int2, w text)
-> create materialized view baz as select distinct on (b) b, c, w from baz_raw where b is not null
+> EXPLAIN CREATE MATERIALIZED VIEW baz as select distinct on (b) b, c, w from baz_raw where b is not null
 > create table quux_raw (c int2, x text)
-> create materialized view quux as select distinct on (c) c, x from quux_raw where c is not null
+> EXPLAIN CREATE MATERIALIZED VIEW quux as select distinct on (c) c, x from quux_raw where c is not null
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arranged TopK input"
@@ -213,7 +213,7 @@ JoinStage
       user_id int,
       worth decimal
   );
-> CREATE MATERIALIZED VIEW event_session AS
+> EXPLAIN CREATE MATERIALIZED VIEW event_session AS
       WITH MUTUALLY RECURSIVE
           make_session (user_id int4, session tsrange)
               AS (
@@ -273,7 +273,7 @@ JoinStage
           *
       FROM
           reduce_session;
-> CREATE MATERIALIZED VIEW user_session_worth AS
+> EXPLAIN CREATE MATERIALIZED VIEW user_session_worth AS
       SELECT
           user_id, id, count, upper(session) - lower(session) AS session_len, sum AS worth
       FROM
@@ -360,7 +360,7 @@ ReduceMinsMaxes
 
 # from transactions.slt
 > CREATE TABLE t (a int)
-> CREATE MATERIALIZED VIEW v AS SELECT COUNT(*) FROM T
+> EXPLAIN CREATE MATERIALIZED VIEW v AS SELECT COUNT(*) FROM T
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
@@ -371,7 +371,7 @@ ReduceAccumulable
 
 # from with mutually_recursive.slt
 > CREATE TABLE t1 (f1 INTEGER);
-> CREATE MATERIALIZED VIEW v1 AS
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS
   WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 2)
     cnt (f1 INTEGER) AS (
       SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt
@@ -413,7 +413,7 @@ ArrangeBy[[Column(0)]]-errors
 
 # from fetch-tail-query.td
 > CREATE TABLE t1 (f1 INTEGER)
-> CREATE MATERIALIZED VIEW v1 AS SELECT count(*) FROM t1
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT count(*) FROM t1
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
@@ -425,7 +425,7 @@ ReduceAccumulable
 # from fetch-tail-retraction.td
 > CREATE TABLE inserts (f1 INTEGER)
 > CREATE TABLE deletes (f1 INTEGER)
-> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ArrangeBy[[Column(0)]]
@@ -436,18 +436,18 @@ ArrangeBy[[Column(0)]]
 
 # from introspection-sources.td
 > CREATE TABLE t (a int)
-> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
 > CREATE VIEW vv AS SELECT * FROM t
 > CREATE DEFAULT INDEX ON vv
-> CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
+> EXPLAIN CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
 > CREATE TABLE t1 (a int)
 > CREATE TABLE t2 (b int)
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1, t2
+> EXPLAIN CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1, t2
 > CREATE DEFAULT INDEX ON mv1
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1
-> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t1
+> EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT 1
+> EXPLAIN CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t1
 > CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b
-> CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+> EXPLAIN CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 > CREATE TABLE t3 (c int)
 > CREATE DEFAULT INDEX ii_empty ON t3
@@ -482,34 +482,34 @@ ReduceAccumulable
 # from joins.td
 > CREATE TABLE names (num bigint, name text)
 > CREATE TABLE mods (num bigint, mod text)
-> CREATE MATERIALIZED VIEW test1 AS
+> EXPLAIN CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num)
-> CREATE MATERIALIZED VIEW test2 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test2 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names JOIN mods ON names.num = mods.num
-> CREATE MATERIALIZED VIEW test3 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test3 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names, mods WHERE names.num = mods.num
-> CREATE MATERIALIZED VIEW test4 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test4 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
-> CREATE MATERIALIZED VIEW test5 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test5 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names LEFT JOIN mods ON names.num = mods.num
-> CREATE MATERIALIZED VIEW test6 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test6 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names RIGHT JOIN mods ON names.num = mods.num
-> CREATE MATERIALIZED VIEW test7 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test7 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
-> CREATE MATERIALIZED VIEW test8 AS
+> EXPLAIN CREATE MATERIALIZED VIEW test8 AS
   SELECT mods.* FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
-> CREATE MATERIALIZED VIEW test9 AS
+> EXPLAIN CREATE MATERIALIZED VIEW test9 AS
   SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo
   WHERE bar.num = foo.num AND foo.mod = 'even'
-> CREATE MATERIALIZED VIEW test10 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test10 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names, mods
-> CREATE MATERIALIZED VIEW test11 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test11 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names CROSS JOIN mods
-> CREATE MATERIALIZED VIEW test12 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test12 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names LEFT JOIN mods ON 1 = 0
-> CREATE MATERIALIZED VIEW test13 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test13 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names RIGHT JOIN mods ON 1 = 0
-> CREATE MATERIALIZED VIEW test14 (names_num, names_name, mods_num, mods_mod) AS
+> EXPLAIN CREATE MATERIALIZED VIEW test14 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names FULL OUTER JOIN mods ON 1 = 0
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
@@ -551,7 +551,7 @@ DistinctByErrorCheck
 > CREATE CLUSTER linear_join REPLICAS (r1 (SIZE '1'))
 > SET cluster=linear_join
 > CREATE TABLE t1 (a int)
-> CREATE MATERIALIZED VIEW v1 IN CLUSTER linear_join AS
+> EXPLAIN CREATE MATERIALIZED VIEW v1 IN CLUSTER linear_join AS
   SELECT SUM(a1.a + a2.a * 10000) FROM t1 AS a1, t1 AS a2
 > CREATE DEFAULT INDEX ON v1
 
@@ -572,7 +572,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_repeat_row  = true
 
 > CREATE TABLE base (data bigint, diff bigint)
-> CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff)
+> EXPLAIN CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff)
 > CREATE VIEW topk AS
   SELECT grp.id, count(t.data) AS top_2_count,
            (SELECT COUNT(d.data) FROM data d WHERE d.data % 2 = grp.id) AS total_count

@@ -10,7 +10,7 @@
 #
 # CREATE views containing ranges
 
-> CREATE MATERIALIZED VIEW int4range_view (a) AS
+> EXPLAIN CREATE MATERIALIZED VIEW int4range_view (a) AS
   SELECT column1::int4range FROM
     (
         VALUES
@@ -59,7 +59,7 @@ empty
 [2,)
 
 
-> CREATE MATERIALIZED VIEW int8range_view (a) AS
+> EXPLAIN CREATE MATERIALIZED VIEW int8range_view (a) AS
   SELECT column1::int8range FROM
     (
         VALUES
@@ -107,7 +107,7 @@ empty
 [2,)
 [2,)
 
-> CREATE MATERIALIZED VIEW daterange_view (a) AS
+> EXPLAIN CREATE MATERIALIZED VIEW daterange_view (a) AS
   SELECT column1::daterange FROM
     (
         VALUES

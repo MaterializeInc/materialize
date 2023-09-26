@@ -51,7 +51,7 @@ false
 
 # Verify that an MV dataflow is cleaned up when the MV is dropped.
 
-> CREATE MATERIALIZED VIEW test_mv AS SELECT a FROM t
+> EXPLAIN CREATE MATERIALIZED VIEW test_mv AS SELECT a FROM t
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
 true
 > DROP MATERIALIZED VIEW test_mv
@@ -63,7 +63,7 @@ false
 # To make sure that we don't query mz_dataflow_operators before the dataflow
 # was created, we query the MV once and then wait for a bit as well.
 
-> CREATE MATERIALIZED VIEW test_mv AS SELECT generate_series(1, 1000)
+> EXPLAIN CREATE MATERIALIZED VIEW test_mv AS SELECT generate_series(1, 1000)
 > SELECT count(*) FROM test_mv
 1000
 > SELECT mz_internal.mz_sleep(1)
@@ -77,7 +77,7 @@ false
 # Regression test for https://github.com/MaterializeInc/materialize/issues/16326
 
 > CREATE SOURCE lgtpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES WITH (SIZE = '1');
-> CREATE MATERIALIZED VIEW q14 AS
+> EXPLAIN CREATE MATERIALIZED VIEW q14 AS
   SELECT
     100.00 * sum(case
       when p_type like 'PROMO%'

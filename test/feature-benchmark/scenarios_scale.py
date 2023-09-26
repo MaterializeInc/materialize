@@ -27,7 +27,7 @@ class SmallClusters(Scenario):
 
                 > CREATE CLUSTER cluster{i} REPLICAS (r (SIZE '4-1'));
 
-                > CREATE MATERIALIZED VIEW v{i}
+                > EXPLAIN CREATE MATERIALIZED VIEW v{i}
                   IN CLUSTER cluster{i}
                   AS SELECT COUNT(*) FROM t1;
 

@@ -27,9 +27,9 @@ SHOW CREATE SOURCE bids;
 $ postgres-execute connection=mz_support
 EXPLAIN OPTIMIZED PLAN FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
-# The mz_support user can execute `EXPLAIN PLAN ... FOR CREATE MATERIALIZED VIEW` commands.
+# The mz_support user can execute `EXPLAIN PLAN ... FOR EXPLAIN CREATE MATERIALIZED VIEW` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW mv AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
+EXPLAIN OPTIMIZED PLAN FOR EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
 # The mz_support user can execute `EXPLAIN TIMESTAMP ...` commands.
 $ postgres-execute connection=mz_support

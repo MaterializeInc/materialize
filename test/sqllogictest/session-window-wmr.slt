@@ -20,7 +20,7 @@ CREATE TABLE events (
 );
 
 statement ok
-CREATE MATERIALIZED VIEW event_session AS
+EXPLAIN CREATE MATERIALIZED VIEW event_session AS
     WITH MUTUALLY RECURSIVE
         -- Convert each value in events into a 5-minute long session
         make_session (user_id int4, session tsrange)
@@ -94,7 +94,7 @@ CREATE MATERIALIZED VIEW event_session AS
         reduce_session;
 
 statement ok
-CREATE MATERIALIZED VIEW user_session_worth AS
+EXPLAIN CREATE MATERIALIZED VIEW user_session_worth AS
     SELECT
         user_id, id, count, upper(session) - lower(session) AS session_len, sum AS worth
     FROM

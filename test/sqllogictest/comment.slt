@@ -115,7 +115,7 @@ u4  view  NULL  this_is_a_view
 u4  view  1  this_works
 
 statement ok
-CREATE MATERIALIZED VIEW mv ( x ) AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv ( x ) AS SELECT 1
 
 statement ok
 COMMENT ON COLUMN mv.x IS 'comment_mat_view_col';

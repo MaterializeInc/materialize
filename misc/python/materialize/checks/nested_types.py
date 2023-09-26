@@ -35,7 +35,7 @@ class NestedTypes(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW nested_types_view1 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW nested_types_view1 AS SELECT
                   map_col, '{a => 1, b => 2}'::map_type,
                   list_col, '{{1,2},{3,4}}'::int4_list_list,
                   record_col, ROW(1, 'abc'),
@@ -45,7 +45,7 @@ class NestedTypes(Check):
                 > INSERT INTO nested_types_table SELECT * FROM nested_types_table LIMIT 1;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW nested_types_view2 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW nested_types_view2 AS SELECT
                   map_col, '{a => 1, b => 2}'::map_type,
                   list_col, '{{1,2},{3,4}}'::int4_list_list,
                   record_col, ROW(1, 'abc'),

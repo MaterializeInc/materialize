@@ -12,7 +12,7 @@
 > SELECT custom_list::text FROM int4_list_view;
 {1,2}
 
-> CREATE MATERIALIZED VIEW int4_list_view_after AS SELECT '{1,2}'::int4_list AS custom_list;
+> EXPLAIN CREATE MATERIALIZED VIEW int4_list_view_after AS SELECT '{1,2}'::int4_list AS custom_list;
 
 > SELECT custom_list::text FROM int4_list_view_after;
 {1,2}
@@ -24,7 +24,7 @@
 > SELECT custom_nested_list::text FROM int4_list_list_view;
 {{1,2}}
 
-> CREATE MATERIALIZED VIEW int4_list_list_view_after AS SELECT '{{1,2}}'::int4_list_list AS custom_nested_list;
+> EXPLAIN CREATE MATERIALIZED VIEW int4_list_list_view_after AS SELECT '{{1,2}}'::int4_list_list AS custom_nested_list;
 
 > SELECT custom_nested_list::text FROM int4_list_list_view_after;
 {{1,2}}
@@ -36,7 +36,7 @@
 > SELECT custom_map::text FROM int4_map_view;
 {a=>1}
 
-> CREATE MATERIALIZED VIEW int4_map_view_after AS SELECT '{a=>1}'::int4_map AS custom_map;
+> EXPLAIN CREATE MATERIALIZED VIEW int4_map_view_after AS SELECT '{a=>1}'::int4_map AS custom_map;
 
 > SELECT custom_map::text FROM int4_map_view_after;
 {a=>1}
@@ -48,7 +48,7 @@
 > SELECT custom_nested_map::text FROM int4_map_map_view;
 "{a=>{\"a a\"=>1}}"
 
-> CREATE MATERIALIZED VIEW int4_map_map_view_after AS SELECT '{a=>{"a a"=>1}}'::int4_map_map AS custom_nested_map;
+> EXPLAIN CREATE MATERIALIZED VIEW int4_map_map_view_after AS SELECT '{a=>{"a a"=>1}}'::int4_map_map AS custom_nested_map;
 
 > SELECT custom_nested_map::text FROM int4_map_map_view_after;
 "{a=>{\"a a\"=>1}}"

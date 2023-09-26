@@ -50,7 +50,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > SELECT COUNT(*) FROM s1;
 2
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1;
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1;
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "345"}

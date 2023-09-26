@@ -51,7 +51,7 @@ class CreateCluster(Check):
 
                 > SET cluster=create_cluster1
                 > CREATE DEFAULT INDEX ON create_cluster1_table;
-                > CREATE MATERIALIZED VIEW create_cluster1_view AS SELECT SUM(f1) FROM create_cluster1_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW create_cluster1_view AS SELECT SUM(f1) FROM create_cluster1_table;
 
                 > SELECT * FROM create_cluster1_table;
                 123
@@ -60,7 +60,7 @@ class CreateCluster(Check):
 
                 > SET cluster=create_cluster2
                 > CREATE DEFAULT INDEX ON create_cluster2_table;
-                > CREATE MATERIALIZED VIEW create_cluster2_view AS SELECT SUM(f1) FROM create_cluster2_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW create_cluster2_view AS SELECT SUM(f1) FROM create_cluster2_table;
 
                 > SELECT * FROM create_cluster2_table;
                 234
@@ -91,11 +91,11 @@ class DropCluster(Check):
 
                 > SET cluster=drop_cluster1
                 > CREATE DEFAULT INDEX ON drop_cluster1_table;
-                > CREATE MATERIALIZED VIEW drop_cluster1_view AS SELECT SUM(f1) FROM drop_cluster1_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW drop_cluster1_view AS SELECT SUM(f1) FROM drop_cluster1_table;
 
                 > SET cluster=drop_cluster2
                 > CREATE DEFAULT INDEX ON drop_cluster2_table;
-                > CREATE MATERIALIZED VIEW drop_cluster2_view AS SELECT SUM(f1) FROM drop_cluster2_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW drop_cluster2_view AS SELECT SUM(f1) FROM drop_cluster2_table;
 
                 > DROP CLUSTER drop_cluster1 CASCADE;
                 """,

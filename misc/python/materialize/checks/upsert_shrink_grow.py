@@ -39,7 +39,7 @@ class ShrinkGrow:
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_update_{name}_view AS
+                > EXPLAIN CREATE MATERIALIZED VIEW upsert_update_{name}_view AS
                   SELECT LEFT(f1, 1), RIGHT(f1, 1),
                   COUNT(*) AS c1, COUNT(DISTINCT key1) AS c2, COUNT(DISTINCT f1) AS c3,
                   MIN(LENGTH(f1)) AS l1, MAX(LENGTH(f1)) AS l2

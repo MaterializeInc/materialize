@@ -158,7 +158,7 @@ WHERE x IN (
 
 # Same query, but inside a view. Regression test for #5092.
 statement ok
-CREATE MATERIALIZED VIEW v AS
+EXPLAIN CREATE MATERIALIZED VIEW v AS
 SELECT * FROM squares
 WHERE x IN (
     WITH squares_y AS (

@@ -204,7 +204,7 @@ class Identifiers(Check):
             > CREATE TYPE {dq(self.ident["type"])} AS LIST (ELEMENT TYPE = text);
             > CREATE TABLE {dq(self.ident["schema"])}.{dq(self.ident["table"])} ({dq(self.ident["column"])} TEXT, c2 {dq(self.ident["type"])});
             > INSERT INTO {dq(self.ident["schema"])}.{dq(self.ident["table"])} VALUES ({sq(self.ident["value1"])}, LIST[{sq(self.ident["value2"])}]::{dq(self.ident["type"])});
-            > CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv0"])} IN CLUSTER default AS
+            > EXPLAIN CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv0"])} IN CLUSTER default AS
               SELECT COUNT({dq(self.ident["column"])}) FROM {dq(self.ident["schema"])}.{dq(self.ident["table"])};
 
             $ kafka-create-topic topic=sink-source-ident
@@ -219,7 +219,7 @@ class Identifiers(Check):
               FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE UPSERT;
-            > CREATE MATERIALIZED VIEW {dq(self.ident["source_view"])} IN CLUSTER default AS
+            > EXPLAIN CREATE MATERIALIZED VIEW {dq(self.ident["source_view"])} IN CLUSTER default AS
               SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(self.ident["source"])} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
             > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink0"])} FROM {dq(self.ident["source_view"])}
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident0')
@@ -238,7 +238,7 @@ class Identifiers(Check):
             f"""
             > SET CLUSTER=identifiers;
             > SET DATABASE={dq(self.ident["db"])};
-            > CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv" + i])} IN CLUSTER default AS
+            > EXPLAIN CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv" + i])} IN CLUSTER default AS
               SELECT {dq(self.ident["column"])}, c2 as {dq(self.ident["alias"])} FROM {dq(self.ident["schema"])}.{dq(self.ident["table"])};
             > INSERT INTO {dq(self.ident["schema"])}.{dq(self.ident["table"])} VALUES ({sq(self.ident["value1"])}, LIST[{sq(self.ident["value2"])}]::{dq(self.ident["type"])});
             > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink" + i])} FROM {dq(self.ident["source_view"])}

@@ -30,7 +30,7 @@ class RenameReplica(Check):
 
                 > SET cluster=rename_replica
                 > CREATE DEFAULT INDEX ON rename_replica_table;
-                > CREATE MATERIALIZED VIEW rename_replica_view AS SELECT COUNT(f1) FROM rename_replica_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_replica_view AS SELECT COUNT(f1) FROM rename_replica_table;
 
                 > INSERT INTO rename_replica_table VALUES (2);
                 > CREATE CLUSTER REPLICA rename_replica.replica1 SIZE '2-2';

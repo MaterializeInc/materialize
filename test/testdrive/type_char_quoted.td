@@ -33,7 +33,7 @@ contains: pg_catalog.char does not support type modifiers
 
 # Usage in materialized views
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1 UNION ALL SELECT 'b'::"char"
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1 UNION ALL SELECT 'b'::"char"
 
 > SELECT * FROM v1;
 97

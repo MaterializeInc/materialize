@@ -23,7 +23,7 @@ class DropIndex(Check):
                 > INSERT INTO drop_index_table VALUES (2,2,2);
                 > CREATE INDEX drop_index_index1 ON drop_index_table (f1, f2);
                 > INSERT INTO drop_index_table VALUES (3,3,3);
-                > CREATE MATERIALIZED VIEW drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
+                > EXPLAIN CREATE MATERIALIZED VIEW drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 """
             )
         )

@@ -34,11 +34,11 @@ class RenameCluster(Check):
 
                 > SET cluster=rename_cluster1
                 > CREATE DEFAULT INDEX ON rename_cluster1_table;
-                > CREATE MATERIALIZED VIEW rename_cluster1_view AS SELECT SUM(f1) FROM rename_cluster1_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_cluster1_view AS SELECT SUM(f1) FROM rename_cluster1_table;
 
                 > SET cluster=rename_cluster2
                 > CREATE DEFAULT INDEX ON rename_cluster2_table;
-                > CREATE MATERIALIZED VIEW rename_cluster2_view AS SELECT SUM(f1) FROM rename_cluster2_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_cluster2_view AS SELECT SUM(f1) FROM rename_cluster2_table;
 
                 > ALTER CLUSTER rename_cluster1 RENAME TO rename_cluster_new1;
                 """,

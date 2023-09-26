@@ -28,7 +28,7 @@ class String(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW string_view1 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW string_view1 AS SELECT
                     f1 BETWEEN f2 AND f3 AS c1,
                     'foo' BETWEEN 'abc' AND 'xyz' AS c2,
                     f1 NOT BETWEEN f2 AND f3 AS c3,
@@ -45,7 +45,7 @@ class String(Check):
                 > INSERT INTO string_table VALUES (' foo ', ' abc ', ' xyz ', 2, 3, '{1,2,3,4,NULL,NULL}');
             """,
                 """
-                > CREATE MATERIALIZED VIEW string_view2 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW string_view2 AS SELECT
                     f1 BETWEEN f2 AND f3 AS c1,
                     'foo' BETWEEN 'abc' AND 'xyz' AS c2,
                     f1 NOT BETWEEN f2 AND f3 AS c3,

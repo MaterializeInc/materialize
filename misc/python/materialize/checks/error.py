@@ -18,7 +18,7 @@ class ParseError(Check):
             dedent(
                 """
                 > CREATE TABLE parse_error_table (f1 STRING);
-                > CREATE MATERIALIZED VIEW parse_error_view AS SELECT f1::INTEGER FROM parse_error_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW parse_error_view AS SELECT f1::INTEGER FROM parse_error_table;
                 > INSERT INTO parse_error_table VALUES ('123');
             """
             )
@@ -50,7 +50,7 @@ class ParseHexError(Check):
             dedent(
                 """
                 > CREATE TABLE parse_hex_error_table (f1 STRING);
-                > CREATE MATERIALIZED VIEW parse_hex_error_view AS SELECT decode(f1, 'hex') FROM parse_hex_error_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW parse_hex_error_view AS SELECT decode(f1, 'hex') FROM parse_hex_error_table;
                 > INSERT INTO parse_hex_error_table VALUES ('aa');
             """
             )
@@ -82,7 +82,7 @@ class DataflowErrorRetraction(Check):
             dedent(
                 """
                 > CREATE TABLE dataflow_error_retraction_table (f1 STRING);
-                > CREATE MATERIALIZED VIEW dataflow_error_retraction_view AS SELECT f1::INTEGER FROM dataflow_error_retraction_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW dataflow_error_retraction_view AS SELECT f1::INTEGER FROM dataflow_error_retraction_table;
                 > INSERT INTO dataflow_error_retraction_table VALUES ('123');
                 > INSERT INTO dataflow_error_retraction_table VALUES ('abc');
                 > INSERT INTO dataflow_error_retraction_table VALUES ('klm');

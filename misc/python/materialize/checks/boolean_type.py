@@ -28,7 +28,7 @@ class BooleanType(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW boolean_type_view1 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW boolean_type_view1 AS
                   SELECT boolean_col, 'TRUE'::boolean AS true_col, 'FALSE'::boolean AS false_col
                   FROM boolean_type_table
                   WHERE boolean_col IS TRUE OR boolean_col IS FALSE OR boolean_col is NULL;
@@ -36,7 +36,7 @@ class BooleanType(Check):
                 > INSERT INTO boolean_type_table SELECT * FROM boolean_type_table;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW boolean_type_view2 AS
+                > EXPLAIN CREATE MATERIALIZED VIEW boolean_type_view2 AS
                   SELECT boolean_col, 'TRUE'::boolean AS true_col, 'FALSE'::boolean AS false_col
                   FROM boolean_type_table
                   WHERE boolean_col IS TRUE OR boolean_col IS FALSE OR boolean_col is NULL;

@@ -12,4 +12,4 @@ SELECT mz_version_num() >= 6700;
 
 > CREATE VIEW view_with_avg_internal (a) AS SELECT AVG(position) FROM mz_catalog.mz_columns;
 
-> CREATE MATERIALIZED VIEW mat_view_with_avg_internal (a) AS SELECT AVG(position) FROM mz_catalog.mz_columns;
+> EXPLAIN CREATE MATERIALIZED VIEW mat_view_with_avg_internal (a) AS SELECT AVG(position) FROM mz_catalog.mz_columns;

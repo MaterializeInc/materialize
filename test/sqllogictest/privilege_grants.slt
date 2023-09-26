@@ -143,7 +143,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'v'
 v  materialize=r/materialize
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1;
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'mv'
@@ -4664,7 +4664,7 @@ statement ok
 GRANT SELECT ON v TO r2, r3
 
 simple conn=r1,user=r1
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 ----
 COMPLETE 0
 

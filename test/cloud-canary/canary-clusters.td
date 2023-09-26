@@ -20,7 +20,7 @@ cluster1 "replica1 (3xsmall), replica2 (3xsmall)"
 cluster1 replica1 3xsmall true
 cluster1 replica2 3xsmall true
 
-> CREATE MATERIALIZED VIEW cluster_view1 AS SELECT COUNT(*) AS cnt FROM mz_tables;
+> EXPLAIN CREATE MATERIALIZED VIEW cluster_view1 AS SELECT COUNT(*) AS cnt FROM mz_tables;
 
 > CREATE DEFAULT INDEX ON cluster_view1;
 

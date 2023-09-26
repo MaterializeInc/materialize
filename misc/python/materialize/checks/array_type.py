@@ -34,7 +34,7 @@ class ArrayType(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW array_type_view1 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW array_type_view1 AS SELECT
                   int_col, array_fill(2, ARRAY[2], ARRAY[2]),
                   text_col, array_fill('foo'::text, ARRAY[2]) AS array_fill2,
                   array_col, ARRAY[ARRAY[1,2], ARRAY[NULL, 4]]
@@ -43,7 +43,7 @@ class ArrayType(Check):
                 > INSERT INTO array_type_table SELECT * FROM array_type_table LIMIT 1;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW array_type_view2 AS SELECT
+                > EXPLAIN CREATE MATERIALIZED VIEW array_type_view2 AS SELECT
                   int_col, array_fill(2, ARRAY[2], ARRAY[2]),
                   text_col, array_fill('foo'::text, ARRAY[2]) AS array_fill2,
                   array_col, ARRAY[ARRAY[1,2], ARRAY[NULL, 4]]

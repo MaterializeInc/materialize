@@ -176,21 +176,21 @@ $ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-
 
 > CREATE TABLE input_table (a bigint, b bigint)
 
-> CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_cdcv2;
+> EXPLAIN CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_cdcv2;
 
-> CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview_view AS SELECT * FROM input_kafka_cdcv2_mview;
+> EXPLAIN CREATE MATERIALIZED VIEW input_kafka_cdcv2_mview_view AS SELECT * FROM input_kafka_cdcv2_mview;
 
 > CREATE VIEW input_kafka_dbz_view AS SELECT a + 2 AS a , b + 10 AS b from input_kafka_dbz;
 
-> CREATE MATERIALIZED VIEW input_kafka_dbz_view_mview AS SELECT * FROM input_kafka_dbz_view;
+> EXPLAIN CREATE MATERIALIZED VIEW input_kafka_dbz_view_mview AS SELECT * FROM input_kafka_dbz_view;
 
-> CREATE MATERIALIZED VIEW input_table_mview AS SELECT a + 2 AS a , b + 10 AS b from input_table;
+> EXPLAIN CREATE MATERIALIZED VIEW input_table_mview AS SELECT a + 2 AS a , b + 10 AS b from input_table;
 
 > CREATE VIEW input_values_view AS VALUES (1), (2), (3);
 
-> CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
+> EXPLAIN CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-> CREATE MATERIALIZED VIEW input_kafka_dbz_derived_table AS SELECT * FROM ( SELECT * FROM input_kafka_dbz ) AS a1;
+> EXPLAIN CREATE MATERIALIZED VIEW input_kafka_dbz_derived_table AS SELECT * FROM ( SELECT * FROM input_kafka_dbz ) AS a1;
 
 $ kafka-create-topic topic=static
 $ kafka-ingest topic=static format=bytes

@@ -30,11 +30,11 @@ class RegexpExtract(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW regexp_extract_view1 AS SELECT regexp_extract('((a)(.c))|((x)(.z))',f1) AS c1 FROM regexp_extract_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW regexp_extract_view1 AS SELECT regexp_extract('((a)(.c))|((x)(.z))',f1) AS c1 FROM regexp_extract_table;
                 > INSERT INTO regexp_extract_table VALUES ('klm');
             """,
                 """
-                > CREATE MATERIALIZED VIEW regexp_extract_view2 AS SELECT regexp_extract('((a)(.c))|((x)(.z))',f1) AS c1 FROM regexp_extract_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW regexp_extract_view2 AS SELECT regexp_extract('((a)(.c))|((x)(.z))',f1) AS c1 FROM regexp_extract_table;
                 > INSERT INTO regexp_extract_table VALUES ('xyz');
             """,
             ]
@@ -71,11 +71,11 @@ class Regex(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW regex_view1 AS SELECT f1 ~ f2 AS c1, f1 ~* f2 AS c2, f1 ~ 'a.c|x.z' AS c3, f1 ~* 'a.c|x.z' AS c4 FROM regex_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW regex_view1 AS SELECT f1 ~ f2 AS c1, f1 ~* f2 AS c2, f1 ~ 'a.c|x.z' AS c3, f1 ~* 'a.c|x.z' AS c4 FROM regex_table;
                 > INSERT INTO regex_table VALUES ('klm','klm');
             """,
                 """
-                > CREATE MATERIALIZED VIEW regex_view2 AS SELECT f1 ~ f2 AS c1, f1 ~* f2 AS c2, f1 ~ 'a.c|x.z' AS c3, f1 ~* 'a.c|x.z' AS c4 FROM regex_table;
+                > EXPLAIN CREATE MATERIALIZED VIEW regex_view2 AS SELECT f1 ~ f2 AS c1, f1 ~* f2 AS c2, f1 ~ 'a.c|x.z' AS c3, f1 ~* 'a.c|x.z' AS c4 FROM regex_table;
                 > INSERT INTO regex_table VALUES ('xyz','xyz');
             """,
             ]

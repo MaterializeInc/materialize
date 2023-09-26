@@ -141,7 +141,7 @@ database_objects = [
         name="materialized_view_constant",
         testdrive=dedent(
             """
-            > CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
+            > EXPLAIN CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
             """
         ),
         expected_size=1024 * 1024,
@@ -155,7 +155,7 @@ database_objects = [
             > CREATE TABLE t1 (f1 TEXT)
             > INSERT INTO t1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
 
-            > CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
+            > EXPLAIN CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
             """
         ),
         expected_size=4 * 1024,

@@ -30,7 +30,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE MATERIALIZED VIEW v1 AS
+> EXPLAIN CREATE MATERIALIZED VIEW v1 AS
   SELECT 1 as col
 
 > CREATE SINK snk

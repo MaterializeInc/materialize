@@ -283,7 +283,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE MATERIALIZED VIEW mv AS SELECT (1);
+> EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT (1);
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');

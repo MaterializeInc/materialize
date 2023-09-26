@@ -19,7 +19,7 @@ class RenameTable(Check):
                 """
                 > CREATE TABLE rename_table1 (f1 INTEGER);
                 > INSERT INTO rename_table1 VALUES (1);
-                > CREATE MATERIALIZED VIEW rename_table_view AS SELECT DISTINCT f1 FROM rename_table1;
+                > EXPLAIN CREATE MATERIALIZED VIEW rename_table_view AS SELECT DISTINCT f1 FROM rename_table1;
                 """
             )
         )

@@ -14,7 +14,7 @@ ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 # Test that sinks can be created even in the absence of the DescribeConfigs permission
 #
 
-> CREATE MATERIALIZED VIEW no_describe_configs_view AS SELECT 1;
+> EXPLAIN CREATE MATERIALIZED VIEW no_describe_configs_view AS SELECT 1;
 
 > CREATE SECRET no_describe_configs_password AS 'password'
 

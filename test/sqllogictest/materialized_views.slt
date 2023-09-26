@@ -24,7 +24,7 @@ CREATE CLUSTER other REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'))
 # Test: Materialized view can be created.
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 
 # Test: Materialized view can be replaced.
@@ -41,10 +41,10 @@ SELECT * FROM mv
 # Test: Materialized view creation can be skipped if a materialized view already exists.
 
 statement error materialized view "materialize.public.mv" already exists
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 statement ok
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW IF NOT EXISTS mv AS SELECT 1
 
 query I
 SELECT * FROM mv
@@ -67,13 +67,13 @@ jon  12
 # Test: Explicit column names must have the right cardinality.
 
 statement error materialized view .+ definition names 2 columns, but materialized view .+ has 1 column
-CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
+EXPLAIN CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 
 
 # Test: Materialized view can be created in another cluster.
 
 statement ok
-CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
@@ -89,7 +89,7 @@ DROP MATERIALIZED VIEW other_mv
 # Test: Materialized view can not be created in a non-existing cluster.
 
 statement error unknown cluster 'doesnotexist'
-CREATE MATERIALIZED VIEW error IN CLUSTER doesnotexist AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW error IN CLUSTER doesnotexist AS SELECT 1
 
 
 # Test: Materialized view data is accessible from the same cluster.
@@ -177,7 +177,7 @@ SELECT * FROM mv
 # Test: Materialized views can be nested.
 
 statement ok
-CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv
+EXPLAIN CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv
 
 query I
 SELECT * FROM mv2
@@ -206,7 +206,7 @@ DROP MATERIALIZED VIEW mv
 # Test: Materialized views can not be dropped if they have dependants.
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 statement ok
 CREATE VIEW v AS SELECT * FROM mv
@@ -232,7 +232,7 @@ statement ok
 CREATE VIEW v AS SELECT 1 AS c
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM v WHERE c IS NULL
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM v WHERE c IS NULL
 
 statement error cannot drop view v: still depended upon by materialized view mv
 DROP VIEW v
@@ -247,7 +247,7 @@ SELECT count(*) FROM mz_materialized_views WHERE name = 'mv'
 
 # mz_scheduling_elapsed_raw, a log source, is optimized away, but should still count as a dependency
 query error db error: ERROR: materialized view objects cannot depend on log sources
-CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_internal.mz_scheduling_elapsed_raw WHERE FALSE);
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT (SELECT 1 FROM mz_internal.mz_scheduling_elapsed_raw WHERE FALSE);
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_table_keys = true
@@ -262,7 +262,7 @@ CREATE TABLE t2 (f1 INTEGER NOT NULL PRIMARY KEY);
 
 # Folds to Constant, t1 is optimized away but must still be counted as a dependency
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE;
 
 statement error db error: ERROR: cannot drop table t1: still depended upon by materialized view mv
 DROP TABLE t1
@@ -272,7 +272,7 @@ DROP MATERIALIZED VIEW mv
 
 # In the cases below, t2 is optimized away but should still be present as a dependency
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT t1.* FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1);
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT t1.* FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1);
 
 statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
 DROP TABLE t2
@@ -281,7 +281,7 @@ statement ok
 DROP MATERIALIZED VIEW mv
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE AND EXISTS (SELECT * FROM t2);
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE FALSE AND EXISTS (SELECT * FROM t2);
 
 statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
 DROP TABLE t2
@@ -290,7 +290,7 @@ statement ok
 DROP MATERIALIZED VIEW mv
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE TRUE OR EXISTS (SELECT * FROM t2);
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE TRUE OR EXISTS (SELECT * FROM t2);
 
 statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
 DROP TABLE t2
@@ -299,7 +299,7 @@ statement ok
 DROP MATERIALIZED VIEW mv
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT (SELECT f1 FROM t2 WHERE FALSE) FROM t1;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT (SELECT f1 FROM t2 WHERE FALSE) FROM t1;
 
 statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
 DROP TABLE t2
@@ -309,7 +309,7 @@ DROP MATERIALIZED VIEW mv
 
 # No need to evaluate second argument of COALESCE if first is non-null
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT COALESCE(1, (SELECT * FROM t2 LIMIT 1)) FROM t1;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT COALESCE(1, (SELECT * FROM t2 LIMIT 1)) FROM t1;
 
 statement error db error: ERROR: cannot drop table t2: still depended upon by materialized view mv
 DROP TABLE t2
@@ -322,7 +322,7 @@ CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
 # Mention of int4_list is optimized away
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE NULL::int4_list IS NOT NULL;
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT * FROM t1 WHERE NULL::int4_list IS NOT NULL;
 
 statement error db error: ERROR: cannot drop type int4_list: still depended upon by materialized view mv
 DROP TYPE int4_list
@@ -346,7 +346,7 @@ statement ok
 CREATE CLUSTER to_drop REPLICAS ()
 
 statement ok
-CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER to_drop AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER to_drop AS SELECT 1
 
 statement error cannot drop cluster with active objects
 DROP CLUSTER to_drop
@@ -361,29 +361,29 @@ query error unknown catalog item 'to_drop_mv'
 SELECT * FROM to_drop_mv
 
 
-# Test: SHOW CREATE MATERIALIZED VIEW
+# Test: SHOW EXPLAIN CREATE MATERIALIZED VIEW
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 query TT colnames
-SHOW CREATE MATERIALIZED VIEW mv
+SHOW EXPLAIN CREATE MATERIALIZED VIEW mv
 ----
 name                  create_sql
 materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
-# Test: SHOW CREATE MATERIALIZED VIEW as mz_support
+# Test: SHOW EXPLAIN CREATE MATERIALIZED VIEW as mz_support
 
 simple conn=mz_introspection,user=mz_support
-SHOW CREATE MATERIALIZED VIEW mv
+SHOW EXPLAIN CREATE MATERIALIZED VIEW mv
 ----
-materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
+materialize.public.mv,EXPLAIN CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
 COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
 
 statement ok
-CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
@@ -419,7 +419,7 @@ DROP MATERIALIZED VIEW mv2
 # Test: Materialized views show up in mz_materialized_views.
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 query TT colnames
 SELECT name, definition FROM mz_materialized_views
@@ -439,7 +439,7 @@ SELECT count(*) FROM mz_materialized_views
 # Test: Materialized views show in `SHOW OBJECTS`.
 
 statement ok
-CREATE MATERIALIZED VIEW mv AS SELECT 1
+EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT 1
 
 mode standard
 
@@ -477,60 +477,60 @@ CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_internal.mz_da
 statement error materialize\.public\.mv is not a view\nHINT: Use DROP MATERIALIZED VIEW to remove a materialized view\.
 DROP VIEW mv
 
-statement error materialize\.public\.mv is not a view\nHINT: Use SHOW CREATE MATERIALIZED VIEW to show a materialized view\.
+statement error materialize\.public\.mv is not a view\nHINT: Use SHOW EXPLAIN CREATE MATERIALIZED VIEW to show a materialized view\.
 SHOW CREATE VIEW mv
 
 statement error materialize\.public\.mv is not a view\nHINT: Use ALTER MATERIALIZED VIEW to rename a materialized view\.
 ALTER VIEW mv RENAME TO mv2
 
-# We should not be able to create materialized views on top of 'SHOW' commands.
+# We should not be able to EXPLAIN CREATE MATERIALIZED VIEWs on top of 'SHOW' commands.
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_cluster_replicas AS SELECT cluster, replica, size, ready FROM (SHOW CLUSTER REPLICAS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_cluster_replicas AS SELECT cluster, replica, size, ready FROM (SHOW CLUSTER REPLICAS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_columns AS SELECT name, nullable, type FROM (SHOW COLUMNS FROM mz_tables);
+EXPLAIN CREATE MATERIALIZED VIEW mat_columns AS SELECT name, nullable, type FROM (SHOW COLUMNS FROM mz_tables);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);
+EXPLAIN CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_indexes AS SELECT name, on, cluster, key FROM (SHOW INDEXES);
+EXPLAIN CREATE MATERIALIZED VIEW mat_indexes AS SELECT name, on, cluster, key FROM (SHOW INDEXES);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_mat_views AS SELECT name, cluster FROM (SHOW MATERIALIZED VIEWS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_mat_views AS SELECT name, cluster FROM (SHOW MATERIALIZED VIEWS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_objects AS SELECT name FROM (SHOW OBJECTS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_objects AS SELECT name FROM (SHOW OBJECTS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_schemas AS SELECT name FROM (SHOW SCHEMAS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_schemas AS SELECT name FROM (SHOW SCHEMAS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_secrets AS SELECT name FROM (SHOW SECRETS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_sinks AS SELECT name, type, size FROM (SHOW SINKS);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
+EXPLAIN CREATE MATERIALIZED VIEW mat_sources AS SELECT name, type, size FROM (SHOW SOURCES);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
+EXPLAIN CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
 
 statement error SHOW commands are not allowed in views
-CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
+EXPLAIN CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
 
 # LIMIT in materialized view
 
 statement ok
-CREATE MATERIALIZED VIEW mv_limited AS
+EXPLAIN CREATE MATERIALIZED VIEW mv_limited AS
 SELECT a
 FROM t
 ORDER BY a DESC, a+b

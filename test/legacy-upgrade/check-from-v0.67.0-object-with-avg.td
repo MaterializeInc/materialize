@@ -10,12 +10,12 @@
 > SHOW CREATE VIEW view_with_avg_internal;
 "materialize.public.view_with_avg_internal" "CREATE VIEW \"materialize\".\"public\".\"view_with_avg_internal\" (\"a\") AS SELECT \"mz_catalog\".\"avg_internal_v1\"(\"position\") FROM \"mz_catalog\".\"mz_columns\""
 
-> SHOW CREATE MATERIALIZED VIEW mat_view_with_avg_internal;
-"materialize.public.mat_view_with_avg_internal" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mat_view_with_avg_internal\" (\"a\") IN CLUSTER \"default\" AS SELECT \"mz_catalog\".\"avg_internal_v1\"(\"position\") FROM \"mz_catalog\".\"mz_columns\""
+> SHOW EXPLAIN CREATE MATERIALIZED VIEW mat_view_with_avg_internal;
+"materialize.public.mat_view_with_avg_internal" "EXPLAIN CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mat_view_with_avg_internal\" (\"a\") IN CLUSTER \"default\" AS SELECT \"mz_catalog\".\"avg_internal_v1\"(\"position\") FROM \"mz_catalog\".\"mz_columns\""
 
 
 > SHOW CREATE VIEW view_with_avg_post_v0_67;
 "materialize.public.view_with_avg_post_v0_67" "CREATE VIEW \"materialize\".\"public\".\"view_with_avg_post_v0_67\" (\"a\") AS SELECT \"pg_catalog\".\"avg\"(\"position\") FROM \"mz_catalog\".\"mz_columns\""
 
-> SHOW CREATE MATERIALIZED VIEW mat_view_with_avg_post_v0_67;
-"materialize.public.mat_view_with_avg_post_v0_67" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mat_view_with_avg_post_v0_67\" (\"a\") IN CLUSTER \"default\" AS SELECT \"pg_catalog\".\"avg\"(\"position\") FROM \"mz_catalog\".\"mz_columns\""
+> SHOW EXPLAIN CREATE MATERIALIZED VIEW mat_view_with_avg_post_v0_67;
+"materialize.public.mat_view_with_avg_post_v0_67" "EXPLAIN CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mat_view_with_avg_post_v0_67\" (\"a\") IN CLUSTER \"default\" AS SELECT \"pg_catalog\".\"avg\"(\"position\") FROM \"mz_catalog\".\"mz_columns\""
