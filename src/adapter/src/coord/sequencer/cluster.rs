@@ -21,7 +21,7 @@ use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType, SessionCatalog};
-use mz_sql::names::{ObjectId, QualifiedItemName};
+use mz_sql::names::ObjectId;
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
@@ -1004,14 +1004,8 @@ impl Coordinator {
     /// Returns `Ok` if the item can be created, and an error otherwise.
     pub(crate) fn check_compute_item_in_cluster(
         &self,
-        name: &QualifiedItemName,
         cluster_id: ClusterId,
     ) -> Result<(), AdapterError> {
-        let is_system_schema_specifier = self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec);
-
         let enable_unified_clusters = self
             .catalog()
             .for_system_session()
@@ -1027,7 +1021,7 @@ impl Coordinator {
                 )
             });
 
-        if !is_system_schema_specifier && !enable_unified_clusters && !is_compute_cluster {
+        if !enable_unified_clusters && !is_compute_cluster {
             let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
             Err(AdapterError::BadItemInStorageCluster { cluster_name })
         } else {

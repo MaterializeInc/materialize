@@ -957,7 +957,7 @@ impl Coordinator {
             ambiguous_columns,
         } = plan;
 
-        self.check_compute_item_in_cluster(&name, cluster_id)?;
+        self.check_compute_item_in_cluster(cluster_id)?;
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
@@ -1106,7 +1106,7 @@ impl Coordinator {
         // An index must be created on a specific cluster.
         let cluster_id = index.cluster_id;
 
-        self.check_compute_item_in_cluster(&name, cluster_id)?;
+        self.check_compute_item_in_cluster(cluster_id)?;
 
         let empty_key = index.keys.is_empty();
 
