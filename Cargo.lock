@@ -5525,6 +5525,7 @@ dependencies = [
  "differential-dataflow",
  "http",
  "itertools",
+ "maplit",
  "mz-ccsr",
  "mz-cluster-client",
  "mz-kafka-util",
