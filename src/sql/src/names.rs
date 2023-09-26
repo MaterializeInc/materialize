@@ -1440,7 +1440,7 @@ impl<'a> NameResolver<'a> {
                         (full_name, item)
                     }
                 };
-                self.ids.insert(item.id());
+                self.referenced_ids(item.id());
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),
@@ -1449,6 +1449,20 @@ impl<'a> NameResolver<'a> {
                     print_id: true,
                 })
             }
+        }
+    }
+
+    /// Adds leaf types referenced by `id`.
+    fn referenced_ids(&mut self, id: GlobalId) {
+        let item = self.catalog.get_item(&id);
+        let details = item.type_details().expect("must be a Type");
+        let refs = details.typ.references();
+        if refs.is_empty() {
+            self.ids.insert(id);
+            return;
+        }
+        for r in refs {
+            self.referenced_ids(*r);
         }
     }
 

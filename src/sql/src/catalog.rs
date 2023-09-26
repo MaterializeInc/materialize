@@ -864,6 +864,57 @@ pub enum CatalogType<T: TypeReference> {
     MzAclItem,
 }
 
+impl<T: TypeReference> CatalogType<T> {
+    /// Returns any referenced types.
+    pub fn references(&self) -> Vec<&T::Reference> {
+        match self {
+            CatalogType::Array { element_reference } => vec![element_reference],
+            CatalogType::List { element_reference } => vec![element_reference],
+            CatalogType::Map {
+                key_reference,
+                value_reference,
+            } => vec![key_reference, value_reference],
+            CatalogType::Range { element_reference } => vec![element_reference],
+            CatalogType::Record { fields } => {
+                fields.iter().map(|(_name, reference)| reference).collect()
+            }
+
+            CatalogType::AclItem
+            | CatalogType::Bool
+            | CatalogType::Bytes
+            | CatalogType::Char
+            | CatalogType::Date
+            | CatalogType::Float32
+            | CatalogType::Float64
+            | CatalogType::Int16
+            | CatalogType::Int2Vector
+            | CatalogType::Int32
+            | CatalogType::Int64
+            | CatalogType::Interval
+            | CatalogType::Jsonb
+            | CatalogType::MzAclItem
+            | CatalogType::MzTimestamp
+            | CatalogType::Numeric
+            | CatalogType::Oid
+            | CatalogType::PgLegacyChar
+            | CatalogType::PgLegacyName
+            | CatalogType::Pseudo
+            | CatalogType::RegClass
+            | CatalogType::RegProc
+            | CatalogType::RegType
+            | CatalogType::String
+            | CatalogType::Time
+            | CatalogType::Timestamp
+            | CatalogType::TimestampTz
+            | CatalogType::UInt16
+            | CatalogType::UInt32
+            | CatalogType::UInt64
+            | CatalogType::Uuid
+            | CatalogType::VarChar => Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Mirrored from [PostgreSQL's `typcategory`][typcategory].
 ///
