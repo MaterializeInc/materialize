@@ -11,16 +11,39 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use maplit::btreemap;
 use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::collections::CollectionExt;
+use mz_ore::future::{timeout, TimeoutError};
+use mz_repr::GlobalId;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
     KafkaSinkConnectionRetention, KafkaSinkFormat,
 };
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::ClientContext;
+use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
+use rdkafka::error::KafkaError;
+use rdkafka::{ClientContext, Message};
 use tracing::warn;
+
+/// Formatter for Kafka group.id setting
+pub struct SinkGroupId;
+
+impl SinkGroupId {
+    pub fn new(sink_id: GlobalId) -> String {
+        format!("materialize-bootstrap-sink-{sink_id}")
+    }
+}
+
+/// Formatter for the progress topic's key's
+pub struct ProgressKey;
+
+impl ProgressKey {
+    pub fn new(sink_id: GlobalId) -> String {
+        format!("mz-sink-{sink_id}")
+    }
+}
 
 struct TopicConfigs {
     partition_count: i32,
@@ -206,22 +229,105 @@ async fn publish_kafka_schemas(
     Ok((key_schema_id, value_schema_id))
 }
 
-/// Ensures that the Kafka sink's topic and consistency topics exist.
+/// Ensures that the Kafka sink's topic and consistency collateral exist.
 ///
-/// Note that this function guarantees that the topics exist, even in the face
-/// of the user having previously deleted one or both of the topics. If a user
-/// does delete a sink's topics, we no longer make any guarantees about the
-/// sink's consistency.
+/// # Errors
+/// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
+///   contains data for this sink, but the sink's data topic does not exist.
 pub async fn build_kafka(
+    sink_id: mz_repr::GlobalId,
     connection: &mut KafkaSinkConnection,
     connection_cx: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    // Create Kafka topic.
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
         .await
         .context("creating admin client failed")?;
+
+    // Check for existence of progress topic; if it exists and contains data for
+    // this sink, we expect the data topic to exist, as well. Note that we don't
+    // expect the converse to be true because we don't want to prevent users
+    // from creating topics before setting up their sinks.
+    let meta = client
+        .inner()
+        .fetch_metadata(None, Duration::from_secs(10))?;
+
+    // Check if the broker's metadata already contains the progress topic.
+    let progress_topic = match &connection.consistency_config {
+        KafkaConsistencyConfig::Progress { topic } => {
+            meta.topics().iter().find(|t| t.name() == topic)
+        }
+    };
+
+    // If the consistency topic exists, check to see if it contains this sink's
+    // data.
+    if let Some(progress_topic) = progress_topic {
+        let consumer: StreamConsumer<_> = connection
+            .connection
+            .create_with_context(
+                connection_cx,
+                MzClientContext::default(),
+                &btreemap! {
+                    "group.id" => SinkGroupId::new(sink_id),
+                    "isolation.level" => "read_committed".into(),
+                    "enable.auto.commit" => "false".into(),
+                    "auto.offset.reset" => "earliest".into(),
+                    "enable.partition.eof" => "true".into(),
+                },
+            )
+            .await
+            .context("creating consumer failed")?;
+
+        consumer
+            .subscribe(&[progress_topic.name()])
+            .expect("subscribing to consistency topic must succeed");
+
+        let progress_key = ProgressKey::new(sink_id);
+
+        let has_sink_progress_data = loop {
+            // At this point, we have already connected to the broker and are
+            // just reading values, so we have an aggressive timeout here.
+            //
+            // This is, in part, motivated by our testing framework which can
+            // try to delete the progress topic while we're reading from it
+            // and we want that case to error quickly.
+            match timeout(Duration::from_secs(10), consumer.recv()).await {
+                // Reached end of partition without finding this topic's
+                // progress data.
+                Err(TimeoutError::Inner(KafkaError::PartitionEOF(partition))) => {
+                    assert_eq!(partition, 0, "progress topic should have one partition");
+                    break false;
+                }
+                Err(e) => bail!("reading from progress topic: {}", e),
+                Ok(m) => {
+                    let key = match m.key_view::<str>() {
+                        Some(Ok(s)) => s,
+                        None => bail!("key missing when deserializing from progress topic"),
+                        Some(Err(e)) => {
+                            bail!("deserializing progress topic key: {}", e);
+                        }
+                    };
+
+                    if progress_key == key {
+                        break true;
+                    }
+
+                    consumer
+                        .commit_message(&m, CommitMode::Async)
+                        .expect("committing messages succeeds");
+                }
+            };
+        };
+
+        // If we have progress data, we should have the topic listed in the
+        // broker's metadata. If we don't, error.
+        if has_sink_progress_data && !meta.topics().iter().any(|t| t.name() == connection.topic) {
+            bail!("sink progress data exists, but sink data topic is missing");
+        }
+    }
+
+    // Create Kafka topic.
     ensure_kafka_topic(
         &client,
         &connection.topic,

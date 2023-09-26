@@ -489,7 +489,7 @@ impl KafkaSinkState {
                     connection_context,
                     MzClientContext::default(),
                     &btreemap! {
-                        "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
+                        "group.id" => mz_storage_client::sink::SinkGroupId::new(*sink_id),
                         "isolation.level" => "read_committed".into(),
                         "enable.auto.commit" => "false".into(),
                         "auto.offset.reset" => "earliest".into(),
@@ -512,7 +512,7 @@ impl KafkaSinkState {
             progress_topic: match connection.consistency_config {
                 KafkaConsistencyConfig::Progress { topic } => topic,
             },
-            progress_key: format!("mz-sink-{sink_id}"),
+            progress_key: mz_storage_client::sink::ProgressKey::new(*sink_id),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
             internal_cmd_tx,
@@ -1381,14 +1381,15 @@ where
         // innocuous, this step is why this must be an async operator.
         //
         // Also note that where this lies in the rendering cycle means that we
-        // will create the collateral topics each time the sink is rendered,
-        // e.g. even if the broker's admin deleted either of the topics. It
-        // remains to be seen if this is a problem for users or not.
+        // might create the collateral topics each time the sink is rendered,
+        // e.g. even if the broker's admin deleted both of the topics. For more
+        // details, see `mz_storage_client::sink::build_kafka`.
         let _ = halt_on_err(
             &healthchecker,
             sink_id,
             &internal_cmd_tx,
-            mz_storage_client::sink::build_kafka(&mut connection, &connection_context).await,
+            mz_storage_client::sink::build_kafka(sink_id, &mut connection, &connection_context)
+                .await,
         )
         .await;
 
