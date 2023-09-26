@@ -17,24 +17,22 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::anyhow;
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use maplit::btreemap;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{
-    BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
-};
+use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
+use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
@@ -44,12 +42,10 @@ use mz_storage_types::sinks::{
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::consumer::BaseConsumer;
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
-use rdkafka::{Offset, TopicPartitionList};
-use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::operators::Concat;
@@ -492,7 +488,7 @@ impl KafkaSinkState {
                     connection_context,
                     MzClientContext::default(),
                     &btreemap! {
-                        "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
+                        "group.id" => mz_storage_client::sink::SinkGroupId::new(sink_id),
                         "isolation.level" => "read_committed".into(),
                         "enable.auto.commit" => "false".into(),
                         "auto.offset.reset" => "earliest".into(),
@@ -514,7 +510,7 @@ impl KafkaSinkState {
             progress_topic: match connection.consistency_config {
                 KafkaConsistencyConfig::Progress { topic } => topic,
             },
-            progress_key: format!("mz-sink-{sink_id}"),
+            progress_key: mz_storage_client::sink::ProgressKey::new(sink_id),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
             gate_ts,
@@ -596,177 +592,6 @@ impl KafkaSinkState {
             .retry_async(|_| self.producer.flush())
             .await
             .expect("Infinite retry cannot fail");
-    }
-
-    async fn determine_latest_progress_record(
-        &mut self,
-    ) -> Result<Option<Timestamp>, anyhow::Error> {
-        // Polls a message from a Kafka Source.  Blocking so should always be called on background
-        // thread.
-        fn get_next_message<C>(
-            consumer: &BaseConsumer<C>,
-            timeout: Duration,
-        ) -> Result<Option<(Vec<u8>, Vec<u8>, i64)>, anyhow::Error>
-        where
-            C: ConsumerContext,
-        {
-            if let Some(result) = consumer.poll(timeout) {
-                match result {
-                    Ok(message) => match message.payload() {
-                        Some(p) => Ok(Some((
-                            message.key().unwrap_or(&[]).to_vec(),
-                            p.to_vec(),
-                            message.offset(),
-                        ))),
-                        None => bail!("unexpected null payload"),
-                    },
-                    Err(KafkaError::PartitionEOF(_)) => Ok(None),
-                    Err(err) => bail!("Failed to process message {}", err),
-                }
-            } else {
-                Ok(None)
-            }
-        }
-
-        // Retrieves the latest committed timestamp from the progress topic.  Blocking so should
-        // always be called on background thread
-        fn get_latest_ts<C>(
-            progress_topic: &str,
-            progress_key: &str,
-            progress_client: &BaseConsumer<C>,
-            timeout: Duration,
-        ) -> Result<Option<Timestamp>, anyhow::Error>
-        where
-            C: ConsumerContext,
-        {
-            // ensure the progress topic has exactly one partition
-            let partitions = mz_kafka_util::client::get_partitions(
-                progress_client.client(),
-                progress_topic,
-                timeout,
-            )
-            .with_context(|| {
-                format!(
-                    "Unable to fetch metadata about progress topic {}",
-                    progress_topic
-                )
-            })?;
-
-            if partitions.len() != 1 {
-                bail!(
-                    "Progress topic {} should contain a single partition, but instead contains {} partitions",
-                    progress_topic, partitions.len(),
-                );
-            }
-
-            let partition = partitions.into_element();
-
-            // We scan from the beginning and see if we can find a progress record. We have
-            // to do it like this because Kafka Control Batches mess with offsets. We
-            // therefore cannot simply take the last offset from the back and expect a
-            // progress message there. With a transactional producer, the OffsetTail(1) will
-            // not point to an progress message but a control message. With aborted
-            // transactions, there might even be a lot of garbage at the end of the
-            // topic or in between.
-
-            let mut tps = TopicPartitionList::new();
-            tps.add_partition(progress_topic, partition);
-            tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
-
-            progress_client.assign(&tps).with_context(|| {
-                format!(
-                    "Error seeking in progress topic {}:{}",
-                    progress_topic, partition
-                )
-            })?;
-
-            let (lo, hi) = progress_client
-                .fetch_watermarks(progress_topic, 0, timeout)
-                .map_err(|e| {
-                    anyhow!(
-                        "Failed to fetch metadata while reading from progress topic: {}",
-                        e
-                    )
-                })?;
-
-            // Empty topic.  Return early to avoid unnecessary call to kafka below.
-            if hi == 0 {
-                return Ok(None);
-            }
-
-            let mut latest_ts = None;
-            let mut latest_offset = None;
-
-            let progress_key_bytes = progress_key.as_bytes();
-            while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
-                debug_assert!(offset >= latest_offset.unwrap_or(0));
-                latest_offset = Some(offset);
-
-                let timestamp_opt = if &key == progress_key_bytes {
-                    let progress: ProgressRecord = serde_json::from_slice(&message)?;
-                    Some(progress.timestamp)
-                } else {
-                    None
-                };
-
-                if let Some(ts) = timestamp_opt {
-                    if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
-                        latest_ts = Some(ts);
-                    }
-                }
-
-                // If the next possible offset for the client is past the high watermark, we've seen
-                // everything we expect to see.
-                let position = progress_client
-                    .position()?
-                    .find_partition(progress_topic, partition)
-                    .ok_or_else(|| anyhow!("No progress info for known partition"))?
-                    .offset();
-                if let Offset::Offset(i) = position {
-                    if i >= hi {
-                        break;
-                    }
-                }
-            }
-
-            // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
-            // have no reason to rely on kafka not inserting any internal messages at the beginning.
-            if latest_offset.is_none() {
-                debug!(
-                    "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
-                    progress_topic, partition, lo, hi
-                );
-            }
-            Ok(latest_ts)
-        }
-
-        let progress_client = self
-            .progress_client
-            .take()
-            .expect("Claiming just-created progress client");
-        // Only actually used for retriable errors.
-        Retry::default()
-            .max_tries(3)
-            .clamp_backoff(Duration::from_secs(60 * 10))
-            .retry_async(|_| async {
-                let progress_topic = self.progress_topic.clone();
-                let progress_key = self.progress_key.clone();
-                let progress_client = Arc::clone(&progress_client);
-                task::spawn_blocking(
-                    || format!("get_latest_ts:{}", self.name),
-                    move || {
-                        get_latest_ts(
-                            &progress_topic,
-                            &progress_key,
-                            &progress_client,
-                            DEFAULT_FETCH_METADATA_TIMEOUT,
-                        )
-                    },
-                )
-                .await
-                .unwrap_or_else(|e| bail!(e))
-            })
-            .await
     }
 
     async fn send_progress_record(&self, transaction_id: Timestamp) {
@@ -1087,7 +912,16 @@ where
         )
         .await;
 
-        let latest_ts = s.determine_latest_progress_record().await;
+        let latest_ts = mz_storage_client::sink::determine_latest_progress_record(
+            s.name.clone(),
+            s.progress_topic.clone(),
+            s.progress_key.clone(),
+            s.progress_client
+                .take()
+                .expect("Claiming just-created progress client"),
+        )
+        .await;
+
         let latest_ts = s.halt_on_err(latest_ts).await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
@@ -1358,7 +1192,8 @@ where
 
         let _ = halt_on_err(
             &healthchecker,
-            mz_storage_client::sink::build_kafka(&mut connection, &connection_context).await,
+            mz_storage_client::sink::build_kafka(sink_id, &mut connection, &connection_context)
+                .await,
         )
         .await;
 
@@ -1421,18 +1256,4 @@ where
     });
 
     (stream, health_stream, Rc::new(button.press_on_drop()))
-}
-
-#[derive(Serialize, Deserialize)]
-/// This struct is emitted as part of a transactional produce, and captures the information we
-/// need to resume the Kafka sink at the correct place in the sunk collection. (Currently, all
-/// we need is the timestamp... this is a record to make it easier to add more metadata in the
-/// future if needed.) It's encoded as JSON to make it easier to introspect while debugging, and
-/// because we expect it to remain small.
-///
-/// Unlike the old consistency topic, this is not intended to be a user-facing feature; it's there
-/// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
-/// information should be added elsewhere instead of overloading this record.
-struct ProgressRecord {
-    timestamp: Timestamp,
 }
