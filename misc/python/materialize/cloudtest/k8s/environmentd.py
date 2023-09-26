@@ -50,13 +50,14 @@ class EnvironmentdService(K8sService):
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
+        internal_http_port = V1ServicePort(name="internal_http", post=6878)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
             metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
             spec=V1ServiceSpec(
                 type="NodePort",
-                ports=[service_port, internal_port, http_port],
+                ports=[service_port, internal_port, http_port, internal_http_port],
                 selector={"app": "environmentd"},
             ),
         )
