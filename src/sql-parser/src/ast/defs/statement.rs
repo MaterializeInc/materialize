@@ -3157,6 +3157,7 @@ pub enum Explainee<T: AstInfo> {
     Index(T::ItemName),
     Query(Box<Query<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
+    CreateIndex(Box<CreateIndexStatement<T>>, bool),
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -3181,6 +3182,12 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_node(query);
             }
             Self::CreateMaterializedView(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
+            }
+            Self::CreateIndex(statement, broken) => {
                 if *broken {
                     f.write_str("BROKEN ");
                 }
