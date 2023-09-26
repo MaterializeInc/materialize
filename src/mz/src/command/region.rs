@@ -38,9 +38,24 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
     let cloud_provider = cx.get_cloud_provider().await?;
 
     loading_spinner.set_message("Enabling the region...");
-    cx.cloud_client()
-        .create_region(version, vec![], cloud_provider.clone())
-        .await?;
+
+    // Loop region creation.
+    // After 6 minutes it will timeout.
+    let _ = Retry::default()
+        .max_duration(Duration::from_secs(720))
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async(|_| async {
+            let _ = cx
+                .cloud_client()
+                .create_region(version.clone(), vec![], cloud_provider.clone())
+                .await;
+
+            loading_spinner.set_message("Waiting for the region to be online...");
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| Error::TimeoutError(Box::new(e)))?;
 
     loading_spinner.set_message("Waiting for the region to be online...");
 
