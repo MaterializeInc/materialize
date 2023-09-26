@@ -776,6 +776,10 @@ impl ExecuteContextExtra {
         let Self { statement_uuid } = self;
         statement_uuid.is_none()
     }
+    pub fn contents(&self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = self;
+        *statement_uuid
+    }
     /// Take responsibility for the contents.  This should only be
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
