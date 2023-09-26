@@ -1223,6 +1223,13 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const EMIT_INTROSPECTION_QUERY_NOTICE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("emit_introspection_query_notice"),
+    value: &true,
+    description: "Whether to print a notice when querying per-replica introspection sources.",
+    internal: false,
+};
+
 // TODO(mgree) change this to a SelectOption
 pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_cardinality_estimates"),
@@ -1790,6 +1797,7 @@ impl SessionVars {
                 &STATEMENT_LOGGING_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
+            .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -2205,6 +2213,11 @@ impl SessionVars {
 
     pub fn get_statement_logging_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_SAMPLE_RATE)
+    }
+
+    /// Returns the value of the `emit_introspection_query_notice` configuration parameter.
+    pub fn emit_introspection_query_notice(&self) -> bool {
+        *self.expect_value(&EMIT_INTROSPECTION_QUERY_NOTICE)
     }
 }
 
