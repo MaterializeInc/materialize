@@ -7,5 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-def identifier(ident: str) -> str: ...
-def literal(value: str) -> str: ...
+> SHOW application_name
+foo_bar_baz

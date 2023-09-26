@@ -119,6 +119,9 @@ pub enum AdapterNotice {
         url: url::Url,
     },
     DroppedInUseIndex(DroppedInUseIndex),
+    PerReplicaLogRead {
+        log_names: Vec<String>,
+    },
 }
 
 impl AdapterNotice {
@@ -177,6 +180,7 @@ impl AdapterNotice {
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+            AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
         }
     }
 
@@ -259,6 +263,7 @@ impl AdapterNotice {
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
+            AdapterNotice::PerReplicaLogRead { .. } => SqlState::WARNING,
         }
     }
 }
@@ -409,6 +414,9 @@ impl fmt::Display for AdapterNotice {
                 dependant_objects,
             }) => {
                 write!(f, "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!", separated(", ", dependant_objects))
+            }
+            AdapterNotice::PerReplicaLogRead { log_names } => {
+                write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
             }
         }
     }

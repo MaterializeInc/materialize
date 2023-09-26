@@ -171,6 +171,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .open_readonly(args.postgres_url.clone(), None, tls.clone())
         .await?;
     let usage = Usage::from_stash(&mut stash).await?;
+    let schema = None;
 
     match args.action {
         Action::Dump { target } => {
@@ -187,12 +188,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             value,
         } => {
             // edit needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
         Action::Delete { collection, key } => {
             // delete needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls).await?;
             delete(stash, usage, collection, key).await
         }
         Action::UpgradeCheck {
@@ -206,7 +207,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 StashConfig {
                     stash_factory: factory,
                     stash_url: args.postgres_url,
-                    schema: None,
+                    schema,
                     tls,
                 },
                 usage,

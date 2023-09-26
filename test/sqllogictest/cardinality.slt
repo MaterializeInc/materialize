@@ -199,11 +199,6 @@ EOF
 # regression test drawn from LDBC-BI query 15 for having a selectivity of 0
 # TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE Person_knows_Person (
     creationDate timestamp with time zone NOT NULL,
@@ -326,11 +321,6 @@ EOF
 
 # regression test drawn from LDBC-BI query 15 for having a selectivity of 0
 # TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive TO true;
-----
-COMPLETE 0
 
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE

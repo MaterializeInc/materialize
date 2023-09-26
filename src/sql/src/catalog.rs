@@ -435,6 +435,11 @@ impl RoleAttributes {
         self.inherit = true;
         self
     }
+
+    /// Returns whether or not the role has inheritence of privileges.
+    pub const fn is_inherit(&self) -> bool {
+        self.inherit
+    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
@@ -442,17 +447,6 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
-            _private: (),
-        }
-    }
-}
-
-impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
-    fn from(
-        (role, PlannedRoleAttributes { inherit }): (&dyn CatalogRole, PlannedRoleAttributes),
-    ) -> RoleAttributes {
-        RoleAttributes {
-            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
             _private: (),
         }
     }
@@ -539,14 +533,17 @@ pub trait CatalogRole {
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
 
-    /// Indicates whether the role has inheritance of privileges.
-    fn is_inherit(&self) -> bool;
-
     /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
     /// membership.
     ///
     /// Key is the role that some role is a member of, value is the grantor role ID.
     fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
+
+    /// Returns the attributes associated with this role.
+    fn attributes(&self) -> &RoleAttributes;
+
+    /// Returns all variables that this role has a default value stored for.
+    fn vars(&self) -> &BTreeMap<String, OwnedVarInput>;
 }
 
 /// A cluster in a [`SessionCatalog`].

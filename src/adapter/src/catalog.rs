@@ -4365,6 +4365,7 @@ impl Catalog {
                     id,
                     name,
                     attributes,
+                    vars,
                 } => {
                     state.ensure_not_reserved_role(&id)?;
                     if let Some(builtin_update) = state.pack_role_update(id, -1) {
@@ -4372,6 +4373,7 @@ impl Catalog {
                     }
                     let existing_role = state.get_role_mut(&id);
                     existing_role.attributes = attributes;
+                    existing_role.vars = vars;
                     tx.update_role(id, existing_role.clone().into())?;
                     if let Some(builtin_update) = state.pack_role_update(id, 1) {
                         builtin_table_updates.push(builtin_update);
@@ -6820,6 +6822,7 @@ pub enum Op {
         id: RoleId,
         name: String,
         attributes: RoleAttributes,
+        vars: RoleVars,
     },
     CreateDatabase {
         name: String,
@@ -7615,12 +7618,16 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.id
     }
 
-    fn is_inherit(&self) -> bool {
-        self.attributes.inherit
-    }
-
     fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
         &self.membership.map
+    }
+
+    fn attributes(&self) -> &RoleAttributes {
+        &self.attributes
+    }
+
+    fn vars(&self) -> &BTreeMap<String, OwnedVarInput> {
+        &self.vars.map
     }
 }
 
@@ -7801,6 +7808,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
     use std::{env, iter};
 
@@ -7820,7 +7828,7 @@ mod tests {
     use mz_repr::role_id::RoleId;
     use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, RowArena, ScalarType, Timestamp};
     use mz_sql::catalog::{CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
-    use mz_sql::func::{Func, OP_IMPLS};
+    use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
@@ -9348,7 +9356,8 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_smoketest_all_builtins() {
-        fn inner(catalog: Catalog) {
+        fn inner(catalog: Catalog) -> Vec<tokio::task::JoinHandle<()>> {
+            let catalog = Arc::new(catalog);
             let conn_catalog = catalog.for_system_session();
 
             let resolve_type_oid = |item: &str| {
@@ -9361,28 +9370,8 @@ mod tests {
                     .unwrap_or_else(|_| panic!("unable to resolve type: {item}"))
                     .oid()
             };
-            let pcx = PlanContext::zero();
-            let scx = StatementContext::new(Some(&pcx), &conn_catalog);
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
-            let ecx = ExprContext {
-                qcx: &qcx,
-                name: "smoketest",
-                scope: &Scope::empty(),
-                relation_type: &RelationType::empty(),
-                allow_aggregates: false,
-                allow_subqueries: false,
-                allow_parameters: false,
-                allow_windows: false,
-            };
-            let arena = RowArena::new();
-            let mut session = Session::dummy();
-            session
-                .start_transaction(to_datetime(0), None, None)
-                .expect("must succeed");
-            let prep_style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::Time(Timestamp::MIN),
-                session: &session,
-            };
+            let mut handles = Vec::new();
+
             // Extracted during planning; always panics when executed.
             let ignore_names = BTreeSet::from([
                 "avg",
@@ -9440,14 +9429,13 @@ mod tests {
                         .return_typ
                         .map(|item| resolve_type_oid(item))
                         .expect("must exist");
-                    let return_styp = &mz_pgrepr::Type::from_oid(return_oid)
+                    let return_styp = mz_pgrepr::Type::from_oid(return_oid)
                         .ok()
                         .map(|typ| ScalarType::try_from(&typ).expect("must exist"));
 
                     let mut idxs = vec![0; datums.len()];
-                    let mut args = Vec::with_capacity(idxs.len());
                     while idxs[0] < datums[0].len() {
-                        args.clear();
+                        let mut args = Vec::with_capacity(idxs.len());
                         for i in 0..(datums.len()) {
                             args.push(datums[i][idxs[i]]);
                         }
@@ -9472,79 +9460,25 @@ mod tests {
                                 .join(", "),
                             imp.oid
                         );
-
-                        // Execute the function as much as possible, ensuring no panics occur, but
-                        // otherwise ignoring eval errors. We also do various other checks.
-                        let start = Instant::now();
-                        let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
-                        if let Ok(hir) = res {
-                            if let Ok(mut mir) = hir.lower_uncorrelated() {
-                                // Populate unmaterialized functions.
-                                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
-                                    .expect("must succeed");
-
-                                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
-                                    if let Some(return_styp) = return_styp {
-                                        let mir_typ = mir.typ(&[]);
-                                        // MIR type inference should be consistent with the type
-                                        // we get from the catalog.
-                                        assert_eq!(mir_typ.scalar_type, *return_styp);
-                                        // The following will check not just that the scalar type
-                                        // is ok, but also catches if the function returned a null
-                                        // but the MIR type inference said "non-nullable".
-                                        if !eval_result_datum.is_instance_of(&mir_typ) {
-                                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
-                                        }
-                                        // Check the consistency of `introduces_nulls` and
-                                        // `propagates_nulls` with `MirScalarExpr::typ`.
-                                        if let Some((introduces_nulls, propagates_nulls)) =
-                                            call_introduces_propagates_nulls(&mir)
-                                        {
-                                            if introduces_nulls {
-                                                // If the function introduces_nulls, then the return
-                                                // type should always be nullable, regardless of
-                                                // the nullability of the input types.
-                                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
-                                            } else {
-                                                let any_input_null =
-                                                    args.iter().any(|arg| arg.is_null());
-                                                if !any_input_null {
-                                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
-                                                } else {
-                                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
-                                                }
-                                            }
-                                        }
-                                        // Check that `MirScalarExpr::reduce` yields the same result
-                                        // as the real evaluation.
-                                        let mut reduced = mir.clone();
-                                        reduced.reduce(&[]);
-                                        match reduced {
-                                            MirScalarExpr::Literal(reduce_result, ctyp) => {
-                                                match reduce_result {
-                                                    Ok(reduce_result_row) => {
-                                                        let reduce_result_datum = reduce_result_row.unpack_first();
-                                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
-                                                        // Let's check that the types also match.
-                                                        // (We are not checking nullability here,
-                                                        // because it's ok when we know a more
-                                                        // precise nullability after actually
-                                                        // evaluating a function than before.)
-                                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
-                                                    },
-                                                    Err(..) => {}, // It's ok, we might have given invalid args to the function
-                                                }
-                                            },
-                                            _ => unreachable!("all args are literals, so should have reduced to a literal"),
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let elapsed = start.elapsed();
-                        if elapsed > Duration::from_millis(250) {
-                            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
-                        }
+                        let catalog = Arc::clone(&catalog);
+                        let call_name_fn = call_name.clone();
+                        let return_styp = return_styp.clone();
+                        let handle = task::spawn_blocking(
+                            || call_name,
+                            move || {
+                                smoketest_fn(
+                                    name,
+                                    call_name_fn,
+                                    op,
+                                    imp,
+                                    args,
+                                    catalog,
+                                    scalars,
+                                    return_styp,
+                                )
+                            },
+                        );
+                        handles.push(handle);
 
                         // Advance to the next datum combination.
                         for i in (0..datums.len()).rev() {
@@ -9562,9 +9496,129 @@ mod tests {
                     }
                 }
             }
+            handles
         }
 
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await
+        let handles =
+            Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await;
+        for handle in handles {
+            handle.await.expect("must succeed");
+        }
+    }
+
+    fn smoketest_fn(
+        name: &&str,
+        call_name: String,
+        op: &Operation<HirScalarExpr>,
+        imp: &FuncImpl<HirScalarExpr>,
+        args: Vec<Datum<'_>>,
+        catalog: Arc<Catalog>,
+        scalars: Vec<CoercibleScalarExpr>,
+        return_styp: Option<ScalarType>,
+    ) {
+        let conn_catalog = catalog.for_system_session();
+        let pcx = PlanContext::zero();
+        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+        let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
+        let ecx = ExprContext {
+            qcx: &qcx,
+            name: "smoketest",
+            scope: &Scope::empty(),
+            relation_type: &RelationType::empty(),
+            allow_aggregates: false,
+            allow_subqueries: false,
+            allow_parameters: false,
+            allow_windows: false,
+        };
+        let arena = RowArena::new();
+        let mut session = Session::dummy();
+        session
+            .start_transaction(to_datetime(0), None, None)
+            .expect("must succeed");
+        let prep_style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::Time(Timestamp::MIN),
+            session: &session,
+        };
+
+        // Execute the function as much as possible, ensuring no panics occur, but
+        // otherwise ignoring eval errors. We also do various other checks.
+        let start = Instant::now();
+        let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
+        if let Ok(hir) = res {
+            if let Ok(mut mir) = hir.lower_uncorrelated() {
+                // Populate unmaterialized functions.
+                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
+                    .expect("must succeed");
+
+                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
+                    if let Some(return_styp) = return_styp {
+                        let mir_typ = mir.typ(&[]);
+                        // MIR type inference should be consistent with the type
+                        // we get from the catalog.
+                        assert_eq!(mir_typ.scalar_type, return_styp);
+                        // The following will check not just that the scalar type
+                        // is ok, but also catches if the function returned a null
+                        // but the MIR type inference said "non-nullable".
+                        if !eval_result_datum.is_instance_of(&mir_typ) {
+                            panic!("{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}");
+                        }
+                        // Check the consistency of `introduces_nulls` and
+                        // `propagates_nulls` with `MirScalarExpr::typ`.
+                        if let Some((introduces_nulls, propagates_nulls)) =
+                            call_introduces_propagates_nulls(&mir)
+                        {
+                            if introduces_nulls {
+                                // If the function introduces_nulls, then the return
+                                // type should always be nullable, regardless of
+                                // the nullability of the input types.
+                                assert!(mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                            } else {
+                                let any_input_null = args.iter().any(|arg| arg.is_null());
+                                if !any_input_null {
+                                    assert!(!mir_typ.nullable, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                } else {
+                                    assert_eq!(mir_typ.nullable, propagates_nulls, "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}", name, args, mir, mir_typ.nullable);
+                                }
+                            }
+                        }
+                        // Check that `MirScalarExpr::reduce` yields the same result
+                        // as the real evaluation.
+                        let mut reduced = mir.clone();
+                        reduced.reduce(&[]);
+                        match reduced {
+                            MirScalarExpr::Literal(reduce_result, ctyp) => {
+                                match reduce_result {
+                                    Ok(reduce_result_row) => {
+                                        let reduce_result_datum = reduce_result_row.unpack_first();
+                                        assert_eq!(reduce_result_datum, eval_result_datum, "eval/reduce datum mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                        // Let's check that the types also match.
+                                        // (We are not checking nullability here,
+                                        // because it's ok when we know a more
+                                        // precise nullability after actually
+                                        // evaluating a function than before.)
+                                        assert_eq!(ctyp.scalar_type, mir_typ.scalar_type, "eval/reduce type mismatch: fn named `{}` called on args `{:?}` (lowered to `{}`) evaluated to `{}` with typ `{:?}`, but reduced to `{}` with typ `{:?}`", name, args, mir, eval_result_datum, mir_typ.scalar_type, reduce_result_datum, ctyp.scalar_type);
+                                    }
+                                    Err(..) => {} // It's ok, we might have given invalid args to the function
+                                }
+                            }
+                            _ => unreachable!(
+                                "all args are literals, so should have reduced to a literal"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+        // Because the tests are run with one task per fn, these execution times go up compared to
+        // running them serially on a single task/thread. Thus choose a fairly high timeout.
+        // Additionally, CI infra has variable performance and we want to avoid flakes. This timeout
+        // is designed to detect something taking an unexpectedly long time, but that's hard to
+        // define. If this causes problems in CI it should probably be removed instead of getting
+        // bumped to a higher timeout.
+        let elapsed = start.elapsed();
+        if elapsed > Duration::from_millis(5_000) {
+            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
+        }
     }
 
     /// If the given MirScalarExpr

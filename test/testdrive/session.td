@@ -25,6 +25,7 @@ cluster                             <VARIES>                "Sets the current cl
 cluster_replica                     ""                      "Sets a target cluster replica for SELECT queries (Materialize)."
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
+emit_introspection_query_notice     on                      "Whether to print a notice when querying per-replica introspection sources."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 enable_comment                      off                     "Enables the COMMENT ON feature for objects in the database (Materialize)."

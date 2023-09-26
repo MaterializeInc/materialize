@@ -325,6 +325,7 @@ impl Listeners {
 
         let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
         let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
+        let stash_schema = None;
 
         // Start the internal HTTP server.
         //
@@ -348,7 +349,7 @@ impl Listeners {
         let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
             stash_factory: config.controller.postgres_factory.clone(),
             stash_url: config.adapter_stash_url.clone(),
-            schema: None,
+            schema: stash_schema.clone(),
             tls: tls.clone(),
         });
 

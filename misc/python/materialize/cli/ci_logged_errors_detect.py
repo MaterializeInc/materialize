@@ -26,6 +26,7 @@ ERROR_RE = re.compile(
     r"""
     ( panicked\ at
     | segfault\ at
+    | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
