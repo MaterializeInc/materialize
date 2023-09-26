@@ -133,7 +133,12 @@ impl AvroSchemaGenerator {
     pub fn new(
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
-        options: AvroSchemaOptions,
+        AvroSchemaOptions {
+            is_debezium,
+            avro_value_nullname,
+            avro_key_fullname,
+            set_null_defaults
+            }: AvroSchemaOptions,
     ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
         if options.is_debezium {
