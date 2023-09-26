@@ -3091,8 +3091,8 @@ impl Coordinator {
 
         let trace = optimizer_trace.drain_all(
             format,
-            config,
-            self.catalog().for_session(ctx.session()),
+            &config,
+            &self.catalog().for_session(ctx.session()),
             row_set_finishing,
             used_indexes,
             fast_path_plan,
