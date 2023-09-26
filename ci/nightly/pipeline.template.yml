@@ -606,8 +606,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: mz-e2e
 
-  - id: output-consistency-test
-    label: "Output consistency test"
+  - id: output-consistency-internal
+    label: "Output consistency (internal)"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -617,8 +617,8 @@ steps:
           composition: output-consistency
           args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
 
-  - id: postgres-consistency-test
-    label: "Postgres consistency test"
+  - id: output-consistency-postgres
+    label: "Output consistency (Postgres)"
     timeout_in_minutes: 58
     agents:
       queue: linux-x86_64
