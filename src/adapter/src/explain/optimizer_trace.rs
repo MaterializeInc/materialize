@@ -17,7 +17,9 @@ use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
-use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, UsedIndexes};
+use mz_repr::explain::{
+    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
+};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::ExplainStage;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -25,7 +27,6 @@ use mz_transform::optimizer_notices::OptimizerNotice;
 use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
-use crate::catalog::ConnCatalog;
 use crate::coord::peek::FastPathPlan;
 use crate::explain::Explainable;
 
@@ -86,8 +87,8 @@ impl OptimizerTrace {
     pub fn drain_all(
         self,
         format: ExplainFormat,
-        config: ExplainConfig,
-        catalog: ConnCatalog,
+        config: &ExplainConfig,
+        humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         used_indexes: UsedIndexes,
         fast_path_plan: Option<FastPathPlan>,
@@ -98,14 +99,14 @@ impl OptimizerTrace {
         // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., drain
         // HIR plans.
         let mut context = ExplainContext {
-            config: &config,
-            humanizer: &catalog,
+            config,
+            humanizer,
             used_indexes: UsedIndexes::default(),
             finishing: row_set_finishing.clone(),
             duration: Duration::default(),
             optimizer_notices: OptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
-                &catalog,
+                humanizer,
             )?,
         };
 
@@ -117,14 +118,14 @@ impl OptimizerTrace {
 
         // Drain trace entries of types produced by global optimizer stages.
         let mut context = ExplainContext {
-            config: &config,
-            humanizer: &catalog,
+            config,
+            humanizer,
             used_indexes,
             finishing: row_set_finishing,
             duration: Duration::default(),
             optimizer_notices: OptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
-                &catalog,
+                humanizer,
             )?,
         };
         let fast_path_plan = match fast_path_plan {
