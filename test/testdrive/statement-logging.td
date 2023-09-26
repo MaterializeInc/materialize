@@ -29,6 +29,7 @@ statement_logging_sample_rate
 
 # Now the real test begins
 
+# This will be executed on `mz_introspection`, due to auto-routing of "simple" queries.
 > SELECT 'beginning real test!'
 "beginning real test!"
 
@@ -71,6 +72,10 @@ contains: column "f_nonexistent" does not exist
 
 > COMMIT
 
+# This will be executed on mz_introspection, due to auto-routing of introspection queries.
+> SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
+true
+
 # Assumptions encoded here:
 # (1) "Inner" statement executions are not logged. For example,
 #     if SQL-level `PREPARE` and `EXECUTE` are used, those statements will
@@ -89,21 +94,22 @@ contains: column "f_nonexistent" does not exist
 
 > WITH all_stmts AS (SELECT * FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
-  SELECT all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql
-  FROM all_stmts, test_begin WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%' --ignore this statement, in case we have to re-run it
-  ORDER BY all_stmts.sql, all_statements.rows_returned
-1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t"
-1 {} success <null> 1 constant true "EXECUTE p('hello world')"
-1 {} success <null> 1 constant true "SELECT 'beginning real test!'"
-1 {} success <null> 1 fast-path true "SELECT * FROM t"
-1 {} success <null> 1 standard true "SELECT count(*) FROM t"
-1 {} success <null> 2 constant true "FETCH c"
-1 {} success <null> <null> <null> true BEGIN
-1 {} success <null> <null> <null> true COMMIT
-1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t"
-1 {} success <null> <null> <null> true "CREATE TABLE t(f int)"
-1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)"
-1 {} success <null> <null> <null> true "FETCH c"
-1 {} success <null> <null> <null> true "FETCH c"
-1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)"
-1 {} success <null> <null> <null> true "PREPARE p AS values ($1)"
+  SELECT c.name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql
+  FROM all_stmts, test_begin, mz_clusters c WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
+  AND c.id = all_stmts.cluster_id
+default 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t"
+default 1 {} success <null> 1 constant true "EXECUTE p('hello world')"
+mz_introspection 1 {} success <null> 1 constant true "SELECT 'beginning real test!'"
+default 1 {} success <null> 1 fast-path true "SELECT * FROM t"
+mz_introspection 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics"
+default 1 {} success <null> 1 standard true "SELECT count(*) FROM t"
+default 1 {} success <null> 2 constant true "FETCH c"
+default 1 {} success <null> <null> <null> true BEGIN
+default 1 {} success <null> <null> <null> true COMMIT
+default 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t"
+default 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)"
+default 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)"
+default 1 {} success <null> <null> <null> true "FETCH c"
+default 1 {} success <null> <null> <null> true "FETCH c"
+default 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)"
+default 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)"
