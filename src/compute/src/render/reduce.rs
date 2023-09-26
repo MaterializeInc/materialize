@@ -36,13 +36,15 @@ use tracing::warn;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
+use crate::render::context::{
+    Arrangement, CollectionBundle, Context, KeyValArrangement, SpecializedArrangement,
+};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::ArrangementFlavor;
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
-impl<G, T> Context<G, Row, T>
+impl<G, T> Context<G, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -52,11 +54,11 @@ where
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &mut self,
-        input: CollectionBundle<G, Row, T>,
+        input: CollectionBundle<G, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         input_key: Option<Vec<MirScalarExpr>>,
-    ) -> CollectionBundle<G, Row, T> {
+    ) -> CollectionBundle<G, T> {
         input.scope().region_named("Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,
@@ -159,7 +161,7 @@ where
         collection: Collection<S, (Row, Row), Diff>,
         err_input: Collection<S, DataflowError, Diff>,
         key_arity: usize,
-    ) -> CollectionBundle<S, Row, T>
+    ) -> CollectionBundle<S, T>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -168,7 +170,10 @@ where
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
         CollectionBundle::from_columns(
             0..key_arity,
-            ArrangementFlavor::Local(arrangement, errs.mz_arrange("Arrange bundle err")),
+            ArrangementFlavor::Local(
+                SpecializedArrangement::RowRow(arrangement),
+                errs.mz_arrange("Arrange bundle err"),
+            ),
         )
     }
 
@@ -606,7 +611,7 @@ where
     fn build_reduce_inaccumulable_distinct<S, R>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
-    ) -> KeyArrangement<S, (Row, Row), R>
+    ) -> KeyValArrangement<S, (Row, Row), R>
     where
         S: Scope<Timestamp = G::Timestamp>,
         R: MaybeValidatingRow<(), String>,

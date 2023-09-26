@@ -14,7 +14,7 @@ use timely::dataflow::Scope;
 
 use crate::render::context::{CollectionBundle, Context};
 
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
@@ -22,12 +22,12 @@ where
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        input: CollectionBundle<G, Row>,
+        input: CollectionBundle<G>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
-    ) -> CollectionBundle<G, Row> {
+    ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());

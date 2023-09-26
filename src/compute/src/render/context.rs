@@ -22,12 +22,14 @@ use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_repr::fixed_length::{Bytes9, FromRowByTypes, IntoRowByTypes};
+use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe;
+use mz_timely_util::probe::ProbeNotify;
 use timely::communication::message::RefOrMut;
-use timely::container::columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
@@ -36,20 +38,21 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
-pub(crate) type KeyArrangement<S, K, V> =
+pub(crate) type KeyValArrangement<S, K, V> =
     Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type Arrangement<S, V> = KeyArrangement<S, V, V>;
+pub(crate) type Arrangement<S, V> = KeyValArrangement<S, V, V>;
 pub(crate) type ErrArrangement<S> =
     Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type ArrangementImport<S, V, T> = Arranged<
+pub(crate) type KeyValArrangementImport<S, K, V, T> = Arranged<
     S,
-    TraceEnter<TraceFrontier<TraceRowHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
+    TraceEnter<TraceFrontier<TraceRowHandle<K, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
 pub(crate) type ErrArrangementImport<S, T> = Arranged<
     S,
@@ -69,7 +72,7 @@ pub(crate) type ErrArrangementImport<S, T> = Arranged<
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope, V: Data + columnation::Columnation, T = mz_repr::Timestamp>
+pub struct Context<S: Scope, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -91,14 +94,14 @@ where
     /// Used to limit the amount of work done when appropriate.
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
+    pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
     /// A token that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_token: ShutdownToken,
     /// The implementation to use for rendering linear joins.
     pub(super) linear_join_impl: LinearJoinImpl,
 }
 
-impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
+impl<S: Scope> Context<S>
 where
     S::Timestamp: Lattice + Refines<mz_repr::Timestamp>,
 {
@@ -127,7 +130,7 @@ where
     }
 }
 
-impl<S: Scope, V: Data + columnation::Columnation, T> Context<S, V, T>
+impl<S: Scope, T> Context<S, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -139,18 +142,18 @@ where
     pub fn insert_id(
         &mut self,
         id: Id,
-        collection: CollectionBundle<S, V, T>,
-    ) -> Option<CollectionBundle<S, V, T>> {
+        collection: CollectionBundle<S, T>,
+    ) -> Option<CollectionBundle<S, T>> {
         self.bindings.insert(id, collection)
     }
     /// Remove a collection bundle by an identifier.
     ///
     /// The primary use of this method is uninstalling `Let` bindings.
-    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, V, T>> {
+    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, T>> {
         self.bindings.remove(&id)
     }
     /// Melds a collection bundle to whatever exists.
-    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, V, T>) {
+    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, T>) {
         if !self.bindings.contains_key(&id) {
             self.bindings.insert(id, collection);
         } else {
@@ -167,7 +170,7 @@ where
         }
     }
     /// Look up a collection bundle by an identifier.
-    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, V, T>> {
+    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, T>> {
         self.bindings.get(&id).cloned()
     }
 
@@ -212,27 +215,305 @@ impl ShutdownToken {
     }
 }
 
+/// A representation of arrangements that are statically type-specialized.
+/// Each variant of this `enum` covers a different supported specialization of
+/// key and value types for arrangement flavors.
+///
+/// The specialization here is performed on the representation length, as opposed
+/// to its constituent types. For fixed-length specializations, it thus becomes
+/// necessary to keep track of the schema used, since datums are not used and thus
+/// the representation is not tagged. A catch-all `RowRow` specialization without
+/// schema information allows for covering the current approach of self-describing
+/// variable-length keys and variable-length values.
+#[derive(Clone)]
+pub enum SpecializedArrangement<S: Scope>
+where
+    <S as ScopeParent>::Timestamp: Lattice,
+{
+    Bytes9Row(Vec<ColumnType>, KeyValArrangement<S, Bytes9, Row>),
+    RowRow(KeyValArrangement<S, Row, Row>),
+}
+
+impl<S: Scope> SpecializedArrangement<S>
+where
+    <S as ScopeParent>::Timestamp: Lattice,
+{
+    /// The scope of the underlying arrangement's stream.
+    pub fn scope(&self) -> S {
+        match self {
+            SpecializedArrangement::Bytes9Row(_, inner) => inner.stream.scope(),
+            SpecializedArrangement::RowRow(inner) => inner.stream.scope(),
+        }
+    }
+
+    /// Brings the underlying arrangement into a region.
+    pub fn enter_region<'a>(
+        &self,
+        region: &Child<'a, S, S::Timestamp>,
+    ) -> SpecializedArrangement<Child<'a, S, S::Timestamp>> {
+        match self {
+            SpecializedArrangement::Bytes9Row(key_types, inner) => {
+                SpecializedArrangement::Bytes9Row(key_types.clone(), inner.enter_region(region))
+            }
+            SpecializedArrangement::RowRow(inner) => {
+                SpecializedArrangement::RowRow(inner.enter_region(region))
+            }
+        }
+    }
+
+    /// Extracts the underlying arrangement as a stream of updates.
+    pub fn as_collection<L>(&self, mut logic: L) -> Collection<S, Row, Diff>
+    where
+        L: FnMut(&Row, &Row) -> Row + 'static,
+    {
+        match self {
+            SpecializedArrangement::Bytes9Row(key_types, inner) => {
+                let key_types = key_types.clone();
+                let mut key_buf = Row::default();
+                let mut val_buf = Row::default();
+
+                inner.as_collection(move |k, v| {
+                    let k = k.into_row(&mut key_buf, Some(&key_types));
+                    let v = v.into_row(&mut val_buf, None);
+                    logic(k, v)
+                })
+            }
+            SpecializedArrangement::RowRow(inner) => inner.as_collection(logic),
+        }
+    }
+
+    /// Applies logic to elements of the underlying arrangement and returns the results.
+    pub fn flat_map<I, L, T>(
+        &self,
+        key: Option<Row>,
+        mut logic: L,
+        refuel: usize,
+    ) -> timely::dataflow::Stream<S, I::Item>
+    where
+        T: Timestamp + Lattice,
+        <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
+            + 'static,
+    {
+        match self {
+            SpecializedArrangement::Bytes9Row(key_types, inner) => {
+                let key_types = key_types.clone();
+                let mut key_buf = Row::default();
+                let mut val_buf = Row::default();
+
+                CollectionBundle::<S, T>::flat_map_core(
+                    inner,
+                    key.map(|k| Bytes9::from_row(k, Some(&key_types))),
+                    move |k, v, t, d| {
+                        let k = k.into_row(&mut key_buf, Some(&key_types));
+                        let v = v.into_row(&mut val_buf, None);
+                        logic(&[&RefOrMut::Ref(k), &RefOrMut::Ref(v)], t, d)
+                    },
+                    refuel,
+                )
+            }
+            SpecializedArrangement::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
+                inner,
+                key,
+                move |k, v, t, d| logic(&[&k, &v], t, d),
+                refuel,
+            ),
+        }
+    }
+}
+
+impl<'a, S: Scope> SpecializedArrangement<Child<'a, S, S::Timestamp>>
+where
+    <S as ScopeParent>::Timestamp: Lattice,
+{
+    /// Extracts the underlying arrangement flavor from a region.
+    pub fn leave_region(&self) -> SpecializedArrangement<S> {
+        match self {
+            SpecializedArrangement::Bytes9Row(key_types, inner) => {
+                SpecializedArrangement::Bytes9Row(key_types.clone(), inner.leave_region())
+            }
+            SpecializedArrangement::RowRow(inner) => {
+                SpecializedArrangement::RowRow(inner.leave_region())
+            }
+        }
+    }
+}
+
+impl<S: Scope> SpecializedArrangement<S>
+where
+    S: ScopeParent<Timestamp = mz_repr::Timestamp>,
+{
+    /// Attaches probes to the stream of the underlying arrangement
+    /// to notify on index frontier advancement.
+    pub fn probe_notify_with(&self, probes: Vec<probe::Handle<mz_repr::Timestamp>>) {
+        match self {
+            SpecializedArrangement::Bytes9Row(_, inner) => {
+                inner.stream.probe_notify_with(probes);
+            }
+            SpecializedArrangement::RowRow(inner) => {
+                inner.stream.probe_notify_with(probes);
+            }
+        }
+    }
+
+    /// Obtains a `SpecializedTraceHandle` for the underlying arrangement.
+    pub fn trace_handle(&self) -> SpecializedTraceHandle {
+        match self {
+            SpecializedArrangement::Bytes9Row(key_types, inner) => {
+                SpecializedTraceHandle::Bytes9Row(key_types.clone(), inner.trace.clone())
+            }
+            SpecializedArrangement::RowRow(inner) => {
+                SpecializedTraceHandle::RowRow(inner.trace.clone())
+            }
+        }
+    }
+}
+
+/// Defines a statically type-specialized representation of arrangement imports,
+/// similarly to `SpecializedArrangement`.
+#[derive(Clone)]
+pub enum SpecializedArrangementImport<S: Scope, T = mz_repr::Timestamp>
+where
+    T: Timestamp + Lattice,
+    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
+{
+    Bytes9Row(Vec<ColumnType>, KeyValArrangementImport<S, Bytes9, Row, T>),
+    RowRow(KeyValArrangementImport<S, Row, Row, T>),
+}
+
+impl<S: Scope, T> SpecializedArrangementImport<S, T>
+where
+    T: Timestamp + Lattice,
+    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
+{
+    /// The scope of the underlying trace's stream.
+    pub fn scope(&self) -> S {
+        match self {
+            SpecializedArrangementImport::Bytes9Row(_, inner) => inner.stream.scope(),
+            SpecializedArrangementImport::RowRow(inner) => inner.stream.scope(),
+        }
+    }
+
+    /// Brings the underlying trace into a region.
+    pub fn enter_region<'a>(
+        &self,
+        region: &Child<'a, S, S::Timestamp>,
+    ) -> SpecializedArrangementImport<Child<'a, S, S::Timestamp>, T> {
+        match self {
+            SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
+                SpecializedArrangementImport::Bytes9Row(
+                    key_types.clone(),
+                    inner.enter_region(region),
+                )
+            }
+            SpecializedArrangementImport::RowRow(inner) => {
+                SpecializedArrangementImport::RowRow(inner.enter_region(region))
+            }
+        }
+    }
+
+    /// Extracts the underlying trace as a stream of updates.
+    pub fn as_collection<L>(&self, mut logic: L) -> Collection<S, Row, Diff>
+    where
+        L: FnMut(&Row, &Row) -> Row + 'static,
+    {
+        match self {
+            SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
+                let key_types = key_types.clone();
+                let mut key_buf = Row::default();
+                let mut val_buf = Row::default();
+
+                inner.as_collection(move |k, v| {
+                    let k = k.into_row(&mut key_buf, Some(&key_types));
+                    let v = v.into_row(&mut val_buf, None);
+                    logic(k, v)
+                })
+            }
+            SpecializedArrangementImport::RowRow(inner) => inner.as_collection(logic),
+        }
+    }
+
+    /// Applies logic to elements of the underlying arrangement and returns the results.
+    pub fn flat_map<I, L>(
+        &self,
+        key: Option<Row>,
+        mut logic: L,
+        refuel: usize,
+    ) -> timely::dataflow::Stream<S, I::Item>
+    where
+        I: IntoIterator,
+        I::Item: Data,
+        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
+            + 'static,
+    {
+        match self {
+            SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
+                let key_types = key_types.clone();
+                let mut key_buf = Row::default();
+                let mut val_buf = Row::default();
+
+                CollectionBundle::<S, T>::flat_map_core(
+                    inner,
+                    key.map(|k| Bytes9::from_row(k, Some(&key_types))),
+                    move |k, v, t, d| {
+                        let k = k.into_row(&mut key_buf, Some(&key_types));
+                        let v = v.into_row(&mut val_buf, None);
+                        logic(&[&RefOrMut::Ref(k), &RefOrMut::Ref(v)], t, d)
+                    },
+                    refuel,
+                )
+            }
+            SpecializedArrangementImport::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
+                inner,
+                key,
+                move |k, v, t, d| logic(&[&k, &v], t, d),
+                refuel,
+            ),
+        }
+    }
+}
+
+impl<'a, S: Scope, T> SpecializedArrangementImport<Child<'a, S, S::Timestamp>, T>
+where
+    T: Timestamp + Lattice,
+    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
+{
+    /// Extracts the underlying arrangement flavor from a region.
+    pub fn leave_region(&self) -> SpecializedArrangementImport<S, T> {
+        match self {
+            SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
+                SpecializedArrangementImport::Bytes9Row(key_types.clone(), inner.leave_region())
+            }
+            SpecializedArrangementImport::RowRow(inner) => {
+                SpecializedArrangementImport::RowRow(inner.leave_region())
+            }
+        }
+    }
+}
+
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope, V: Data + columnation::Columnation, T = mz_repr::Timestamp>
+pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
     /// A dataflow-local arrangement.
-    Local(Arrangement<S, V>, ErrArrangement<S>),
+    Local(SpecializedArrangement<S>, ErrArrangement<S>),
     /// An imported trace from outside the dataflow.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        ArrangementImport<S, V, T>,
+        SpecializedArrangementImport<S, T>,
         ErrArrangementImport<S, T>,
     ),
 }
 
-impl<S: Scope, T> ArrangementFlavor<S, Row, T>
+impl<S: Scope, T> ArrangementFlavor<S, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -296,31 +577,21 @@ where
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let mut logic = constructor();
-                let oks = CollectionBundle::<S, Row, T>::flat_map_core(
-                    oks,
-                    key,
-                    move |k, v, t, d| logic(&[&k, &v], t, d),
-                    refuel,
-                );
+                let logic = constructor();
+                let oks = oks.flat_map(key, logic, refuel);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let mut logic = constructor();
-                let oks = CollectionBundle::<S, Row, T>::flat_map_core(
-                    oks,
-                    key,
-                    move |k, v, t, d| logic(&[&k, &v], t, d),
-                    refuel,
-                );
+                let logic = constructor();
+                let oks = oks.flat_map(key, logic, refuel);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
         }
     }
 }
-impl<S: Scope, V: Data + columnation::Columnation, T> ArrangementFlavor<S, V, T>
+impl<S: Scope, T> ArrangementFlavor<S, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -328,8 +599,8 @@ where
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
         match self {
-            ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
-            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
+            ArrangementFlavor::Local(oks, _errs) => oks.scope(),
+            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.scope(),
         }
     }
 
@@ -337,7 +608,7 @@ where
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
-    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, V, T> {
+    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => {
                 ArrangementFlavor::Local(oks.enter_region(region), errs.enter_region(region))
@@ -348,14 +619,13 @@ where
         }
     }
 }
-impl<'a, S: Scope, V: Data + columnation::Columnation, T>
-    ArrangementFlavor<Child<'a, S, S::Timestamp>, V, T>
+impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region(&self) -> ArrangementFlavor<S, V, T> {
+    pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => {
                 ArrangementFlavor::Local(oks.leave_region(), errs.leave_region())
@@ -372,23 +642,23 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope, V: Data + columnation::Columnation, T = mz_repr::Timestamp>
+pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
-    pub collection: Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
+    pub collection: Option<(Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)>,
+    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
 
-impl<S: Scope, V: Data + columnation::Columnation, T: Lattice> CollectionBundle<S, V, T>
+impl<S: Scope, T: Lattice> CollectionBundle<S, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
-        oks: Collection<S, V, Diff>,
+        oks: Collection<S, Row, Diff>,
         errs: Collection<S, DataflowError, Diff>,
     ) -> Self {
         Self {
@@ -400,7 +670,7 @@ where
     /// Inserts arrangements by the expressions on which they are keyed.
     pub fn from_expressions(
         exprs: Vec<MirScalarExpr>,
-        arrangements: ArrangementFlavor<S, V, T>,
+        arrangements: ArrangementFlavor<S, T>,
     ) -> Self {
         let mut arranged = BTreeMap::new();
         arranged.insert(exprs, arrangements);
@@ -413,7 +683,7 @@ where
     /// Inserts arrangements by the columns on which they are keyed.
     pub fn from_columns<I: IntoIterator<Item = usize>>(
         columns: I,
-        arrangements: ArrangementFlavor<S, V, T>,
+        arrangements: ArrangementFlavor<S, T>,
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
@@ -439,7 +709,7 @@ where
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
-    ) -> CollectionBundle<Child<'a, S, S::Timestamp>, V, T> {
+    ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
         CollectionBundle {
             collection: self
                 .collection
@@ -454,14 +724,13 @@ where
     }
 }
 
-impl<'a, S: Scope, V: Data + columnation::Columnation, T>
-    CollectionBundle<Child<'a, S, S::Timestamp>, V, T>
+impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Extracts the collection bundle from a region.
-    pub fn leave_region(&self) -> CollectionBundle<S, V, T> {
+    pub fn leave_region(&self) -> CollectionBundle<S, T> {
         CollectionBundle {
             collection: self
                 .collection
@@ -476,7 +745,7 @@ where
     }
 }
 
-impl<S: Scope, T: Lattice> CollectionBundle<S, Row, T>
+impl<S: Scope, T: Lattice> CollectionBundle<S, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -567,22 +836,22 @@ where
     /// once, and thereby avoid any skew in the two uses of the logic.
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
-    /// where key and value are rows.
-    fn flat_map_core<Tr, I, L>(
+    /// where key and value are potentially specialized, but convertible into rows.
+    fn flat_map_core<Tr, I, L, K, V>(
         trace: &Arranged<S, Tr>,
-        key: Option<Row>,
+        key: Option<K>,
         mut logic: L,
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        Tr: TraceReader<Key = Row, Val = Row, Time = S::Timestamp, R = mz_repr::Diff>
-            + Clone
-            + 'static,
+        K: PartialEq + IntoRowByTypes + 'static,
+        V: IntoRowByTypes,
+        Tr: TraceReader<Key = K, Val = V, Time = S::Timestamp, R = mz_repr::Diff> + Clone + 'static,
         I: IntoIterator,
         I::Item: Data,
         L: for<'a, 'b> FnMut(
-                RefOrMut<'b, Row>,
-                RefOrMut<'b, Row>,
+                RefOrMut<'b, K>,
+                RefOrMut<'b, V>,
                 &'a S::Timestamp,
                 &'a mz_repr::Diff,
             ) -> I
@@ -634,12 +903,12 @@ where
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, Row, T>> {
+    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
 
-impl<S, T> CollectionBundle<S, mz_repr::Row, T>
+impl<S, T> CollectionBundle<S, T>
 where
     T: timely::progress::Timestamp + Lattice,
     S: Scope,
@@ -756,11 +1025,15 @@ where
             self.collection =
                 Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until));
         }
-        for (key, _, thinning) in collections.arranged {
+        for (key, permutation, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
                 let key2 = key.clone();
+
+                let (key_types, val_types) =
+                    derive_key_val_types(&permutation, &thinning, collections.types.as_ref());
+
                 let (oks, errs) = self
                     .collection
                     .clone()
@@ -782,7 +1055,7 @@ where
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
-                let oks = oks_keyed.mz_arrange::<RowSpine<Row, Row, _, _>>(&name);
+                let oks = Self::specialized_arrange(&name, oks_keyed, key_types, val_types);
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
                 let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
@@ -791,6 +1064,32 @@ where
         }
         self
     }
+
+    /// Builds a specialized arrangement to provided types. The specialization for key and
+    /// value types of the arrangement is based on the bit length derived from the corresponding
+    /// type descriptions.
+    fn specialized_arrange(
+        name: &String,
+        oks: Collection<S, (Row, Row), i64>,
+        _key_types: Vec<ColumnType>,
+        _val_types: Vec<ColumnType>,
+    ) -> SpecializedArrangement<S> {
+        // TODO(vmarcos) Specialize arrangements to types here!
+        let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
+        let flavor = SpecializedArrangement::RowRow(oks);
+        flavor
+    }
+}
+
+/// Derives the column types of the key and values of an arrangement based on its column
+/// permutation, value thinning, and column types describing the full row schema.
+fn derive_key_val_types(
+    _permutation: &BTreeMap<usize, usize>,
+    _thinning: &Vec<usize>,
+    _types: Option<&Vec<ColumnType>>,
+) -> (Vec<ColumnType>, Vec<ColumnType>) {
+    // TODO(vmarcos): Calculate types here!
+    (Vec::new(), Vec::new())
 }
 
 struct PendingWork<C>

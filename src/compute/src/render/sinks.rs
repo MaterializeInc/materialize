@@ -32,7 +32,7 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
 use crate::render::RenderTimestamp;
 
-impl<'g, G, T> Context<Child<'g, G, T>, Row>
+impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
