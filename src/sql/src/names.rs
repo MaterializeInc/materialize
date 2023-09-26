@@ -1399,6 +1399,7 @@ impl<'a> NameResolver<'a> {
                                     .quoted()
                             ),
                         };
+                        self.ids.insert(array_item.id());
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
                             qualifiers: array_item.name().qualifiers.clone(),
