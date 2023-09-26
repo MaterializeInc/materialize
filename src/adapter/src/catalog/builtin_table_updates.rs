@@ -228,8 +228,8 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let cluster = &self.clusters_by_id[&cluster_id];
-        let id = cluster.replica_id_by_name[name];
-        let replica = &cluster.replicas_by_id[&id];
+        let id = cluster.replica_id(name).expect("Must exist");
+        let replica = cluster.replica(id).expect("Must exist");
 
         let (size, disk, az, internal) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not

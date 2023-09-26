@@ -1374,7 +1374,7 @@ impl Coordinator {
                 &cluster_id,
                 &catalog,
             );
-            for replica in cluster.replicas_by_id.values() {
+            for replica in cluster.replicas() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
                     let replica_id =
                         SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
@@ -1610,10 +1610,8 @@ impl Coordinator {
                     if !clusters_to_drop.contains(cluster_id) {
                         let cluster = self.catalog.get_cluster(*cluster_id);
                         if cluster.is_managed() {
-                            let replica = cluster
-                                .replicas_by_id
-                                .get(replica_id)
-                                .expect("Catalog out of sync");
+                            let replica =
+                                cluster.replica(*replica_id).expect("Catalog out of sync");
                             if !replica.config.location.internal() {
                                 coord_bail!("cannot drop replica of managed cluster");
                             }
@@ -2148,16 +2146,16 @@ impl Coordinator {
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                cluster.replica_id_by_name.get(name).copied().ok_or(
-                    AdapterError::UnknownClusterReplica {
+                cluster
+                    .replica_id(name)
+                    .ok_or(AdapterError::UnknownClusterReplica {
                         cluster_name: cluster.name.clone(),
                         replica_name: name.to_string(),
-                    },
-                )
+                    })
             })
             .transpose()?;
 
-        if cluster.replicas_by_id.is_empty() {
+        if cluster.replicas().next().is_none() {
             return Err(AdapterError::NoClusterReplicasAvailable(
                 cluster.name.clone(),
             ));
@@ -2740,12 +2738,12 @@ impl Coordinator {
         let target_replica_name = ctx.session().vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                cluster.replica_id_by_name.get(name).copied().ok_or(
-                    AdapterError::UnknownClusterReplica {
+                cluster
+                    .replica_id(name)
+                    .ok_or(AdapterError::UnknownClusterReplica {
                         cluster_name: cluster.name.clone(),
                         replica_name: name.to_string(),
-                    },
-                )
+                    })
             })
             .transpose()?;
 
@@ -5297,13 +5295,10 @@ impl Coordinator {
                 // Alter owner cascades down to linked clusters and replicas.
                 if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
                     let linked_cluster_replica_ops =
-                        cluster
-                            .replicas_by_id
-                            .keys()
-                            .map(|id| catalog::Op::UpdateOwner {
-                                id: ObjectId::ClusterReplica((cluster.id(), *id)),
-                                new_owner,
-                            });
+                        cluster.replicas().map(|r| catalog::Op::UpdateOwner {
+                            id: ObjectId::ClusterReplica((cluster.id(), r.replica_id)),
+                            new_owner,
+                        });
                     ops.extend(linked_cluster_replica_ops);
                     ops.push(catalog::Op::UpdateOwner {
                         id: ObjectId::Cluster(cluster.id()),
@@ -5326,13 +5321,10 @@ impl Coordinator {
                 let cluster = self.catalog().get_cluster(*cluster_id);
                 // Alter owner cascades down to cluster replicas.
                 let managed_cluster_replica_ops =
-                    cluster
-                        .replicas_by_id
-                        .keys()
-                        .map(|replica_id| catalog::Op::UpdateOwner {
-                            id: ObjectId::ClusterReplica((cluster.id(), *replica_id)),
-                            new_owner,
-                        });
+                    cluster.replicas().map(|replica| catalog::Op::UpdateOwner {
+                        id: ObjectId::ClusterReplica((cluster.id(), replica.replica_id())),
+                        new_owner,
+                    });
                 ops.extend(managed_cluster_replica_ops);
             }
             _ => {}
@@ -5487,10 +5479,10 @@ where
     // Reading from log sources on replicated clusters is only allowed if a
     // target replica is selected. Otherwise, we have no way of knowing which
     // replica we read the introspection data from.
-    let num_replicas = cluster.replicas_by_id.len();
+    let num_replicas = cluster.replicas().count();
     if target_replica.is_none() {
         if num_replicas == 1 {
-            *target_replica = cluster.replicas_by_id.keys().next().copied();
+            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
         } else {
             return Err(AdapterError::UntargetedLogRead { log_names });
         }
@@ -5499,7 +5491,7 @@ where
     // Ensure that logging is initialized for the target replica, lest
     // we try to read from a non-existing arrangement.
     let replica_id = target_replica.expect("set to `Some` above");
-    let replica = &cluster.replicas_by_id[&replica_id];
+    let replica = &cluster.replica(replica_id).expect("Replica must exist");
     if !replica.config.compute.logging.enabled() {
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }

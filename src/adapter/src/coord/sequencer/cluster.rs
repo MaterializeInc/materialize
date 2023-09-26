@@ -363,10 +363,8 @@ impl Coordinator {
             .expect("creating cluster must not fail");
 
         let replicas: Vec<_> = cluster
-            .replicas_by_id
-            .keys()
-            .copied()
-            .map(|r| (cluster_id, r))
+            .replicas()
+            .map(|r| (cluster_id, r.replica_id))
             .collect();
         self.create_cluster_replicas(&replicas).await;
 
@@ -507,7 +505,11 @@ impl Coordinator {
         for (cluster_id, replica_id) in replicas.iter().copied() {
             let cluster = self.catalog().get_cluster(cluster_id);
             let role = cluster.role();
-            let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
+            let replica_config = cluster
+                .replica(replica_id)
+                .expect("known to exist")
+                .config
+                .clone();
 
             replicas_to_start.push(CreateReplicaConfig {
                 cluster_id,
@@ -758,11 +760,11 @@ impl Coordinator {
 
             // tear down all replicas, create new ones
             for name in (0..*replication_factor).map(managed_cluster_replica_name) {
-                let replica = cluster.replica_id_by_name.get(&name);
+                let replica = cluster.replica_id(&name);
                 if let Some(replica) = replica {
                     ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
                         cluster.id(),
-                        *replica,
+                        replica,
                     ))))
                 }
             }
@@ -786,11 +788,11 @@ impl Coordinator {
             for name in
                 (*new_replication_factor..*replication_factor).map(managed_cluster_replica_name)
             {
-                let replica = cluster.replica_id_by_name.get(&name);
+                let replica = cluster.replica_id(&name);
                 if let Some(replica) = replica {
                     ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
                         cluster.id(),
-                        *replica,
+                        replica,
                     ))))
                 }
             }
@@ -849,17 +851,20 @@ impl Coordinator {
         } = &mut new_config;
 
         // Validate replication factor parameter
+        let user_replica_count = cluster
+            .user_replicas()
+            .count()
+            .try_into()
+            .expect("must_fit");
         match options.replication_factor {
             AlterOptionParameter::Set(_) => {
                 // Validate that the replication factor matches the current length only if specified.
-                if u32::try_from(cluster.replicas_by_id.len()).expect("must fit")
-                    != *new_replication_factor
-                {
-                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({})", cluster.replicas_by_id.len());
+                if user_replica_count != *new_replication_factor {
+                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({user_replica_count})");
                 }
             }
             _ => {
-                *new_replication_factor = cluster.replicas_by_id.len().try_into().expect("must fit")
+                *new_replication_factor = user_replica_count;
             }
         }
 
@@ -870,11 +875,7 @@ impl Coordinator {
         self.ensure_valid_azs(new_availability_zones.iter())?;
 
         // Validate per-replica configuration
-        for replica in cluster
-            .replicas_by_id
-            .values()
-            .filter(|replica| !replica.config.location.internal())
-        {
+        for replica in cluster.user_replicas() {
             names.insert(replica.name.clone());
             match &replica.config.location {
                 ReplicaLocation::Unmanaged(_) => coord_bail!(
@@ -900,7 +901,7 @@ impl Coordinator {
 
         if sizes.is_empty() {
             assert!(
-                cluster.replicas_by_id.is_empty(),
+                cluster.user_replicas().next().is_none(),
                 "Cluster should not have replicas"
             );
             // We didn't collect any size, so the user has to name it.

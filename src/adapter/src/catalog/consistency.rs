@@ -138,11 +138,11 @@ impl CatalogState {
             if self.roles_by_id.get(&cluster.owner_id).is_none() {
                 inconsistencies.push(RoleInconsistency::Cluster(*cluster_id, cluster.owner_id));
             }
-            for (replica_id, replica) in &cluster.replicas_by_id {
+            for replica in cluster.replicas() {
                 if self.roles_by_id.get(&replica.owner_id).is_none() {
                     inconsistencies.push(RoleInconsistency::ClusterReplica(
                         *cluster_id,
-                        *replica_id,
+                        replica.replica_id,
                         cluster.owner_id,
                     ));
                 }
@@ -275,7 +275,7 @@ impl CatalogState {
                     let replica = self
                         .clusters_by_id
                         .get(&cluster_id)
-                        .and_then(|cluster| cluster.replicas_by_id.get(&replica_id));
+                        .and_then(|cluster| cluster.replica(replica_id));
                     if replica.is_none() {
                         comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id));

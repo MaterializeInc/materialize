@@ -475,7 +475,7 @@ impl PlanValidity {
             };
 
             if let Some(replica_id) = self.replica_id {
-                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                if cluster.replica(replica_id).is_none() {
                     return Err(AdapterError::ChangedPlan);
                 }
             }
@@ -1086,13 +1086,13 @@ impl Coordinator {
                 },
                 self.variable_length_row_encoding,
             )?;
-            for (replica_id, replica) in instance.replicas_by_id.clone() {
+            for replica in instance.replicas() {
                 let role = instance.role();
                 replicas_to_start.push(CreateReplicaConfig {
                     cluster_id: instance.id,
-                    replica_id,
+                    replica_id: replica.replica_id,
                     role,
-                    config: replica.config,
+                    config: replica.config.clone(),
                 });
             }
         }

@@ -600,8 +600,10 @@ impl CatalogState {
 
     pub(super) fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
         let cluster = self.get_linked_cluster(object_id)?;
-        let replica_id = cluster.replica_id_by_name[LINKED_CLUSTER_REPLICA_NAME];
-        let replica = &cluster.replicas_by_id[&replica_id];
+        let replica_id = cluster
+            .replica_id(LINKED_CLUSTER_REPLICA_NAME)
+            .expect("Must exist");
+        let replica = cluster.replica(replica_id).expect("Must exist");
         match &replica.config.location {
             ReplicaLocation::Unmanaged(_) => None,
             ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) => Some(size),
@@ -970,8 +972,8 @@ impl CatalogState {
                 linked_object_id,
                 bound_objects: BTreeSet::new(),
                 log_indexes,
-                replica_id_by_name: BTreeMap::new(),
-                replicas_by_id: BTreeMap::new(),
+                replica_id_by_name_: BTreeMap::new(),
+                replicas_by_id_: BTreeMap::new(),
                 owner_id,
                 privileges,
                 config,
@@ -1023,11 +1025,7 @@ impl CatalogState {
             .clusters_by_id
             .get_mut(&cluster_id)
             .expect("catalog out of sync");
-        assert!(cluster
-            .replica_id_by_name
-            .insert(replica_name, replica_id)
-            .is_none());
-        assert!(cluster.replicas_by_id.insert(replica_id, replica).is_none());
+        cluster.insert_replica(replica);
     }
 
     /// Renames a cluster replica.
@@ -1039,16 +1037,8 @@ impl CatalogState {
         replica_id: ReplicaId,
         to_name: String,
     ) {
-        let replica = self.get_cluster_replica_mut(cluster_id, replica_id);
-        let old_name = std::mem::take(&mut replica.name);
-        replica.name = to_name.clone();
-
         let cluster = self.get_cluster_mut(cluster_id);
-        assert!(cluster.replica_id_by_name.remove(&old_name).is_some());
-        assert!(cluster
-            .replica_id_by_name
-            .insert(to_name, replica_id)
-            .is_none());
+        cluster.rename_replica(replica_id, to_name);
     }
 
     /// Inserts or updates the status of the specified cluster replica process.
@@ -1061,9 +1051,7 @@ impl CatalogState {
         process_id: ProcessId,
         status: ClusterReplicaProcessStatus,
     ) {
-        let replica = self
-            .try_get_cluster_replica_mut(cluster_id, replica_id)
-            .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"));
+        let replica = self.get_cluster_replica_mut(cluster_id, replica_id);
         replica.process_status.insert(process_id, status);
     }
 
@@ -1077,7 +1065,7 @@ impl CatalogState {
         replica_id: ReplicaId,
     ) -> Option<&ClusterReplica> {
         self.try_get_cluster(id)
-            .and_then(|cluster| cluster.replicas_by_id.get(&replica_id))
+            .and_then(|cluster| cluster.replica(replica_id))
     }
 
     /// Gets a reference to the specified replica of the specified cluster.
@@ -1103,7 +1091,7 @@ impl CatalogState {
         replica_id: ReplicaId,
     ) -> Option<&mut ClusterReplica> {
         self.try_get_cluster_mut(id)
-            .and_then(|cluster| cluster.replicas_by_id.get_mut(&replica_id))
+            .and_then(|cluster| cluster.replica_mut(replica_id))
     }
 
     /// Gets a mutable reference to the specified replica of the specified
@@ -1412,10 +1400,9 @@ impl CatalogState {
         let cluster = self.resolve_cluster(cluster_replica_name.cluster.as_str())?;
         let replica_name = cluster_replica_name.replica.as_str();
         let replica_id = cluster
-            .replica_id_by_name
-            .get(replica_name)
+            .replica_id(replica_name)
             .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(replica_name.to_string()))?;
-        Ok(&cluster.replicas_by_id[replica_id])
+        Ok(cluster.replica(replica_id).expect("Must exist"))
     }
 
     /// Resolves [`PartialItemName`] into a [`CatalogEntry`].

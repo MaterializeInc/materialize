@@ -621,7 +621,7 @@ impl Coordinator {
         let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
             return;
         };
-        let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
+        let Some(replica) = cluster.replica(event.replica_id) else {
             return;
         };
 
@@ -638,7 +638,7 @@ impl Coordinator {
             .unwrap_or_terminate("updating cluster status cannot fail");
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
-            let replica = &cluster.replicas_by_id[&event.replica_id];
+            let replica = cluster.replica(event.replica_id).expect("Replica exists");
             let new_status = replica.status();
 
             if old_status != new_status {
