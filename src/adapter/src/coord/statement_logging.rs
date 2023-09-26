@@ -380,11 +380,15 @@ impl Coordinator {
             .get_mut(&id)
             .expect("set_statement_execution_cluster must not be called after execution ends");
         let retraction = Self::pack_statement_began_execution_update(record);
-        self.statement_logging.pending_statement_execution_events.push((retraction, -1));
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((retraction, -1));
         assert!(record.cluster_id.is_none());
         record.cluster_id = Some(cluster_id);
         let update = Self::pack_statement_began_execution_update(record);
-        self.statement_logging.pending_statement_execution_events.push((update, 1));        
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((update, 1));
     }
 
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
