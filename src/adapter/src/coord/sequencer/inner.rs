@@ -3088,18 +3088,26 @@ impl Coordinator {
         // executing the optimizer pipeline.
         let optimizer_trace = OptimizerTrace::new(broken, stage.path());
 
+        // It's easy to leak `Dispatch`'s (see
+        // <https://docs.rs/tracing/latest/tracing/struct.Dispatch.html#method.downgrade>), but
+        // we aren't storing this clone in a `Subscriber`, so we should be fine.
+        let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
+
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
                 broken,
             } => {
+                // Please see the doc comment on `explain_query_optimizer_pipeline` for more
+                // information regarding its subtleties.
                 self.explain_query_optimizer_pipeline(
                     raw_plan,
                     broken,
                     target_cluster,
                     ctx.session_mut(),
                     &row_set_finishing,
+                    root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
@@ -3111,12 +3119,14 @@ impl Coordinator {
                 cluster_id,
                 broken,
             } => {
+                // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_materialized_view_optimizer_pipeline(
                     name,
                     raw_plan,
                     column_names,
                     cluster_id,
                     broken,
+                    root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
@@ -3190,6 +3200,30 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
+    /// WARNING, ENTERING SPOOKY ZONE 3.0
+    ///
+    /// This method is ALWAYS called within the context of a specialized `tracing` `Subscriber` (set as
+    /// the thread-local default `Dispatch` using `.with_subscriber` at call-sites.
+    ///
+    /// In general, this should be considered safe, but `tracing` has limitations that mean that
+    /// any `Span` created under the specialized `Subscriber` that _leaves_ this function will
+    /// almost assuredly cause a panic inside `tracing`. This is because `Span`s track the
+    /// `Subscriber` they were created under, but certain actions (like an ordinary `Span` exit)
+    /// will call a method on the _thread-local_ `Subscriber`, which may be backed with a different
+    /// `Registry`.
+    ///
+    /// At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
+    /// resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
+    /// and the `tracing` feature. This method has been audited to make sure ALL such
+    /// cases are dispatched inside the global `root_dispatch`, and **any change to this method
+    /// needs to ensure this invariant is upheld.**
+    ///
+    /// It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
+    /// all `.await` points inside it use the passed `root_dispatch`, but splitting the method
+    /// into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
+    /// would be very hard to read. Additionally, once the issues with `broken` are resolved
+    /// (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
+    /// can be simplified, as only a _singular_ `Registry` will be in use.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
@@ -3198,6 +3232,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
+        root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
             UsedIndexes,
@@ -3313,6 +3348,7 @@ impl Coordinator {
         // Load cardinality statistics.
         let stats = self
             .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
+            .with_subscriber(root_dispatch)
             .await?;
 
         // Execute the `optimize/global` stage.
@@ -3382,6 +3418,13 @@ impl Coordinator {
         ))
     }
 
+    /// WARNING, ENTERING SPOOKY ZONE 3.0
+    ///
+    /// Please read the docs on `explain_query_optimizer_pipeline`.
+    ///
+    /// Currently this method does not need to use the global `Dispatch` like
+    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    /// require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_materialized_view_optimizer_pipeline(
         &mut self,
@@ -3390,6 +3433,7 @@ impl Coordinator {
         column_names: Vec<ColumnName>,
         target_cluster_id: ClusterId,
         broken: bool,
+        _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
             UsedIndexes,
