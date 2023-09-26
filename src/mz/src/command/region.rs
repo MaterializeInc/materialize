@@ -50,8 +50,6 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
                 .create_region(version.clone(), vec![], cloud_provider.clone())
                 .await;
 
-            loading_spinner.set_message("Waiting for the region to be online...");
-
             Ok(())
         })
         .await
