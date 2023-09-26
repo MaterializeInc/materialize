@@ -65,14 +65,15 @@ use prost::Message;
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
-    ClusterOption, ClusterOptionName, ColumnOption, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    AlterObjectSwapStatement, AlterSecretStatement, AvroSchema, AvroSchemaOption,
+    AvroSchemaOptionName, AwsConnectionOption, AwsConnectionOptionName,
+    AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName, ClusterOption,
+    ClusterOptionName, ColumnOption, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnection, CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
@@ -4787,6 +4788,23 @@ pub fn plan_alter_cluster_replica_rename(
             Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
         }
     }
+}
+
+pub fn describe_alter_object_swap(
+    _: &StatementContext,
+    _: AlterObjectSwapStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_object_swap(
+    _: &mut StatementContext,
+    _: AlterObjectSwapStatement,
+) -> Result<Plan, PlanError> {
+    Err(PlanError::Unsupported {
+        feature: "ALTER ... SWAP ...".to_string(),
+        issue_no: Some(12972),
+    })
 }
 
 pub fn describe_alter_secret_options(

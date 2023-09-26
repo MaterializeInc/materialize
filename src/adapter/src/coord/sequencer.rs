@@ -343,6 +343,11 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::AlterClusterSwap(_plan) => {
+                // Note: we should never reach this point because we return an unsupported error in
+                // planning.
+                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            }
             Plan::AlterClusterReplicaRename(plan) => {
                 let result = self
                     .sequence_alter_cluster_replica_rename(ctx.session(), plan)
@@ -356,6 +361,11 @@ impl Coordinator {
             Plan::AlterItemRename(plan) => {
                 let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
                 ctx.retire(result);
+            }
+            Plan::AlterItemSwap(_plan) => {
+                // Note: we should never reach this point because we return an unsupported error in
+                // planning.
+                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
             }
             Plan::AlterIndexSetOptions(plan) => {
                 let result = self.sequence_alter_index_set_options(plan);

@@ -531,6 +531,7 @@ impl Coordinator {
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterObjectSwap(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
