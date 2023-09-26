@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import re
 import time
 from copy import copy
@@ -55,41 +56,52 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in [
-        "test-smoke",
-        "test-github-12251",
-        "test-github-15531",
-        "test-github-15535",
-        "test-github-15799",
-        "test-github-15930",
-        "test-github-15496",
-        "test-github-17177",
-        "test-github-17510",
-        "test-github-17509",
-        "test-github-19610",
-        "test-single-time-monotonicity-enforcers",
-        "test-remote-storage",
-        "test-drop-default-cluster",
-        "test-upsert",
-        "test-resource-limits",
-        "test-invalid-compute-reuse",
-        "pg-snapshot-resumption",
-        "pg-snapshot-partial-failure",
-        "test-system-table-indexes",
-        "test-replica-targeted-subscribe-abort",
-        "test-compute-reconciliation-reuse",
-        "test-compute-reconciliation-no-errors",
-        "test-mz-subscriptions",
-        "test-mv-source-sink",
-        "test-query-without-default-cluster",
-        "test-clusterd-death-detection",
-        "test-replica-metrics",
-        "test-compute-controller-metrics",
-        "test-metrics-retention-across-restart",
-        "test-concurrent-connections",
-    ]:
-        with c.test_case(name):
-            c.workflow(name)
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard:
+        shard = int(shard)
+    if shard_count:
+        shard_count = int(shard_count)
+
+    for i, name in enumerate(
+        [
+            "test-smoke",
+            "test-github-12251",
+            "test-github-15531",
+            "test-github-15535",
+            "test-github-15799",
+            "test-github-15930",
+            "test-github-15496",
+            "test-github-17177",
+            "test-github-17510",
+            "test-github-17509",
+            "test-github-19610",
+            "test-single-time-monotonicity-enforcers",
+            "test-remote-storage",
+            "test-drop-default-cluster",
+            "test-upsert",
+            "test-resource-limits",
+            "test-invalid-compute-reuse",
+            "pg-snapshot-resumption",
+            "pg-snapshot-partial-failure",
+            "test-system-table-indexes",
+            "test-replica-targeted-subscribe-abort",
+            "test-compute-reconciliation-reuse",
+            "test-compute-reconciliation-no-errors",
+            "test-mz-subscriptions",
+            "test-mv-source-sink",
+            "test-query-without-default-cluster",
+            "test-clusterd-death-detection",
+            "test-replica-metrics",
+            "test-compute-controller-metrics",
+            "test-metrics-retention-across-restart",
+            "test-concurrent-connections",
+        ]
+    ):
+        if shard is None or shard_count is None or i % int(shard_count) == shard:
+            with c.test_case(name):
+                c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
