@@ -77,13 +77,34 @@
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Read, path::Path, time::Duration};
+    use std::{
+        fs,
+        io::Read,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
 
     use assert_cmd::{assert::Assert, Command};
     use mz::{config_file::ConfigFile, ui::OptionalStr};
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
     use tabled::{Style, Table, Tabled};
+
+    fn get_config_path() -> PathBuf {
+        let config_file_path = ConfigFile::default_path().unwrap();
+        let config_dir = config_file_path
+            .parent()
+            .expect("Failed to get parent directory");
+
+        if !config_dir.exists() {
+            fs::create_dir_all(config_dir).expect("Failed to create directory");
+        }
+
+        let mut config_path_buf = config_dir.to_path_buf();
+        config_path_buf.push("mz_test_config.toml");
+
+        config_path_buf
+    }
 
     /// Returns the password to use in the tests.
     /// The password must start with the `mzp_` prefix.
@@ -156,16 +177,7 @@ mod tests {
             get_password(mock)
         );
 
-        let config_file_path = ConfigFile::default_path().unwrap();
-        let config_dir = config_file_path
-            .parent()
-            .expect("Failed to get parent directory");
-
-        if !config_dir.exists() {
-            fs::create_dir_all(config_dir).expect("Failed to create directory");
-        }
-
-        fs::write(config_file_path, main_config_file).unwrap();
+        fs::write(get_config_path(), main_config_file).unwrap();
     }
 
     /// Tests local commands that do not requires interacting with any API.
@@ -173,6 +185,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_local() {
         init_config_file(true);
+        let config_path_buf = get_config_path();
+        let config_path = config_path_buf.to_str().unwrap();
 
         // Test - `mz config`
         //
@@ -181,6 +195,8 @@ mod tests {
             .arg("config")
             .arg("get")
             .arg("profile")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -195,6 +211,8 @@ mod tests {
             .arg("region")
             .arg("--profile")
             .arg("alternative")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -210,6 +228,8 @@ mod tests {
             .arg("wrongUrl")
             .arg("--profile")
             .arg("alternative")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -220,6 +240,8 @@ mod tests {
             .arg("admin-endpoint")
             .arg("--profile")
             .arg("alternative")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
         let output = output_to_string(binding);
@@ -232,6 +254,8 @@ mod tests {
             .arg("admin-endpoint")
             .arg("--profile")
             .arg("alternative")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -242,6 +266,8 @@ mod tests {
             .arg("admin-endpoint")
             .arg("--profile")
             .arg("alternative")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -274,7 +300,13 @@ mod tests {
             },
         ];
         let expected_command_output = Table::new(vec).with(Style::psql()).to_string();
-        let assert = cmd().arg("config").arg("list").assert().success();
+        let assert = cmd()
+            .arg("config")
+            .arg("list")
+            .arg("--config")
+            .arg(config_path)
+            .assert()
+            .success();
 
         let output = output_to_string(assert);
         assert!(output.trim() == expected_command_output.trim());
@@ -285,6 +317,8 @@ mod tests {
             .arg("set")
             .arg("profile")
             .arg("random")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -292,6 +326,8 @@ mod tests {
             .arg("config")
             .arg("get")
             .arg("profile")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -303,6 +339,8 @@ mod tests {
             .arg("config")
             .arg("remove")
             .arg("profile")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -310,6 +348,8 @@ mod tests {
             .arg("config")
             .arg("get")
             .arg("profile")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -325,6 +365,8 @@ mod tests {
                 .arg("config")
                 .arg("get")
                 .arg("app-password")
+                .arg("--config")
+                .arg(config_path)
                 .assert()
                 .success(),
         );
@@ -365,6 +407,8 @@ mod tests {
             .arg("profile")
             .arg("config")
             .arg("list")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .success();
 
@@ -384,6 +428,8 @@ mod tests {
                 .arg(name)
                 .arg("config")
                 .arg("list")
+                .arg("--config")
+                .arg(config_path)
                 .assert()
                 .failure();
 
@@ -402,6 +448,8 @@ mod tests {
             .arg(&format!("--profile=\"{}\"", name))
             .arg("config")
             .arg("list")
+            .arg("--config")
+            .arg(config_path)
             .assert()
             .failure();
 
