@@ -109,6 +109,9 @@ pub enum MzKafkaError {
     /// SSL authentication required
     #[error("SSL authentication required")]
     SSLAuthenticationRequired,
+    /// Unknown topic or partition
+    #[error("Unknown topic or partition")]
+    UnknownTopicOrPartition,
     /// An internal kafka error
     #[error("Internal kafka error: {0}")]
     Internal(String),
@@ -146,6 +149,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::SSLAuthenticationRequired)
         } else if s.contains("probably due to broker version < 0.10") {
             Ok(Self::UnsupportedBrokerVersion)
+        } else if s.contains("Unknown topic or partition") || s.contains("Unknown partition") {
+            Ok(Self::UnknownTopicOrPartition)
         } else {
             Err(())
         }
