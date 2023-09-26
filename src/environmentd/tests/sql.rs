@@ -2943,7 +2943,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
     assert_introspection_notice(false);
 }
 
-const INTROSPECTION_NOTICE: &'static str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
+const INTROSPECTION_NOTICE: &str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
 
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_disabled() {
