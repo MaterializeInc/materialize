@@ -85,24 +85,21 @@ mod tests {
     };
 
     use assert_cmd::{assert::Assert, Command};
-    use mz::{config_file::ConfigFile, ui::OptionalStr};
+    use mz::ui::OptionalStr;
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
     use tabled::{Style, Table, Tabled};
 
     fn get_config_path() -> PathBuf {
-        let config_file_path = ConfigFile::default_path().unwrap();
-        let config_dir = config_file_path
-            .parent()
-            .expect("Failed to get parent directory");
+        let config_file_path = dirs::cache_dir().unwrap();
+        let mut config_path_buf = config_file_path.to_path_buf();
+        config_path_buf.push("materialize");
 
-        if !config_dir.exists() {
-            fs::create_dir_all(config_dir).expect("Failed to create directory");
+        if !config_path_buf.exists() {
+            fs::create_dir_all(config_path_buf.clone()).expect("Failed to create directory");
         }
 
-        let mut config_path_buf = config_dir.to_path_buf();
         config_path_buf.push("mz_test_config.toml");
-
         config_path_buf
     }
 
