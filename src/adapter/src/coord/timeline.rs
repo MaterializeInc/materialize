@@ -38,7 +38,7 @@ use crate::coord::timestamp_oracle::catalog_oracle::{
 use crate::coord::timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use crate::coord::timestamp_oracle::{self, TimestampOracle};
+use crate::coord::timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle};
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -116,6 +116,18 @@ impl Coordinator {
             .expect("all timelines have a timestamp oracle")
             .oracle
             .as_ref()
+    }
+
+    #[allow(unused)]
+    pub(crate) fn get_shared_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<Box<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.global_timelines
+            .get(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+            .get_shared()
     }
 
     /// Returns a reference to the timestamp oracle used for reads and writes

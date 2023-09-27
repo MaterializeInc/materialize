@@ -24,7 +24,7 @@ use mz_repr::Timestamp;
 use tracing::{debug, info};
 
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::TimestampOracle;
+use crate::coord::timestamp_oracle::{ShareableTimestampOracle, TimestampOracle};
 
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
@@ -195,7 +195,7 @@ where
             .execute(&statement, &[&oracle.timeline, &0i64, &0i64])
             .await?;
 
-        oracle.apply_write(initially).await;
+        ShareableTimestampOracle::apply_write(&mut oracle, initially).await;
 
         Ok(oracle)
     }
@@ -209,8 +209,8 @@ where
 // that, and also make the types we store in the backing "Postgres" table
 // generic. But in practice we only use oracles for [`mz_repr::Timestamp`] so
 // don't do that extra work for now.
-#[async_trait(?Send)]
-impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
+#[async_trait]
+impl<N> ShareableTimestampOracle<Timestamp> for PostgresTimestampOracle<N>
 where
     N: GenericNowFn<Timestamp> + 'static,
 {
@@ -314,5 +314,41 @@ where
             .execute(&statement, &[&self.timeline, &write_ts])
             .await
             .expect("todo");
+    }
+}
+
+#[async_trait(?Send)]
+impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
+where
+    N: GenericNowFn<Timestamp> + 'static,
+{
+    #[tracing::instrument(name = "oracle::write_ts", level = "debug", skip_all)]
+    async fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
+        ShareableTimestampOracle::write_ts(self).await
+    }
+
+    #[tracing::instrument(name = "oracle::peek_write_ts", level = "debug", skip_all)]
+    async fn peek_write_ts(&self) -> Timestamp {
+        ShareableTimestampOracle::peek_write_ts(self).await
+    }
+
+    #[tracing::instrument(name = "oracle::read_ts", level = "debug", skip_all)]
+    async fn read_ts(&self) -> Timestamp {
+        ShareableTimestampOracle::read_ts(self).await
+    }
+
+    #[tracing::instrument(name = "oracle::apply_write", level = "debug", skip_all)]
+    async fn apply_write(&mut self, write_ts: Timestamp) {
+        ShareableTimestampOracle::apply_write(self, write_ts).await
+    }
+
+    fn get_shared(&self) -> Option<Box<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        let cloned = Self {
+            timeline: self.timeline.clone(),
+            next: self.next.clone(),
+            postgres_client: Arc::clone(&self.postgres_client),
+        };
+
+        Some(Box::new(cloned))
     }
 }

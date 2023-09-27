@@ -50,4 +50,38 @@ pub trait TimestampOracle<T> {
     /// All subsequent values of `self.read_ts()` will be greater or equal to
     /// `write_ts`.
     async fn apply_write(&mut self, write_ts: T);
+
+    /// Get a shared, shallow clone of the oracle. Returns `None` if this oracle
+    /// is not shareable.
+    fn get_shared(&self) -> Option<Box<dyn ShareableTimestampOracle<T> + Send + Sync>>;
+}
+
+/// A shareable version of [`TimestampOracle`] that is `Send` and `Sync`.
+///
+/// We have this as a stop-gap solution while we still keep the legacy
+/// in-memory/backed-by-Stash TimestampOracle around. Once we remove that we can
+/// make [`TimestampOracle`] shareable.
+#[async_trait]
+pub trait ShareableTimestampOracle<T> {
+    /// Acquire a new timestamp for writing.
+    ///
+    /// This timestamp will be strictly greater than all prior values of
+    /// `self.read_ts()` and `self.write_ts()`.
+    async fn write_ts(&mut self) -> WriteTimestamp<T>;
+
+    /// Peek the current write timestamp.
+    async fn peek_write_ts(&self) -> T;
+
+    /// Acquire a new timestamp for reading.
+    ///
+    /// This timestamp will be greater or equal to all prior values of
+    /// `self.apply_write(write_ts)`, and strictly less than all subsequent
+    /// values of `self.write_ts()`.
+    async fn read_ts(&self) -> T;
+
+    /// Mark a write at `write_ts` completed.
+    ///
+    /// All subsequent values of `self.read_ts()` will be greater or equal to
+    /// `write_ts`.
+    async fn apply_write(&mut self, lower_bound: T);
 }
