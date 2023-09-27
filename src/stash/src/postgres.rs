@@ -1340,7 +1340,7 @@ impl DebugStashFactory {
         // for now it resolves issues in CI while we debug further.
         client
             .batch_execute(
-                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '3s'",
+                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
             )
             .await?;
         client
