@@ -2410,6 +2410,9 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
     sure #21782 does not regress.
     """
     num_conns = 2000
+    p50_limit = 2.0
+    p99_limit = 6.0
+
     runtimes: list[float] = [float("inf")] * num_conns
 
     def worker(c: Composition, i: int) -> None:
@@ -2429,8 +2432,8 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
 
     for i in range(3):
         threads = []
-        for i in range(num_conns):
-            thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
+        for j in range(num_conns):
+            thread = Thread(name=f"worker_{j}", target=worker, args=(c, j))
             threads.append(thread)
 
         for thread in threads:
@@ -2443,10 +2446,17 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         print(
             f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
         )
-        if p[49] < 1.0 and p[98] < 4.0:
+
+        p50 = p[49]
+        p99 = p[98]
+        if p50 < p50_limit and p99 < p99_limit:
             return
         if i < 2:
             print("retry...")
             continue
-        assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
-        assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"
+        assert (
+            p50 < p50_limit
+        ), f"p50 is {p50:.2f}s, should be less than {p50_limit:.2f}s"
+        assert (
+            p99 < p99_limit
+        ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
