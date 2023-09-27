@@ -2131,9 +2131,9 @@ pub async fn serve(
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
-        // prevent a stack overflow we allocate a stack twice as big as the default
+        // prevent a stack overflow we allocate a stack three times as big as the default
         // stack.
-        .stack_size(2 * stack::STACK_SIZE)
+        .stack_size(3 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
