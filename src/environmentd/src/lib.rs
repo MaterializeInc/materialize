@@ -170,6 +170,8 @@ pub struct Config {
     // === Adapter options. ===
     /// Catalog configuration.
     pub catalog_config: CatalogConfig,
+    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
+    pub timestamp_oracle_url: Option<String>,
 
     // === Bootstrap options. ===
     /// The cloud ID of this environment.
@@ -537,6 +539,7 @@ impl Listeners {
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             dataflow_client: controller,
             storage: adapter_storage,
+            timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,

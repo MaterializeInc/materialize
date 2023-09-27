@@ -59,6 +59,7 @@ SERVICES = [
             "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
             "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
             "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+            "--timestamp-oracle-url=postgres://root@cockroach:26257?options=--search_path=tsoracle",
         ],
     ),
     *[
@@ -143,6 +144,7 @@ def run_disruption(c: Composition, d: CrdbDisruption) -> None:
         "CREATE SCHEMA IF NOT EXISTS consensus",
         "CREATE SCHEMA IF NOT EXISTS storage",
         "CREATE SCHEMA IF NOT EXISTS adapter",
+        "CREATE SCHEMA IF NOT EXISTS tsoracle",
     ]:
         c.exec("cockroach0", "cockroach", "sql", "--insecure", "-e", query)
 
