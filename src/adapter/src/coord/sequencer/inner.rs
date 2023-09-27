@@ -31,7 +31,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert, task};
+use mz_ore::{soft_assert, soft_panic_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{
@@ -53,9 +53,9 @@ use mz_sql::names::{
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
-    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
+    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind,
+    OptimizerConfig, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
+    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3081,6 +3081,7 @@ impl Coordinator {
             unreachable!()
         };
 
+        let stmt_kind = plan::ExplaineeStatementKind::from(&stmt);
         let broken = stmt.broken();
         let row_set_finishing = stmt.row_set_finishing();
 
@@ -3130,6 +3131,15 @@ impl Coordinator {
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
+            }
+            plan::ExplaineeStatement::CreateIndex {
+                name,
+                index,
+                broken,
+            } => {
+                self.explain_create_index_optimizer_pipeline(name, index, broken)
+                    .with_subscriber(&optimizer_trace)
+                    .await
             }
         };
 
@@ -3185,9 +3195,17 @@ impl Coordinator {
                     .find(|entry| entry.path == path)
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
-                        AdapterError::Internal(format!(
-                            "stage `{path}` not present in the collected optimizer trace",
-                        ))
+                        if !stmt_kind.supports(&stage) {
+                            // Print a nicer error for unsupported stages.
+                            AdapterError::Unstructured(anyhow!(format!(
+                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
+                            )))
+                        } else {
+                            // We don't expect this stage to be missing.
+                            AdapterError::Internal(format!(
+                                "stage `{path}` not present in the collected optimizer trace",
+                            ))
+                        }
                     })?;
                 vec![row]
             }
@@ -3566,6 +3584,161 @@ impl Coordinator {
         // TODO: This should always be the case here so we can demote
         // the outer index to a soft assert.
         if df.index_exports.is_empty() {
+            df.until = Antichain::from_elem(Timestamp::MIN);
+            for (_, sink) in &df.sink_exports {
+                df.until.join_assign(&sink.up_to);
+            }
+        }
+
+        // Execute the `optimize/finalize_dataflow` stage.
+        let df = catch_unwind(broken, "finalize_dataflow", || {
+            self.finalize_dataflow(df, target_cluster_id)
+        })?;
+
+        // Trace the resulting plan for the top-level `optimize` path.
+        trace_plan(&df);
+
+        // Return objects that need to be passed to the `ExplainContext`
+        // when rendering explanations for the various trace entries.
+        Ok((used_indexes, None, df_metainfo, transient_items))
+    }
+
+    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    async fn explain_create_index_optimizer_pipeline(
+        &mut self,
+        name: QualifiedItemName,
+        index: Index,
+        broken: bool,
+    ) -> Result<
+        (
+            UsedIndexes,
+            Option<FastPathPlan>,
+            DataflowMetainfo,
+            BTreeMap<GlobalId, TransientItem>,
+        ),
+        AdapterError,
+    > {
+        use mz_repr::explain::trace_plan;
+
+        if broken {
+            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
+        }
+
+        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
+        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+        where
+            F: FnOnce() -> Result<R, E>,
+            E: Into<AdapterError>,
+        {
+            if guard {
+                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+                match r {
+                    Ok(result) => result.map_err(Into::into),
+                    Err(_) => {
+                        let msg = format!("panic at the `{}` optimization stage", stage);
+                        Err(AdapterError::Internal(msg))
+                    }
+                }
+            } else {
+                f().map_err(Into::into)
+            }
+        }
+
+        // Initialize helper context
+        // -------------------------
+
+        let target_cluster_id = index.cluster_id;
+        let compute_instance = self
+            .instance_snapshot(target_cluster_id)
+            .expect("compute instance does not exist");
+        let exported_index_id = self.allocate_transient_id()?;
+        let state = self.catalog().state();
+        let on_entry = self.catalog.get_entry(&index.on);
+        let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
+        let on_desc = on_entry
+            .desc(&full_name)
+            .expect("can only create indexes on items with a valid description");
+
+        // Create a transient catalog item
+        // -------------------------------
+
+        let mut transient_items = BTreeMap::new();
+        transient_items.insert(exported_index_id, {
+            TransientItem::new(
+                Some(full_name.to_string()),
+                Some(full_name.item.to_string()),
+                Some(on_desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        });
+
+        // Global optimization
+        // -------------------
+        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
+            // This code should mirror the sequence of steps performed in
+            // `build_index_dataflow`. We cannot call `build_index_dataflow`
+            // here directly because it assumes that the index is present in the
+            // catalog as an `IndexEntry`. However, in the condtext of `EXPLAIN
+            // CREATE` we don't want to do actually modify the catalog state.
+
+            let mut df_builder = DataflowBuilder::new(self.catalog().state(), compute_instance);
+            let mut df = DataflowDesc::new(full_name.to_string());
+
+            df_builder.import_into_dataflow(&index.on, &mut df)?;
+
+            for desc in df.objects_to_build.iter_mut() {
+                prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
+            }
+
+            let mut index_description = IndexDesc {
+                on_id: index.on,
+                key: index.keys.clone(),
+            };
+
+            for key in index_description.key.iter_mut() {
+                prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
+            }
+
+            df.export_index(exported_index_id, index_description, on_desc.typ().clone());
+
+            // Optimize the dataflow across views, and any other ways that appeal.
+            let df_metainfo = mz_transform::optimize_dataflow(
+                &mut df,
+                &df_builder,
+                &mz_transform::EmptyStatisticsOracle,
+            )?;
+
+            Ok::<_, AdapterError>((df, df_metainfo))
+        })?;
+
+        // Collect the list of indexes used by the dataflow at this point
+        let used_indexes = UsedIndexes::new(
+            df
+                .index_imports
+                .iter()
+                .map(|(id, _index_import)| {
+                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                })
+                .collect(),
+        );
+
+        // Finalization
+        // ------------
+
+        // In the actual sequencing of `CREATE INDEX` statements, the following
+        // DataflowDescription manipulations happen in the `ship_dataflow` call.
+        // However, since we don't want to ship, we have temporary duplicated
+        // the code below. This will be resolved once we implement the proposal
+        // from #20569.
+
+        // If the only outputs of the dataflow are sinks, we might be able to
+        // turn off the computation early, if they all have non-trivial
+        // `up_to`s.
+        //
+        // TODO: This should never be the case here so we can probably remove
+        // the entire thing.
+        if df.index_exports.is_empty() {
+            soft_panic_or_log!("unexpectedly setting df.until for an index");
             df.until = Antichain::from_elem(Timestamp::MIN);
             for (_, sink) in &df.sink_exports {
                 df.until.join_assign(&sink.up_to);
