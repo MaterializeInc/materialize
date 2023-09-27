@@ -43,4 +43,4 @@ class EnumConstantOperationParam(OperationParam):
         ), f"Index {index} out of range in list with {len(self.values)} values"
         value = self.values[index]
         characteristics = self.characteristics_per_index[index]
-        return EnumConstant(f"'{value}'" if self.add_quotes else value, characteristics)
+        return EnumConstant(value, self.add_quotes, characteristics)

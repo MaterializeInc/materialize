@@ -30,9 +30,15 @@ ENUM_RETURN_TYPE_SPEC = ReturnTypeSpec(DataTypeCategory.ENUM)
 class EnumConstant(Expression):
     """A constant SQL value"""
 
-    def __init__(self, value: str, characteristics: set[ExpressionCharacteristics]):
+    def __init__(
+        self,
+        value: str,
+        add_quotes: bool,
+        characteristics: set[ExpressionCharacteristics],
+    ):
         super().__init__(characteristics, ValueStorageLayout.ANY, False, False)
         self.value = value
+        self.add_quotes = add_quotes
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return DataTypeCategory.ENUM
@@ -58,6 +64,9 @@ class EnumConstant(Expression):
         return self.to_sql(False)
 
     def to_sql(self, is_root_level: bool) -> str:
+        if self.add_quotes:
+            return f"'{self.value}'"
+
         return self.value
 
     def collect_leaves(self) -> list[LeafExpression]:
