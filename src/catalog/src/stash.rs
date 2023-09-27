@@ -253,12 +253,13 @@ async fn open_inner(
     deploy_generation: Option<u64>,
 ) -> Result<Connection, (Stash, Error)> {
     // Initialize the Stash if it hasn't been already
-    let mut conn = if !match stash.is_initialized().await {
+    let is_init = match stash.is_initialized().await {
         Ok(is_init) => is_init,
         Err(e) => {
             return Err((stash, e.into()));
         }
-    } {
+    };
+    let mut conn = if !is_init {
         // Get the current timestamp so we can record when we booted. We don't have to worry
         // about `boot_ts` being less than a previously used timestamp because the stash is
         // uninitialized and there are no previous timestamps.
