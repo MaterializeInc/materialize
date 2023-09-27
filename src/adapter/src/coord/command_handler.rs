@@ -210,6 +210,10 @@ impl Coordinator {
                     catalog: self.owned_catalog(),
                 });
             }
+
+            Command::CheckConsistency { tx } => {
+                let _ = tx.send(self.check_consistency());
+            }
         }
     }
 

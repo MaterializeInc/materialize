@@ -43,6 +43,7 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::client::{ConnectionId, ConnectionIdType};
+use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
@@ -137,6 +138,10 @@ pub enum Command {
         data: ExecuteContextExtra,
         reason: StatementEndedExecutionReason,
     },
+
+    CheckConsistency {
+        tx: oneshot::Sender<Result<(), CoordinatorInconsistencies>>,
+    },
 }
 
 impl Command {
@@ -151,7 +156,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::RetireExecute { .. } => None,
+            | Command::RetireExecute { .. }
+            | Command::CheckConsistency { .. } => None,
         }
     }
 
@@ -166,7 +172,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::RetireExecute { .. } => None,
+            | Command::RetireExecute { .. }
+            | Command::CheckConsistency { .. } => None,
         }
     }
 }

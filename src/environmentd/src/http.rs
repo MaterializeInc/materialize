@@ -433,6 +433,10 @@ impl InternalHttpServer {
                 routing::get(catalog::handle_catalog_check),
             )
             .route(
+                "/api/coordinator/check",
+                routing::get(catalog::handle_coordinator_check),
+            )
+            .route(
                 "/api/internal-console",
                 routing::get(|| async move {
                     handle_internal_console_redirect(&internal_console_redirect_url).await

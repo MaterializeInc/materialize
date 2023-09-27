@@ -117,7 +117,7 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
-mod consistency;
+pub(crate) mod consistency;
 mod error;
 mod migrate;
 
