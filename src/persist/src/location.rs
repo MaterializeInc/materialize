@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
-use mz_ore::task::JoinHandleExt;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -395,8 +394,7 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
             || "persist::task::head",
             async move { backing.head(&key).await },
         )
-        .wait_and_assert_finished()
-        .await
+        .await?
     }
 
     async fn compare_and_set(
@@ -410,8 +408,7 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
         mz_ore::task::spawn(|| "persist::task::cas", async move {
             backing.compare_and_set(&key, expected, new).await
         })
-        .wait_and_assert_finished()
-        .await
+        .await?
     }
 
     async fn scan(
@@ -425,8 +422,7 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
         mz_ore::task::spawn(|| "persist::task::scan", async move {
             backing.scan(&key, from, limit).await
         })
-        .wait_and_assert_finished()
-        .await
+        .await?
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
@@ -435,8 +431,7 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
         mz_ore::task::spawn(|| "persist::task::truncate", async move {
             backing.truncate(&key, seqno).await
         })
-        .wait_and_assert_finished()
-        .await
+        .await?
     }
 }
 
