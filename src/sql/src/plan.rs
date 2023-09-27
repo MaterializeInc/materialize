@@ -885,7 +885,10 @@ impl ExplaineeStatement {
         match self {
             Self::Query {
                 row_set_finishing, ..
-            } => row_set_finishing.clone(),
+            } => {
+                // Use the optional finishing extracted in the plan_query call.
+                row_set_finishing.clone()
+            }
             Self::CreateMaterializedView { .. } => {
                 // Trivial finishing asserted in plan_create_materialized_view.
                 None

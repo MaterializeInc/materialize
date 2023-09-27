@@ -6989,13 +6989,17 @@ impl<'a> Parser<'a> {
             Explainee::Index(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
-            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW]) {
-                // Parse: `BROKEN? CREATE MATERIALIZED VIEW ...`
+
+            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
+                || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
+            {
+                // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
                 let _ = self.parse_keyword(CREATE); // consume CREATE token
                 let stmt = match self.parse_create_materialized_view()? {
                     Statement::CreateMaterializedView(stmt) => stmt,
                     _ => panic!("Unexpected statement type return after parsing"),
                 };
+
                 Explainee::CreateMaterializedView(Box::new(stmt), broken)
             } else {
                 // Parse: `BROKEN? query`
