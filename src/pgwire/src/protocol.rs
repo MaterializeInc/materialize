@@ -23,20 +23,25 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::StatementEndedExecutionReason;
 use mz_adapter::{
-    AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, RowsFuture, Severity,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
+    RowsFuture,
 };
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
+use mz_ore::server::TlsMode;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
+use mz_pgwire_common::{
+    Conn, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
+};
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, Var, VarInput, MAX_COPY_FROM_SIZE};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -46,8 +51,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
-use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
-use crate::server::{Conn, TlsMode};
+use crate::message::{self, BackendMessage};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -282,9 +286,8 @@ where
     let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
         Ok(drop_connection) => drop_connection,
         Err(e) => {
-            return conn
-                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
-                .await
+            let e: AdapterError = e.into();
+            return conn.send(e.into_response(Severity::Fatal)).await;
         }
     };
 
@@ -311,11 +314,7 @@ where
     // Register session with adapter.
     let mut adapter_client = match adapter_client.startup(session, setting_keys).await {
         Ok(adapter_client) => adapter_client,
-        Err(e) => {
-            return conn
-                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
-                .await
-        }
+        Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };
 
     let mut buf = Vec::new();
@@ -323,7 +322,7 @@ where
     // (https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-ASYNC),
     // so it is within spec to send them after the initial ReadyForQuery.
     for notice in adapter_client.session().drain_notices() {
-        buf.push(ErrorResponse::from_adapter_notice(notice).into());
+        buf.push(notice.into_response().into());
     }
     conn.send_all(buf).await?;
     conn.flush().await?;
@@ -478,7 +477,8 @@ where
 
             // `recv_timeout()` is cancel-safe as per it's docs.
             Some(timeout) = self.adapter_client.recv_timeout() => {
-                let error_response = ErrorResponse::from_adapter_error(Severity::Fatal, timeout.into());
+                let e: AdapterError =timeout.into();
+                let error_response = e.into_response(Severity::Fatal);
                 self.adapter_client.terminate().await;
                 // We must wait for the client to send a request before we can send the error response.
                 // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
@@ -604,9 +604,7 @@ where
             .declare(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
-            return self
-                .error(ErrorResponse::from_adapter_error(Severity::Error, e))
-                .await;
+            return self.error(e.into_response(Severity::Error)).await;
         }
 
         let stmt_desc = self
@@ -627,7 +625,7 @@ where
         // Maybe send row description.
         if let Some(relation_desc) = &stmt_desc.relation_desc {
             if !stmt_desc.is_copy {
-                let formats = vec![mz_pgrepr::Format::Text; stmt_desc.arity()];
+                let formats = vec![Format::Text; stmt_desc.arity()];
                 self.send(BackendMessage::RowDescription(
                     message::encode_row_description(relation_desc, &formats),
                 ))
@@ -656,8 +654,7 @@ where
             }
             Err(e) => {
                 self.send_pending_notices().await?;
-                self.error(ErrorResponse::from_adapter_error(Severity::Error, e))
-                    .await
+                self.error(e.into_response(Severity::Error)).await
             }
         };
 
@@ -804,10 +801,7 @@ where
                 self.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready)
             }
-            Err(e) => {
-                self.error(ErrorResponse::from_adapter_error(Severity::Error, e))
-                    .await
-            }
+            Err(e) => self.error(e.into_response(Severity::Error)).await,
         }
     }
 
@@ -826,7 +820,7 @@ where
         let resp = self.adapter_client.end_transaction(action).await;
         if let Err(err) = resp {
             self.send(BackendMessage::ErrorResponse(
-                ErrorResponse::from_adapter_error(Severity::Error, err),
+                err.into_response(Severity::Error),
             ))
             .await?;
         }
@@ -837,9 +831,9 @@ where
         &mut self,
         portal_name: String,
         statement_name: String,
-        param_formats: Vec<mz_pgrepr::Format>,
+        param_formats: Vec<Format>,
         raw_params: Vec<Option<Vec<u8>>>,
-        result_formats: Vec<mz_pgrepr::Format>,
+        result_formats: Vec<Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1));
@@ -851,11 +845,7 @@ where
             .await
         {
             Ok(stmt) => stmt,
-            Err(err) => {
-                return self
-                    .error(ErrorResponse::from_adapter_error(Severity::Error, err))
-                    .await
-            }
+            Err(err) => return self.error(err.into_response(Severity::Error)).await,
         };
 
         let param_types = &stmt.desc().param_types;
@@ -920,7 +910,7 @@ where
         if let Some(desc) = stmt.desc().relation_desc.clone() {
             for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
                 match (format, &ty.scalar_type) {
-                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::List { .. }) => {
+                    (Format::Binary, mz_repr::ScalarType::List { .. }) => {
                         return self
                             .error(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -928,7 +918,7 @@ where
                             ))
                             .await;
                     }
-                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::Map { .. }) => {
+                    (Format::Binary, mz_repr::ScalarType::Map { .. }) => {
                         return self
                             .error(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -936,7 +926,7 @@ where
                             ))
                             .await;
                     }
-                    (mz_pgrepr::Format::Binary, mz_repr::ScalarType::AclItem) => {
+                    (Format::Binary, mz_repr::ScalarType::AclItem) => {
                         return self
                             .error(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -962,9 +952,7 @@ where
             result_formats,
             revision,
         ) {
-            return self
-                .error(ErrorResponse::from_adapter_error(Severity::Error, err))
-                .await;
+            return self.error(err.into_response(Severity::Error)).await;
         }
 
         self.send(BackendMessage::BindComplete).await?;
@@ -1051,8 +1039,7 @@ where
                         }
                         Err(e) => {
                             self.send_pending_notices().await?;
-                            self.error(ErrorResponse::from_adapter_error(Severity::Error, e))
-                                .await
+                            self.error(e.into_response(Severity::Error)).await
                         }
                     }
                 }
@@ -1157,11 +1144,7 @@ where
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
-            Err(err) => {
-                return self
-                    .error(ErrorResponse::from_adapter_error(Severity::Error, err))
-                    .await
-            }
+            Err(err) => return self.error(err.into_response(Severity::Error)).await,
         };
         // Cloning to avoid a mutable borrow issue because `send` also uses `adapter_client`
         let parameter_desc = BackendMessage::ParameterDescription(
@@ -1174,7 +1157,7 @@ where
         // Claim that all results will be output in text format, even
         // though the true result formats are not yet known. A bit
         // weird, but this is the behavior that PostgreSQL specifies.
-        let formats = vec![mz_pgrepr::Format::Text; stmt.desc().arity()];
+        let formats = vec![Format::Text; stmt.desc().arity()];
         let row_desc = describe_rows(stmt.desc(), &formats);
         self.send_all([parameter_desc, row_desc]).await?;
         Ok(State::Ready)
@@ -1361,7 +1344,7 @@ where
                         return Ok(rx);
                     }
                     notice = self.adapter_client.session().recv_notice() => {
-                        self.send(ErrorResponse::from_adapter_notice(notice))
+                        self.send(notice.into_response())
                             .await?;
                         self.conn.flush().await?;
                     }
@@ -1878,8 +1861,7 @@ where
                     self.conn.flush().await?;
                 }
                 FetchResult::Notice(notice) => {
-                    self.send(ErrorResponse::from_adapter_notice(notice))
-                        .await?;
+                    self.send(notice.into_response()).await?;
                     self.conn.flush().await?;
                 }
                 FetchResult::Error(text) => {
@@ -1935,10 +1917,10 @@ where
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
-            mz_pgrepr::Format,
+            Format,
         ) = match format {
-            CopyFormat::Text => (mz_pgcopy::encode_copy_row_text, mz_pgrepr::Format::Text),
-            CopyFormat::Binary => (mz_pgcopy::encode_copy_row_binary, mz_pgrepr::Format::Binary),
+            CopyFormat::Text => (mz_pgcopy::encode_copy_row_text, Format::Text),
+            CopyFormat::Binary => (mz_pgcopy::encode_copy_row_binary, Format::Binary),
             _ => {
                 let msg = format!("COPY TO format {:?} not supported", format);
                 return self
@@ -2013,7 +1995,7 @@ where
                     }
                 },
                 notice = self.adapter_client.session().recv_notice() => {
-                    self.send(ErrorResponse::from_adapter_notice(notice))
+                    self.send(notice.into_response())
                         .await?;
                     self.conn.flush().await?;
                 }
@@ -2085,19 +2067,40 @@ where
         ctx_extra: &mut ExecuteContextExtra,
     ) -> Result<State, io::Error> {
         let typ = row_desc.typ();
-        let column_formats = vec![mz_pgrepr::Format::Text; typ.column_types.len()];
+        let column_formats = vec![Format::Text; typ.column_types.len()];
         self.send(BackendMessage::CopyInResponse {
-            overall_format: mz_pgrepr::Format::Text,
+            overall_format: Format::Text,
             column_formats,
         })
         .await?;
         self.conn.flush().await?;
 
+        let system_vars = self.adapter_client.get_system_vars().await.ok();
+        let max_size = system_vars
+            .as_ref()
+            .map(|resp| resp.get(MAX_COPY_FROM_SIZE.name()))
+            .flatten()
+            .map(|max_size| max_size.parse().ok())
+            .flatten()
+            .unwrap_or(usize::MAX);
+        tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
+
         let mut data = Vec::new();
         loop {
             let message = self.conn.recv().await?;
             match message {
-                Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
+                Some(FrontendMessage::CopyData(buf)) => {
+                    // Bail before we OOM.
+                    if (data.len() + buf.len()) > max_size {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::INSUFFICIENT_RESOURCES,
+                                "COPY FROM STDIN too large",
+                            ))
+                            .await;
+                    }
+                    data.extend(buf)
+                }
                 Some(FrontendMessage::CopyDone) => break,
                 Some(FrontendMessage::CopyFail(err)) => {
                     self.adapter_client.retire_execute(
@@ -2168,9 +2171,7 @@ where
                     error: e.to_string(),
                 },
             );
-            return self
-                .error(ErrorResponse::from_adapter_error(Severity::Error, e))
-                .await;
+            return self.error(e.into_response(Severity::Error)).await;
         }
 
         let tag = format!("COPY {}", count);
@@ -2185,9 +2186,7 @@ where
             .session()
             .drain_notices()
             .into_iter()
-            .map(|notice| {
-                BackendMessage::ErrorResponse(ErrorResponse::from_adapter_notice(notice))
-            });
+            .map(|notice| BackendMessage::ErrorResponse(notice.into_response()));
         self.send_all(notices).await?;
         Ok(())
     }
@@ -2244,12 +2243,9 @@ where
     }
 }
 
-fn pad_formats(
-    formats: Vec<mz_pgrepr::Format>,
-    n: usize,
-) -> Result<Vec<mz_pgrepr::Format>, String> {
+fn pad_formats(formats: Vec<Format>, n: usize) -> Result<Vec<Format>, String> {
     match (formats.len(), n) {
-        (0, e) => Ok(vec![mz_pgrepr::Format::Text; e]),
+        (0, e) => Ok(vec![Format::Text; e]),
         (1, e) => Ok(iter::repeat(formats[0]).take(e).collect()),
         (a, e) if a == e => Ok(formats),
         (a, e) => Err(format!(
@@ -2259,7 +2255,7 @@ fn pad_formats(
     }
 }
 
-fn describe_rows(stmt_desc: &StatementDesc, formats: &[mz_pgrepr::Format]) -> BackendMessage {
+fn describe_rows(stmt_desc: &StatementDesc, formats: &[Format]) -> BackendMessage {
     match &stmt_desc.relation_desc {
         Some(desc) if !stmt_desc.is_copy => {
             BackendMessage::RowDescription(message::encode_row_description(desc, formats))

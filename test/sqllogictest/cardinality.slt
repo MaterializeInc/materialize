@@ -199,11 +199,6 @@ EOF
 # regression test drawn from LDBC-BI query 15 for having a selectivity of 0
 # TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE Person_knows_Person (
     creationDate timestamp with time zone NOT NULL,
@@ -327,11 +322,6 @@ EOF
 # regression test drawn from LDBC-BI query 15 for having a selectivity of 0
 # TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_mutually_recursive TO true;
-----
-COMPLETE 0
-
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
@@ -439,5 +429,166 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
+
+EOF
+
+# timeouts should work
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '1us';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SHOW optimizer_oneshot_stats_timeout;
+----
+1 us
+COMPLETE 1
+
+statement ok
+CREATE TABLE t3 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t4 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t5 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t6 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t7 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t8 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t9 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE t10 (x INTEGER NOT NULL, y INTEGER NOT NULL);
+
+statement ok
+INSERT INTO t3 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 13)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t4 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 47)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t5 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 38)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t6 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 23)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t7 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 23)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t8 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 23)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t9 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 21)) AS l, (SELECT generate_series(1, 13)) AS r
+
+statement ok
+INSERT INTO t10 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 20)) AS l, (SELECT generate_series(1, 13)) AS r
+
+# TODO(mgree): Make this reproducible
+# query T multiline
+# EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+# ----
+# Explained Query:
+#   Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
+#     Join on=(eq(#0, #2, #4, #6, #8, #10, #12, #14, #16, #18)) type=delta
+#       implementation
+#         %0:t » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %1:t2 » %0:t[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %2:t3 » %0:t[#0]KA » %1:t2[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %3:t4 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %4:t5 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %5:t6 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %6:t7 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %7:t8 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %8:t9[#0]KA » %9:t10[#0]KA
+#         %8:t9 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %9:t10[#0]KA
+#         %9:t10 » %0:t[#0]KA » %1:t2[#0]KA » %2:t3[#0]KA » %3:t4[#0]KA » %4:t5[#0]KA » %5:t6[#0]KA » %6:t7[#0]KA » %7:t8[#0]KA » %8:t9[#0]KA
+#       ArrangeBy keys=[[#0]]
+#         ReadIndex on=t t_x=[delta join 1st input (full scan)]
+#       ArrangeBy keys=[[#0]]
+#         ReadIndex on=t2 tt_x=[delta join lookup]
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t3
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t4
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t5
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t6
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t7
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t8
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t9
+#       ArrangeBy keys=[[#0]]
+#         ReadStorage materialize.public.t10
+#
+# Used Indexes:
+#   - materialize.public.t_x (delta join 1st input (full scan))
+#   - materialize.public.tt_x (delta join lookup)
+#
+# EOF
+
+# restore and make sure we're good
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '20ms';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SHOW optimizer_oneshot_stats_timeout;
+----
+20 ms
+COMPLETE 1
+
+query T multiline
+EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+----
+Explained Query:
+  Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
+    Join on=(eq(#0, #2, #4, #6, #8, #10, #12, #14, #16, #18)) type=delta
+      implementation
+        %0:t » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %1:t2 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611|
+        %2:t3 » %0:t[#0]KA|4| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %3:t4 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %1:t2[#0]KA|10000|
+        %4:t5 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %5:t6 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %6:t7 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %7:t8 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %8:t9 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %9:t10[#0]KA|260| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+        %9:t10 » %0:t[#0]KA|4| » %2:t3[#0]KA|169| » %8:t9[#0]KA|273| » %5:t6[#0]KA|299| » %6:t7[#0]KA|299| » %7:t8[#0]KA|299| » %4:t5[#0]KA|494| » %3:t4[#0]KA|611| » %1:t2[#0]KA|10000|
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t t_x=[delta join 1st input (full scan)]
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t2 tt_x=[delta join lookup]
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t3
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t4
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t5
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t6
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t7
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t8
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t9
+      ArrangeBy keys=[[#0]]
+        ReadStorage materialize.public.t10
+
+Used Indexes:
+  - materialize.public.t_x (delta join 1st input (full scan))
+  - materialize.public.tt_x (delta join lookup)
 
 EOF

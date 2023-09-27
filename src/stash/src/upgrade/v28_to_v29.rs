@@ -273,7 +273,7 @@ mod tests {
 
         // Connect to the Stash.
         let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open_debug().await;
+        let mut stash = factory.open().await;
 
         // Insert a database.
         let databases_v28: TypedCollection<objects_v28::DatabaseKey, objects_v28::DatabaseValue> =

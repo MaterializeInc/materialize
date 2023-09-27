@@ -125,6 +125,7 @@ impl Coordinator {
         let mut update_default_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
+        let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
             match op {
@@ -199,6 +200,13 @@ impl Coordinator {
                 }
                 catalog::Op::DropObject(ObjectId::Cluster(id)) => {
                     clusters_to_drop.push(*id);
+                    log_indexes_to_drop.extend(
+                        self.catalog()
+                            .get_cluster(*id)
+                            .log_indexes
+                            .values()
+                            .cloned(),
+                    );
                 }
                 catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
                     // Drop the cluster replica itself.
@@ -372,7 +380,8 @@ impl Coordinator {
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates).await;
+            self.send_builtin_table_updates_blocking(builtin_table_updates)
+                .await;
 
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
@@ -440,6 +449,11 @@ impl Coordinator {
                 fail::fail_point!("after_catalog_drop_replica");
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
                     self.drop_replica(cluster_id, replica_id).await;
+                }
+            }
+            if !log_indexes_to_drop.is_empty() {
+                for id in log_indexes_to_drop {
+                    self.drop_compute_read_policy(&id);
                 }
             }
             if !clusters_to_drop.is_empty() {
@@ -522,7 +536,7 @@ impl Coordinator {
 
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if sort assertions are enabled.
-        mz_ore::soft_assert_eq!(self.catalog().check_consistency(), Ok(()));
+        mz_ore::soft_assert_eq!(self.check_consistency(), Ok(()));
 
         Ok(result)
     }
@@ -794,10 +808,10 @@ impl Coordinator {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        let status_id =
-            Some(self.catalog().resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
-            ));
+        let status_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
+        );
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean

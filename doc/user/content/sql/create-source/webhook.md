@@ -10,7 +10,7 @@ menu:
     weight: 40
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{% create-source/intro %}}
 Webhook sources expose a public URL that allow your other applications to push data into Materialize.
@@ -111,7 +111,7 @@ filtered out.
 The URL which can be used to **POST** events to your webhook source is stored in the
 [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources) system table.
 
-In general these URLs have the following format:
+In general, these URLs have the following format:
 
 ```
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
@@ -291,53 +291,6 @@ FROM WEBHOOK
 ```
 
 Your new webhook is now up and ready to accept requests using the basic authentication.
-
-### Connecting with Segment
-
-[Segment](https://segment.com/) is a commonly used tool for collecting events from your
-applications. You can supercharge these events by ingesting them into Materialize and joining it
-with your other data!
-
-The first step for setting up a webhook source is to create a shared secret. While this isn't
-required, it's the recommended best practice.
-
-```sql
-CREATE SECRET segment_shared_secret AS 'abc123';
-```
-
-Using this shared key, Segment will sign each request and we can use the signature to determine if
-the request is legitmate.
-
-After defining a shared secret, we can create the source itself:
-
-```sql
-CREATE SOURCE my_segment_source IN CLUSTER my_cluster FROM WEBHOOK
-  BODY FORMAT JSON
-  INCLUDE HEADER 'event-type' AS event_type
-  INCLUDE HEADERS
-  CHECK (
-    WITH ( BODY BYTES, HEADERS, SECRET segment_shared_secret AS secret BYTES)
-    decode(headers->'x-signature', 'hex') = hmac(body, secret, 'sha1')
-  );
-```
-
-This creates a source called _my_segment_source_ and installs it in cluster named _my_cluster_.
-The source will have three columns, _body_ of type `jsonb`, _headers_ of type `map[text=>text]`, and
-_event_type_ of type `text`.
-
-The `CHECK` statement defines how to validate each request. At the time of writing, Segment
-validates requests by signing them with an HMAC in the `X-Signature` request header. The HMAC is a
-hex-encoded SHA1 hash using the shared secret and request body. We can decode the signature using
-the [`decode`](/sql/functions/#decode) function, getting the raw bytes, and generate our own HMAC
-using the [`hmac`](/sql/functions/#hmac) function. If the two values are equal, then the request is
-legitimate!
-
-{{< note >}}
-
-For the latest information on Segment's Webhook Destination, please see their
-[documentation](https://segment.com/docs/connections/destinations/catalog/actions-webhook/).
-
-{{< /note >}}
 
 ### Connecting with Amazon EventBridge
 

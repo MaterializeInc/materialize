@@ -11,8 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Redpanda, Testdrive, Toxiproxy
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),

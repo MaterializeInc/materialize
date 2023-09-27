@@ -9,14 +9,31 @@
 
 import os
 from textwrap import dedent
+from urllib.parse import quote
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Dbt, Materialized, Postgres, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.dbt import Dbt
+from materialize.mzcompose.services.testdrive import Testdrive
 
-# The FieldEng cluster in the Confluent Cloud is used to provide Kafka services
-KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
-SCHEMA_REGISTRY_ENDPOINT = "https://psrc-e0919.us-east-2.aws.confluent.cloud"
 # The actual values are stored as Pulumi secrets in the i2 repository
+MATERIALIZE_PROD_SANDBOX_HOSTNAME = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
+MATERIALIZE_PROD_SANDBOX_USERNAME = os.environ["MATERIALIZE_PROD_SANDBOX_USERNAME"]
+MATERIALIZE_PROD_SANDBOX_APP_PASSWORD = os.environ[
+    "MATERIALIZE_PROD_SANDBOX_APP_PASSWORD"
+]
+
+MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME = os.environ[
+    "MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME"
+]
+MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD = os.environ[
+    "MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD"
+]
+
+CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER = os.environ[
+    "CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER"
+]
+CONFLUENT_CLOUD_FIELDENG_CSR_URL = os.environ["CONFLUENT_CLOUD_FIELDENG_CSR_URL"]
+
 CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME = os.environ[
     "CONFLUENT_CLOUD_FIELDENG_CSR_USERNAME"
 ]
@@ -30,25 +47,44 @@ CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD = os.environ[
     "CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD"
 ]
 
-SERVICES = [Materialized(), Dbt(), Testdrive(no_reset=True), Postgres()]
+
+SERVICES = [
+    Dbt(
+        environment=[
+            "MATERIALIZE_PROD_SANDBOX_HOSTNAME",
+            "MATERIALIZE_PROD_SANDBOX_USERNAME",
+            "MATERIALIZE_PROD_SANDBOX_APP_PASSWORD",
+        ]
+    ),
+    Testdrive(no_reset=True),
+]
 
 POSTGRES_RANGE = 1024
 POSTGRES_RANGE_FUNCTION = "FLOOR(RANDOM() * (SELECT MAX(id) FROM people))"
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("materialized", "postgres")
+def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("dbt", persistent=True)
     c.up("testdrive", persistent=True)
 
-    c.testdrive(
-        input=dedent(
-            f"""
+    materialize_url = f"postgres://{quote(MATERIALIZE_PROD_SANDBOX_USERNAME)}:{quote(MATERIALIZE_PROD_SANDBOX_APP_PASSWORD)}@{quote(MATERIALIZE_PROD_SANDBOX_HOSTNAME)}:6875"
+
+    with c.override(
+        Testdrive(
+            default_timeout="1200s",
+            materialize_url=materialize_url,
+            no_reset=True,  # Required so that admin port 6877 is not used
+        )
+    ):
+        c.testdrive(
+            input=dedent(
+                f"""
+            > SET DATABASE=qa_canary_environment
             > CREATE SECRET IF NOT EXISTS kafka_username AS '{CONFLUENT_CLOUD_FIELDENG_KAFKA_USERNAME}'
             > CREATE SECRET IF NOT EXISTS kafka_password AS '{CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD}'
 
             > CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (
-              BROKER '{KAFKA_BOOTSTRAP_SERVER}',
+              BROKER '{CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER}',
               SASL MECHANISMS = 'PLAIN',
               SASL USERNAME = SECRET kafka_username,
               SASL PASSWORD = SECRET kafka_password
@@ -58,19 +94,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             > CREATE SECRET IF NOT EXISTS csr_password AS '{CONFLUENT_CLOUD_FIELDENG_CSR_PASSWORD}'
 
             > CREATE CONNECTION IF NOT EXISTS csr_connection TO CONFLUENT SCHEMA REGISTRY (
-              URL '{SCHEMA_REGISTRY_ENDPOINT}',
+              URL '{CONFLUENT_CLOUD_FIELDENG_CSR_URL}',
               USERNAME = SECRET csr_username,
               PASSWORD = SECRET csr_password
               )
         """
+            )
         )
-    )
 
-    c.testdrive(
-        input=dedent(
-            f"""
-            $ postgres-execute connection=postgres://postgres:postgres@postgres
-            ALTER USER postgres WITH replication;
+        c.testdrive(
+            input=dedent(
+                f"""
+            > SET DATABASE=qa_canary_environment
+            $ postgres-execute connection=postgres://postgres:{MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD}@{MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME}
+            -- ALTER USER postgres WITH replication;
 
             DROP SCHEMA IF EXISTS public CASCADE;
             CREATE SCHEMA public;
@@ -98,24 +135,25 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             SELECT cron.schedule('delete-relationships', '1 seconds', 'DELETE FROM relationships WHERE a = {POSTGRES_RANGE_FUNCTION} AND b = {POSTGRES_RANGE_FUNCTION}');
 
-            > CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'
+            > CREATE SECRET IF NOT EXISTS pg_password AS '{MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD}'
 
             > CREATE CONNECTION IF NOT EXISTS pg TO POSTGRES (
-              HOST postgres,
+              HOST '{MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME}',
               DATABASE postgres,
               USER postgres,
-              PASSWORD SECRET pgpass
+              PASSWORD SECRET pg_password,
+              SSL MODE 'require'
               )
             """
+            )
         )
-    )
 
     c.exec("dbt", "dbt", "run", "--threads", "8", workdir="/workdir")
-    workflow_test(c, parser)
 
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.exec("dbt", "dbt", "test", "--threads", "8", workdir="/workdir")
+    c.up("dbt", persistent=True)
+    c.exec("dbt", "dbt", "test", workdir="/workdir")
 
 
 def workflow_clean(c: Composition, parser: WorkflowArgumentParser) -> None:

@@ -96,7 +96,7 @@ use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
-use mz_ore::retry::{Retry, RetryResult};
+use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
@@ -1301,19 +1301,11 @@ fn test_explain_timestamp_json() {
 // 2. Acquires read holds for all objects within the same time domain
 // 3. Errors during a write-only transaction
 // 4. Errors when an object outside the chosen time domain is referenced
+//
+// GitHub issue # 18950
 #[mz_ore::test]
-fn test_github_18950() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
-    let now = {
-        let nowfn = Arc::clone(&nowfn);
-        NowFn::from(move || (nowfn.lock().unwrap())())
-    };
-
-    let config = util::Config::default()
-        .workers(2)
-        .with_now(now)
-        .unsafe_mode();
+fn test_transactional_explain_timestamps() {
+    let config = util::Config::default().workers(2).unsafe_mode();
 
     let server = util::start_server(config).unwrap();
 
@@ -1322,6 +1314,11 @@ fn test_github_18950() {
 
     client_writes
         .batch_execute("CREATE TABLE t1 (i1 int)")
+        .unwrap();
+
+    client_writes.batch_execute("CREATE SCHEMA s").unwrap();
+    client_writes
+        .batch_execute("CREATE TABLE s.t2 (i2 int)")
         .unwrap();
 
     // Verify execution during a write-only txn fails
@@ -1342,7 +1339,7 @@ fn test_github_18950() {
     client_reads.batch_execute("BEGIN").unwrap();
     let mut query_timestamp = None;
 
-    for i in 1..5 {
+    for _ in 1..5 {
         let row = client_reads
             .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
             .unwrap();
@@ -1368,8 +1365,6 @@ fn test_github_18950() {
         // Ensure `t1`'s read frontier remains <= the query timestamp
         assert!(*explain_t1_read_frontier <= query_timestamp.unwrap());
 
-        // Increase now by 2s each iteration
-        *nowfn.lock().unwrap() = NowFn::from(move || 2000 * i);
         // Inserting tends to cause sources to compact, so this should ideally
         // strengthen the assertion above that `t1`'s read frontier should
         // not advance during the txn
@@ -1380,10 +1375,7 @@ fn test_github_18950() {
 
     // Errors when an object outside the chosen time domain is referenced
     let error = client_reads
-        .query_one(
-            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;",
-            &[],
-        )
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM s.t2;", &[])
         .unwrap_err();
 
     assert!(format!("{}", error)
@@ -1463,27 +1455,9 @@ fn test_utilization_hold() {
                 .execute(&format!("SET cluster={cluster}"), &[])
                 .unwrap();
 
-            // Hack: we think there might be an issue where sinces
-            // can briefly be zero on startup, which breaks our logic here.
-            //
-            // So just spin until it's not zero.
-            // TODO[btv] - Get rid of this loop if that bug is ever fixed
-            let explain = Retry::default()
-                .initial_backoff(Duration::from_secs(1))
-                .factor(1.0)
-                .max_tries(10)
-                .retry(|_| {
-                    let row = client.query_one(explain_q, &[]).unwrap();
-                    let explain: String = row.get(0);
-                    let explain: TimestampExplanation<Timestamp> =
-                        serde_json::from_str(&explain).unwrap();
-                    if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
-                        RetryResult::RetryableErr(())
-                    } else {
-                        RetryResult::Ok(explain)
-                    }
-                })
-                .expect("Since never became non-zero");
+            let row = client.query_one(explain_q, &[]).unwrap();
+            let explain: String = row.get(0);
+            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
@@ -1500,8 +1474,9 @@ fn test_utilization_hold() {
                 .since
                 .into_option()
                 .expect("The since must be finite");
-
-            assert!(since.less_equal(&past_since));
+            // Plus 10 to allow for a small number of write timestamps to be
+            // consumed.
+            assert!(since.less_equal(&past_since.checked_add(10).unwrap()));
             // Assert we aren't lagging by more than 30 days + 1 second.
             // If we ever make the since granularity configurable, this line will
             // need to be changed.
@@ -2745,13 +2720,7 @@ fn test_timelines_persist_after_failed_transaction() {
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
 fn test_mz_sessions() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let now = Arc::new(Mutex::new(0));
-    let now_fn = {
-        let now = Arc::clone(&now);
-        NowFn::from(move || *now.lock().unwrap())
-    };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
+    let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
     let mut foo_client = server
@@ -2783,20 +2752,19 @@ fn test_mz_sessions() {
 
     // Concurrent session appears in mz_sessions and is removed from mz_sessions.
     {
-        *now.lock().expect("lock poisoned") += 1_000;
-        let _bar_client = server
+        let mut bar_client = server
             .pg_config()
             .user("bar")
             .connect(postgres::NoTls)
             .unwrap();
         assert_eq!(
-            foo_client
+            bar_client
                 .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
             2,
         );
-        let bar_session_row = foo_client
+        let bar_session_row = bar_client
             .query_one(
                 &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
                 &[],
@@ -2804,14 +2772,16 @@ fn test_mz_sessions() {
             .unwrap();
         let bar_role_id = bar_session_row.get::<_, String>("role_id");
         assert_eq!(
-            foo_client
+            bar_client
                 .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&bar_role_id])
                 .unwrap()
                 .get::<_, String>(0),
             "bar",
         );
-        *now.lock().expect("lock poisoned") += 1_000;
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client
@@ -2831,14 +2801,13 @@ fn test_mz_sessions() {
     // Concurrent session, with the same name as active session,
     // appears in mz_sessions and is removed from mz_sessions.
     {
-        *now.lock().expect("lock poisoned") += 1_000;
-        let _other_foo_client = server
+        let mut other_foo_client = server
             .pg_config()
             .user("foo")
             .connect(postgres::NoTls)
             .unwrap();
         assert_eq!(
-            foo_client
+            other_foo_client
                 .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
@@ -2854,8 +2823,10 @@ fn test_mz_sessions() {
         let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
-        *now.lock().expect("lock poisoned") += 1_000;
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client
@@ -2972,6 +2943,8 @@ fn test_auto_run_on_introspection_feature_enabled() {
     assert_introspection_notice(false);
 }
 
+const INTROSPECTION_NOTICE: &str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
+
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
@@ -2987,16 +2960,15 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_introspection_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+            (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
-                assert_eq!(msg, expected);
+                assert!(msg.contains(expected));
             }
-            (Err(_), false) => (),
-            (_, true) => panic!("Didn't get the expected notice!"),
-            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+            (Err(_), None) => (),
+            (_, Some(_)) => panic!("Didn't get the expected notice!"),
+            (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
         while let Ok(Some(_)) = rx.try_next() {}
@@ -3016,12 +2988,12 @@ fn test_auto_run_on_introspection_feature_disabled() {
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _row = client
         .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _row = client
         .query_one(
@@ -3029,12 +3001,12 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query(
@@ -3042,18 +3014,18 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     client
         .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     client.batch_execute("FETCH ALL c").unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     client.batch_execute("COMMIT").unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 }
 
 #[mz_ore::test]
@@ -3071,16 +3043,15 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_introspection_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+            (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
-                assert_eq!(msg, expected);
+                assert!(msg.contains(expected));
             }
-            (Err(_), false) => (),
-            (_, true) => panic!("Didn't get the expected notice!"),
-            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+            (Err(_), None) => (),
+            (_, Some(_)) => panic!("Didn't get the expected notice!"),
+            (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
         while let Ok(Some(_)) = rx.try_next() {}
@@ -3103,7 +3074,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
     let _rows = client
@@ -3112,14 +3083,14 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     // Enable the feature
     client
         .execute("SET auto_route_introspection_queries = true", &[])
         .unwrap();
 
-    // Even after enabling the feature we still shouldn't emit any notices
+    // Even after enabling the feature we still shouldn't emit the auto-routing notice
 
     let _rows = client
         .query(
@@ -3127,12 +3098,12 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 }
 
 #[mz_ore::test]

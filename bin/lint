@@ -45,7 +45,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)(Cargo|askama)\.toml$' \
     -e '^\.cargo/config$' \
     -e '^\.config/hakari.toml$' \
-    -e '^Cargo\.lock$' \
+    -e '(^|/)Cargo\.lock$' \
     -e '^about\.toml$' \
     -e '^deny\.toml$' \
     -e '^netlify\.toml$' \
@@ -69,6 +69,7 @@ copyright_files=$(grep -vE \
     -e 'gen/.*\.rs' \
     -e 'misc/python/MANIFEST\.in' \
     -e 'misc/completions/.*' \
+    -e 'supply-chain/.*' \
     -e '.devcontainer/.*' \
     <<< "$files"
 )
@@ -105,4 +106,4 @@ try bin/gen-completion check
 try bin/gen-lints
 try git diff --compact-summary --exit-code
 
-try_finish
+try_status_report

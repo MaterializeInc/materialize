@@ -27,7 +27,7 @@ the superpowers of an operational data warehouse first-hand:
 ## Before you begin
 
 All you need is a Materialize account. If you already have one —
-great! If not, [sign up for a playground account](https://materialize.com/register/) first.
+great! If not, [sign up for a playground account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) first.
 
 When you're ready, head over to the [Materialize console](https://console.materialize.com/),
 and pop open the SQL Shell.
@@ -159,9 +159,9 @@ interactive.
    created in the previous step also make joins more interactive (as in other
    databases)!
 
-[//]: # "NOTE(morsapaes) This query is borderline unpredictable since we're
-relying on a load generator, but _mostly_ returns some results. The experience
-won't be great when it doesn't."
+    [//]: # "NOTE(morsapaes) This query is borderline unpredictable since we're
+    relying on a load generator, but _mostly_ returns some results. The experience
+    won't be great when it doesn't."
 
 1. Create a view that detects when a user wins an auction as a bidder, and then
 is identified as a seller for an item at a higher price.
@@ -297,4 +297,4 @@ DROP TABLE fraud_accounts;
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started with your own data, [reach out to our team](https://materialize.com/contact/) to upgrade your playground to a trial account.
+To get started with your own data, [upgrade your playground to a trial account](https://materialize.com/trial/?utm_campaign=General&utm_source=documentation).

@@ -10,6 +10,7 @@ members = [
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/catalog",
     "src/cloud-api",
     "src/cluster",
     "src/clusterd",
@@ -48,6 +49,7 @@ members = [
     "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
+    "src/pgwire-common",
     "src/pid-file",
     "src/postgres-util",
     "src/prof",
@@ -69,6 +71,7 @@ members = [
     "src/stash-debug",
     "src/storage",
     "src/storage-client",
+    "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
     "src/test-macro",
@@ -83,6 +86,12 @@ members = [
     "test/test-util",
     "src/regexp",
 ]
+
+exclude = [
+    # Exclude the wasm crate to avoid needless cache invalidations.
+    "src/sql-lexer-wasm",
+]
+
 # Use Cargo's new feature resolver, which can handle target-specific features.
 # Explicit opt-in is required even with the 2021 edition because we use a
 # virtual workspace.
@@ -92,6 +101,11 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 rust-version = "1.72.0"
+
+[profile.dev]
+# TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
+# in our workspace.
+incremental = false
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
@@ -132,7 +146,7 @@ differential-dataflow = { git = "https://github.com/MaterializeInc/differential-
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }

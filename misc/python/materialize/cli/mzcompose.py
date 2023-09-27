@@ -35,7 +35,8 @@ from typing import IO, Any
 import junit_xml
 from humanize import naturalsize
 
-from materialize import MZ_ROOT, ci_util, mzbuild, mzcompose, spawn, ui
+from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
+from materialize.mzcompose.composition import Composition, UnknownCompositionError
 from materialize.ui import UIError
 
 MIN_COMPOSE_VERSION = (2, 6, 0)
@@ -139,17 +140,17 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     args.command.invoke(args)
 
 
-def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
+def load_composition(args: argparse.Namespace) -> Composition:
     """Loads the composition specified by the command-line arguments."""
     repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
     try:
-        return mzcompose.Composition(
+        return Composition(
             repo,
             name=args.find or Path.cwd().name,
             preserve_ports=args.preserve_ports,
             project_name=args.project_name,
         )
-    except mzcompose.UnknownCompositionError as e:
+    except UnknownCompositionError as e:
         if args.find:
             hint = "available compositions:\n"
             for name in repo.compositions:
@@ -264,7 +265,7 @@ class ListCompositionsCommand(Command):
         repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
         for name, path in sorted(repo.compositions.items(), key=lambda item: item[1]):
             print(os.path.relpath(path, repo.root))
-            composition = mzcompose.Composition(repo, name, munge_services=False)
+            composition = Composition(repo, name, munge_services=False)
             if composition.description:
                 # Emit the first paragraph of the description.
                 for line in composition.description.split("\n"):
@@ -447,7 +448,7 @@ class DockerComposeCommand(Command):
         self.handle_composition(args, composition)
 
     def handle_composition(
-        self, args: argparse.Namespace, composition: mzcompose.Composition
+        self, args: argparse.Namespace, composition: Composition
     ) -> None:
         ui.header("Delegating to Docker Compose")
         composition.invoke(*args.unknown_args, self.name, *args.unknown_subargs)
@@ -549,7 +550,7 @@ To see the available workflows, run:
         super().run(args)
 
     def handle_composition(
-        self, args: argparse.Namespace, composition: mzcompose.Composition
+        self, args: argparse.Namespace, composition: Composition
     ) -> None:
         if args.workflow not in composition.workflows:
             # Restart any dependencies whose definitions have changed. This is

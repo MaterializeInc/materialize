@@ -108,6 +108,7 @@ Decimal
 Declare
 Decorrelated
 Default
+Defaults
 Delete
 Delimited
 Delimiter
@@ -354,6 +355,7 @@ Subsource
 Subsources
 Substring
 Superuser
+Swap
 System
 Table
 Tables
@@ -369,6 +371,7 @@ Time
 Timeline
 Timeout
 Timestamp
+TimestampTz
 To
 Token
 Topic

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use futures::future::BoxFuture;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -34,7 +35,7 @@ use mz_sql::plan::{
     ExecuteTimeout, Plan, PlanKind, WebhookHeaders, WebhookValidation, WebhookValidationSecret,
 };
 use mz_sql::session::user::User;
-use mz_sql::session::vars::Var;
+use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -42,6 +43,7 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::client::{ConnectionId, ConnectionIdType};
+use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
@@ -136,6 +138,10 @@ pub enum Command {
         data: ExecuteContextExtra,
         reason: StatementEndedExecutionReason,
     },
+
+    CheckConsistency {
+        tx: oneshot::Sender<Result<(), CoordinatorInconsistencies>>,
+    },
 }
 
 impl Command {
@@ -150,7 +156,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::RetireExecute { .. } => None,
+            | Command::RetireExecute { .. }
+            | Command::CheckConsistency { .. } => None,
         }
     }
 
@@ -165,7 +172,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::RetireExecute { .. } => None,
+            | Command::RetireExecute { .. }
+            | Command::CheckConsistency { .. } => None,
         }
     }
 }
@@ -179,12 +187,18 @@ pub struct Response<T> {
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 
 /// The response to [`Client::startup`](crate::Client::startup).
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct StartupResponse {
     /// RoleId for the user.
     pub role_id: RoleId,
+    /// A future that completes when all necessary Builtin Table writes have completed.
+    #[derivative(Debug = "ignore")]
+    pub write_notify: BoxFuture<'static, ()>,
     /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
-    pub set_vars: Vec<(String, String)>,
+    pub session_vars: Vec<(String, OwnedVarInput)>,
+    /// Vec of (name, VarInput::Flat) tuples of Role default variables that should be set.
+    pub role_vars: Vec<(String, OwnedVarInput)>,
     pub catalog: Arc<Catalog>,
 }
 
@@ -228,6 +242,10 @@ impl GetVariablesResponse {
             vars.map(|var| (var.name().to_string(), var.value()))
                 .collect(),
         )
+    }
+
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.get(name).map(|s| s.as_str())
     }
 }
 
@@ -776,10 +794,12 @@ impl ExecuteResponse {
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
             AlterClusterRename
+            | AlterClusterSwap
             | AlterCluster
             | AlterClusterReplicaRename
             | AlterOwner
             | AlterItemRename
+            | AlterItemSwap
             | AlterNoop
             | AlterSecret
             | AlterSink

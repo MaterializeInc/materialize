@@ -301,7 +301,7 @@ impl ShouldHalt for crate::catalog::Error {
     }
 }
 
-impl ShouldHalt for crate::catalog::storage::Error {
+impl ShouldHalt for mz_catalog::Error {
     fn should_halt(&self) -> bool {
         match &self {
             Self::Stash(e) => e.should_halt(),

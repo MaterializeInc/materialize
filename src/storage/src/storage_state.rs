@@ -110,7 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{error, info, trace};
+use tracing::{info, trace, warn};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
@@ -711,6 +711,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             sink_description,
                         ));
                     }
+
+                    // Continue with other commands.
+                    return;
                 }
 
                 if !self
@@ -725,7 +728,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // two commands get sufficiently delayed- then it's possible to receive a
                     // SuspendAndRestart command for an unknown source. We cannot assert that this
                     // never happens but we log an error here to track how often this happens.
-                    error!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
+                    warn!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
                 }
             }
             InternalStorageCommand::CreateIngestionDataflow {
@@ -861,14 +864,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.storage_state.dropped_ids.extend(ids);
             }
             InternalStorageCommand::UpdateConfiguration {
-                pg,
+                pg_source_tcp_timeouts,
+                pg_source_snapshot_statement_timeout,
                 rocksdb,
                 storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
                 delay_sources_past_rehydration,
                 shrink_upsert_unused_buffers_by_ratio,
             } => self.storage_state.dataflow_parameters.update(
-                pg,
+                pg_source_tcp_timeouts,
+                pg_source_snapshot_statement_timeout,
                 rocksdb,
                 auto_spill_config,
                 storage_dataflow_max_inflight_bytes_config,
@@ -1184,7 +1189,9 @@ impl StorageState {
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
-                        pg: params.pg_replication_timeouts,
+                        pg_source_tcp_timeouts: params.pg_source_tcp_timeouts,
+                        pg_source_snapshot_statement_timeout: params
+                            .pg_source_snapshot_statement_timeout,
                         rocksdb: params.upsert_rocksdb_tuning_config,
                         storage_dataflow_max_inflight_bytes_config: params
                             .storage_dataflow_max_inflight_bytes_config,

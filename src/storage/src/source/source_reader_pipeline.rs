@@ -159,7 +159,8 @@ impl RawSourceCreationConfig {
 #[derive(Clone)]
 pub struct SourceCreationParams {
     /// Sets timeouts specific to PG replication streams
-    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
+    pub pg_source_snapshot_statement_timeout: Duration,
 }
 
 /// Creates a source dataflow operator graph from a source connection. The type of SourceConnection
@@ -1223,10 +1224,8 @@ async fn handle_message<K, V, T, D>(
                 Ok(SourceOutput::new(
                     message.key,
                     message.value,
+                    message.metadata,
                     offset,
-                    message.upstream_time_millis,
-                    partition.clone(),
-                    message.headers,
                 )),
             )
         }

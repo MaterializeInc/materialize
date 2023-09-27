@@ -43,21 +43,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::keywords::Keyword;
 
-#[cfg(target_arch = "wasm32")]
-use lol_alloc::{FreeListAllocator, LockedAllocator};
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-#[global_allocator]
-static ALLOCATOR: LockedAllocator<FreeListAllocator> =
-    LockedAllocator::new(FreeListAllocator::new());
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(typescript_custom_section)]
-const LEX_TS_DEF: &'static str = r#"export function lex(query: string): PosToken[];"#;
-
 // Maximum allowed identifier length in bytes.
 pub const MAX_IDENTIFIER_LENGTH: usize = 255;
 
@@ -155,47 +140,7 @@ macro_rules! bail {
 ///
 /// See the module documentation for more information about the lexical
 /// structure of SQL.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn lex(query: &str) -> Result<Vec<PosToken>, LexerError> {
-    lex_inner(query)
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(js_name = PosToken, getter_with_clone, inspectable)]
-#[derive(Debug)]
-pub struct JsToken {
-    pub kind: String,
-    pub offset: usize,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl From<PosToken> for JsToken {
-    fn from(value: PosToken) -> Self {
-        JsToken {
-            kind: value.kind.to_string(),
-            offset: value.offset,
-        }
-    }
-}
-
-/// Lexes a SQL query.
-///
-/// Returns a list of tokens alongside their corresponding byte offset in the
-/// input string. Returns an error if the SQL query is lexically invalid.
-///
-/// See the module documentation for more information about the lexical
-/// structure of SQL.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(skip_typescript)]
-pub fn lex(query: &str) -> Result<Vec<JsValue>, JsError> {
-    let lexed = lex_inner(query).map_err(|e| JsError::new(&e.message))?;
-    Ok(lexed
-        .into_iter()
-        .map(|token| JsValue::from(JsToken::from(token)))
-        .collect())
-}
-
-fn lex_inner(query: &str) -> Result<Vec<PosToken>, LexerError> {
     let buf = &mut LexBuf::new(query);
     let mut tokens = vec![];
     while let Some(ch) = buf.next() {

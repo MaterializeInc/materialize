@@ -109,7 +109,7 @@ pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 /// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
 /// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 37;
+pub const STASH_VERSION: u64 = 39;
 
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
@@ -117,7 +117,7 @@ pub const STASH_VERSION: u64 = 37;
 pub(crate) const MIN_STASH_VERSION: u64 = 25;
 
 // TODO(jkosh44) There's some circular logic going on with this key across crates.
-// mz_adapter::catalog::storage::stash initializes uses this value to initialize
+// mz_catalog::stash initializes uses this value to initialize
 // `CONFIG_COLLECTION: mz_stash::TypedCollection`. Then `mz_stash::postgres::Stash` uses this value
 // to check if the stash has been initialized.
 /// The key within the Config Collection that stores the version of the Stash.

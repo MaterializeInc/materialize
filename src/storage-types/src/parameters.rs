@@ -9,6 +9,8 @@
 
 //! Configuration parameter types.
 
+use std::time::Duration;
+
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -26,7 +28,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 pub struct StorageParameters {
     /// Persist client configuration.
     pub persist: PersistParameters,
-    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
+    pub pg_source_snapshot_statement_timeout: Duration,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
@@ -47,6 +50,11 @@ pub struct StorageParameters {
     pub delay_sources_past_rehydration: bool,
     /// Configuration ratio to shrink upsert buffers by.
     pub shrink_upsert_unused_buffers_by_ratio: usize,
+    /// Whether to garbage-collect old statement log entries on startup.
+    pub truncate_statement_log: bool,
+    /// How long entries in the statement log should be retained, in seconds.
+    /// Ignored if `truncate_statement_log` is false.
+    pub statement_logging_retention_time_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -119,7 +127,8 @@ impl StorageParameters {
         &mut self,
         StorageParameters {
             persist,
-            pg_replication_timeouts,
+            pg_source_tcp_timeouts,
+            pg_source_snapshot_statement_timeout,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
             upsert_rocksdb_tuning_config,
@@ -130,10 +139,13 @@ impl StorageParameters {
             grpc_client,
             delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio,
+            statement_logging_retention_time_seconds,
+            truncate_statement_log,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
-        self.pg_replication_timeouts = pg_replication_timeouts;
+        self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
+        self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
@@ -146,6 +158,8 @@ impl StorageParameters {
         self.grpc_client.update(grpc_client);
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
+        self.statement_logging_retention_time_seconds = statement_logging_retention_time_seconds;
+        self.truncate_statement_log = truncate_statement_log;
     }
 }
 
@@ -153,7 +167,10 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
     fn into_proto(&self) -> ProtoStorageParameters {
         ProtoStorageParameters {
             persist: Some(self.persist.into_proto()),
-            pg_replication_timeouts: Some(self.pg_replication_timeouts.into_proto()),
+            pg_source_tcp_timeouts: Some(self.pg_source_tcp_timeouts.into_proto()),
+            pg_source_snapshot_statement_timeout: Some(
+                self.pg_source_snapshot_statement_timeout.into_proto(),
+            ),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
@@ -172,6 +189,8 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: u64::cast_from(
                 self.shrink_upsert_unused_buffers_by_ratio,
             ),
+            truncate_statement_log: self.truncate_statement_log,
+            statement_logging_retention_time_seconds: self.statement_logging_retention_time_seconds,
         }
     }
 
@@ -180,9 +199,14 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoStorageParameters::persist")?,
-            pg_replication_timeouts: proto
-                .pg_replication_timeouts
-                .into_rust_if_some("ProtoStorageParameters::pg_replication_timeouts")?,
+            pg_source_tcp_timeouts: proto
+                .pg_source_tcp_timeouts
+                .into_rust_if_some("ProtoStorageParameters::pg_source_tcp_timeouts")?,
+            pg_source_snapshot_statement_timeout: proto
+                .pg_source_snapshot_statement_timeout
+                .into_rust_if_some(
+                    "ProtoStorageParameters::pg_source_snapshot_statement_timeout",
+                )?,
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,
             ),
@@ -211,13 +235,16 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: usize::cast_from(
                 proto.shrink_upsert_unused_buffers_by_ratio,
             ),
+            truncate_statement_log: proto.truncate_statement_log,
+            statement_logging_retention_time_seconds: proto
+                .statement_logging_retention_time_seconds,
         })
     }
 }
 
-impl RustType<ProtoPgReplicationTimeouts> for mz_postgres_util::ReplicationTimeouts {
-    fn into_proto(&self) -> ProtoPgReplicationTimeouts {
-        ProtoPgReplicationTimeouts {
+impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
+    fn into_proto(&self) -> ProtoPgSourceTcpTimeouts {
+        ProtoPgSourceTcpTimeouts {
             connect_timeout: self.connect_timeout.into_proto(),
             keepalives_retries: self.keepalives_retries,
             keepalives_idle: self.keepalives_idle.into_proto(),
@@ -226,8 +253,8 @@ impl RustType<ProtoPgReplicationTimeouts> for mz_postgres_util::ReplicationTimeo
         }
     }
 
-    fn from_proto(proto: ProtoPgReplicationTimeouts) -> Result<Self, TryFromProtoError> {
-        Ok(mz_postgres_util::ReplicationTimeouts {
+    fn from_proto(proto: ProtoPgSourceTcpTimeouts) -> Result<Self, TryFromProtoError> {
+        Ok(mz_postgres_util::TcpTimeoutConfig {
             connect_timeout: proto.connect_timeout.into_rust()?,
             keepalives_retries: proto.keepalives_retries,
             keepalives_idle: proto.keepalives_idle.into_rust()?,

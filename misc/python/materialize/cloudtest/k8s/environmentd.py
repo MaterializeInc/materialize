@@ -33,7 +33,7 @@ from kubernetes.client import (
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
-from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 
 try:
     from semver.version import Version
@@ -50,13 +50,14 @@ class EnvironmentdService(K8sService):
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
+        internal_http_port = V1ServicePort(name="internalhttp", port=6878)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
             metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
             spec=V1ServiceSpec(
                 type="NodePort",
-                ports=[service_port, internal_port, http_port],
+                ports=[service_port, internal_port, http_port, internal_http_port],
                 selector={"app": "environmentd"},
             ),
         )
@@ -184,6 +185,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
+            "--internal-http-listen-addr=0.0.0.0:6878",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
             # Materialize too! If you are adding a command-line option that is

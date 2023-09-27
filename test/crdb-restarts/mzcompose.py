@@ -11,8 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, ServiceHealthcheck
-from materialize.mzcompose.services import Cockroach, Materialized, Testdrive
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import ServiceHealthcheck
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 CRDB_NODE_COUNT = 4
@@ -128,7 +131,7 @@ def workflow_default(c: Composition) -> None:
 
 def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     print(f"--- Running Disruption {d.name} ...")
-    c.down(destroy_volumes=True)
+    c.down(destroy_volumes=True, sanity_restart_mz=False)
 
     for id in range(CRDB_NODE_COUNT):
         c.up(f"cockroach{id}")

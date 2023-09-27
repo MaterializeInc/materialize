@@ -50,6 +50,8 @@ pub struct ContextLoadArgs {
     pub no_color: bool,
     /// Global optional region.
     pub region: Option<String>,
+    /// Global optional profile.
+    pub profile: Option<String>,
 }
 
 /// Context for a basic command.
@@ -58,6 +60,7 @@ pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
     region: Option<String>,
+    profile: Option<String>,
 }
 
 impl Context {
@@ -68,6 +71,7 @@ impl Context {
             output_format,
             no_color,
             region,
+            profile,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
         let config_file_path = match config_file_path {
@@ -79,6 +83,7 @@ impl Context {
             config_file,
             output_formatter: OutputFormatter::new(output_format, no_color),
             region,
+            profile,
         })
     }
 
@@ -108,47 +113,28 @@ impl Context {
         Ok(None)
     }
 
-    // Prints a warning comment about the cloud endpoint
-    /// TODO: Remove after releasing version 0.1.6 and give anyone using `mz` time to apply the fix.
-    pub fn print_warning_comment(&self) {
-        eprintln!("⚠️ \t Warning\t ⚠️ \nStarting from version 0.1.3, it is a must to include the 'api.' subdomain in the cloud endpoint.");
-        eprintln!("\nWrong: cloud-endpoint = \"https://staging.cloud.materialize.com\"");
-        eprintln!("Right: cloud-endpoint = \"https://api.staging.cloud.materialize.com\"");
-        eprintln!("\nPlease address this in your config before upcoming releases.");
-        eprintln!("Config path: ~/.config/materialize/mz.toml.\n");
-    }
-
-    /// Verifies the cloud endpoint is ok.
-    /// Otherwise raises a warning message.
-    /// This function is temporal.
-    /// TODO: Remove after version 0.1.6 and give anyone using `mz` time to apply the fix.
-    pub fn verify_and_return_cloud_endpoint_url(
-        &self,
-        cloud_endpoint: Option<&str>,
-    ) -> Result<Option<Url>, ParseError> {
-        if let Some(endpoint) = cloud_endpoint {
-            let mut endpoint_url = endpoint.parse::<Url>()?;
-            if let Some(host) = endpoint_url.host_str().as_mut() {
-                if !host.starts_with("api.") {
-                    self.print_warning_comment();
-                    endpoint_url.set_host(Some(&format!("api.{}", host)))?;
-                }
-                return Ok(Some(endpoint_url));
-            }
-        }
-
-        Ok(None)
+    /// Returns the global profile option.
+    pub fn get_global_profile(&self) -> Option<String> {
+        self.profile.clone()
     }
 
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
-    pub fn activate_profile(self, name: Option<String>) -> Result<ProfileContext, Error> {
-        let profile_name = name.unwrap_or_else(|| self.config_file.profile().into());
+    pub fn activate_profile(self) -> Result<ProfileContext, Error> {
+        let profile_name = self
+            .profile
+            .clone()
+            .unwrap_or_else(|| self.config_file.profile().into());
         let config_file = self.config_file.clone();
+
         let profile = config_file.load_profile(&profile_name)?;
 
-        let cloud_endpoint = self.verify_and_return_cloud_endpoint_url(profile.cloud_endpoint())?;
+        // Parse the endpoint form the string in the config to URL.
+        let cloud_endpoint = match profile.cloud_endpoint() {
+            Some(endpoint) => Some(endpoint.parse::<Url>()?),
+            None => None,
+        };
 
         // Build clients
         let mut admin_client_builder = AdminClientBuilder::default();
@@ -226,13 +212,18 @@ impl ProfileContext {
             .config_file
             .load_profile(&self.profile_name)
             .unwrap();
+
+        // Region must be lower case.
+        // Cloud's API response returns the region in
+        // lower case.
         let region_name = self
             .context
             .region
             .clone()
             .or(profile.region().map(|r| r.to_string()))
             .ok_or_else(|| panic!("no region configured"))
-            .unwrap();
+            .unwrap()
+            .to_lowercase();
         Ok(RegionContext {
             context: self,
             region_name,
@@ -257,6 +248,15 @@ impl ProfileContext {
     /// Returns the output_formatter associated with this context.
     pub fn output_formatter(&self) -> &OutputFormatter {
         &self.context.output_formatter
+    }
+
+    /// Returns the context profile.
+    /// If a global profile has been set, it will return the global profile.
+    /// Otherwise returns the config's profile.
+    pub fn get_profile(&self) -> String {
+        self.context
+            .get_global_profile()
+            .unwrap_or(self.config_file().profile().to_string())
     }
 }
 
@@ -317,6 +317,14 @@ impl RegionContext {
     /// Returns the configuration file loaded by this context.
     pub fn config_file(&self) -> &ConfigFile {
         self.context.config_file()
+    }
+
+    /// Returns the region profile.
+    /// As in the context, if a global profile has been set,
+    /// it will return the global profile.
+    /// Otherwise returns the config's profile.
+    pub fn get_profile(&self) -> String {
+        self.context.get_profile()
     }
 
     /// Returns the output_formatter associated with this context.

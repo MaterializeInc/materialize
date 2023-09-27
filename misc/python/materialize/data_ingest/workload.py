@@ -37,7 +37,7 @@ from materialize.data_ingest.transaction_def import (
     TransactionDef,
     TransactionSize,
 )
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 
 
 class Workload:

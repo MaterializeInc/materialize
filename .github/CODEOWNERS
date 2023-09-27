@@ -27,6 +27,7 @@
 /src/avro-derive                    @umanwizard
 /src/build-id                       @umanwizard
 /src/build-info                     @benesch
+/src/catalog                        @MaterializeInc/adapter
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/compute @MaterializeInc/storage
@@ -94,6 +95,7 @@
 /src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
+/src/storage-controller             @MaterializeInc/storage
 /src/storage-operators              @MaterializeInc/storage
 /src/storage-types                  @MaterializeInc/storage
 /src/test-macro                     @MaterializeInc/testing

@@ -47,7 +47,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SCHEMA another;
 > CREATE SOURCE another.mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  FOR TABLES (t1, t2);
 
 > SELECT * FROM another.t1;
 1

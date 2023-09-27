@@ -8,6 +8,9 @@
 // by the Apache License, Version 2.0.
 
 //! Internal consistency checks that validate invariants of [`CatalogState`].
+//!
+//! Note: the implementation of consistency checks should favor simplicity over performance, to
+//! make it as easy as possible to understand what a given check is doing.
 
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
@@ -20,7 +23,7 @@ use serde::Serialize;
 
 use super::CatalogState;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct CatalogInconsistencies {
     /// Inconsistencies found with internal fields, if any.
     internal_fields: Vec<InternalFieldsInconsistency>,
@@ -28,6 +31,8 @@ pub struct CatalogInconsistencies {
     roles: Vec<RoleInconsistency>,
     /// Inconsistencies found with comments, if any.
     comments: Vec<CommentInconsistency>,
+    /// Inconsistencies found with object dependencies, if any.
+    object_dependencies: Vec<ObjectDependencyInconsistency>,
 }
 
 impl CatalogInconsistencies {
@@ -49,6 +54,9 @@ impl CatalogState {
         }
         if let Err(comments) = self.check_comments() {
             inconsistencies.comments = comments;
+        }
+        if let Err(dependencies) = self.check_object_dependencies() {
+            inconsistencies.object_dependencies = dependencies;
         }
 
         if inconsistencies.is_empty() {
@@ -282,9 +290,64 @@ impl CatalogState {
             Err(comment_inconsistencies)
         }
     }
+
+    /// # Invariants:
+    ///
+    /// * All of the objects in the "uses" collection of a CatalogEntry, should contain said
+    ///   CatalogEntry in their own "used_by" collection.
+    /// * All of the objects in the "used_by" collection of a CatalogEntry, should contain said
+    ///   CatalogEntry in their own "uses" collection.
+    ///
+    fn check_object_dependencies(&self) -> Result<(), Vec<ObjectDependencyInconsistency>> {
+        let mut dependency_inconsistencies = vec![];
+
+        for (id, entry) in &self.entry_by_id {
+            for used_id in &entry.uses().0 {
+                let Some(used_entry) = self.entry_by_id.get(used_id) else {
+                    dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
+                        object_a: *id,
+                        object_b: *used_id,
+                    });
+                    continue;
+                };
+                if !used_entry.used_by.contains(id) {
+                    dependency_inconsistencies.push(
+                        ObjectDependencyInconsistency::InconsistentUsedBy {
+                            object_a: *id,
+                            object_b: *used_id,
+                        },
+                    );
+                }
+            }
+
+            for used_by in entry.used_by() {
+                let Some(used_by_entry) = self.entry_by_id.get(used_by) else {
+                    dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUsedBy {
+                        object_a: *id,
+                        object_b: *used_by,
+                    });
+                    continue;
+                };
+                if !used_by_entry.uses().0.contains(id) {
+                    dependency_inconsistencies.push(
+                        ObjectDependencyInconsistency::InconsistentUses {
+                            object_a: *id,
+                            object_b: *used_by,
+                        },
+                    );
+                }
+            }
+        }
+
+        if dependency_inconsistencies.is_empty() {
+            Ok(())
+        } else {
+            Err(dependency_inconsistencies)
+        }
+    }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum InternalFieldsInconsistency {
     Database(String, DatabaseId),
     AmbientSchema(String, SchemaId),
@@ -293,7 +356,7 @@ enum InternalFieldsInconsistency {
     Role(String, RoleId),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum RoleInconsistency {
     Database(DatabaseId, RoleId),
     Schema(SchemaId, RoleId),
@@ -311,10 +374,34 @@ enum RoleInconsistency {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum CommentInconsistency {
     /// A comment was found for an object that no longer exists.
     Dangling(CommentObjectId),
     /// A comment with a column position was found on a non-relation.
     NonRelation(CommentObjectId, usize),
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+enum ObjectDependencyInconsistency {
+    /// Object A uses Object B, but Object B does not exist.
+    MissingUses {
+        object_a: GlobalId,
+        object_b: GlobalId,
+    },
+    /// Object A is used by Object B, but Object B does not exist.
+    MissingUsedBy {
+        object_a: GlobalId,
+        object_b: GlobalId,
+    },
+    /// Object A uses Object B, but Object B does not record that it is used by Object A.
+    InconsistentUsedBy {
+        object_a: GlobalId,
+        object_b: GlobalId,
+    },
+    /// Object B is used by Object A, but Object B does not record that is uses Object A.
+    InconsistentUses {
+        object_a: GlobalId,
+        object_b: GlobalId,
+    },
 }

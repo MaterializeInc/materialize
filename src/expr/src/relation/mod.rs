@@ -33,6 +33,7 @@ use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, 
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::explain::HumanizedExpr;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
@@ -2269,13 +2270,19 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
 
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        HumanizedExpr::new(self, None).fmt(f)
+    }
+}
+
+impl<'a> fmt::Display for HumanizedExpr<'a, ColumnOrder> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // If you modify this, then please also attend to Display for ColumnOrderWithExpr!
         write!(
             f,
-            "#{} {} {}",
-            self.column,
-            if self.desc { "desc" } else { "asc" },
-            if self.nulls_last {
+            "{} {} {}",
+            self.child(&self.expr.column),
+            if self.expr.desc { "desc" } else { "asc" },
+            if self.expr.nulls_last {
                 "nulls_last"
             } else {
                 "nulls_first"

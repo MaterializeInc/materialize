@@ -101,6 +101,7 @@ fn main() {
                 "repr/src/adt/numeric.proto",
                 "repr/src/adt/range.proto",
                 "repr/src/adt/regex.proto",
+                "repr/src/adt/timestamp.proto",
                 "repr/src/adt/varchar.proto",
             ],
             &[".."],

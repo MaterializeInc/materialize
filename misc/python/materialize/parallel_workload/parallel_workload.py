@@ -18,8 +18,8 @@ from collections import Counter, defaultdict
 
 import pg8000
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
     CancelAction,
@@ -43,6 +43,7 @@ def run(
     host: str,
     port: int,
     system_port: int,
+    http_port: int,
     seed: str,
     runtime: int,
     complexity: Complexity,
@@ -63,6 +64,7 @@ def run(
     )
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
+        cur.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
         cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         cur.execute("ALTER SYSTEM SET max_tables = 200")
@@ -78,7 +80,9 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(rng, seed, host, port, system_port, complexity, scenario)
+    database = Database(
+        rng, seed, host, port, system_port, http_port, complexity, scenario
+    )
     conn = pg8000.connect(host=host, port=port, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -267,6 +271,7 @@ def main() -> int:
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
     parser.add_argument("--system-port", default=6877, type=int)
+    parser.add_argument("--http-port", default=6876, type=int)
     parse_common_args(parser)
 
     args = parser.parse_args()
@@ -286,6 +291,7 @@ def main() -> int:
         args.host,
         args.port,
         args.system_port,
+        args.http_port,
         args.seed,
         args.runtime,
         Complexity(args.complexity),

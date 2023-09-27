@@ -14,7 +14,7 @@ syn = {version = "1.0", features = ["extra-traits", "full"]}
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-tokio = {version = "1.24.2", default-features = false, features = ["rt-multi-thread", "macros"]}
+tokio = {version = "1.32.0", default-features = false, features = ["rt-multi-thread", "macros"]}
 
 [features]
 default = ["workspace-hack"]

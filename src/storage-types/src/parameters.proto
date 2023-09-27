@@ -18,9 +18,8 @@ import "service/src/params.proto";
 package mz_storage_types.parameters;
 
 message ProtoStorageParameters {
-    reserved 2;
+    reserved 2, 3;
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
-    ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
@@ -31,10 +30,14 @@ message ProtoStorageParameters {
     mz_service.params.ProtoGrpcClientParameters grpc_client = 11;
     bool storage_dataflow_delay_sources_past_rehydration = 12;
     uint64 shrink_upsert_unused_buffers_by_ratio = 13;
+    bool truncate_statement_log = 14;
+    uint64 statement_logging_retention_time_seconds = 15;
+    ProtoPgSourceTcpTimeouts pg_source_tcp_timeouts = 16;
+    mz_proto.ProtoDuration pg_source_snapshot_statement_timeout = 17;
 }
 
 
-message ProtoPgReplicationTimeouts {
+message ProtoPgSourceTcpTimeouts {
     optional mz_proto.ProtoDuration connect_timeout = 1;
     optional uint32 keepalives_retries = 2;
     optional mz_proto.ProtoDuration keepalives_idle = 3;

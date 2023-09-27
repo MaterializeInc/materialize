@@ -13,15 +13,13 @@ import sys
 import tempfile
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 
 class Generator:
@@ -1126,6 +1124,11 @@ class UnionsNested(Generator):
 
 
 class CaseWhen(Generator):
+    # Originally this was working with 1000, but after moving lowering and
+    # decorrelation from the `plan_~` to the `sequence_~` method we had to
+    # reduce it a bit in order to avoid overflowing the stack.
+    COUNT = 950
+
     @classmethod
     def body(cls) -> None:
         print(

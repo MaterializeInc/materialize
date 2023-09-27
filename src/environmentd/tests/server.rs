@@ -79,9 +79,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
+use std::io::Write as _;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
@@ -98,6 +99,7 @@ use mz_environmentd::WebSocketResponse;
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::{
@@ -106,10 +108,12 @@ use mz_ore::{
 };
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql_parser::ast::display::AstDisplay;
+use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
-use reqwest::Url;
+use reqwest::{redirect, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio_postgres::error::SqlState;
@@ -199,12 +203,13 @@ fn test_persistence() {
     );
 }
 
-fn setup_statement_logging(
+fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
+    extra_config: util::Config,
 ) -> (util::Server, postgres::Client) {
     let server = util::start_server(
-        util::Config::default()
+        extra_config
             .with_system_parameter_default(
                 "statement_logging_max_sample_rate".to_string(),
                 max_sample_rate.to_string(),
@@ -223,6 +228,13 @@ fn setup_statement_logging(
         )
         .unwrap();
     (server, client)
+}
+
+fn setup_statement_logging(
+    max_sample_rate: f64,
+    sample_rate: f64,
+) -> (util::Server, postgres::Client) {
+    setup_statement_logging_core(max_sample_rate, sample_rate, util::Config::default())
 }
 
 #[mz_ore::test]
@@ -252,6 +264,7 @@ fn test_statement_logging_immediate() {
         "SHOW ALL",
         "SHOW application_name",
     ];
+    let constants: &[&str] = &["1", "2", "3", "hunter2", "my_application"];
 
     for &statement in successful_immediates {
         client.execute(statement, &[]).unwrap();
@@ -269,7 +282,8 @@ SELECT
     mseh.finished_at,
     mseh.finished_status,
     mpsh.sql,
-    mpsh.prepared_at
+    mpsh.prepared_at,
+    mpsh.redacted_sql
 FROM
     mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
@@ -287,6 +301,7 @@ ORDER BY mseh.began_at;",
         finished_status: String,
         sql: String,
         prepared_at: DateTime<Utc>,
+        redacted_sql: String,
     }
     assert_eq!(sl.len(), successful_immediates.len());
     for (r, stmt) in std::iter::zip(sl.iter(), successful_immediates) {
@@ -297,6 +312,7 @@ ORDER BY mseh.began_at;",
             finished_status: r.get(3),
             sql: r.get(4),
             prepared_at: r.get(5),
+            redacted_sql: r.get(6),
         };
         assert_eq!(r.sample_rate, 1.0);
         assert_eq!(
@@ -310,7 +326,18 @@ ORDER BY mseh.began_at;",
         // both the start and end time, but the `NowFn` mechanism doesn't
         // appear to give us any way to do that. Instead, let's just check
         // that none of these statements took longer than 5s wall-clock time.
-        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5))
+        assert!(r.finished_at - r.began_at <= chrono::Duration::seconds(5));
+        if !r.sql.is_empty() {
+            let expected_redacted = mz_sql::parse::parse(&r.sql)
+                .unwrap()
+                .into_element()
+                .ast
+                .to_ast_string_redacted();
+            assert_eq!(r.redacted_sql, expected_redacted);
+            for constant in constants {
+                assert!(!r.redacted_sql.contains(constant));
+            }
+        }
     }
 }
 
@@ -617,6 +644,69 @@ fn test_statement_logging_unsampled_metrics() {
     assert_eq!(expected_total, metric_value);
 }
 
+#[mz_ore::test]
+// NOTE: Unfortunately, this test requires sleeping
+// for over a minute. I tried to get it to work by manipulating
+// a `NowFn`, but storage and persist seem to get confused by that.
+fn test_statement_logging_persistence() {
+    let data_dir = tempfile::tempdir().unwrap();
+
+    let cfg = util::Config::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "statement_logging_retention".to_string(),
+            "30s".to_string(),
+        );
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, cfg.clone());
+
+    // Issue one statement, then wait long enough for it to surely not be retained on reboot,
+    // then issue another statement. After reboot, check that only the second statement remains.
+    client.simple_query("SELECT 1").unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+    client.simple_query("SELECT 2").unwrap();
+    std::thread::sleep(Duration::from_secs(10));
+
+    std::mem::drop(client);
+    std::mem::drop(server);
+
+    let (_server, mut client) = setup_statement_logging_core(0.0, 0.0, cfg);
+    // Check that we only retained the second query.
+    let result = client
+        .simple_query(
+            "SELECT sql
+FROM
+    mz_internal.mz_statement_execution_history AS mseh,
+    mz_internal.mz_prepared_statement_history AS mpsh,
+    mz_internal.mz_session_history AS msh
+WHERE
+    mseh.prepared_statement_id = mpsh.id
+        AND
+    mpsh.session_id = msh.id",
+        )
+        .unwrap();
+    // one for row, one for "CommandComplete"
+    assert_eq!(result.len(), 2, "the log should have exactly one statement");
+    let SimpleQueryMessage::Row(row) = result.into_iter().next().unwrap() else {
+        panic!("`SELECT` must return a result set");
+    };
+    let sql = row.get(0).expect("`sql` must be present");
+    assert_eq!(sql, "SELECT 2");
+    // Since we only retained the second query, we should also have garbage-collected
+    // the prepared statement and session history entries for the first statement. Verify that here.
+    for tbl in [
+        "mz_internal.mz_statement_execution_history",
+        "mz_internal.mz_prepared_statement_history",
+        "mz_internal.mz_session_history",
+    ] {
+        let result: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {tbl}"), &[])
+            .unwrap()
+            .get(0);
+
+        assert_eq!(result, 1);
+    }
+}
+
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
 // unsafe mode.
 #[mz_ore::test]
@@ -853,7 +943,6 @@ fn test_cancel_long_running_query() {
 fn test_cancellation_cancels_dataflows(query: &str) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -938,7 +1027,6 @@ fn test_cancel_insert_select() {
 fn test_closing_connection_cancels_dataflows(query: String) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
@@ -1449,7 +1537,7 @@ fn test_max_request_size() {
 
     // pgwire
     {
-        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param_size = mz_pgwire_common::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -1924,6 +2012,116 @@ fn test_concurrent_id_reuse() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("SELECT 1").unwrap();
+}
+
+#[mz_ore::test]
+fn test_internal_console_redirect() {
+    let test_url =
+        Url::parse("https://test_org.test_region.internal.console.materialize.com").unwrap();
+
+    let config = util::Config::default()
+        .unsafe_mode()
+        .with_internal_console_redirect_url(Some(test_url.to_string()));
+    let server = util::start_server(config.clone()).unwrap();
+
+    let redirected = Arc::new(AtomicBool::new(false));
+    let cloned = Arc::clone(&redirected);
+    // Reqwest will default follow redirects, so we want to avoid that and introspect
+    // the redirect to make sure it's pointing to our test_url
+    let custom_redirect_policy = redirect::Policy::custom(move |attempt| {
+        tracing::debug!("Got redirect request to URL: {:?}", attempt.url());
+        if attempt.url() == &test_url {
+            cloned.store(true, Ordering::Relaxed);
+        }
+        attempt.stop()
+    });
+
+    let res = Client::builder()
+        .redirect(custom_redirect_policy)
+        .build()
+        .unwrap()
+        .get(
+            Url::parse(&format!(
+                "http://{}/api/internal-console",
+                server.inner.internal_http_local_addr()
+            ))
+            .unwrap(),
+        )
+        .send()
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(redirected.load(Ordering::Relaxed), true);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_internal_http_auth() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let json = serde_json::json!({"query": "SELECT current_user;"});
+    let url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.internal_http_local_addr()
+    ))
+    .unwrap();
+
+    let res = Client::new().post(url.clone()).json(&json).send().unwrap();
+
+    tracing::info!("response: {res:?}");
+
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // defaults to mz_system
+    assert!(res.text().unwrap().to_string().contains("mz_system"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_system")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // can be explicitly set to mz_system
+    assert!(res.text().unwrap().to_string().contains("mz_system"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_support")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // can be explicitly set to mz_support
+    assert!(res.text().unwrap().to_string().contains("mz_support"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "invalid value")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    // invalid header returns an error
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{:?}", res.text());
 }
 
 #[mz_ore::test]
@@ -2894,4 +3092,86 @@ fn test_webhook_url_notice() {
         .expect("success");
     let body: String = row.get("body");
     assert_eq!(body, "request_foo");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn copy_from() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let mut system_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    system_client
+        .batch_execute("ALTER SYSTEM SET max_copy_from_size = 50")
+        .unwrap();
+    drop(system_client);
+
+    client
+        .execute("CREATE TABLE copy_from_test ( x text )", &[])
+        .expect("success");
+
+    let mut writer = client
+        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
+        .expect("success");
+    writer
+        .write_all(b"hello\nworld\n")
+        .expect("write all to succeed");
+    writer.finish().expect("success");
+
+    let rows = client
+        .query("SELECT * FROM copy_from_test", &[])
+        .expect("success");
+    assert_eq!(rows.len(), 2);
+
+    // This copy from is 53 bytes long, which is greater than our limit of 50.
+    let mut writer = client
+        .copy_in("COPY copy_from_test FROM STDIN (FORMAT TEXT)")
+        .expect("success");
+    writer
+        .write_all(b"this\ncopy\nis\nlarger\nthan\nour\ngreatest\nsupported\nsize\n")
+        .expect("write all to succeed");
+    let result = writer.finish().unwrap_db_error();
+    assert_eq!(result.code(), &SqlState::INSUFFICIENT_RESOURCES);
+
+    let rows = client
+        .query("SELECT * FROM copy_from_test", &[])
+        .expect("success");
+    assert_eq!(rows.len(), 2);
+}
+
+// Test that a cluster dropped mid transaction results in an error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn concurrent_cluster_drop() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let mut txn_client = server.connect(postgres::NoTls).unwrap();
+    let mut drop_client = server.connect(postgres::NoTls).unwrap();
+
+    txn_client
+        .execute("CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));", &[])
+        .expect("failed to create cluster");
+    txn_client
+        .execute("CREATE TABLE t (a INT);", &[])
+        .expect("failed to create cluster");
+
+    txn_client
+        .execute("SET CLUSTER TO c", &[])
+        .expect("success");
+    txn_client.execute("BEGIN", &[]).expect("success");
+    let _ = txn_client.query("SELECT * FROM t", &[]).expect("success");
+
+    drop_client.execute("DROP CLUSTER c", &[]).expect("success");
+
+    let err = txn_client
+        .execute("SELECT * FROM t", &[])
+        .expect_err("error");
+
+    assert_eq!(
+        err.as_db_error().unwrap().message(),
+        "the transaction's active cluster has been dropped"
+    );
 }

@@ -38,7 +38,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, Indent};
+use mz_ore::str::{bracketed, separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -179,6 +179,10 @@ pub struct ExplainConfig {
     pub filter_pushdown: bool,
     /// Show cardinality information.
     pub cardinality: bool,
+    /// Show inferred column names.
+    pub column_names: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
 }
 
 impl Default for ExplainConfig {
@@ -197,6 +201,8 @@ impl Default for ExplainConfig {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
+            humanized_exprs: false,
         }
     }
 }
@@ -209,6 +215,7 @@ impl ExplainConfig {
             || self.types
             || self.keys
             || self.cardinality
+            || self.column_names
     }
 }
 
@@ -235,6 +242,8 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             types: flags.remove("types"),
             filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
             cardinality: flags.remove("cardinality"),
+            column_names: flags.remove("column_names"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -450,6 +459,79 @@ pub trait ExprHumanizer: fmt::Debug {
     fn id_exists(&self, id: GlobalId) -> bool;
 }
 
+/// An [`ExprHumanizer`] that extends the `inner` instance with shadow items
+/// that are reported as present, even though they might not exist in `inner`.
+#[derive(Debug)]
+pub struct ExprHumanizerExt<'a> {
+    /// A map of custom items that might not exist in the backing `inner`
+    /// humanizer, but are reported as present by this humanizer instance.
+    items: BTreeMap<GlobalId, TransientItem>,
+    /// The inner humanizer used to resolve queries for [GlobalId] values not
+    /// present in the `items` map.
+    inner: &'a dyn ExprHumanizer,
+}
+
+impl<'a> ExprHumanizerExt<'a> {
+    pub fn new(items: BTreeMap<GlobalId, TransientItem>, inner: &'a dyn ExprHumanizer) -> Self {
+        Self { items, inner }
+    }
+}
+
+impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id.clone(),
+            None => self.inner.humanize_id(id),
+        }
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id_unqualified.clone(),
+            None => self.inner.humanize_id_unqualified(id),
+        }
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        self.inner.humanize_scalar_type(ty)
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        match self.items.get(&id) {
+            Some(item) => item.column_names.clone(),
+            None => self.inner.column_names_for_id(id),
+        }
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.items.contains_key(&id) || self.inner.id_exists(id)
+    }
+}
+
+/// A description of a catalog item that does not exist, but can be reported as
+/// present in the catalog by a [`ExprHumanizerExt`] instance that has it in its
+/// `items` list.
+#[derive(Debug)]
+pub struct TransientItem {
+    humanized_id: Option<String>,
+    humanized_id_unqualified: Option<String>,
+    column_names: Option<Vec<String>>,
+}
+
+impl TransientItem {
+    pub fn new(
+        humanized_id: Option<String>,
+        humanized_id_unqualified: Option<String>,
+        column_names: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            humanized_id,
+            humanized_id_unqualified,
+            column_names,
+        }
+    }
+}
+
 /// A bare-minimum implementation of [`ExprHumanizer`].
 ///
 /// The `DummyHumanizer` does a poor job of humanizing expressions. It is
@@ -514,32 +596,90 @@ pub struct Attributes {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<String>,
-    pub keys: Option<String>,
+    pub types: Option<Option<Vec<ColumnType>>>,
+    pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
+    pub column_names: Option<Vec<String>>,
 }
 
-impl fmt::Display for Attributes {
+#[derive(Debug, Clone)]
+pub struct HumanizedAttributes<'a> {
+    attrs: &'a Attributes,
+    humanizer: &'a dyn ExprHumanizer,
+    config: &'a ExplainConfig,
+}
+
+impl<'a> HumanizedAttributes<'a> {
+    pub fn new<T>(attrs: &'a Attributes, ctx: &PlanRenderingContext<'a, T>) -> Self {
+        Self {
+            attrs,
+            humanizer: ctx.humanizer,
+            config: ctx.config,
+        }
+    }
+}
+
+impl<'a> fmt::Display for HumanizedAttributes<'a> {
+    // Attribute rendering is guarded by the ExplainConfig flag for each
+    // attribute. This is needed because we might have derived attributes that
+    // are not explicitly requested (such as column_names), in which case we
+    // don't want to display them.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
-        if let Some(subtree_size) = &self.subtree_size {
-            builder.field("subtree_size", subtree_size);
+
+        if self.config.subtree_size {
+            let subtree_size = self.attrs.subtree_size.expect("subtree_size");
+            builder.field("subtree_size", &subtree_size);
         }
-        if let Some(non_negative) = &self.non_negative {
-            builder.field("non_negative", non_negative);
+
+        if self.config.non_negative {
+            let non_negative = self.attrs.non_negative.expect("non_negative");
+            builder.field("non_negative", &non_negative);
         }
-        if let Some(arity) = &self.arity {
-            builder.field("arity", arity);
+
+        if self.config.arity {
+            let arity = self.attrs.arity.expect("arity");
+            builder.field("arity", &arity);
         }
-        if let Some(types) = &self.types {
-            builder.field("types", types);
+
+        if self.config.types {
+            let types = match self.attrs.types.as_ref().expect("types") {
+                Some(types) => {
+                    let types = types
+                        .into_iter()
+                        .map(|c| self.humanizer.humanize_column_type(c))
+                        .collect::<Vec<_>>();
+
+                    bracketed("(", ")", separated(", ", types)).to_string()
+                }
+                None => "(<error>)".to_string(),
+            };
+            builder.field("types", &types);
         }
-        if let Some(keys) = &self.keys {
-            builder.field("keys", keys);
+
+        if self.config.keys {
+            let keys = self
+                .attrs
+                .keys
+                .as_ref()
+                .expect("keys")
+                .into_iter()
+                .map(|key| bracketed("[", "]", separated(", ", key)).to_string());
+            let keys = bracketed("(", ")", separated(", ", keys)).to_string();
+            builder.field("keys", &keys);
         }
-        if let Some(cardinality) = &self.cardinality {
+
+        if self.config.cardinality {
+            let cardinality = self.attrs.cardinality.as_ref().expect("cardinality");
             builder.field("cardinality", cardinality);
         }
+
+        if self.config.column_names {
+            let column_names = self.attrs.column_names.as_ref().expect("column_names");
+            let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
+            builder.field("column_names", &column_names);
+        }
+
         builder.finish()
     }
 }
@@ -748,6 +888,8 @@ mod tests {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
+            humanized_exprs: false,
         };
         let context = ExplainContext {
             env,

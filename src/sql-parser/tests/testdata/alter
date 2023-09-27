@@ -1,0 +1,189 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+ALTER ROLE arjun
+----
+ALTER ROLE arjun
+=>
+AlterRole(AlterRoleStatement { name: Ident("arjun"), option: Attributes([]) })
+
+parse-statement
+ALTER ROLE frank SUPERUSER
+----
+ALTER ROLE frank SUPERUSER
+=>
+AlterRole(AlterRoleStatement { name: Ident("frank"), option: Attributes([SuperUser]) })
+
+parse-statement
+ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
+----
+ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
+=>
+AlterRole(AlterRoleStatement { name: Ident("other_usr"), option: Attributes([Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole]) })
+
+parse-statement
+ALTER ROLE bad.qualification
+----
+error: Expected end of statement, found dot
+ALTER ROLE bad.qualification
+              ^
+
+parse-statement
+ALTER ROLE usr WITH LOGIN
+----
+ALTER ROLE usr LOGIN
+=>
+AlterRole(AlterRoleStatement { name: Ident("usr"), option: Attributes([Login]) })
+
+parse-statement
+ALTER ROLE usr WITH badopt
+----
+error: Expected end of statement, found identifier "badopt"
+ALTER ROLE usr WITH badopt
+                    ^
+
+parse-statement
+ALTER ROLE parker SET cluster TO my_cluster
+----
+ALTER ROLE parker SET cluster = my_cluster
+=>
+AlterRole(AlterRoleStatement { name: Ident("parker"), option: Variable(Set { name: Ident("cluster"), value: Values([Ident(Ident("my_cluster"))]) }) })
+
+parse-statement
+ALTER ROLE parker RESET cluster
+----
+ALTER ROLE parker RESET cluster
+=>
+AlterRole(AlterRoleStatement { name: Ident("parker"), option: Variable(Reset { name: Ident("cluster") }) })
+
+parse-statement
+ALTER TABLE SWAP cool_table cooler_table
+----
+ALTER TABLE SWAP cool_table cooler_table
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Table, name_a: Item(UnresolvedItemName([Ident("cool_table")])), name_b: Item(UnresolvedItemName([Ident("cooler_table")])) })
+
+parse-statement
+ALTER VIEW SWAP good_data okay_data
+----
+ALTER VIEW SWAP good_data okay_data
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: View, name_a: Item(UnresolvedItemName([Ident("good_data")])), name_b: Item(UnresolvedItemName([Ident("okay_data")])) })
+
+parse-statement
+ALTER MATERIALIZED VIEW SWAP ice_cream.avg_price ice_cream.median_price
+----
+ALTER MATERIALIZED VIEW SWAP ice_cream.avg_price ice_cream.median_price
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: MaterializedView, name_a: Item(UnresolvedItemName([Ident("ice_cream"), Ident("avg_price")])), name_b: Item(UnresolvedItemName([Ident("ice_cream"), Ident("median_price")])) })
+
+parse-statement
+ALTER SOURCE SWAP blue_data green_data
+----
+ALTER SOURCE SWAP blue_data green_data
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Source, name_a: Item(UnresolvedItemName([Ident("blue_data")])), name_b: Item(UnresolvedItemName([Ident("green_data")])) })
+
+parse-statement
+ALTER SINK SWAP sink_a sink_b
+----
+ALTER SINK SWAP sink_a sink_b
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Sink, name_a: Item(UnresolvedItemName([Ident("sink_a")])), name_b: Item(UnresolvedItemName([Ident("sink_b")])) })
+
+parse-statement
+ALTER CONNECTION SWAP fast_connection slow_connection
+----
+ALTER CONNECTION SWAP fast_connection slow_connection
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Connection, name_a: Item(UnresolvedItemName([Ident("fast_connection")])), name_b: Item(UnresolvedItemName([Ident("slow_connection")])) })
+
+parse-statement
+ALTER FUNCTION SWAP function_blue func_green
+----
+ALTER FUNCTION SWAP function_blue func_green
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Func, name_a: Item(UnresolvedItemName([Ident("function_blue")])), name_b: Item(UnresolvedItemName([Ident("func_green")])) })
+
+parse-statement
+ALTER TABLE SWAP a.b.c.d.e.f.g h.i.j.k.l.m.n
+----
+ALTER TABLE SWAP a.b.c.d.e.f.g h.i.j.k.l.m.n
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Table, name_a: Item(UnresolvedItemName([Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e"), Ident("f"), Ident("g")])), name_b: Item(UnresolvedItemName([Ident("h"), Ident("i"), Ident("j"), Ident("k"), Ident("l"), Ident("m"), Ident("n")])) })
+
+parse-statement
+ALTER CLUSTER SWAP foo bar
+----
+ALTER CLUSTER SWAP foo bar
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("foo")), name_b: Cluster(Ident("bar")) })
+
+parse-statement
+ALTER CLUSTER SWAP cluster.too_many cluster.this_wont_work
+----
+error: Expected identifier, found dot
+ALTER CLUSTER SWAP cluster.too_many cluster.this_wont_work
+                          ^
+
+parse-statement
+ALTER CLUSTER REPLICA SWAP blue.r1 green.r1
+----
+ALTER CLUSTER REPLICA SWAP blue.r1 green.r1
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: ClusterReplica, name_a: ClusterReplica(QualifiedReplica { cluster: Ident("blue"), replica: Ident("r1") }), name_b: ClusterReplica(QualifiedReplica { cluster: Ident("green"), replica: Ident("r1") }) })
+
+parse-statement
+ALTER CLUSTER REPLICA SWAP cluster.replica.too_many cluster.replica.wont_work
+----
+error: Expected identifier, found dot
+ALTER CLUSTER REPLICA SWAP cluster.replica.too_many cluster.replica.wont_work
+                                          ^
+
+parse-statement
+ALTER DATABASE SWAP good_db other_db
+----
+ALTER DATABASE SWAP good_db other_db
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Database, name_a: Database(UnresolvedDatabaseName(Ident("good_db"))), name_b: Database(UnresolvedDatabaseName(Ident("other_db"))) })
+
+parse-statement
+ALTER DATABASE SWAP too_many.components this.wont_work
+----
+error: Expected identifier, found dot
+ALTER DATABASE SWAP too_many.components this.wont_work
+                            ^
+
+parse-statement
+ALTER SCHEMA SWAP a.b.c d.e.f
+----
+ALTER SCHEMA SWAP a.b.c d.e.f
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("a"), Ident("b"), Ident("c")])), name_b: Schema(UnresolvedSchemaName([Ident("d"), Ident("e"), Ident("f")])) })
+
+parse-statement
+ALTER ROLE SWAP blue green
+----
+ALTER ROLE SWAP blue green
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Role, name_a: Role(Ident("blue")), name_b: Role(Ident("green")) })
+
+parse-statement
+ALTER SUBSOURCE SWAP portion_of_source other_portion_of_source
+----
+error: Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION, found SUBSOURCE
+ALTER SUBSOURCE SWAP portion_of_source other_portion_of_source
+      ^

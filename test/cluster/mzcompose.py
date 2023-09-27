@@ -8,30 +8,30 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import re
 import time
 from copy import copy
 from datetime import datetime
+from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Kafka,
-    Localstack,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -56,40 +56,52 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in [
-        "test-smoke",
-        "test-github-12251",
-        "test-github-15531",
-        "test-github-15535",
-        "test-github-15799",
-        "test-github-15930",
-        "test-github-15496",
-        "test-github-17177",
-        "test-github-17510",
-        "test-github-17509",
-        "test-github-19610",
-        "test-single-time-monotonicity-enforcers",
-        "test-remote-storage",
-        "test-drop-default-cluster",
-        "test-upsert",
-        "test-resource-limits",
-        "test-invalid-compute-reuse",
-        "pg-snapshot-resumption",
-        "pg-snapshot-partial-failure",
-        "test-system-table-indexes",
-        "test-replica-targeted-subscribe-abort",
-        "test-compute-reconciliation-reuse",
-        "test-compute-reconciliation-no-errors",
-        "test-mz-subscriptions",
-        "test-mv-source-sink",
-        "test-query-without-default-cluster",
-        "test-clusterd-death-detection",
-        "test-replica-metrics",
-        "test-compute-controller-metrics",
-        "test-metrics-retention-across-restart",
-    ]:
-        with c.test_case(name):
-            c.workflow(name)
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard:
+        shard = int(shard)
+    if shard_count:
+        shard_count = int(shard_count)
+
+    for i, name in enumerate(
+        [
+            "test-smoke",
+            "test-github-12251",
+            "test-github-15531",
+            "test-github-15535",
+            "test-github-15799",
+            "test-github-15930",
+            "test-github-15496",
+            "test-github-17177",
+            "test-github-17510",
+            "test-github-17509",
+            "test-github-19610",
+            "test-single-time-monotonicity-enforcers",
+            "test-remote-storage",
+            "test-drop-default-cluster",
+            "test-upsert",
+            "test-resource-limits",
+            "test-invalid-compute-reuse",
+            "pg-snapshot-resumption",
+            "pg-snapshot-partial-failure",
+            "test-system-table-indexes",
+            "test-replica-targeted-subscribe-abort",
+            "test-compute-reconciliation-reuse",
+            "test-compute-reconciliation-no-errors",
+            "test-mz-subscriptions",
+            "test-mv-source-sink",
+            "test-query-without-default-cluster",
+            "test-clusterd-death-detection",
+            "test-replica-metrics",
+            "test-compute-controller-metrics",
+            "test-metrics-retention-across-restart",
+            "test-concurrent-connections",
+        ]
+    ):
+        if shard is None or shard_count is None or i % int(shard_count) == shard:
+            with c.test_case(name):
+                c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2365,8 +2377,9 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         dt = datetime.fromtimestamp(since / 1000.0)
         diff = now - dt
 
+        # This env was just created, so the since should be recent.
         assert (
-            diff.days >= 30
+            diff.days < 30
         ), f"{name} greater than expected (since={since}, diff={diff})"
 
     c.down(destroy_volumes=True)
@@ -2380,6 +2393,70 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
+    # The env has been up for less than 30d, so the since should not have
+    # changed.
     table_since2, index_since2 = collect_sinces()
-    validate_since(table_since2, "table_since2")
-    validate_since(index_since2, "index_since2")
+    assert (
+        table_since1 == table_since2
+    ), f"table sinces did not match {table_since1} vs {table_since2})"
+    assert (
+        index_since1 == index_since2
+    ), f"index sinces did not match {index_since1} vs {index_since2})"
+
+
+def workflow_test_concurrent_connections(c: Composition) -> None:
+    """
+    Run many concurrent connections, measure their p50 and p99 latency, make
+    sure #21782 does not regress.
+    """
+    num_conns = 2000
+    p50_limit = 2.0
+    p99_limit = 6.0
+
+    runtimes: list[float] = [float("inf")] * num_conns
+
+    def worker(c: Composition, i: int) -> None:
+        start_time = time.time()
+        c.sql("SELECT 1")
+        end_time = time.time()
+        runtimes[i] = end_time - start_time
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql(
+        f"ALTER SYSTEM SET max_connections = {num_conns + 4};",
+        port=6877,
+        user="mz_system",
+    )
+
+    for i in range(3):
+        threads = []
+        for j in range(num_conns):
+            thread = Thread(name=f"worker_{j}", target=worker, args=(c, j))
+            threads.append(thread)
+
+        for thread in threads:
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+        p = quantiles(runtimes, n=100)
+        print(
+            f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+        )
+
+        p50 = p[49]
+        p99 = p[98]
+        if p50 < p50_limit and p99 < p99_limit:
+            return
+        if i < 2:
+            print("retry...")
+            continue
+        assert (
+            p50 < p50_limit
+        ), f"p50 is {p50:.2f}s, should be less than {p50_limit:.2f}s"
+        assert (
+            p99 < p99_limit
+        ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"

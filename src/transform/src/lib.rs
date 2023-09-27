@@ -135,9 +135,6 @@ use crate::dataflow::DataflowMetainfo;
 pub use dataflow::optimize_dataflow;
 use mz_ore::soft_assert;
 
-#[macro_use]
-extern crate num_derive;
-
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
 macro_rules! all {
@@ -324,9 +321,9 @@ impl Transform for Fixpoint {
                 let original = relation.clone();
 
                 let span = tracing::span!(
+                    target: "optimizer",
                     tracing::Level::TRACE,
                     "iteration",
-                    target = "optimizer",
                     path.segment = format!("{:04}", i)
                 );
                 span.in_scope(|| -> Result<(), TransformError> {
@@ -671,7 +668,7 @@ impl Optimizer {
     /// which makes them suitable for pre-optimization before dataflow deployment.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment = self.name)
     )]

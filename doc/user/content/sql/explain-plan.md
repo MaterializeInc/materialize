@@ -406,5 +406,3 @@ The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schemas that all relations and types in the explainee are contained in.
 - `USAGE` privileges on all types used in the explainee.
-- `SELECT` privileges on all relations in the explainee.
-  - NOTE: if any referenced relation is an index or a materialized view, then its owner must also have the necessary privileges to execute its definition.

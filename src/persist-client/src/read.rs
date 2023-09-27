@@ -540,7 +540,7 @@ where
     explicitly_expired: bool,
     lease_returner: SubscriptionLeaseReturner,
 
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
+    pub(crate) heartbeat_tasks: Option<Vec<JoinHandle<()>>>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -577,7 +577,7 @@ where
                 reader_id: reader_id.clone(),
                 metrics,
             },
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
+            heartbeat_tasks: Some(machine.start_reader_heartbeat_tasks(reader_id, gc).await),
         }
     }
 
@@ -810,7 +810,7 @@ where
             .register_leased_reader(
                 &new_reader_id,
                 purpose,
-                self.cfg.reader_lease_duration,
+                self.cfg.dynamic.reader_lease_duration(),
                 heartbeat_ts,
             )
             .await;
@@ -846,7 +846,7 @@ where
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
         // above).
-        let min_elapsed = self.cfg.reader_lease_duration / 4;
+        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
@@ -861,12 +861,14 @@ where
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = self.cfg.reader_lease_duration / 2;
+        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 2;
         let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.applier.cfg.reader_lease_duration {
+            if elapsed_since_last_heartbeat
+                > self.machine.applier.cfg.dynamic.reader_lease_duration()
+            {
                 warn!(
                     "reader ({}) of shard ({}) went {}s between heartbeats",
                     self.reader_id,
@@ -1236,8 +1238,10 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
+        if let Some(heartbeat_tasks) = self.heartbeat_tasks.take() {
+            for heartbeat_task in heartbeat_tasks {
+                heartbeat_task.abort();
+            }
         }
         if self.explicitly_expired {
             return;

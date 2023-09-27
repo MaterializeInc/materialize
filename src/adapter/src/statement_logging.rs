@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use uuid::Uuid;
@@ -22,6 +23,7 @@ pub struct StatementBeganExecutionRecord {
     pub sample_rate: f64,
     pub params: Vec<Option<String>>,
     pub began_at: EpochMillis,
+    pub cluster_id: Option<ClusterId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,6 +74,7 @@ pub struct StatementEndedExecutionRecord {
 pub struct StatementPreparedRecord {
     pub id: Uuid,
     pub sql: String,
+    pub redacted_sql: String,
     pub name: String,
     pub session_id: Uuid,
     pub prepared_at: EpochMillis,

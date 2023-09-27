@@ -26,6 +26,7 @@ ERROR_RE = re.compile(
     r"""
     ( panicked\ at
     | segfault\ at
+    | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
@@ -200,6 +201,11 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         "error",
     )
     annotate_errors(known_errors, "Known errors in logs, ignoring", "info")
+
+    if unknown_errors:
+        print(
+            f"--- Failing test because of {len(unknown_errors)} unknown error(s) in logs"
+        )
 
     return len(unknown_errors)
 

@@ -10,7 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::bail;
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
 use std::marker::PhantomData;
@@ -25,17 +25,23 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::TryStreamExt;
 use mz_persist::location::Blob;
 use mz_persist_types::Codec64;
+use semver::Version;
 use timely::progress::Timestamp;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};
 use crate::internal::metrics::{BatchPartReadMetrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::PartialBatchKey;
+use crate::internal::paths::{PartialBatchKey, WriterKey};
 use crate::internal::state::HollowBatchPart;
 use crate::metrics::Metrics;
 use crate::read::SubscriptionLeaseReturner;
 use crate::ShardId;
+
+/// Versions prior to this had bugs in consolidation, or used a different sort. However,
+/// we can assume that consolidated parts at this version or higher were consolidated
+/// according to the current definition.
+pub const MINIMUM_CONSOLIDATED_VERSION: Version = Version::new(0, 67, 0);
 
 type Tuple<T, D> = ((Vec<u8>, Vec<u8>), T, D);
 type TupleRef<'a, T, D> = (&'a [u8], &'a [u8], T, D);
@@ -72,6 +78,15 @@ pub(crate) enum FetchData<T: Timestamp + Codec64> {
 }
 
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
+    fn maybe_unconsolidated(&self) -> bool {
+        let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
+        match self {
+            FetchData::Unleased { part_key, .. } => part_key.split().0 >= min_version,
+            FetchData::Leased { part, .. } => part.key.split().0 >= min_version,
+            FetchData::AlreadyFetched => false,
+        }
+    }
+
     fn take(&mut self) -> Self {
         mem::replace(self, FetchData::AlreadyFetched)
     }
@@ -134,6 +149,7 @@ pub(crate) enum ConsolidationPart<T: Timestamp + Codec64, D> {
     },
     Prefetched {
         handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
+        maybe_unconsolidated: bool,
     },
     Encoded {
         part: EncodedPart<T>,
@@ -146,9 +162,13 @@ pub(crate) enum ConsolidationPart<T: Timestamp + Codec64, D> {
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> ConsolidationPart<T, D> {
-    pub(crate) fn from_encoded(part: EncodedPart<T>, filter: &'a FetchBatchFilter<T>) -> Self {
+    pub(crate) fn from_encoded(
+        part: EncodedPart<T>,
+        filter: &'a FetchBatchFilter<T>,
+        maybe_unconsolidated: bool,
+    ) -> Self {
         let mut cursor = Cursor::default();
-        if part.maybe_unconsolidated() {
+        if part.maybe_unconsolidated() || maybe_unconsolidated {
             Self::from_iter(ConsolidationPartIter::encoded(&part, &mut cursor, filter))
         } else {
             ConsolidationPart::Encoded { part, cursor }
@@ -359,13 +379,22 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                 match part {
                     ConsolidationPart::Queued { data } => {
                         self.metrics.compaction.parts_waited.inc();
+                        let maybe_unconsolidated = data.maybe_unconsolidated();
                         *part = ConsolidationPart::from_encoded(
                             data.take().fetch().await?,
                             &self.filter,
+                            maybe_unconsolidated,
                         );
                     }
-                    ConsolidationPart::Prefetched { handle } => {
-                        *part = ConsolidationPart::from_encoded(handle.await??, &self.filter);
+                    ConsolidationPart::Prefetched {
+                        handle,
+                        maybe_unconsolidated,
+                    } => {
+                        *part = ConsolidationPart::from_encoded(
+                            handle.await??,
+                            &self.filter,
+                            *maybe_unconsolidated,
+                        );
                     }
                     ConsolidationPart::Encoded { .. } | ConsolidationPart::Sorted { .. } => {}
                 }
@@ -431,12 +460,16 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     };
                     self.metrics.compaction.parts_prefetched.inc();
 
+                    let maybe_unconsolidated = data.maybe_unconsolidated();
                     let span = debug_span!("compaction::prefetch");
                     let handle = mz_ore::task::spawn(
                         || "persist::compaction::prefetch",
                         data.fetch().instrument(span),
                     );
-                    *c_part = ConsolidationPart::Prefetched { handle };
+                    *c_part = ConsolidationPart::Prefetched {
+                        handle,
+                        maybe_unconsolidated,
+                    };
                 }
             }
         }
@@ -600,31 +633,39 @@ where
             let Some(mut part) = self.heap.peek_mut() else {
                 break;
             };
-            match part.next_kvt.0.as_ref() {
-                None => {
-                    if part.last_in_run {
-                        PeekMut::pop(part);
-                    } else {
-                        // NB: this is the only case this method exits without returning the current state:
-                        // there may be more instances of the KVT in a later part of the same run.
-                        return None;
-                    }
-                }
-                Some((k1, v1, t1)) => match &mut self.state {
-                    None => {
-                        self.state = part.pop(&mut self.parts);
-                    }
-                    Some((k0, v0, t0, d0)) => {
-                        if (*k0, *v0, &*t0) == (*k1, *v1, t1) {
-                            let (_, _, _, d1) = part
-                                .pop(&mut self.parts)
-                                .expect("popping from a non-empty iterator");
-                            d0.plus_equals(&d1);
-                        } else {
-                            break;
+            if let Some((k1, v1, t1)) = part.next_kvt.0.as_ref() {
+                if let Some((k0, v0, t0, d0)) = &mut self.state {
+                    let consolidates = match (*k0, *v0, &*t0).cmp(&(*k1, *v1, t1)) {
+                        Ordering::Less => false,
+                        Ordering::Equal => true,
+                        Ordering::Greater => {
+                            // Don't want to log the entire KV, but it's interesting to know
+                            // whether it's KVs going backwards or 'just' timestamps.
+                            panic!(
+                                "data arrived at the consolidator out of order (kvs equal? {})",
+                                (*k0, *v0) == (*k1, *v1)
+                            );
                         }
+                    };
+                    if consolidates {
+                        let (_, _, _, d1) = part
+                            .pop(&mut self.parts)
+                            .expect("popping from a non-empty iterator");
+                        d0.plus_equals(&d1);
+                    } else {
+                        break;
                     }
-                },
+                } else {
+                    self.state = part.pop(&mut self.parts);
+                }
+            } else {
+                if part.last_in_run {
+                    PeekMut::pop(part);
+                } else {
+                    // NB: this is the only case this method exits without returning the current state:
+                    // there may be more instances of the KVT in a later part of the same run.
+                    return None;
+                }
             }
         }
         self.state.take()
@@ -786,7 +827,9 @@ mod tests {
                 let parts: Vec<_> = run
                     .into_iter()
                     .map(|encoded_size_bytes| HollowBatchPart {
-                        key: PartialBatchKey("".into()),
+                        key: PartialBatchKey(
+                            "n0000000/p00000000-0000-0000-0000-000000000000".into(),
+                        ),
                         encoded_size_bytes,
                         key_lower: vec![],
                         stats: None,

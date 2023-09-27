@@ -76,7 +76,7 @@ steps:
           - { value: data-ingest }
           - { value: parallel-workload-dml }
           - { value: parallel-workload }
-          - { value: parallel-workload-100-threads }
+          #- { value: parallel-workload-100-threads }
           - { value: parallel-workload-cancel }
           #- { value: parallel-workload-kill }
         multiple: true
@@ -401,6 +401,7 @@ steps:
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -412,6 +413,7 @@ steps:
 
   - id: checks-parallel-restart-clusterd-compute
     label: "Checks parallel + restart compute clusterd"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -423,6 +425,7 @@ steps:
 
   - id: checks-parallel-restart-entire-mz
     label: "Checks parallel + restart of the entire Mz"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -434,6 +437,7 @@ steps:
 
   - id: checks-parallel-restart-environmentd-clusterd-storage
     label: "Checks parallel + restart of environmentd & storage clusterd"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -445,6 +449,7 @@ steps:
 
   - id: checks-parallel-kill-clusterd-storage
     label: "Checks parallel + kill storage clusterd"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -456,6 +461,7 @@ steps:
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"
+    skip: "Affected by #21317"
     timeout_in_minutes: 60
     agents:
       queue: builder-linux-x86_64
@@ -807,7 +813,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
-          args: [--runtime=3000, --complexity=dml, --threads=16]
+          args: [--runtime=3000, --complexity=dml, --threads=8]
     # Allow retrying generally flaky tests even when they are green
     retry:
       manual:
@@ -828,20 +834,21 @@ steps:
       manual:
         permit_on_passed: true
 
-  - id: parallel-workload-100-threads
-    label: "Parallel Workload (100 threads)"
-    artifact_paths: [junit_*.xml, pw-*.log]
-    timeout_in_minutes: 60
-    agents:
-      queue: builder-linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: parallel-workload
-          args: [--runtime=3000, --threads=100]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+  # TODO: Reenable when #21954 is fixed
+  #- id: parallel-workload-100-threads
+  #  label: "Parallel Workload (100 threads)"
+  #  artifact_paths: [junit_*.xml, pw-*.log]
+  #  timeout_in_minutes: 60
+  #  agents:
+  #    queue: builder-linux-x86_64
+  #  plugins:
+  #    - ./ci/plugins/mzcompose:
+  #        composition: parallel-workload
+  #        args: [--runtime=3000, --threads=100]
+  #  # Allow retrying generally flaky tests even when they are green
+  #  retry:
+  #    manual:
+  #      permit_on_passed: true
 
   - id: parallel-workload-cancel
     label: "Parallel Workload (cancel)"

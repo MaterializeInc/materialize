@@ -78,7 +78,7 @@ impl Coordinator {
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = catalog::storage::ReplicaLocation::Managed {
+        let location = mz_catalog::ReplicaLocation::Managed {
             size: size.to_string(),
             availability_zone: None,
             disk,

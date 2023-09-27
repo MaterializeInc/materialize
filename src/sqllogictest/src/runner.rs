@@ -1023,6 +1023,7 @@ impl<'a> RunnerInner<'a> {
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
             http_host_name: Some(host_name),
+            internal_console_redirect_url: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1095,18 +1096,14 @@ impl<'a> RunnerInner<'a> {
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // We turn on enable_monotonic_oneshot_selects and enable_with_mutually_recursive,
-        // as these two features have reached enough maturity to do so.
+        // We turn on enable_monotonic_oneshot_selects,
+        // as that feature has reached enough maturity to do so.
         // TODO(vmarcos): Remove this code when we retire these feature flags.
         self.system_client
             .execute(
                 "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
                 &[],
             )
-            .await?;
-
-        self.system_client
-            .execute("ALTER SYSTEM SET enable_with_mutually_recursive = on", &[])
             .await?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.

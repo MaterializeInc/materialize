@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.mzcompose.services import Clusterd, Materialized
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.util import MzVersion
 
 if TYPE_CHECKING:

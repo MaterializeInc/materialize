@@ -47,6 +47,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
     strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
@@ -87,7 +88,7 @@ use crate::plan::{
     transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
     WebhookValidationSecret,
 };
-use crate::session::vars::{self, FeatureFlag};
+use crate::session::vars::FeatureFlag;
 
 #[derive(Debug)]
 pub struct PlannedQuery<E> {
@@ -1396,9 +1397,6 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
-            qcx.scx
-                .require_feature_flag(&vars::ENABLE_WITH_MUTUALLY_RECURSIVE)?;
-
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {
                 let cte_name = normalize::ident(cte.name.clone());
@@ -2945,7 +2943,7 @@ fn plan_table_function_internal(
                 func: ScalarWindowFunc::RowNumber,
                 order_by: vec![],
             }),
-            partition: vec![],
+            partition_by: vec![],
             order_by: vec![],
         })]);
         scope
@@ -4767,7 +4765,7 @@ fn plan_function<'a>(
                     func,
                     order_by: col_orders,
                 }),
-                partition,
+                partition_by: partition,
                 order_by,
             }));
         }
@@ -4798,7 +4796,7 @@ fn plan_function<'a>(
                     window_frame,
                     ignore_nulls: window_spec.ignore_nulls, // (RESPECT NULLS is the default)
                 }),
-                partition,
+                partition_by: partition,
                 order_by,
             }));
         }
@@ -5311,6 +5309,28 @@ fn scalar_type_from_catalog(
             }
             Ok(ScalarType::VarChar { max_length: length })
         }
+        CatalogType::Timestamp => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) => Some(TimestampPrecision::try_from(*p)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type timestamp supports at most one type modifier");
+            }
+            Ok(ScalarType::Timestamp { precision })
+        }
+        CatalogType::TimestampTz => {
+            let mut modifiers = modifiers.iter().fuse();
+            let precision = match modifiers.next() {
+                Some(p) => Some(TimestampPrecision::try_from(*p)?),
+                None => None,
+            };
+            if modifiers.next().is_some() {
+                sql_bail!("type timestamp with time zone supports at most one type modifier");
+            }
+            Ok(ScalarType::TimestampTz { precision })
+        }
         t => {
             if !modifiers.is_empty() {
                 sql_bail!(
@@ -5392,14 +5412,14 @@ fn scalar_type_from_catalog(
                 CatalogType::RegType => Ok(ScalarType::RegType),
                 CatalogType::String => Ok(ScalarType::String),
                 CatalogType::Time => Ok(ScalarType::Time),
-                CatalogType::Timestamp => Ok(ScalarType::Timestamp),
-                CatalogType::TimestampTz => Ok(ScalarType::TimestampTz),
                 CatalogType::Uuid => Ok(ScalarType::Uuid),
                 CatalogType::Int2Vector => Ok(ScalarType::Int2Vector),
                 CatalogType::MzAclItem => Ok(ScalarType::MzAclItem),
                 CatalogType::Numeric => unreachable!("handled above"),
                 CatalogType::Char => unreachable!("handled above"),
                 CatalogType::VarChar => unreachable!("handled above"),
+                CatalogType::Timestamp => unreachable!("handled above"),
+                CatalogType::TimestampTz => unreachable!("handled above"),
             }
         }
     }

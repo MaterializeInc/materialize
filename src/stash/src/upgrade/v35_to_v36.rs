@@ -90,7 +90,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_existing_flags() {
         let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open_debug().await;
+        let mut stash = factory.open().await;
 
         SYSTEM_CONFIGURATION_COLLECTION
             .insert_without_overwrite(
@@ -150,7 +150,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_empty_flags() {
         let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open_debug().await;
+        let mut stash = factory.open().await;
 
         SYSTEM_CONFIGURATION_COLLECTION
             .insert_without_overwrite(&mut stash, vec![])

@@ -9,7 +9,7 @@
 
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 

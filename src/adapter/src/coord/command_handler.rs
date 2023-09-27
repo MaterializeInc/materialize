@@ -210,6 +210,10 @@ impl Coordinator {
                     catalog: self.owned_catalog(),
                 });
             }
+
+            Command::CheckConsistency { tx } => {
+                let _ = tx.send(self.check_consistency());
+            }
         }
     }
 
@@ -228,7 +232,7 @@ impl Coordinator {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id).await {
             Ok(role_id) => {
-                let mut set_vars = Vec::new();
+                let mut session_vars = Vec::new();
                 if !set_setting_keys
                     .iter()
                     .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
@@ -238,11 +242,17 @@ impl Coordinator {
                         .state()
                         .system_config()
                         .statement_logging_default_sample_rate();
-                    set_vars.push((
+                    session_vars.push((
                         STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                        default.to_string(),
+                        OwnedVarInput::Flat(default.to_string()),
                     ));
                 }
+                let role_vars = self
+                    .catalog()
+                    .get_role(&role_id)
+                    .vars()
+                    .map(|(name, val)| (name.to_owned(), val.clone()))
+                    .collect();
 
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
@@ -264,11 +274,16 @@ impl Coordinator {
                 let update = self.catalog().state().pack_session_update(&conn, 1);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
-                self.send_builtin_table_updates(vec![update]).await;
+
+                // Note: Do NOT await the notify here, we pass this back to whatever requested the
+                // startup to prevent blocking the Coordinator on a builtin table update.
+                let notify = self.send_builtin_table_updates_defer(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    set_vars,
+                    write_notify: notify,
+                    session_vars,
+                    role_vars,
                     catalog: self.owned_catalog(),
                 });
                 if tx.send(resp).is_err() {
@@ -520,6 +535,7 @@ impl Coordinator {
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterObjectSwap(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
@@ -774,8 +790,12 @@ impl Coordinator {
             .dec();
         self.cancel_pending_peeks(conn.conn_id());
         self.end_session_for_statement_logging(conn.uuid());
+
+        // Queue the builtin table update, but do not wait for it to complete. We explicitly do
+        // this to prevent blocking the Coordinator in the case that a lot of connections are
+        // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        self.send_builtin_table_updates(vec![update]).await;
+        self.send_builtin_table_updates_defer(vec![update]);
     }
 
     fn handle_append_webhook(

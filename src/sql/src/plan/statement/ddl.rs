@@ -19,7 +19,7 @@ use std::iter;
 use itertools::Itertools;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
-use mz_interchange::avro::AvroSchemaGenerator;
+use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
 use mz_ore::str::StrExt;
@@ -31,14 +31,14 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
-    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
+    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    DeferredItemName, DropOwnedStatement, SetRoleVar, SshConnectionOption, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -55,7 +55,7 @@ use mz_storage_types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage_types::sources::{
-    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
+    GenericSourceConnection, KafkaMetadataKind, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
@@ -65,14 +65,15 @@ use prost::Message;
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
-    ClusterOption, ClusterOptionName, ColumnOption, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    AlterObjectSwapStatement, AlterSecretStatement, AvroSchema, AvroSchemaOption,
+    AvroSchemaOptionName, AwsConnectionOption, AwsConnectionOptionName,
+    AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName, ClusterOption,
+    ClusterOptionName, ColumnOption, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnection, CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
@@ -118,8 +119,8 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation,
+    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -675,63 +676,63 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
 
-            let mut connection = KafkaSourceConnection::<ReferencedConnection> {
+            if !include_metadata.is_empty()
+                && !matches!(
+                    envelope,
+                    Envelope::Upsert | Envelope::None | Envelope::Debezium(DbzMode::Plain)
+                )
+            {
+                // TODO(guswynn): should this be `bail_unsupported!`?
+                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+            }
+
+            let metadata_columns = include_metadata
+                .into_iter()
+                .flat_map(|item| match item.ty {
+                    SourceIncludeMetadataType::Timestamp => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "timestamp".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Timestamp))
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "partition".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Partition))
+                    }
+                    SourceIncludeMetadataType::Offset => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "offset".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Offset))
+                    }
+                    SourceIncludeMetadataType::Headers => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "headers".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Headers))
+                    }
+                    SourceIncludeMetadataType::Key => {
+                        // handled below
+                        None
+                    }
+                })
+                .collect();
+
+            let connection = KafkaSourceConnection::<ReferencedConnection> {
                 connection: connection_item.id(),
                 connection_id: connection_item.id(),
                 topic,
                 start_offsets,
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
-                include_timestamp: None,
-                include_partition: None,
-                include_topic: None,
-                include_offset: None,
-                include_headers: None,
+                metadata_columns,
             };
-
-            let unwrap_name = |alias: Option<Ident>, default, pos| {
-                Some(IncludedColumnPos {
-                    name: alias
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| String::from(default)),
-                    pos,
-                })
-            };
-
-            if !matches!(envelope, Envelope::Upsert | Envelope::None)
-                && include_metadata
-                    .iter()
-                    .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
-            {
-                // TODO(guswynn): should this be `bail_unsupported!`?
-                sql_bail!("INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE");
-            }
-
-            for (pos, item) in include_metadata.iter().cloned().enumerate() {
-                match item.ty {
-                    SourceIncludeMetadataType::Timestamp => {
-                        connection.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
-                    }
-                    SourceIncludeMetadataType::Partition => {
-                        connection.include_partition = unwrap_name(item.alias, "partition", pos);
-                    }
-                    SourceIncludeMetadataType::Topic => {
-                        // TODO(bwm): This requires deeper thought, the current structure of the
-                        // code requires us to clone the topic name around all over the place
-                        // whether or not anyone ever uses it. Considering we expect the
-                        // overwhelming majority of people will *not* want topics in dataflows that
-                        // is an unnacceptable cost.
-                        bail_unsupported!("INCLUDE TOPIC");
-                    }
-                    SourceIncludeMetadataType::Offset => {
-                        connection.include_offset = unwrap_name(item.alias, "offset", pos);
-                    }
-                    SourceIncludeMetadataType::Headers => {
-                        connection.include_headers = unwrap_name(item.alias, "headers", pos);
-                    }
-                    SourceIncludeMetadataType::Key => {} // handled below
-                }
-            }
 
             let connection = GenericSourceConnection::Kafka(connection);
 
@@ -1140,7 +1141,6 @@ pub fn plan_create_source(
     };
 
     let metadata_columns = external_connection.metadata_columns();
-    let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
@@ -1217,7 +1217,6 @@ pub fn plan_create_source(
         connection: external_connection,
         encoding,
         envelope: envelope.clone(),
-        metadata_columns: metadata_column_types,
         timestamp_interval,
     };
 
@@ -1920,7 +1919,6 @@ pub fn plan_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
         scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
@@ -1941,7 +1939,7 @@ pub fn plan_view(
 
     let view = View {
         create_sql,
-        expr: relation_expr,
+        expr,
         column_names: names,
         temporary,
     };
@@ -2061,7 +2059,6 @@ pub fn plan_create_materialized_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
@@ -2346,7 +2343,8 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
 generate_extracted_config!(
     CsrConfigOption,
     (AvroKeyFullname, String),
-    (AvroValueFullname, String)
+    (AvroValueFullname, String),
+    (NullDefaults, bool, Default(false))
 );
 
 fn kafka_sink_builder(
@@ -2446,6 +2444,7 @@ fn kafka_sink_builder(
             let CsrConfigOptionExtracted {
                 avro_key_fullname,
                 avro_value_fullname,
+                null_defaults,
                 ..
             } = options.try_into()?;
 
@@ -2459,14 +2458,19 @@ fn kafka_sink_builder(
                 sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
             }
 
+            let options = AvroSchemaOptions {
+                avro_key_fullname,
+                avro_value_fullname,
+                set_null_defaults: null_defaults,
+                is_debezium: matches!(envelope, SinkEnvelope::Debezium),
+            };
+
             let schema_generator = AvroSchemaGenerator::new(
-                avro_key_fullname.as_deref(),
-                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
-                matches!(envelope, SinkEnvelope::Debezium),
+                options,
             )?;
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -2801,6 +2805,12 @@ generate_extracted_config!(
 );
 
 #[derive(Debug)]
+pub enum PlannedAlterRoleOption {
+    Attributes(PlannedRoleAttributes),
+    Variable(PlannedRoleVariable),
+}
+
+#[derive(Debug)]
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
 }
@@ -2852,6 +2862,34 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
     }
 
     Ok(planned_attributes)
+}
+
+#[derive(Debug)]
+pub enum PlannedRoleVariable {
+    Set { name: String, value: VariableValue },
+    Reset { name: String },
+}
+
+impl PlannedRoleVariable {
+    pub fn name(&self) -> &str {
+        match self {
+            PlannedRoleVariable::Set { name, .. } => name,
+            PlannedRoleVariable::Reset { name } => name,
+        }
+    }
+}
+
+fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+    let plan = match variable {
+        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
+            name: name.to_string(),
+            value: scl::plan_set_variable_to(value)?,
+        },
+        SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
+            name: name.to_string(),
+        },
+    };
+    Ok(plan)
 }
 
 pub fn describe_create_role(
@@ -4750,6 +4788,23 @@ pub fn plan_alter_cluster_replica_rename(
     }
 }
 
+pub fn describe_alter_object_swap(
+    _: &StatementContext,
+    _: AlterObjectSwapStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_object_swap(
+    _: &mut StatementContext,
+    _: AlterObjectSwapStatement,
+) -> Result<Plan, PlanError> {
+    Err(PlanError::Unsupported {
+        feature: "ALTER ... SWAP ...".to_string(),
+        issue_no: Some(12972),
+    })
+}
+
 pub fn describe_alter_secret_options(
     _: &StatementContext,
     _: AlterSecretStatement<Aug>,
@@ -5104,15 +5159,27 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    _: &StatementContext,
-    AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
+    scx: &StatementContext,
+    AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(options)?;
+    let option = match option {
+        AlterRoleOption::Attributes(attrs) => {
+            let attrs = plan_role_attributes(attrs)?;
+            PlannedAlterRoleOption::Attributes(attrs)
+        }
+        AlterRoleOption::Variable(variable) => {
+            // Make sure the LaunchDarkly flag is enabled.
+            scx.require_feature_flag(&vars::ENABLE_ROLE_VARS)?;
+
+            let var = plan_role_variable(variable)?;
+            PlannedAlterRoleOption::Variable(var)
+        }
+    };
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,
         name: name.name,
-        attributes,
+        option,
     }))
 }
 

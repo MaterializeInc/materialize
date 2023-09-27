@@ -63,7 +63,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test() {
         let factory: DebugStashFactory = DebugStashFactory::new().await;
-        let mut stash = factory.open_debug().await;
+        let mut stash = factory.open().await;
 
         let roles_v32: TypedCollection<objects_v32::RoleKey, objects_v32::RoleValue> =
             TypedCollection::new("role");

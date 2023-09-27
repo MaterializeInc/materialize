@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use mz_build_info::BuildInfo;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::NowFn;
@@ -30,6 +31,8 @@ pub use sync::system_parameter_sync;
 pub struct SystemParameterSyncConfig {
     /// The environment ID that should identify connected clients.
     env_id: EnvironmentId,
+    /// Build info for the environment running this.
+    build_info: &'static BuildInfo,
     /// Parameter sync metrics.
     metrics: Metrics,
     /// Function to return the current time.
@@ -46,6 +49,7 @@ impl SystemParameterSyncConfig {
     /// Construct a new [SystemParameterFrontend] instance.
     pub fn new(
         env_id: EnvironmentId,
+        build_info: &'static BuildInfo,
         registry: &MetricsRegistry,
         now_fn: NowFn,
         ld_sdk_key: String,
@@ -53,6 +57,7 @@ impl SystemParameterSyncConfig {
     ) -> Self {
         Self {
             env_id,
+            build_info,
             metrics: Metrics::register_into(registry),
             now_fn,
             ld_sdk_key,

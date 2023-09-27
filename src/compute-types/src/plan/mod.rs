@@ -85,7 +85,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.rs"));
 /// when creating arrangements, and permute by the hashmap when reading them,
 /// the contract of the function where they are generated (`mz_expr::permutation_for_arrangement`)
 /// ensures that the correct values will be read.
-#[derive(Arbitrary, Default, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(
+    Arbitrary, Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
@@ -161,7 +163,7 @@ impl AvailableCollections {
 }
 
 /// A rendering plan with as much conditional logic as possible removed.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Plan<T = mz_repr::Timestamp> {
     /// A collection containing a pre-determined collection.
     Constant {
@@ -887,7 +889,7 @@ impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, mz_repr::Timestamp, i64
 }
 
 /// How a `Get` stage will be rendered.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
@@ -1723,7 +1725,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment = "finalize_dataflow")
     )]
@@ -1784,7 +1786,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// creates plans for every object to be built for the dataflow.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment ="mir_to_lir")
     )]
@@ -1857,7 +1859,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// push down common MFP expressions.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment = "refine_source_mfps")
     )]
@@ -1914,7 +1916,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment = "refine_union_negate_consolidation")
     )]
@@ -1947,7 +1949,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// one-shot SELECT query.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment = "refine_single_time_operator_selection")
     )]
@@ -2000,7 +2002,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// whenever the input is deemed to be physically monotonic.
     #[tracing::instrument(
         target = "optimizer",
-        level = "debug",
+        level = "trace",
         skip_all,
         fields(path.segment = "refine_single_time_consolidation")
     )]
