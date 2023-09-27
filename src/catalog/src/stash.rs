@@ -1086,40 +1086,24 @@ pub const ALL_COLLECTIONS: &[&str] = &[
 /// stash for usage in tests.
 #[derive(Debug)]
 pub struct DebugOpenableConnection<'a> {
-    stash: Option<Stash>,
-    debug_stash_factory: &'a DebugStashFactory,
+    _debug_stash_factory: &'a DebugStashFactory,
+    openable_connection: OpenableConnection,
 }
 
 impl DebugOpenableConnection<'_> {
     pub(crate) fn new(debug_stash_factory: &DebugStashFactory) -> DebugOpenableConnection {
         DebugOpenableConnection {
-            stash: None,
-            debug_stash_factory,
+            _debug_stash_factory: debug_stash_factory,
+            openable_connection: OpenableConnection {
+                stash: None,
+                config: StashConfig {
+                    stash_factory: debug_stash_factory.stash_factory().clone(),
+                    stash_url: debug_stash_factory.url().to_string(),
+                    schema: Some(debug_stash_factory.schema().to_string()),
+                    tls: debug_stash_factory.tls().clone(),
+                },
+            },
         }
-    }
-
-    /// Opens the inner stash in read-only mode.
-    async fn open_stash_read_only(&mut self) -> Result<&mut Stash, StashError> {
-        if !matches!(&self.stash, Some(stash) if stash.is_readonly()) {
-            self.stash = Some(self.debug_stash_factory.open_readonly().await);
-        }
-        Ok(self.stash.as_mut().expect("opened above"))
-    }
-
-    /// Opens the inner stash in savepoint mode.
-    async fn open_stash_savepoint(&mut self) -> Result<&mut Stash, StashError> {
-        if !matches!(&self.stash, Some(stash) if stash.is_savepoint()) {
-            self.stash = Some(self.debug_stash_factory.open_savepoint().await);
-        }
-        Ok(self.stash.as_mut().expect("opened above"))
-    }
-
-    /// Opens the inner stash in a writeable mode.
-    async fn open_stash(&mut self) -> Result<&mut Stash, StashError> {
-        if !matches!(&self.stash, Some(stash) if stash.is_writeable()) {
-            self.stash = Some(self.debug_stash_factory.open().await);
-        }
-        Ok(self.stash.as_mut().expect("opened above"))
     }
 }
 
@@ -1131,9 +1115,9 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
-        self.open_stash_savepoint().await?;
-        let stash = self.stash.take().expect("opened above");
-        retry_open(stash, now, bootstrap_args, deploy_generation).await
+        self.openable_connection
+            .open_check(now, bootstrap_args, deploy_generation)
+            .await
     }
 
     async fn open_read_only(
@@ -1141,9 +1125,9 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Connection, Error> {
-        self.open_stash_read_only().await?;
-        let stash = self.stash.take().expect("opened above");
-        retry_open(stash, now, bootstrap_args, None).await
+        self.openable_connection
+            .open_read_only(now, bootstrap_args)
+            .await
     }
 
     async fn open(
@@ -1152,35 +1136,16 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
-        self.open_stash().await?;
-        let stash = self.stash.take().expect("opened above");
-        retry_open(stash, now, bootstrap_args, deploy_generation).await
+        self.openable_connection
+            .open(now, bootstrap_args, deploy_generation)
+            .await
     }
 
     async fn is_initialized(&mut self) -> Result<bool, Error> {
-        let stash = match &mut self.stash {
-            None => self.open_stash().await?,
-            Some(stash) => stash,
-        };
-        stash.is_initialized().await.err_into()
+        self.openable_connection.is_initialized().await
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error> {
-        let stash = match &mut self.stash {
-            None => self.open_stash().await?,
-            Some(stash) => stash,
-        };
-
-        let deployment_generation = CONFIG_COLLECTION
-            .peek_key_one(
-                stash,
-                proto::ConfigKey {
-                    key: DEPLOY_GENERATION.into(),
-                },
-            )
-            .await?
-            .map(|v| v.value);
-
-        Ok(deployment_generation)
+        self.openable_connection.get_deployment_generation().await
     }
 }
