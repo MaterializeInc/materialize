@@ -2621,6 +2621,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "insta"
+version = "1.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3e02c584f4595792d09509a94cdb92a3cef7592b1eb2d9877ee6f527062d0ea"
+dependencies = [
+ "console",
+ "lazy_static",
+ "linked-hash-map",
+ "similar",
+ "yaml-rust",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3049,9 +3062,9 @@ dependencies = [
 
 [[package]]
 name = "linked-hash-map"
-version = "0.5.4"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fb9b38af92608140b86b693604b9ffcc5824240a484d1ecd4795bacb2fe88f3"
+checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "linked_hash_set"
@@ -3340,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -3415,6 +3428,7 @@ dependencies = [
  "mz-persist-types",
  "mz-pgcopy",
  "mz-pgrepr",
+ "mz-pgwire-common",
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
@@ -3454,6 +3468,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tracing",
+ "tracing-core",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uncased",
@@ -3722,7 +3737,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.70.0-dev"
+version = "0.71.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3914,7 +3929,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.70.0-dev"
+version = "0.71.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3963,6 +3978,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-pgtest",
  "mz-pgwire",
+ "mz-pgwire-common",
  "mz-postgres-util",
  "mz-prof",
  "mz-repr",
@@ -4000,7 +4016,6 @@ dependencies = [
  "serde_urlencoded",
  "shell-words",
  "similar-asserts",
- "socket2 0.4.9",
  "sysctl",
  "tempfile",
  "thiserror",
@@ -4111,6 +4126,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.13.1",
+ "clap",
  "derivative",
  "jsonwebtoken",
  "mz-ore",
@@ -4413,10 +4429,12 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "socket2 0.4.9",
  "stacker",
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
+ "tokio-stream",
  "tokio-test",
  "tonic",
  "tracing",
@@ -4473,7 +4491,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.70.0-dev"
+version = "0.71.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4579,6 +4597,7 @@ dependencies = [
  "dec",
  "mz-ore",
  "mz-pgrepr-consts",
+ "mz-pgwire-common",
  "mz-repr",
  "once_cell",
  "postgres-types",
@@ -4626,6 +4645,7 @@ dependencies = [
  "mz-ore",
  "mz-pgcopy",
  "mz-pgrepr",
+ "mz-pgwire-common",
  "mz-repr",
  "mz-sql",
  "openssl",
@@ -4634,6 +4654,22 @@ dependencies = [
  "tokio-openssl",
  "tokio-stream",
  "tokio-util",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-pgwire-common"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "bytesize",
+ "mz-ore",
+ "tokio",
+ "tokio-openssl",
+ "tokio-postgres",
  "tracing",
  "workspace-hack",
 ]
@@ -4781,6 +4817,7 @@ dependencies = [
  "timely",
  "tokio-postgres",
  "tracing",
+ "tracing-core",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -4965,6 +5002,7 @@ dependencies = [
  "mz-persist-client",
  "mz-pgcopy",
  "mz-pgrepr",
+ "mz-pgwire-common",
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
@@ -5110,6 +5148,7 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures",
+ "insta",
  "itertools",
  "md-5",
  "mz-ore",
@@ -9228,6 +9267,15 @@ name = "xmlparser"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d25c75bf9ea12c4040a97f829154768bbbce366287e2dc044af160cd79a13fd"
+
+[[package]]
+name = "yaml-rust"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
+dependencies = [
+ "linked-hash-map",
+]
 
 [[package]]
 name = "yansi"

@@ -16,9 +16,9 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 git clean -ffdX ci/www/public
-ci_try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
+try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
 echo "<!doctype html>" > ci/www/public/index.html
-ci_try htmltest -s ci/www/public -c doc/user/.htmltest.yml
-ci_try ci/test/lint-docs-catalog.sh
+try htmltest -s ci/www/public -c doc/user/.htmltest.yml
+try ci/test/lint-docs-catalog.sh
 
-ci_status_report
+try_status_report

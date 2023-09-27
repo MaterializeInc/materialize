@@ -33,7 +33,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership,
+    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership, RoleVars,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -332,6 +332,7 @@ impl<'a> Transaction<'a> {
         name: String,
         attributes: RoleAttributes,
         membership: RoleMembership,
+        vars: RoleVars,
     ) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
@@ -341,6 +342,7 @@ impl<'a> Transaction<'a> {
                 name: name.clone(),
                 attributes,
                 membership,
+                vars,
             },
         ) {
             Ok(_) => Ok(id),

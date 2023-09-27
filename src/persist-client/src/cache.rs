@@ -22,7 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Blob, Consensus, ExternalError, VersionedData, BLOB_GET_LIVENESS_KEY,
+    Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
     CONSENSUS_HEAD_LIVENESS_KEY,
 };
 use mz_persist_types::{Codec, Codec64};
@@ -159,6 +159,7 @@ impl PersistClientCache {
                     .await;
                 let consensus =
                     Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
+                let consensus = Arc::new(Tasked(consensus));
                 let task = consensus_rtt_latency_task(
                     Arc::clone(&consensus),
                     Arc::clone(&self.metrics),
@@ -261,7 +262,7 @@ async fn blob_rtt_latency_task(
 /// start.
 #[allow(clippy::unused_async)]
 async fn consensus_rtt_latency_task(
-    consensus: Arc<MetricsConsensus>,
+    consensus: Arc<Tasked<MetricsConsensus>>,
     metrics: Arc<Metrics>,
     measurement_interval: Duration,
 ) -> JoinHandle<()> {

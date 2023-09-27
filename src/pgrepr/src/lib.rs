@@ -79,7 +79,7 @@
 //!
 //! This crate exports a [`Value`] type that maps directly to a PostgreSQL
 //! datum. These values can be serialized using either the text or binary
-//! encoding format; see the [`Format`] type for details.
+//! encoding format; see the [`mz_pgwire_common::Format`] type for details.
 //!
 //! `Value`s are easily converted to and from [`mz_repr::Datum`]s. See, for
 //! example, the [`values_from_row`] function.
@@ -87,13 +87,11 @@
 #![warn(clippy::as_conversions)]
 #![warn(missing_docs)]
 
-mod format;
 mod types;
 mod value;
 
 pub mod oid;
 
-pub use format::Format;
 pub use types::{
     Type, TypeConversionError, TypeFromOidError, ANYCOMPATIBLELIST, ANYCOMPATIBLEMAP, LIST, MAP,
 };

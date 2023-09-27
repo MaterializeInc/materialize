@@ -35,7 +35,7 @@ use mz_sql::plan::{
     ExecuteTimeout, Plan, PlanKind, WebhookHeaders, WebhookValidation, WebhookValidationSecret,
 };
 use mz_sql::session::user::User;
-use mz_sql::session::vars::Var;
+use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -43,6 +43,7 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::client::{ConnectionId, ConnectionIdType};
+use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
 use crate::error::AdapterError;
@@ -137,6 +138,10 @@ pub enum Command {
         data: ExecuteContextExtra,
         reason: StatementEndedExecutionReason,
     },
+
+    CheckConsistency {
+        tx: oneshot::Sender<Result<(), CoordinatorInconsistencies>>,
+    },
 }
 
 impl Command {
@@ -151,7 +156,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::RetireExecute { .. } => None,
+            | Command::RetireExecute { .. }
+            | Command::CheckConsistency { .. } => None,
         }
     }
 
@@ -166,7 +172,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
-            | Command::RetireExecute { .. } => None,
+            | Command::RetireExecute { .. }
+            | Command::CheckConsistency { .. } => None,
         }
     }
 }
@@ -185,11 +192,13 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 pub struct StartupResponse {
     /// RoleId for the user.
     pub role_id: RoleId,
-    /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
-    pub set_vars: Vec<(String, String)>,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
     pub write_notify: BoxFuture<'static, ()>,
+    /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
+    pub session_vars: Vec<(String, OwnedVarInput)>,
+    /// Vec of (name, VarInput::Flat) tuples of Role default variables that should be set.
+    pub role_vars: Vec<(String, OwnedVarInput)>,
     pub catalog: Arc<Catalog>,
 }
 
@@ -785,10 +794,12 @@ impl ExecuteResponse {
         match plan {
             AbortTransaction => vec![TransactionRolledBack],
             AlterClusterRename
+            | AlterClusterSwap
             | AlterCluster
             | AlterClusterReplicaRename
             | AlterOwner
             | AlterItemRename
+            | AlterItemSwap
             | AlterNoop
             | AlterSecret
             | AlterSink

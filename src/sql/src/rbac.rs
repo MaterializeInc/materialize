@@ -708,7 +708,7 @@ fn generate_rbac_requirements(
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 }
-                Explainee::Query { raw_plan, .. } => raw_plan
+                Explainee::Statement(stmt) => stmt
                     .depends_on()
                     .into_iter()
                     .map(|id| {
@@ -720,7 +720,7 @@ fn generate_rbac_requirements(
             },
             item_usage: match explainee {
                 Explainee::MaterializedView(_) | Explainee::Index(_) => false,
-                Explainee::Query { .. } => true,
+                Explainee::Statement(_) => true,
             },
             ..Default::default()
         },
@@ -871,6 +871,15 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Cluster(*id)],
             ..Default::default()
         },
+        Plan::AlterClusterSwap(plan::AlterClusterSwapPlan {
+            id_a,
+            id_b,
+            name_a: _,
+            name_b: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Cluster(*id_a), ObjectId::Cluster(*id_b)],
+            ..Default::default()
+        },
         Plan::AlterClusterReplicaRename(plan::AlterClusterReplicaRenamePlan {
             cluster_id,
             replica_id,
@@ -889,17 +898,34 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
+        Plan::AlterItemSwap(plan::AlterItemSwapPlan {
+            id_a,
+            id_b,
+            full_name_a: _,
+            full_name_b: _,
+            object_type: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id_a), ObjectId::Item(*id_b)],
+            ..Default::default()
+        },
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
         Plan::AlterRole(plan::AlterRolePlan {
-            id: _,
+            id,
             name: _,
-            attributes: _,
-        }) => RbacRequirements {
-            privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            ..Default::default()
+            option,
+        }) => match option {
+            // Roles are allowed to change their own variables.
+            plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
+                RbacRequirements::default()
+            }
+            // Otherwise to ALTER a role, you need to have the CREATE_ROLE privilege.
+            _ => RbacRequirements {
+                privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+                ..Default::default()
+            },
         },
         Plan::AlterOwner(plan::AlterOwnerPlan {
             id,

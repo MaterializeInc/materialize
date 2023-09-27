@@ -14,7 +14,3 @@ steps:
     timeout_in_minutes: 5
     agents:
       queue: linux
-  - command: bin/ci-builder run stable cargo vet check
-    timeout_in_minutes: 5
-    agents:
-      queue: linux

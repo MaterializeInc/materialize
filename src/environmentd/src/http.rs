@@ -27,7 +27,7 @@ use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
 use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
@@ -40,8 +40,12 @@ use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as Fronte
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
-use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql::session::user::{
+    ExternalUserMetadata, User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER,
+    SYSTEM_USER_NAME,
+};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
 use serde::{Deserialize, Serialize};
@@ -55,7 +59,6 @@ use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
 
 mod catalog;
@@ -225,6 +228,7 @@ pub struct InternalHttpConfig {
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
     pub promote_leader: oneshot::Sender<()>,
     pub ready_to_promote: oneshot::Receiver<()>,
+    pub internal_console_redirect_url: Option<String>,
 }
 
 pub struct InternalHttpServer {
@@ -350,6 +354,25 @@ pub async fn handle_leader_promote(
     )
 }
 
+/// This route allows User Impersonation by using Teleport to proxy requests to the Internal HTTP Server.
+/// Teleport is configured to handle the user auth and then set an auth cookie stored in the user's browser
+/// that is tied to the host being proxied (the InternalHTTPServer). This /internal-console route accepts
+/// that request and then redirects the user's browser to a Web Console URL, and the Console code can
+/// then make further requests to the InternalHTTPServer using the teleport auth cookie now in the user's browser
+async fn handle_internal_console_redirect(
+    internal_console_redirect_url: &Option<String>,
+) -> Response {
+    if let Some(redirect_url) = internal_console_redirect_url {
+        Redirect::temporary(redirect_url).into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            "Redirect URL is not correctly configured".to_string(),
+        )
+            .into_response()
+    }
+}
+
 impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
@@ -358,6 +381,7 @@ impl InternalHttpServer {
             active_connection_count,
             promote_leader,
             ready_to_promote,
+            internal_console_redirect_url,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let metrics = Metrics::register_into(&metrics_registry, "mz_internal_http");
@@ -408,7 +432,17 @@ impl InternalHttpServer {
                 "/api/catalog/check",
                 routing::get(catalog::handle_catalog_check),
             )
-            .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
+            .route(
+                "/api/coordinator/check",
+                routing::get(catalog::handle_coordinator_check),
+            )
+            .route(
+                "/api/internal-console",
+                routing::get(|| async move {
+                    handle_internal_console_redirect(&internal_console_redirect_url).await
+                }),
+            )
+            .layer(middleware::from_fn(internal_http_auth))
             .layer(Extension(adapter_client_rx.shared()))
             .layer(Extension(active_connection_count));
 
@@ -424,6 +458,25 @@ impl InternalHttpServer {
 
         InternalHttpServer { router }
     }
+}
+
+async fn internal_http_auth<B>(mut req: Request<B>, next: Next<B>) -> impl IntoResponse {
+    let user_name = req
+        .headers()
+        .get("x-materialize-user")
+        .map(|h| h.to_str())
+        .unwrap_or_else(|| Ok(SYSTEM_USER_NAME));
+    let user = match user_name {
+        Ok(SUPPORT_USER_NAME) => AuthedUser(SUPPORT_USER.clone()),
+        Ok(SYSTEM_USER_NAME) => AuthedUser(SYSTEM_USER.clone()),
+        _ => {
+            return Err(AuthError::MismatchedUser(format!(
+            "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
+        )));
+        }
+    };
+    req.extensions_mut().insert(user);
+    Ok(next.run(req).await)
 }
 
 #[async_trait]
@@ -565,7 +618,7 @@ enum AuthError {
     #[error("missing authorization header")]
     MissingHttpAuthentication,
     #[error("{0}")]
-    MismatchedUser(&'static str),
+    MismatchedUser(String),
     #[error("unexpected credentials")]
     UnexpectedCredentials,
 }
@@ -612,7 +665,7 @@ async fn http_auth<B>(
                 if let Some(user) = cert_user {
                     if basic.username() != user {
                         return Err(AuthError::MismatchedUser(
-                        "user in client certificate did not match user specified in authorization header",
+                        "user in client certificate did not match user specified in authorization header".to_string(),
                     ));
                     }
                 }

@@ -42,10 +42,10 @@ fi
 for catalog_file in "${catalog_files[@]}"; do
     slt="$slt_directory/$(basename "$catalog_file" .md).slt"
     if $rewrite; then
-        ci_try bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file" > "$slt"
+        try bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file" > "$slt"
     else
-        ci_try diff "$slt" <(bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file")
+        try diff "$slt" <(bin/pyactivate ci/test/lint-docs-catalog.py "$catalog_file")
     fi
 done
 
-ci_status_report
+try_status_report

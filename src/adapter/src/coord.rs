@@ -159,6 +159,7 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
+pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;
@@ -776,6 +777,10 @@ impl ExecuteContextExtra {
         let Self { statement_uuid } = self;
         statement_uuid.is_none()
     }
+    pub fn contents(&self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = self;
+        *statement_uuid
+    }
     /// Take responsibility for the contents.  This should only be
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
@@ -1323,11 +1328,13 @@ impl Coordinator {
             }
         }
 
+        let register_ts = self.get_local_write_ts().await.timestamp;
         self.controller
             .storage
-            .create_collections(collections_to_create)
+            .create_collections(Some(register_ts), collections_to_create)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+        self.apply_local_write(register_ts).await;
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
@@ -1360,7 +1367,7 @@ impl Coordinator {
                             source_desc(self.catalog(), source_status_collection_id, source);
                         self.controller
                             .storage
-                            .create_collections(vec![(entry.id(), source_desc)])
+                            .create_collections(None, vec![(entry.id(), source_desc)])
                             .await
                             .unwrap_or_terminate("cannot fail to create collections");
                     }
@@ -1438,7 +1445,7 @@ impl Coordinator {
                     );
                     self.controller
                         .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
+                        .create_collections(None, vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
@@ -1664,11 +1671,11 @@ impl Coordinator {
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new(), advance_to))
+            .map(|entry| (entry.id(), Vec::new()))
             .collect();
         self.controller
             .storage
-            .append_table(appends)
+            .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")

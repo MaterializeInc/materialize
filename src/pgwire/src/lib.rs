@@ -96,7 +96,6 @@ mod metrics;
 mod protocol;
 mod server;
 
-pub use codec::MAX_REQUEST_SIZE;
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
-pub use server::{Config, Server, TlsConfig, TlsMode};
+pub use server::{Config, Server};

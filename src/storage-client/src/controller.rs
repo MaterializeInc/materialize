@@ -40,7 +40,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::Update;
+use crate::client::TimestamplessUpdate;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
@@ -267,8 +267,14 @@ pub trait StorageController: Debug + Send {
     /// This method is NOT idempotent; It can fail between processing of different
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
+    ///
+    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// might later give non-tables the same treatment, but hold off on that initially.) Callers
+    /// must provide a Some if any of the collections is a table. A None may be given if none of the
+    /// collections are a table (i.e. all materialized views, sources, etc).
     async fn create_collections(
         &mut self,
+        register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
@@ -356,7 +362,9 @@ pub trait StorageController: Debug + Send {
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     fn append_table(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        write_ts: Self::Timestamp,
+        advance_to: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to

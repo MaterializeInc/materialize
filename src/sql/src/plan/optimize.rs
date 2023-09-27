@@ -10,19 +10,12 @@
 //! This module defines the API and logic for running optimization pipelines.
 
 use crate::plan::expr::HirRelationExpr;
-use crate::plan::{PlanError, StatementContext};
+use crate::plan::PlanError;
 
 /// Feature flags for the [`HirRelationExpr::optimize_and_lower()`] logic.
 #[derive(Debug)]
 pub struct OptimizerConfig {
     // TODO: add parameters driving the optimization pass here
-}
-
-/// Convert a reference to a [`StatementContext`] to an [`OptimizerConfig`].
-impl<'a> From<&StatementContext<'a>> for OptimizerConfig {
-    fn from(_scx: &StatementContext) -> Self {
-        OptimizerConfig {}
-    }
 }
 
 impl HirRelationExpr {

@@ -21,7 +21,7 @@ use derivative::Derivative;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
 use mz_ore::now::EpochMillis;
-use mz_pgrepr::Format;
+use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
@@ -48,7 +48,6 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
-use crate::severity::Severity;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -398,8 +397,8 @@ impl<T: TimestampManipulation> Session<T> {
     fn notice_filter(&mut self, notice: AdapterNotice) -> Option<AdapterNotice> {
         // Filter out low threshold severity.
         let minimum_client_severity = self.vars.client_min_messages();
-        let sev = Severity::for_adapter_notice(&notice);
-        if !sev.should_output_to_client(minimum_client_severity) {
+        let sev = notice.severity();
+        if !minimum_client_severity.should_output_to_client(&sev) {
             return None;
         }
         // Filter out notices for other clusters.
@@ -562,7 +561,7 @@ impl<T: TimestampManipulation> Session<T> {
         stmt: Option<Statement<Raw>>,
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, ScalarType)>,
-        result_formats: Vec<mz_pgrepr::Format>,
+        result_formats: Vec<Format>,
         catalog_revision: u64,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
@@ -796,7 +795,7 @@ pub struct Portal {
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
-    pub result_formats: Vec<mz_pgrepr::Format>,
+    pub result_formats: Vec<Format>,
     /// A handle to metadata needed for statement logging.
     #[derivative(Debug = "ignore")]
     pub logging: Arc<QCell<PreparedStatementLoggingInfo>>,
