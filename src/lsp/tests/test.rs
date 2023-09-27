@@ -78,4 +78,222 @@
 #[cfg(test)]
 mod tests {
 
+    use dashmap::DashMap;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+    use std::fmt::Debug;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+    use tower_lsp::lsp_types::*;
+    use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize)]
+    struct LspMessage<T, R> {
+        jsonrpc: String,
+        method: Option<String>,
+        params: Option<T>,
+        result: Option<R>,
+        id: Option<i32>,
+    }
+
+    /// Tests local commands that do not requires interacting with any API.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
+    async fn test_lsp() {
+        let (mut req_client, mut resp_client) = start_server();
+        test_initialize(&mut req_client, &mut resp_client).await;
+        test_parser(&mut req_client, &mut resp_client).await;
+    }
+
+    async fn test_parser(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        // Test "did_open". Triggers "on_change" and the parser.
+        let did_open = r#"{
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": "file:///foo.rs",
+                        "languageId": "sql",
+                        "version": 1,
+                        "text": "SELECT 100;"
+                    }
+                }
+            }
+        "#;
+
+        let did_open_response: Vec<LspMessage<serde_json::Value, String>> = vec![
+            LspMessage {
+                jsonrpc: "2.0".to_string(),
+                method: Some("window/logMessage".to_string()),
+                params: Some(json!(LogMessageParams {
+                    message: "file opened!".to_string(),
+                    typ: MessageType::INFO,
+                })),
+                result: None,
+                id: None,
+            },
+            LspMessage {
+                jsonrpc: "2.0".to_string(),
+                method: Some("window/logMessage".to_string()),
+                params: Some(json!(json!(LogMessageParams {
+                    message: r#"on_change Url { scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: "/foo.rs", query: None, fragment: None }"#.to_string(),
+                    typ: MessageType::INFO
+                }))),
+                result: None,
+                id: None,
+            },
+            LspMessage {
+                jsonrpc: "2.0".to_string(),
+                method: Some("window/logMessage".to_string()),
+                params: Some(json!(json!(LogMessageParams {
+                    message: r#"Results: [StatementParseResult { ast: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("100")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), sql: "SELECT 100" }]"#.to_string(),
+                    typ: MessageType::INFO
+                }))),
+                result: None,
+                id: None,
+            },
+            LspMessage {
+                jsonrpc: "2.0".to_string(),
+                method: Some("textDocument/publishDiagnostics".to_string()),
+                params: Some(json!(json!(PublishDiagnosticsParams {
+                    uri: "file:///foo.rs".parse().unwrap(),
+                    diagnostics: vec![],
+                    version: Some(1),
+                }))),
+                result: None,
+                id: None,
+            },
+        ];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            did_open,
+            did_open_response,
+        )
+        .await;
+    }
+
+    async fn test_initialize(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        // Test that the server initializes ok.
+        let initialize = r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"textDocumentSync":1}},"id":1}"#;
+        let initialize_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
+            jsonrpc: "2.0".to_string(),
+            method: None,
+            params: None,
+            result: Some(InitializeResult {
+                server_info: None,
+                offset_encoding: None,
+                capabilities: ServerCapabilities {
+                    text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                        TextDocumentSyncKind::FULL,
+                    )),
+                    code_lens_provider: Some(CodeLensOptions {
+                        resolve_provider: Some(true),
+                    }),
+                    completion_provider: Some(CompletionOptions {
+                        resolve_provider: Some(false),
+                        trigger_characters: Some(vec![".".to_string()]),
+                        work_done_progress_options: Default::default(),
+                        all_commit_characters: None,
+                        completion_item: None,
+                    }),
+                    workspace: Some(WorkspaceServerCapabilities {
+                        workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                            supported: Some(true),
+                            change_notifications: Some(OneOf::Left(true)),
+                        }),
+                        file_operations: None,
+                    }),
+                    ..ServerCapabilities::default()
+                },
+            }),
+            id: Some(1),
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            initialize,
+            initialize_response,
+        )
+        .await;
+    }
+
+    async fn write_and_assert<'de, T, R>(
+        req_client: &mut DuplexStream,
+        resp_client: &mut DuplexStream,
+        buf: &'de mut [u8],
+        input_message: &str,
+        expected_output_message: Vec<LspMessage<T, R>>,
+    ) where
+        T: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
+        R: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
+    {
+        req_client
+            .write_all(req(input_message).as_bytes())
+            .await
+            .unwrap();
+        let n = resp_client.read(buf).await.unwrap();
+        let buf_as = std::str::from_utf8(&buf[..n]).unwrap();
+
+        let messages = parse_response::<T, R>(&buf_as.clone());
+        assert_eq!(messages, expected_output_message)
+    }
+
+    fn parse_response<'de, T, R>(response: &'de str) -> Vec<LspMessage<T, R>>
+    where
+        T: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
+        R: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
+    {
+        let mut messages: Vec<LspMessage<T, R>> = Vec::new();
+        let mut slices = response.as_bytes();
+
+        while !slices.is_empty() {
+            // parse headers to get headers length
+            let mut dst = [httparse::EMPTY_HEADER; 2];
+            let (headers_len, _) = match httparse::parse_headers(&slices, &mut dst).unwrap() {
+                httparse::Status::Complete(output) => output,
+                httparse::Status::Partial => panic!("Partial headers"),
+            };
+
+            // Extract content length
+            let content_length = dst
+                .iter()
+                .find(|header| header.name.eq_ignore_ascii_case("Content-Length"))
+                .and_then(|header| std::str::from_utf8(header.value).ok())
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap();
+
+            // Extract the message body using content length
+            let str_slice: &str =
+                std::str::from_utf8(&slices[headers_len..headers_len + content_length]).unwrap();
+            messages.push(serde_json::from_str::<LspMessage<T, R>>(str_slice).unwrap());
+
+            // Move the slice pointer past the current message (header + content length)
+            slices = &slices[headers_len + content_length..];
+        }
+
+        messages
+    }
+
+    fn start_server() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
+        let (req_client, req_server) = tokio::io::duplex(1024);
+        let (resp_server, resp_client) = tokio::io::duplex(1024);
+
+        let (service, socket) = LspService::new(|client| mz_lsp::backend::Backend {
+            client,
+            document_map: DashMap::new(),
+        });
+
+        // start server as concurrent task
+        tokio::spawn(Server::new(req_server, resp_server, socket).serve(service));
+
+        (req_client, resp_client)
+    }
+
+    fn req(msg: &str) -> String {
+        format!("Content-Length: {}\r\n\r\n{}", msg.len(), msg)
+    }
 }

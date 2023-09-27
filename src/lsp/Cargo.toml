@@ -20,3 +20,7 @@ mz-sql-parser = { path = "../sql-parser", default-features = false  }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+assert_cmd = "2.0.5"
+httparse = "1.8.0"

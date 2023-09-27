@@ -4324,8 +4324,10 @@ dependencies = [
 name = "mz-lsp"
 version = "0.1.0"
 dependencies = [
+ "assert_cmd",
  "dashmap",
  "env_logger",
+ "httparse",
  "im-rc",
  "log",
  "mz-ore",
