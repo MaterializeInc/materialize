@@ -95,6 +95,7 @@ use mz_repr::role_id::RoleId;
 use mz_stash::DebugStashFactory;
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_is_initialized() {
     let (_debug_factory, stash_config) = stash_config().await;
     let openable_state = stash_backed_catalog_state(stash_config);
@@ -102,6 +103,7 @@ async fn test_is_initialized() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_is_initialized() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state = debug_stash_backed_catalog_state(&debug_factory);
@@ -133,6 +135,7 @@ async fn is_initialized<D: DurableCatalogState>(
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_get_deployment_generation() {
     let (_debug_factory, stash_config) = stash_config().await;
     let openable_state = stash_backed_catalog_state(stash_config);
@@ -140,6 +143,7 @@ async fn test_get_deployment_generation() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_get_deployment_generation() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state = debug_stash_backed_catalog_state(&debug_factory);
@@ -174,6 +178,7 @@ async fn get_deployment_generation<D: DurableCatalogState>(
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_open_check() {
     let (_debug_factory, stash_config) = stash_config().await;
     let openable_state = stash_backed_catalog_state(stash_config);
@@ -181,6 +186,7 @@ async fn test_open_check() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_open_check() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state = debug_stash_backed_catalog_state(&debug_factory);
@@ -248,6 +254,7 @@ async fn open_check<D: DurableCatalogState>(
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_open_read_only() {
     let (_debug_factory, stash_config) = stash_config().await;
     let openable_state = stash_backed_catalog_state(stash_config);
@@ -255,6 +262,7 @@ async fn test_open_read_only() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_open_read_only() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state = debug_stash_backed_catalog_state(&debug_factory);
@@ -293,6 +301,7 @@ async fn open_read_only<D: DurableCatalogState>(
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_open() {
     let (_debug_factory, stash_config) = stash_config().await;
     let openable_state = stash_backed_catalog_state(stash_config);
@@ -300,6 +309,7 @@ async fn test_open() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_open() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state = debug_stash_backed_catalog_state(&debug_factory);
