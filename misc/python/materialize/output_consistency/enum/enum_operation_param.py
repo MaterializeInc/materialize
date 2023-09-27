@@ -12,6 +12,9 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.enum.enum_data_type import EnumDataType
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.operation.operation_param import OperationParam
 
 
@@ -25,6 +28,9 @@ class EnumConstantOperationParam(OperationParam):
         )
         self.values = list(values)
         self.add_quotes = add_quotes
+        self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
+            set() for _ in values
+        ]
 
     def supports_type(
         self, data_type: DataType, previous_args: list[Expression]
@@ -36,4 +42,5 @@ class EnumConstantOperationParam(OperationParam):
             0 <= index < len(self.values)
         ), f"Index {index} out of range in list with {len(self.values)} values"
         value = self.values[index]
-        return EnumConstant(f"'{value}'" if self.add_quotes else value)
+        characteristics = self.characteristics_per_index[index]
+        return EnumConstant(f"'{value}'" if self.add_quotes else value, characteristics)
