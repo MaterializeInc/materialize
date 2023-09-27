@@ -1359,6 +1359,25 @@ impl DebugStashFactory {
 
     async fn try_open_inner(&self, mode: TransactionMode) -> Result<Stash, StashError> {
         debug!("debug stash open: {mode:?}, {}", self.schema);
+
+        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
+        // been able to figure out. For some reason, uncommitted transactions are being left open
+        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
+        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
+        // issue somehow. This is a gross hack and we don't really understand what's going on, but
+        // for now it resolves issues in CI while we debug further.
+        let url = self.url.clone();
+        let tls = self.tls.clone();
+        let (client, connection) = tokio_postgres::connect(&url, tls).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            let _ = connection.await;
+        });
+        client
+            .batch_execute(
+                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '3s'",
+            )
+            .await?;
+
         self.stash_factory
             .open_inner(
                 mode,
