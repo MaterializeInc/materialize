@@ -19,9 +19,10 @@ use std::iter;
 use itertools::Itertools;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
-use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions};
+use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
+use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -34,11 +35,11 @@ use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
     AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
     AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement, AvroDocOn,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DropOwnedStatement, SetRoleVar, SshConnectionOption, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -2143,9 +2144,13 @@ generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    stmt: CreateSinkStatement<Aug>,
+    mut stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    // updating avro format with comments so that they are frozen in the `create_sql`
+    update_avro_format_with_comments(scx, &mut stmt)?;
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
+
     let CreateSinkStatement {
         name,
         in_cluster,
@@ -2192,10 +2197,8 @@ pub fn plan_create_sink(
             item_type: item.item_type(),
         });
     }
-
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
-
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key, .. } => {
@@ -2287,6 +2290,7 @@ pub fn plan_create_sink(
             key_desc_and_indices,
             desc.into_owned(),
             envelope,
+            from.id(),
         )?,
     };
 
@@ -2315,6 +2319,126 @@ pub fn plan_create_sink(
     }))
 }
 
+fn update_avro_format_with_comments(
+    scx: &StatementContext,
+    stmt: &mut CreateSinkStatement<Aug>,
+) -> Result<(), PlanError> {
+    let from_name = &stmt.from;
+    let from: &dyn CatalogItem = scx.get_item_by_resolved_name(from_name)?;
+    let object_ids = from.uses().0.iter().map(|id| *id).chain_one(from.id());
+
+    // add comments to the avro doc comments
+    if let Some(Format::Avro(AvroSchema::Csr {
+        csr_connection:
+            CsrConnectionAvro {
+                connection:
+                    CsrConnection {
+                        connection: _,
+                        options,
+                    },
+                ..
+            },
+    })) = &mut stmt.format
+    {
+        let user_provided_comments = &options
+            .iter()
+            .filter_map(|CsrConfigOption { name, .. }| match name {
+                CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+
+        // validate column names exist
+        for avro_doc_on in user_provided_comments.iter() {
+            match &avro_doc_on.identifier {
+                DocOnIdentifier::Column {
+                    item_name: ResolvedItemName::Item { id, full_name, .. },
+                    column_name,
+                } => {
+                    let item = scx.catalog.get_item(id);
+                    let column_name = normalize::column_name(column_name.clone());
+                    let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
+
+                    // Check to make sure mentioned column exists.
+                    let _ =
+                        desc.get_by_name(&column_name)
+                            .ok_or_else(|| PlanError::UnknownColumn {
+                                table: Some(full_name.clone().into()),
+                                column: column_name,
+                            })?;
+                }
+                _ => {}
+            }
+        }
+
+        // Adding existing comments if not already provided by user
+        for object_id in object_ids {
+            let item = scx.catalog.get_item(&object_id);
+            let full_name = scx.catalog.resolve_full_name(item.name());
+            let full_resolved_name = ResolvedItemName::Item {
+                id: object_id,
+                qualifiers: item.name().qualifiers.clone(),
+                full_name: full_name.clone(),
+                print_id: !matches!(
+                    item.item_type(),
+                    CatalogItemType::Func | CatalogItemType::Type
+                ),
+            };
+
+            if let Some(comments_map) = scx.catalog.get_item_comments(&object_id) {
+                // Getting comment on the item
+                let doc_on_item_key = AvroDocOn {
+                    identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
+                    for_schema: DocOnSchema::All,
+                };
+                if !user_provided_comments.contains(&doc_on_item_key) {
+                    if let Some(root_comment) = comments_map.get(&None) {
+                        options.push(CsrConfigOption {
+                            name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
+                            value: Some(mz_sql_parser::ast::WithOptionValue::Value(Value::String(
+                                root_comment.clone(),
+                            ))),
+                        });
+                    }
+                }
+
+                // Getting comments on columns in the item
+                match item.item_type() {
+                    CatalogItemType::Source
+                    | CatalogItemType::Table
+                    | CatalogItemType::View
+                    | CatalogItemType::MaterializedView => {
+                        let desc = item.desc(&full_name)?;
+                        for (pos, column_name) in desc.iter_names().enumerate() {
+                            let comment = comments_map.get(&Some(pos + 1));
+                            if let Some(comment_str) = comment {
+                                let doc_on_column_key = AvroDocOn {
+                                    identifier: DocOnIdentifier::Column {
+                                        item_name: full_resolved_name.clone(),
+                                        column_name: column_name.as_str().into(),
+                                    },
+                                    for_schema: DocOnSchema::All,
+                                };
+                                if !user_provided_comments.contains(&doc_on_column_key) {
+                                    options.push(CsrConfigOption {
+                                        name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
+                                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                            Value::String(comment_str.clone()),
+                                        )),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    // the other types don't support comments on columns
+                    _ => {}
+                };
+            }
+        }
+    }
+    Ok(())
+}
+
 fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanError {
     let user_keys = user_keys.iter().map(|column| column.as_str()).join(", ");
 
@@ -2337,12 +2461,95 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
     )
 }
 
-generate_extracted_config!(
-    CsrConfigOption,
-    (AvroKeyFullname, String),
-    (AvroValueFullname, String),
-    (NullDefaults, bool, Default(false))
-);
+/// Creating this by hand instead of using generate_extracted_config! macro
+/// because the macro doesn't support parameterized enums. See <https://github.com/MaterializeInc/materialize/issues/22213>
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct CsrConfigOptionExtracted {
+    seen: ::std::collections::BTreeSet<CsrConfigOptionName<Aug>>,
+    pub(crate) avro_key_fullname: Option<String>,
+    pub(crate) avro_value_fullname: Option<String>,
+    pub(crate) null_defaults: bool,
+    pub(crate) value_doc_options: BTreeMap<DocTarget, String>,
+    pub(crate) key_doc_options: BTreeMap<DocTarget, String>,
+}
+
+impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtracted {
+    type Error = crate::plan::PlanError;
+    fn try_from(v: Vec<CsrConfigOption<Aug>>) -> Result<CsrConfigOptionExtracted, Self::Error> {
+        let mut extracted = CsrConfigOptionExtracted::default();
+        let mut common_doc_comments = BTreeMap::new();
+        for option in v {
+            if !extracted.seen.insert(option.name.clone()) {
+                return Err(PlanError::Unstructured({
+                    format!("{} specified more than once", option.name)
+                }));
+            }
+            let option_name = option.name.clone();
+            let option_name_str = option_name.to_ast_string();
+            let better_error = |e: PlanError| {
+                PlanError::Unstructured(format!("invalid {}: {}", option_name.to_ast_string(), e))
+            };
+            match option.name {
+                CsrConfigOptionName::AvroKeyFullname => {
+                    extracted.avro_key_fullname =
+                        <Option<String>>::try_from_value(option.value).map_err(better_error)?;
+                }
+                CsrConfigOptionName::AvroValueFullname => {
+                    extracted.avro_value_fullname =
+                        <Option<String>>::try_from_value(option.value).map_err(better_error)?;
+                }
+                CsrConfigOptionName::NullDefaults => {
+                    extracted.null_defaults =
+                        <bool>::try_from_value(option.value).map_err(better_error)?;
+                }
+                CsrConfigOptionName::AvroDocOn(doc_on) => {
+                    let value = String::try_from_value(option.value.ok_or_else(|| {
+                        PlanError::InvalidOptionValue {
+                            option_name: option_name_str,
+                            err: Box::new(PlanError::Unstructured("cannot be empty".to_string())),
+                        }
+                    })?)
+                    .map_err(better_error)?;
+                    let key = match doc_on.identifier {
+                        DocOnIdentifier::Column {
+                            item_name: ResolvedItemName::Item { id, .. },
+                            column_name,
+                        } => DocTarget::Field {
+                            object_id: id,
+                            column_name: column_name.to_string().into(),
+                        },
+                        DocOnIdentifier::Type(ResolvedItemName::Item { id, .. }) => {
+                            DocTarget::Type(id)
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    match doc_on.for_schema {
+                        DocOnSchema::KeyOnly => {
+                            extracted.key_doc_options.insert(key, value);
+                        }
+                        DocOnSchema::ValueOnly => {
+                            extracted.value_doc_options.insert(key, value);
+                        }
+                        DocOnSchema::All => {
+                            common_doc_comments.insert(key, value);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (key, value) in common_doc_comments {
+            if !extracted.key_doc_options.contains_key(&key) {
+                extracted.key_doc_options.insert(key.clone(), value.clone());
+            }
+            if !extracted.value_doc_options.contains_key(&key) {
+                extracted.value_doc_options.insert(key, value);
+            }
+        }
+        Ok(extracted)
+    }
+}
 
 fn kafka_sink_builder(
     scx: &StatementContext,
@@ -2355,6 +2562,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
+    sink_from: GlobalId,
 ) -> Result<StorageSinkConnectionBuilder<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
@@ -2442,6 +2650,8 @@ fn kafka_sink_builder(
                 avro_key_fullname,
                 avro_value_fullname,
                 null_defaults,
+                key_doc_options,
+                value_doc_options,
                 ..
             } = options.try_into()?;
 
@@ -2460,6 +2670,9 @@ fn kafka_sink_builder(
                 avro_value_fullname,
                 set_null_defaults: null_defaults,
                 is_debezium: matches!(envelope, SinkEnvelope::Debezium),
+                sink_from: Some(sink_from),
+                value_doc_options,
+                key_doc_options,
             };
 
             let schema_generator = AvroSchemaGenerator::new(

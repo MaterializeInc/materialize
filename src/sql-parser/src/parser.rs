@@ -2035,7 +2035,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_config_option(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AVRO, NULL])? {
+        let name = match self.expect_one_of_keywords(&[AVRO, NULL, KEY, VALUE, DOC])? {
             AVRO => {
                 let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
                     KEY => CsrConfigOptionName::AvroKeyFullname,
@@ -2049,12 +2049,72 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(DEFAULTS)?;
                 CsrConfigOptionName::NullDefaults
             }
+            KEY => {
+                self.expect_keywords(&[DOC, ON])?;
+                let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
+                CsrConfigOptionName::AvroDocOn(AvroDocOn {
+                    identifier: doc_on_identifier,
+                    for_schema: DocOnSchema::KeyOnly,
+                })
+            }
+            VALUE => {
+                self.expect_keywords(&[DOC, ON])?;
+                let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
+                CsrConfigOptionName::AvroDocOn(AvroDocOn {
+                    identifier: doc_on_identifier,
+                    for_schema: DocOnSchema::ValueOnly,
+                })
+            }
+            DOC => {
+                self.expect_keyword(ON)?;
+                let doc_on_identifier = self.parse_avro_doc_on_option_name()?;
+                CsrConfigOptionName::AvroDocOn(AvroDocOn {
+                    identifier: doc_on_identifier,
+                    for_schema: DocOnSchema::All,
+                })
+            }
             _ => unreachable!(),
         };
         Ok(CsrConfigOption {
             name,
             value: self.parse_optional_option_value()?,
         })
+    }
+
+    fn parse_avro_doc_on_option_name(&mut self) -> Result<DocOnIdentifier<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[TYPE, COLUMN])? {
+            TYPE => Ok(DocOnIdentifier::Type(self.parse_raw_name()?)),
+            COLUMN => {
+                let (item_name, column_name) = self.parse_column_name()?;
+                Ok(DocOnIdentifier::Column {
+                    item_name,
+                    column_name,
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_column_name(&mut self) -> Result<(RawItemName, Ident), ParserError> {
+        let start = self.peek_pos();
+        let mut item_name = self.parse_raw_name()?;
+        let column_name = match &mut item_name {
+            RawItemName::Name(UnresolvedItemName(identifiers)) => {
+                if identifiers.len() < 2 {
+                    return Err(ParserError::new(
+                        start,
+                        "need to specify an object and a column",
+                    ));
+                }
+                identifiers.pop().unwrap()
+            }
+            RawItemName::Id(_, _) => {
+                self.expect_token(&Token::Dot)?;
+                self.parse_identifier()?
+            }
+        };
+
+        Ok((item_name, column_name))
     }
 
     fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {

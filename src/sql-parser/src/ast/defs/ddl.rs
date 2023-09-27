@@ -136,27 +136,75 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CsrConfigOptionName {
+pub enum CsrConfigOptionName<T: AstInfo> {
     AvroKeyFullname,
     AvroValueFullname,
     NullDefaults,
+    AvroDocOn(AvroDocOn<T>),
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AvroDocOn<T: AstInfo> {
+    pub identifier: DocOnIdentifier<T>,
+    pub for_schema: DocOnSchema,
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DocOnSchema {
+    KeyOnly,
+    ValueOnly,
+    All,
 }
 
-impl AstDisplay for CsrConfigOptionName {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DocOnIdentifier<T: AstInfo> {
+    Column {
+        item_name: T::ItemName,
+        column_name: Ident,
+    },
+    Type(T::ItemName),
+}
+
+impl<T: AstInfo> AstDisplay for AvroDocOn<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            CsrConfigOptionName::AvroKeyFullname => "AVRO KEY FULLNAME",
-            CsrConfigOptionName::AvroValueFullname => "AVRO VALUE FULLNAME",
-            CsrConfigOptionName::NullDefaults => "NULL DEFAULTS",
-        })
+        match &self.for_schema {
+            DocOnSchema::KeyOnly => f.write_str("KEY "),
+            DocOnSchema::ValueOnly => f.write_str("VALUE "),
+            DocOnSchema::All => {}
+        }
+        match &self.identifier {
+            DocOnIdentifier::Column {
+                item_name,
+                column_name,
+            } => {
+                f.write_str("DOC ON COLUMN ");
+                f.write_node(item_name);
+                f.write_str(".");
+                f.write_str(column_name);
+            }
+            DocOnIdentifier::Type(name) => {
+                f.write_str("DOC ON TYPE ");
+                f.write_node(name);
+            }
+        }
     }
 }
-impl_display!(CsrConfigOptionName);
+impl_display_t!(AvroDocOn);
+
+impl<T: AstInfo> AstDisplay for CsrConfigOptionName<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CsrConfigOptionName::AvroKeyFullname => f.write_str("AVRO KEY FULLNAME"),
+            CsrConfigOptionName::AvroValueFullname => f.write_str("AVRO VALUE FULLNAME"),
+            CsrConfigOptionName::NullDefaults => f.write_str("NULL DEFAULTS"),
+            CsrConfigOptionName::AvroDocOn(doc_on) => f.write_node(doc_on),
+        }
+    }
+}
+impl_display_t!(CsrConfigOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct CsrConfigOption<T: AstInfo> {
-    pub name: CsrConfigOptionName,
+    pub name: CsrConfigOptionName<T>,
     pub value: Option<WithOptionValue<T>>,
 }
 

@@ -4431,6 +4431,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn add_notice(&self, notice: PlanNotice) {
         let _ = self.notices_tx.send(notice.into());
     }
+
+    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>> {
+        let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
+        self.state.comments.get_object_comments(comment_id)
+    }
 }
 
 #[cfg(test)]

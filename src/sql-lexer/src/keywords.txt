@@ -118,6 +118,7 @@ Details
 Discard
 Disk
 Distinct
+Doc
 Dot
 Double
 Drop

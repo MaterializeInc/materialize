@@ -324,6 +324,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Adds a [`PlanNotice`] that will be displayed to the user if the plan
     /// successfully executes.
     fn add_notice(&self, notice: PlanNotice);
+
+    /// Returns the associated comments for the given `id`
+    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
 }
 
 /// Configuration associated with a catalog.
