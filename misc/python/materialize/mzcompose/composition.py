@@ -658,22 +658,18 @@ class Composition:
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
 
+        # starting sources are currently expected if no new data is produced, see #21980
         results = self.sql_query(
             """
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
-                status = 'running' OR
-                (type = 'progress' AND status = 'created') OR
-                (type = 'subsource' AND status = 'starting')
+                status IN ('running', 'starting') OR
+                (type = 'progress' AND status = 'created')
             )
             """
         )
         for (name, status, error, details) in results:
-            # TODO(def-) Remove when #21980 is fixed
-            if status == "starting":
-                continue
-
             return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
