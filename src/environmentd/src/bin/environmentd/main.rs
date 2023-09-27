@@ -399,6 +399,9 @@ pub struct Args {
     /// The PostgreSQL URL for the adapter stash.
     #[clap(long, env = "ADAPTER_STASH_URL", value_name = "POSTGRES_URL")]
     adapter_stash_url: String,
+    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
+    #[clap(long, env = "TIMESTAMP_ORACLE_URL", value_name = "POSTGRES_URL")]
+    timestamp_oracle_url: Option<String>,
 
     // === Bootstrap options. ===
     #[clap(
@@ -906,6 +909,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 cors_allowed_origin,
                 concurrent_webhook_req_count: None,
                 adapter_stash_url: args.adapter_stash_url,
+                timestamp_oracle_url: args.timestamp_oracle_url,
                 controller,
                 secrets_controller,
                 cloud_resource_controller,

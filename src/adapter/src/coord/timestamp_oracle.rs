@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use crate::coord::timeline::WriteTimestamp;
 
 pub mod catalog_oracle;
+pub mod postgres_oracle;
 
 /// A type that provides write and read timestamps, reads observe exactly their
 /// preceding writes.

@@ -898,7 +898,7 @@ impl<'a> RunnerInner<'a> {
         let temp_dir = tempfile::tempdir()?;
         let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
-        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url, timestamp_oracle_url) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
@@ -922,15 +922,18 @@ impl<'a> RunnerInner<'a> {
                 .batch_execute(
                     "DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_timestamp_oracle CASCADE;
                      CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
-                     CREATE SCHEMA sqllogictest_storage;",
+                     CREATE SCHEMA sqllogictest_storage;
+                     CREATE SCHEMA sqllogictest_timestamp_oracle;",
                 )
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_adapter"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_timestamp_oracle"),
             )
         };
 
@@ -966,6 +969,7 @@ impl<'a> RunnerInner<'a> {
         let host_name = format!("localhost:{}", listeners.http_local_addr().port());
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
+            timestamp_oracle_url: Some(timestamp_oracle_url),
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,

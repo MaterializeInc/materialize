@@ -540,6 +540,7 @@ impl PlanValidity {
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: Box<dyn mz_catalog::DurableCatalogState>,
+    pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -1048,6 +1049,9 @@ pub struct Coordinator {
     /// Coordinator metrics.
     metrics: Metrics,
 
+    /// For registering new metrics.
+    metrics_registry: MetricsRegistry,
+
     /// Tracing handle.
     tracing_handle: TracingHandle,
 
@@ -1056,6 +1060,9 @@ pub struct Coordinator {
 
     /// Whether to start replicas with the new variable-length row encoding scheme.
     variable_length_row_encoding: bool,
+
+    /// Postgres connection URL for the Postgres/CRDB-backed timestamp oracle.
+    timestamp_oracle_url: Option<String>,
 }
 
 impl Coordinator {
@@ -2047,6 +2054,7 @@ pub async fn serve(
     Config {
         dataflow_client,
         storage,
+        timestamp_oracle_url,
         unsafe_mode,
         all_features,
         build_info,
@@ -2163,6 +2171,8 @@ pub async fn serve(
                     initial_timestamp,
                     coord_now.clone(),
                     persistence,
+                    timestamp_oracle_url.clone(),
+                    metrics_registry.clone(),
                     &mut timestamp_oracles,
                 ));
             }
@@ -2205,9 +2215,11 @@ pub async fn serve(
                 storage_usage_collection_interval,
                 segment_client,
                 metrics,
+                metrics_registry,
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
                 variable_length_row_encoding,
+                timestamp_oracle_url,
             };
             let bootstrap = handle.block_on(async {
                 coord

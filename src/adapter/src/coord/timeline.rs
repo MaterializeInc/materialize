@@ -18,7 +18,8 @@ use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
@@ -33,6 +34,9 @@ use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
+};
+use crate::coord::timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use crate::coord::timestamp_oracle::{self, TimestampOracle};
 use crate::coord::timestamp_selection::TimestampProvider;
@@ -179,6 +183,8 @@ impl Coordinator {
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
             timestamp_persistence,
+            self.timestamp_oracle_url.clone(),
+            self.metrics_registry.clone(),
             &mut self.global_timelines,
         )
         .await
@@ -191,33 +197,92 @@ impl Coordinator {
         initially: Timestamp,
         now: NowFn,
         timestamp_persistence: P,
+        timestamp_oracle_url: Option<String>,
+        metrics_registry: MetricsRegistry,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp>
     where
         P: TimestampPersistence<mz_repr::Timestamp> + 'static,
     {
+        // WIP: Hook up LD flag for timestamp oracle.
+        let consensus_oracle = true;
+
         if !global_timelines.contains_key(timeline) {
+            // TODO(aljoscha): The code duplication here is annoying! The only
+            // thing that's different is that the legacy CatalogTimestampOracle
+            // is generic over a "now fn" Fn. It will go away once we remove
+            // that legacy oracle, though.
             let oracle = if timeline == &Timeline::EpochMilliseconds {
-                CatalogTimestampOracle::new(
-                    initially,
-                    move || (now)().into(),
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+                if consensus_oracle {
+                    let timestamp_oracle_url = timestamp_oracle_url.expect("missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
+                    let oracle_config = PostgresTimestampOracleConfig::new(
+                        &timestamp_oracle_url,
+                        metrics_registry.clone(),
+                    );
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        PostgresTimestampOracle::open(
+                            oracle_config,
+                            timeline.to_string(),
+                            initially,
+                            now,
+                        )
+                        .await
+                        .expect("todo"),
+                    );
+
+                    oracle
+                } else {
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        CatalogTimestampOracle::new(
+                            initially,
+                            move || (now)().into(),
+                            *TIMESTAMP_PERSIST_INTERVAL,
+                            timestamp_persistence,
+                        )
+                        .await,
+                    );
+
+                    oracle
+                }
             } else {
-                CatalogTimestampOracle::new(
-                    initially,
-                    Timestamp::minimum,
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+                if consensus_oracle {
+                    let timestamp_oracle_url = timestamp_oracle_url.expect("missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
+                    let oracle_config = PostgresTimestampOracleConfig::new(
+                        &timestamp_oracle_url,
+                        metrics_registry.clone(),
+                    );
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        PostgresTimestampOracle::open(
+                            oracle_config,
+                            timeline.to_string(),
+                            initially,
+                            NOW_ZERO.clone(),
+                        )
+                        .await
+                        .expect("todo"),
+                    );
+
+                    oracle
+                } else {
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        CatalogTimestampOracle::new(
+                            initially,
+                            Timestamp::minimum,
+                            *TIMESTAMP_PERSIST_INTERVAL,
+                            timestamp_persistence,
+                        )
+                        .await,
+                    );
+
+                    oracle
+                }
             };
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: Box::new(oracle),
+                    oracle,
                     read_holds: ReadHolds::new(),
                 },
             );
