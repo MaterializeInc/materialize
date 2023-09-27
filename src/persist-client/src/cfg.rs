@@ -21,8 +21,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::batch::UntrimmableColumns;
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
-use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
+use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
+use mz_postgres_client::PostgresClientKnobs;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -348,7 +349,7 @@ impl PersistConfig {
     }
 }
 
-impl ConsensusKnobs for PersistConfig {
+impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
         self.consensus_connection_pool_max_size
     }
