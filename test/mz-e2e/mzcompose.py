@@ -65,11 +65,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     test_failed = True
     try:
         print(f"Enabling region using Mz version {VERSION} ...")
-        try:
-            c.run("mz", "region", "enable", "--version", VERSION)
-        except UIError:
-            # Work around https://github.com/MaterializeInc/materialize/issues/17219
-            pass
+        c.run("mz", "region", "enable", "--version", VERSION)
 
         time.sleep(10)
 
