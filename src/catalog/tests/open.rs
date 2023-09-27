@@ -199,7 +199,7 @@ async fn open_check<D: DurableCatalogState>(
     {
         // Can't open a read-only stash until it's been initialized.
         let err = openable_state
-            .open_check(SYSTEM_TIME.clone(), &bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME.clone(), &bootstrap_args(), None)
             .await
             .unwrap_err();
         match err {
@@ -217,7 +217,7 @@ async fn open_check<D: DurableCatalogState>(
 
         // Open catalog in check mode.
         let mut state = openable_state
-            .open_check(SYSTEM_TIME.clone(), &bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME.clone(), &bootstrap_args(), None)
             .await
             .unwrap();
 

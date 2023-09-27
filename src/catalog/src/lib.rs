@@ -189,7 +189,7 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     /// Will return an error in the following scenarios:
     ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
-    async fn open_check(
+    async fn open_savepoint(
         &mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,

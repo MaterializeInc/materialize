@@ -142,7 +142,7 @@ impl OpenableConnection {
 #[async_trait]
 impl OpenableDurableCatalogState<Connection> for OpenableConnection {
     #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
-    async fn open_check(
+    async fn open_savepoint(
         &mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
@@ -1109,14 +1109,14 @@ impl DebugOpenableConnection<'_> {
 
 #[async_trait]
 impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
-    async fn open_check(
+    async fn open_savepoint(
         &mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Connection, Error> {
         self.openable_connection
-            .open_check(now, bootstrap_args, deploy_generation)
+            .open_savepoint(now, bootstrap_args, deploy_generation)
             .await
     }
 

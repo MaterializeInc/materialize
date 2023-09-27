@@ -482,7 +482,7 @@ impl Usage {
         let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
         let storage = Box::new(
             openable_storage
-                .open_check(
+                .open_savepoint(
                     now.clone(),
                     &BootstrapArgs {
                         default_cluster_replica_size: "1".into(),

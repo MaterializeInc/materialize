@@ -368,7 +368,7 @@ impl Listeners {
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
                 if let Err(e) = openable_adapter_storage
-                    .open_check(
+                    .open_savepoint(
                         config.now.clone(),
                         &BootstrapArgs {
                             default_cluster_replica_size: config
