@@ -4691,6 +4691,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-postgres-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "deadpool-postgres",
+ "mz-ore",
+ "openssl",
+ "openssl-sys",
+ "postgres-openssl",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [

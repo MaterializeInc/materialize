@@ -51,6 +51,7 @@ members = [
     "src/pgwire",
     "src/pgwire-common",
     "src/pid-file",
+    "src/postgres-client",
     "src/postgres-util",
     "src/prof",
     "src/proto",
