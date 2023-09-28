@@ -287,7 +287,6 @@ pub mod txn_write;
 pub mod txns;
 
 // TODO(txn):
-// - Figure out the mod and struct naming.
 // - Add frontier advancement operator.
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?

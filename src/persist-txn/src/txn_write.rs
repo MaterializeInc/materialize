@@ -84,7 +84,6 @@ where
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         C: TxnsCodec,
     {
-        // TODO(txn): Use ownership to disallow a double commit.
         let mut txns_upper = handle
             .txns_write
             .shared_upper()
@@ -131,7 +130,6 @@ where
                 let mut data_write = handle.datas.take_write(data_id).await;
                 let commit_ts = commit_ts.clone();
                 txn_batches_updates.push(async move {
-                    // TODO(txn): Tighter lower bound?
                     let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
                     for (k, v, d) in updates.iter() {
                         batch.add(k, v, &commit_ts, d).await.expect("valid usage");

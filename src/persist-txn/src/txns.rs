@@ -202,7 +202,11 @@ where
         // we write empty data to the physical shard. Otherwise we could race
         // with a commit at the same timestamp, which would then not be able to
         // copy the committed batch into the data shard.
-        let mut txns_upper = recent_upper(&mut self.txns_write).await;
+        let mut txns_upper = self
+            .txns_write
+            .shared_upper()
+            .into_option()
+            .expect("txns should not be closed");
         loop {
             self.txns_cache.update_ge(&txns_upper).await;
             data_ids.retain(|data_id| {
@@ -458,22 +462,6 @@ where
     pub(crate) fn put_write(&mut self, data_write: WriteHandle<K, V, T, D>) {
         self.data_write.insert(data_write.shard_id(), data_write);
     }
-}
-
-pub(crate) async fn recent_upper<K, V, T>(txns_or_data_write: &mut WriteHandle<K, V, T, i64>) -> T
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
-{
-    // TODO(txn): Replace this fetch_recent_upper call with pubsub in
-    // maelstrom.
-    txns_or_data_write
-        .fetch_recent_upper()
-        .await
-        .as_option()
-        .expect("txns shard should not be closed")
-        .clone()
 }
 
 #[cfg(test)]
