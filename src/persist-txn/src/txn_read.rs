@@ -18,13 +18,13 @@ use mz_ore::collections::HashMap;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::error::NotRegistered;
-use crate::{StepForward, TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.

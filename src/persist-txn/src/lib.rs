@@ -275,7 +275,7 @@ use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -292,16 +292,6 @@ pub mod txns;
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?
 // - Figure out the compaction story for both txn and data shard.
-
-/// Advance a timestamp by the least amount possible such that
-/// `ts.less_than(ts.step_forward())` is true.
-///
-/// TODO(txn): Unify this with repr's TimestampManipulation.
-pub trait StepForward {
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
-}
 
 /// The in-mem representation of an update in the txns shard.
 #[derive(Debug)]
@@ -544,12 +534,6 @@ async fn apply_caa<K, V, T, D>(
                 continue;
             }
         }
-    }
-}
-
-impl StepForward for u64 {
-    fn step_forward(&self) -> Self {
-        self.checked_add(1).unwrap()
     }
 }
 

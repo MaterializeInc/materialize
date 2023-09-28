@@ -17,14 +17,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::debug;
 
 use crate::txn_read::TxnsCache;
 use crate::txn_write::Txn;
-use crate::{StepForward, TxnsCodec, TxnsCodecDefault};
+use crate::{TxnsCodec, TxnsCodecDefault};
 
 /// An interface for atomic multi-shard writes.
 ///

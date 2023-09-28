@@ -16,14 +16,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_persist_client::ShardId;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::txns::{Tidy, TxnsHandle};
-use crate::{StepForward, TxnsCodec, TxnsEntry};
+use crate::{TxnsCodec, TxnsEntry};
 
 /// An in-progress transaction.
 #[derive(Debug)]
