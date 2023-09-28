@@ -1607,17 +1607,11 @@ fn source_sink_cluster_config(
     match (in_cluster, size) {
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
-            let cluster = scx.catalog.get_cluster(in_cluster.id);
-            if cluster.replica_ids().len() > 1 {
-                sql_bail!("cannot create {ty} in cluster with more than one replica")
-            }
-            if !is_storage_cluster(scx, cluster) {
-                sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
-            }
+            ensure_cluster_can_host_storage_item(scx, in_cluster.id, ty)?;
 
             // We also don't allow more objects to be added to a cluster that is already
-            // linked to another object or managed.
-            ensure_cluster_is_not_linked(scx, cluster.id())?;
+            // linked to another object.
+            ensure_cluster_is_not_linked(scx, in_cluster.id)?;
 
             Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
         }
@@ -3207,10 +3201,7 @@ pub fn plan_create_cluster_replica(
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    if is_storage_cluster(scx, cluster)
-        && cluster.bound_objects().len() > 0
-        && cluster.replica_ids().len() > 0
-    {
+    if is_storage_cluster(scx, cluster) && cluster.replica_ids().len() > 0 {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
@@ -3925,13 +3916,40 @@ fn plan_drop_cluster(
     })
 }
 
+/// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
+/// objects.
 fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    cluster.bound_objects().iter().all(|id| {
+    cluster.bound_objects().iter().any(|id| {
         matches!(
             scx.catalog.get_item(id).item_type(),
             CatalogItemType::Source | CatalogItemType::Sink
         )
     })
+}
+
+/// Check that the cluster can host storage items.
+fn ensure_cluster_can_host_storage_item(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+    ty: &'static str,
+) -> Result<(), PlanError> {
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    // At most 1 replica
+    if cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create {ty} in cluster with more than one replica")
+    }
+    let enable_unified_cluster = scx.catalog.system_vars().enable_unified_clusters();
+    let only_storage_objects = cluster.bound_objects().iter().all(|id| {
+        matches!(
+            scx.catalog.get_item(id).item_type(),
+            CatalogItemType::Source | CatalogItemType::Sink
+        )
+    });
+    // unified clusters or only storage objects on cluster
+    if !enable_unified_cluster && !only_storage_objects {
+        sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
+    }
+    Ok(())
 }
 
 fn plan_drop_cluster_replica(
@@ -4468,10 +4486,7 @@ pub fn plan_alter_cluster(
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
                     if let Some(replication_factor) = replication_factor {
-                        if is_storage_cluster(scx, cluster)
-                            && !cluster.bound_objects().is_empty()
-                            && replication_factor > 1
-                        {
+                        if is_storage_cluster(scx, cluster) && replication_factor > 1 {
                             sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
                         }
                     }
