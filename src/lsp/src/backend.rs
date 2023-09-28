@@ -18,8 +18,24 @@ use tower_lsp::{Client, LanguageServer};
 use crate::functions::FUNCTIONS;
 use crate::snippets::SNIPPETS;
 
+/// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
+/// Most imporant methods includes:
+/// - `initialize`: sets up the server.
+/// - `did_open`: logs when a file is opened and triggers an `on_change` method.
+/// - `did_save`, `did_close`: log messages indicating file actions.
+/// - `completion`: Provides completion suggestions. WIP.
+/// - `code_lens`: Offers in-editor commands. WIP.
+/// - `execute_command`: Executes commands and logs their results.
+///
+/// Most of the `did_` methods re-route the request to the private method `on_change`
+/// within the `Backend` struct. This method is triggered whenever there's a change
+/// in the file, and it parses the content using `mz_sql_parser`.
+// Depending on the parse result, it either sneds the logs the results or any encountered errors.
 #[derive(Debug)]
 pub struct Backend {
+    /// Handles the communication to the client.
+    /// Logs and results must be sent through
+    /// the client at the end of each capability.
     pub client: Client,
 }
 
@@ -224,9 +240,19 @@ impl Backend {
     }
 }
 
+/// This functions is a helper function that converts an offset in the file to a (line, column).
+///
+/// It is useful when translating an ofsset returned by [mz_sql_parser::parser::parse_statements]
+/// to an (x,y) position in the text to represent the error in the correct token.
 fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let line = rope.try_char_to_line(offset).ok()?;
     let first_char_of_line = rope.try_line_to_char(line).ok()?;
     let column = offset - first_char_of_line;
-    Some(Position::new(line as u32, column as u32))
+    Some(Position::new(
+        line.try_into()
+            .expect("Unexpected u32 overflow in offset_to_position"),
+        column
+            .try_into()
+            .expect("Unexpected u32 overflow in offset_to_position"),
+    ))
 }

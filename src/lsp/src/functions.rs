@@ -12,7 +12,7 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, Documentation,
 };
 
-// TODO: Turn into Markdown content.
+/// Contains the link to Materialize documentation for functions.
 pub static DOCS_LINK: Lazy<Documentation> =
     Lazy::new(|| Documentation::String("https://materialize.com/docs/sql/functions/".to_string()));
 

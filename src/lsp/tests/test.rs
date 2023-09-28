@@ -85,6 +85,16 @@ mod tests {
     use tower_lsp::lsp_types::*;
     use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
 
+    /// This structure defines the message received from the
+    /// [Backend](mz_lsp::backend::Backend).
+    ///
+    /// The `params` and `results` are difficult to parse and compare.
+    /// So the best way to ensure everything is as expected is to write
+    /// them using [tower_lsp::lsp_types] and then using the `json!()`
+    /// macro.
+    ///
+    /// This way provides a safe way to handle the types and a simple
+    /// way to test the response is the expected.
     #[derive(Debug, Deserialize, PartialEq, Serialize)]
     struct LspMessage<T, R> {
         jsonrpc: String,
@@ -94,7 +104,16 @@ mod tests {
         id: Option<i32>,
     }
 
-    /// Tests local commands that do not requires interacting with any API.
+    /// Tests the different capabilities of [Backend](mz_lsp::backend::Backend)
+    ///
+    /// Each capability tested is inside it's own function. To test a capability
+    /// a request and the expected response must be written and the function must
+    /// assert that both are ok.
+    ///
+    /// The idea is to only write the request, and response and use `[write_and_assert]`
+    /// to do the rest.
+    ///
+    /// The server must always initialize before parsing or using any other capability.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     async fn test_lsp() {
@@ -103,6 +122,7 @@ mod tests {
         test_parser(&mut req_client, &mut resp_client).await;
     }
 
+    /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
     async fn test_parser(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
         // Test "did_open". Triggers "on_change" and the parser.
         let did_open = r#"{
@@ -173,8 +193,12 @@ mod tests {
         .await;
     }
 
+    /// Asserts that the server initialize correctly.
+    ///
+    /// Attention:
+    /// Every time a new capability to the server is added,
+    /// the response for this test will change.
     async fn test_initialize(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        // Test that the server initializes ok.
         let initialize = r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"textDocumentSync":1}},"id":1}"#;
         let initialize_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
             jsonrpc: "2.0".to_string(),
@@ -220,6 +244,8 @@ mod tests {
         .await;
     }
 
+    /// Writes a request to the server and asserts that the expected output
+    /// message is ok, otherwise it will fail.
     async fn write_and_assert<'de, T, R>(
         req_client: &mut DuplexStream,
         resp_client: &mut DuplexStream,
@@ -241,6 +267,11 @@ mod tests {
         assert_eq!(messages, expected_output_message)
     }
 
+    /// Parses the response from the server.
+    ///
+    /// The server can return multiple responses in a single transaction.
+    /// Each response contains a `Content-Length` header with its size,
+    /// and it is followed by the content, containing a single [LspMessage].
     fn parse_response<'de, T, R>(response: &'de str) -> Vec<LspMessage<T, R>>
     where
         T: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
@@ -250,7 +281,7 @@ mod tests {
         let mut slices = response.as_bytes();
 
         while !slices.is_empty() {
-            // parse headers to get headers length
+            // Parse headers
             let mut dst = [httparse::EMPTY_HEADER; 2];
             let (headers_len, _) = match httparse::parse_headers(slices, &mut dst).unwrap() {
                 httparse::Status::Complete(output) => output,
@@ -277,13 +308,15 @@ mod tests {
         messages
     }
 
+    /// Starts the [Backend](mz_lsp::backend::Backend) in an [LspService].
+    /// Returns the two clients to send and read request to and from the
+    /// server.
     fn start_server() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
         let (req_client, req_server) = tokio::io::duplex(1024);
         let (resp_server, resp_client) = tokio::io::duplex(1024);
 
         let (service, socket) = LspService::new(|client| mz_lsp::backend::Backend { client });
 
-        // start server as concurrent task
         mz_ore::task::spawn(
             || format!("taskname:{}", "lsp_server"),
             Server::new(req_server, resp_server, socket).serve(service),
