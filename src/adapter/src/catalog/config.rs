@@ -85,6 +85,13 @@ pub struct Config<'a> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
+impl ClusterReplicaSizeMap {
+    /// Iterate all enabled (not disabled) replica allocations, with their name.
+    pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
+        self.0.iter().filter(|(_, a)| !a.disabled)
+    }
+}
+
 impl Default for ClusterReplicaSizeMap {
     // Used for testing and local purposes. This default value should not be used in production.
     //
@@ -124,6 +131,7 @@ impl Default for ClusterReplicaSizeMap {
                         scale: 1,
                         workers: workers.into(),
                         credits_per_hour: 1.into(),
+                        disabled: false,
                     },
                 )
             })
@@ -140,6 +148,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: 1,
                     credits_per_hour: scale.into(),
+                    disabled: false,
                 },
             );
 
@@ -152,6 +161,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
+                    disabled: false,
                 },
             );
 
@@ -164,6 +174,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale: 1,
                     workers: 8,
                     credits_per_hour: 1.into(),
+                    disabled: false,
                 },
             );
         }
@@ -177,6 +188,20 @@ impl Default for ClusterReplicaSizeMap {
                 scale: 2,
                 workers: 4,
                 credits_per_hour: 2.into(),
+                disabled: false,
+            },
+        );
+
+        inner.insert(
+            "free".to_string(),
+            ReplicaAllocation {
+                memory_limit: None,
+                cpu_limit: None,
+                disk_limit: None,
+                scale: 0,
+                workers: 0,
+                credits_per_hour: 0.into(),
+                disabled: true,
             },
         );
         Self(inner)

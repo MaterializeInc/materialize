@@ -10,7 +10,7 @@
 //! A reducible history of compute commands.
 
 use std::borrow::Borrow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -50,13 +50,11 @@ where
 
     /// Add a command to the history.
     ///
-    /// This action will reduce the history every time it doubles while retaining the
-    /// provided peeks.
-    pub fn push<V>(&mut self, command: ComputeCommand<T>, peeks: &BTreeMap<uuid::Uuid, V>) {
+    /// This action will reduce the history every time it doubles.
+    pub fn push(&mut self, command: ComputeCommand<T>) {
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
-            self.retain_peeks(peeks);
             self.reduce();
         } else {
             // Refresh reported metrics. `reduce` already refreshes metrics, so we only need to do
@@ -85,8 +83,7 @@ where
         // and if required what `as_of` frontier should be used for its updated command.
         let mut final_frontiers = BTreeMap::new();
         let mut live_dataflows = Vec::new();
-        let mut live_peeks = Vec::new();
-        let mut live_cancels = BTreeSet::new();
+        let mut live_peeks = BTreeMap::new();
 
         let mut create_inst_command = None;
         let mut create_timely_command = None;
@@ -123,17 +120,17 @@ where
                     final_frontiers.insert(id, frontier.clone());
                 }
                 ComputeCommand::Peek(peek) => {
-                    live_peeks.push(peek);
+                    live_peeks.insert(peek.uuid, peek);
                 }
                 ComputeCommand::CancelPeek { uuid } => {
-                    live_cancels.insert(uuid);
+                    live_peeks.remove(&uuid);
                 }
             }
         }
 
         // Determine the required antichains to support live peeks;
         let mut live_peek_frontiers = std::collections::BTreeMap::new();
-        for Peek { id, timestamp, .. } in live_peeks.iter() {
+        for Peek { id, timestamp, .. } in live_peeks.values() {
             // Introduce `time` as a constraint on the `as_of` frontier of `id`.
             live_peek_frontiers
                 .entry(id)
@@ -208,15 +205,11 @@ where
 
         let count = u64::cast_from(live_peeks.len());
         command_counts.peek.borrow().set(count);
-        for peek in live_peeks {
+        for peek in live_peeks.into_values() {
             self.commands.push(ComputeCommand::Peek(peek));
         }
 
-        let count = u64::cast_from(live_cancels.len());
-        command_counts.cancel_peek.borrow().set(count);
-        for uuid in live_cancels {
-            self.commands.push(ComputeCommand::CancelPeek { uuid });
-        }
+        command_counts.cancel_peek.borrow().set(0);
 
         // Allow compaction only after emmitting peek commands.
         let count = u64::cast_from(final_frontiers.len());
@@ -235,22 +228,19 @@ where
         self.reduced_count = self.commands.len();
     }
 
-    /// Retain only those peeks present in `peeks` and discard the rest.
-    pub fn retain_peeks<V>(&mut self, peeks: &BTreeMap<uuid::Uuid, V>) {
+    /// Discard all peek commands.
+    pub fn discard_peeks(&mut self) {
         self.commands.retain(|command| {
-            let retain = match command {
-                ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
-                ComputeCommand::CancelPeek { uuid } => peeks.contains_key(uuid),
-                _ => true,
-            };
-            if !retain {
+            use ComputeCommand::*;
+            let is_peek = matches!(command, Peek(_) | CancelPeek { .. });
+            if is_peek {
                 self.metrics
                     .command_counts
                     .for_command(command)
                     .borrow()
                     .dec();
             }
-            retain
+            !is_peek
         });
     }
 

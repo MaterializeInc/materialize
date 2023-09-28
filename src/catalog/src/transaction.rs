@@ -123,9 +123,11 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
 pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
     ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: None,
+            billed_as: None,
             disk: false,
+            internal: false,
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
@@ -139,8 +141,7 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 
-/// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
-/// them atomically.
+/// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 pub struct Transaction<'a> {
     durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,

@@ -966,7 +966,7 @@ impl Coordinator {
                             .catalog()
                             .cluster_replica_sizes()
                             .0
-                            .get(&location.size)
+                            .get(location.size_for_billing())
                             .expect("location size is validated against the cluster replica sizes");
                         new_credit_consumption_rate += replica_allocation.credits_per_hour
                     }
@@ -1022,7 +1022,7 @@ impl Coordinator {
                                 .catalog()
                                 .cluster_replica_sizes()
                                 .0
-                                .get(&location.size)
+                                .get(location.size_for_billing())
                                 .expect(
                                     "location size is validated against the cluster replica sizes",
                                 );
@@ -1196,7 +1196,7 @@ impl Coordinator {
             let current_amount = self
                 .catalog()
                 .try_get_cluster(cluster_id)
-                .map(|instance| instance.replicas_by_id.len())
+                .map(|instance| instance.replicas().count())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
@@ -1210,7 +1210,7 @@ impl Coordinator {
             .catalog()
             .user_cluster_replicas()
             .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(&location.size),
+                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
                 ReplicaLocation::Unmanaged(_) => None,
             })
             .map(|size| {

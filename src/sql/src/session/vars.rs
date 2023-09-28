@@ -1703,6 +1703,10 @@ feature_flags!(
         enable_role_vars,
         "setting default session variables for a role"
     ),
+    (
+        enable_unified_clusters,
+        "unified compute and storage cluster"
+    ),
 );
 
 /// Represents the input to a variable.

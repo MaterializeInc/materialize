@@ -14,6 +14,7 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
@@ -527,6 +528,11 @@ impl Stash {
                 tracing::error!("postgres stash connection error: {}", e);
             }
         });
+        // The Config is shared with the Consolidator, so we update the application name in the
+        // session instead of the Config.
+        client
+            .batch_execute("SET application_name = 'stash'")
+            .await?;
         client
             .batch_execute("SET default_transaction_isolation = serializable")
             .await?;
@@ -923,6 +929,7 @@ impl Stash {
                             36 => upgrade::v36_to_v37::upgrade(),
                             37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
                             38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
+                            39 => upgrade::v39_to_v40::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -1073,8 +1080,16 @@ impl Stash {
         self.with_transaction(|_| Box::pin(async { Ok(()) })).await
     }
 
+    pub fn is_writeable(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Writeable)
+    }
+
     pub fn is_readonly(&self) -> bool {
         matches!(self.txn_mode, TransactionMode::Readonly)
+    }
+
+    pub fn is_savepoint(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Savepoint)
     }
 
     pub fn epoch(&self) -> Option<NonZeroI64> {
@@ -1269,6 +1284,11 @@ impl Consolidator {
                 }
             },
         );
+        // The Config is shared with the Stash, so we update the application name in the
+        // session instead of the Config.
+        client
+            .execute("SET application_name = 'stash-consolidator'", &[])
+            .await?;
         if let Some(schema) = &self.schema {
             client
                 .execute(format!("SET search_path TO {schema}").as_str(), &[])
@@ -1309,9 +1329,12 @@ impl Consolidator {
 
 /// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
 /// stash openings. The schema is dropped when this factory is dropped.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct DebugStashFactory {
     url: String,
     schema: String,
+    #[derivative(Debug = "ignore")]
     tls: MakeTlsConnector,
     stash_factory: StashFactory,
 }
@@ -1332,6 +1355,17 @@ impl DebugStashFactory {
                 tracing::error!("postgres stash connection error: {e}");
             }
         });
+        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
+        // been able to figure out. For some reason, uncommitted transactions are being left open
+        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
+        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
+        // issue somehow. This is a gross hack and we don't really understand what's going on, but
+        // for now it resolves issues in CI while we debug further.
+        client
+            .batch_execute(
+                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
+            )
+            .await?;
         client
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await?;
@@ -1400,6 +1434,19 @@ impl DebugStashFactory {
         self.try_open_inner(TransactionMode::Savepoint)
             .await
             .expect("unable to open debug stash")
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+    pub fn tls(&self) -> &MakeTlsConnector {
+        &self.tls
+    }
+    pub fn stash_factory(&self) -> &StashFactory {
+        &self.stash_factory
     }
 }
 

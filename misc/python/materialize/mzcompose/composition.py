@@ -700,7 +700,12 @@ class Composition:
     def sanity_restart_mz(self) -> None:
         """Restart Materialized if it is part of the composition to find
         problems with persisted objects, functions as a sanity check."""
-        if "materialized" in self.compose["services"]:
+        # Exclude environmentd image, which is used in cloud-canary, and doesn't start up fully without clusterd images
+        if (
+            "materialized" in self.compose["services"]
+            and "materialize/environmentd"
+            not in self.compose["services"]["materialized"]["image"]
+        ):
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
             time.sleep(3)

@@ -71,3 +71,25 @@ mv1             t2
 
 > SELECT count(*) > 0 FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 's%'
 true
+
+# Test that `mz_compute_dependencies` is cleaned up when a cluster is dropped.
+
+> CREATE CLUSTER cleanup SIZE '1'
+> CREATE INDEX idx_cleanup IN CLUSTER cleanup ON t1 (a)
+> CREATE MATERIALIZED VIEW mv_cleanup IN CLUSTER cleanup AS SELECT * FROM t2
+
+> SELECT object.name, import.name
+  FROM mz_internal.mz_compute_dependencies dep
+  LEFT JOIN mz_objects object ON dep.object_id = object.id
+  LEFT JOIN mz_objects import ON dep.dependency_id = import.id
+  WHERE object_id LIKE 'u%'
+idx_cleanup t1
+mv_cleanup  t2
+
+> DROP CLUSTER cleanup CASCADE
+
+> SELECT object.name, import.name
+  FROM mz_internal.mz_compute_dependencies dep
+  LEFT JOIN mz_objects object ON dep.object_id = object.id
+  LEFT JOIN mz_objects import ON dep.dependency_id = import.id
+  WHERE object_id LIKE 'u%'

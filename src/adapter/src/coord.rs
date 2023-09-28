@@ -455,7 +455,7 @@ impl PlanValidity {
             };
 
             if let Some(replica_id) = self.replica_id {
-                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                if cluster.replica(replica_id).is_none() {
                     return Err(AdapterError::ChangedPlan);
                 }
             }
@@ -1065,13 +1065,13 @@ impl Coordinator {
                 },
                 self.variable_length_row_encoding,
             )?;
-            for (replica_id, replica) in instance.replicas_by_id.clone() {
+            for replica in instance.replicas() {
                 let role = instance.role();
                 replicas_to_start.push(CreateReplicaConfig {
                     cluster_id: instance.id,
-                    replica_id,
+                    replica_id: replica.replica_id,
                     role,
-                    config: replica.config,
+                    config: replica.config.clone(),
                 });
             }
         }
@@ -2112,9 +2112,9 @@ pub async fn serve(
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
-        // prevent a stack overflow we allocate a stack twice as big as the default
+        // prevent a stack overflow we allocate a stack three times as big as the default
         // stack.
-        .stack_size(2 * stack::STACK_SIZE)
+        .stack_size(3 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();

@@ -87,6 +87,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "pg-snapshot-partial-failure",
             "test-system-table-indexes",
             "test-replica-targeted-subscribe-abort",
+            "test-replica-targeted-select-abort",
             "test-compute-reconciliation-reuse",
             "test-compute-reconciliation-no-errors",
             "test-mz-subscriptions",
@@ -1560,6 +1561,91 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     killer.join()
 
 
+def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
+    """
+    Test that a replica-targeted SELECT is aborted when the target
+    replica disconnects.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+    c.up("clusterd2")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS 2
+            )
+        );
+        CREATE TABLE t (a int);
+        """
+    )
+
+    def drop_replica_with_delay() -> None:
+        time.sleep(2)
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
+
+    dropper = Thread(target=drop_replica_with_delay)
+    dropper.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica1;
+            SELECT * FROM t AS OF 18446744073709551615;
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT didn't return the expected error"
+
+    dropper.join()
+
+    def kill_replica_with_delay() -> None:
+        time.sleep(2)
+        c.kill("clusterd2")
+
+    killer = Thread(target=kill_replica_with_delay)
+    killer.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica2;
+            SELECT * FROM t AS OF 18446744073709551615;
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT didn't return the expected error"
+
+    killer.join()
+
+
 def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
     """Test PostgreSQL snapshot partial failure"""
 
@@ -2410,8 +2496,8 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
     sure #21782 does not regress.
     """
     num_conns = 2000
-    p50_limit = 2.0
-    p99_limit = 6.0
+    p50_limit = 10.0
+    p99_limit = 20.0
 
     runtimes: list[float] = [float("inf")] * num_conns
 

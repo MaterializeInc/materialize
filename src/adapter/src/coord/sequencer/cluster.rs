@@ -14,14 +14,14 @@ use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ReplicaConfig, ReplicaLocation,
-    ReplicaLogging,
+    CreateReplicaConfig, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig,
+    ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType};
-use mz_sql::names::ObjectId;
+use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType, SessionCatalog};
+use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
@@ -170,9 +170,11 @@ impl Coordinator {
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::ReplicaLocation::Managed {
-            size: size.clone(),
             availability_zone: None,
+            billed_as: None,
             disk,
+            internal: false,
+            size: size.clone(),
         };
 
         let logging = if let Some(config) = compute.introspection {
@@ -281,15 +283,19 @@ impl Coordinator {
                     (compute, location)
                 }
                 mz_sql::plan::ReplicaConfig::Managed {
-                    size,
                     availability_zone,
+                    billed_as,
                     compute,
                     disk,
+                    internal,
+                    size,
                 } => {
                     let location = mz_catalog::ReplicaLocation::Managed {
-                        size: size.clone(),
                         availability_zone,
+                        billed_as,
                         disk,
+                        internal,
+                        size: size.clone(),
                     };
                     (compute, location)
                 }
@@ -357,10 +363,8 @@ impl Coordinator {
             .expect("creating cluster must not fail");
 
         let replicas: Vec<_> = cluster
-            .replicas_by_id
-            .keys()
-            .copied()
-            .map(|r| (cluster_id, r))
+            .replicas()
+            .map(|r| (cluster_id, r.replica_id))
             .collect();
         self.create_cluster_replicas(&replicas).await;
 
@@ -404,10 +408,12 @@ impl Coordinator {
                 (compute, location)
             }
             mz_sql::plan::ReplicaConfig::Managed {
-                size,
                 availability_zone,
+                billed_as,
                 compute,
                 disk,
+                internal,
+                size,
             } => {
                 let availability_zone = match availability_zone {
                     Some(az) => {
@@ -417,9 +423,11 @@ impl Coordinator {
                     None => None,
                 };
                 let location = mz_catalog::ReplicaLocation::Managed {
-                    size,
                     availability_zone,
+                    billed_as,
                     disk,
+                    internal,
+                    size,
                 };
                 (compute, location)
             }
@@ -451,9 +459,31 @@ impl Coordinator {
             },
         };
 
-        let id = self.catalog_mut().allocate_user_replica_id().await?;
+        let cluster = self.catalog().get_cluster(cluster_id);
+
+        if let ReplicaLocation::Managed(ManagedReplicaLocation {
+            internal,
+            billed_as,
+            ..
+        }) = &config.location
+        {
+            // Only internal users have access to INTERNAL and BILLED AS
+            if !session.user().is_internal() && (*internal || billed_as.is_some()) {
+                coord_bail!("cannot specify INTERNAL or BILLED AS as non-internal user")
+            }
+            // Managed clusters require the INTERNAL flag.
+            if cluster.is_managed() && !*internal {
+                coord_bail!("must specify INTERNAL when creating a replica in a managed cluster");
+            }
+            // BILLED AS implies the INTERNAL flag.
+            if billed_as.is_some() && !*internal {
+                coord_bail!("must specify INTERNAL when specifying BILLED AS");
+            }
+        }
+
         // Replicas have the same owner as their cluster.
-        let owner_id = self.catalog().get_cluster(cluster_id).owner_id();
+        let owner_id = cluster.owner_id();
+        let id = self.catalog_mut().allocate_user_replica_id().await?;
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
@@ -475,7 +505,11 @@ impl Coordinator {
         for (cluster_id, replica_id) in replicas.iter().copied() {
             let cluster = self.catalog().get_cluster(cluster_id);
             let role = cluster.role();
-            let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
+            let replica_config = cluster
+                .replica(replica_id)
+                .expect("known to exist")
+                .config
+                .clone();
 
             replicas_to_start.push(CreateReplicaConfig {
                 cluster_id,
@@ -726,11 +760,11 @@ impl Coordinator {
 
             // tear down all replicas, create new ones
             for name in (0..*replication_factor).map(managed_cluster_replica_name) {
-                let replica = cluster.replica_id_by_name.get(&name);
+                let replica = cluster.replica_id(&name);
                 if let Some(replica) = replica {
                     ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
                         cluster.id(),
-                        *replica,
+                        replica,
                     ))))
                 }
             }
@@ -754,11 +788,11 @@ impl Coordinator {
             for name in
                 (*new_replication_factor..*replication_factor).map(managed_cluster_replica_name)
             {
-                let replica = cluster.replica_id_by_name.get(&name);
+                let replica = cluster.replica_id(&name);
                 if let Some(replica) = replica {
                     ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
                         cluster.id(),
-                        *replica,
+                        replica,
                     ))))
                 }
             }
@@ -817,17 +851,20 @@ impl Coordinator {
         } = &mut new_config;
 
         // Validate replication factor parameter
+        let user_replica_count = cluster
+            .user_replicas()
+            .count()
+            .try_into()
+            .expect("must_fit");
         match options.replication_factor {
             AlterOptionParameter::Set(_) => {
                 // Validate that the replication factor matches the current length only if specified.
-                if u32::try_from(cluster.replicas_by_id.len()).expect("must fit")
-                    != *new_replication_factor
-                {
-                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({})", cluster.replicas_by_id.len());
+                if user_replica_count != *new_replication_factor {
+                    coord_bail!("REPLICATION FACTOR {new_replication_factor} does not match number of replicas ({user_replica_count})");
                 }
             }
             _ => {
-                *new_replication_factor = cluster.replicas_by_id.len().try_into().expect("must fit")
+                *new_replication_factor = user_replica_count;
             }
         }
 
@@ -838,7 +875,7 @@ impl Coordinator {
         self.ensure_valid_azs(new_availability_zones.iter())?;
 
         // Validate per-replica configuration
-        for replica in cluster.replicas_by_id.values() {
+        for replica in cluster.user_replicas() {
             names.insert(replica.name.clone());
             match &replica.config.location {
                 ReplicaLocation::Unmanaged(_) => coord_bail!(
@@ -864,7 +901,7 @@ impl Coordinator {
 
         if sizes.is_empty() {
             assert!(
-                cluster.replicas_by_id.is_empty(),
+                cluster.user_replicas().next().is_none(),
                 "Cluster should not have replicas"
             );
             // We didn't collect any size, so the user has to name it.
@@ -999,16 +1036,40 @@ impl Coordinator {
         }
     }
 
-    /// Returns whether the given cluster exclusively maintains items
-    /// that were formerly maintained on `computed`.
-    pub(crate) fn is_compute_cluster(&self, id: ClusterId) -> bool {
-        let cluster = self.catalog().get_cluster(id);
-        cluster.bound_objects().iter().all(|id| {
-            matches!(
-                self.catalog().get_entry(id).item_type(),
-                CatalogItemType::Index | CatalogItemType::MaterializedView
-            )
-        })
+    /// Determine whether we can create a compute item in the specified cluster.
+    ///
+    /// Returns `Ok` if the item can be created, and an error otherwise.
+    pub(crate) fn ensure_cluster_can_host_compute_item(
+        &self,
+        name: &QualifiedItemName,
+        cluster_id: ClusterId,
+    ) -> Result<(), AdapterError> {
+        let is_system_schema_specifier = self
+            .catalog()
+            .state()
+            .is_system_schema_specifier(&name.qualifiers.schema_spec);
+
+        let enable_unified_clusters = self
+            .catalog()
+            .for_system_session()
+            .system_vars()
+            .enable_unified_clusters();
+
+        let cluster = self.catalog().get_cluster(cluster_id);
+        let is_compute_cluster = cluster.bound_objects().is_empty()
+            || cluster.bound_objects().iter().any(|id| {
+                matches!(
+                    self.catalog().get_entry(id).item_type(),
+                    CatalogItemType::Index | CatalogItemType::MaterializedView
+                )
+            });
+
+        if !is_system_schema_specifier && !enable_unified_clusters && !is_compute_cluster {
+            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+            Err(AdapterError::BadItemInStorageCluster { cluster_name })
+        } else {
+            Ok(())
+        }
     }
 }
 

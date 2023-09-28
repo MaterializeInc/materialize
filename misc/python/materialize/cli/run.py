@@ -305,9 +305,6 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     env = dict(os.environ)
     command = _cargo_command(args, "build")
     features = []
-    if args.tokio_console:
-        features += ["tokio-console"]
-        env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
     if args.coverage:
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)

@@ -41,6 +41,7 @@ uuid = { version = "1.2.2", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [features]
+default = ["tokio-console"]
 tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
