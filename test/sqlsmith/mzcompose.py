@@ -157,6 +157,7 @@ known_errors = [
     "out of valid range",
     '" does not exist',  # role does not exist
     "csv_extract number of columns too large",
+    "target replica failed or was dropped",  # expected on replica OoMs with #21587
 ]
 
 
