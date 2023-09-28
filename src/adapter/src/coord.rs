@@ -251,28 +251,41 @@ pub enum Message<T = mz_repr::Timestamp> {
 impl Message {
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
-        use Message::*;
-
         match self {
-            Command(_) => "command",
-            ControllerReady => "controller_ready",
-            PurifiedStatementReady(_) => "purified_statement_ready",
-            CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            SinkConnectionReady(_) => "sink_connection_ready",
-            WriteLockGrant(_) => "write_lock_grant",
-            GroupCommitInitiate(..) => "group_commit_initiate",
-            GroupCommitApply(..) => "group_commit_apply",
-            AdvanceTimelines => "advance_timelines",
-            ClusterEvent(_) => "cluster_event",
-            RemovePendingPeeks { .. } => "remove_pending_peeks",
-            LinearizeReads(_) => "linearize_reads",
-            StorageUsageFetch => "storage_usage_fetch",
-            StorageUsageUpdate(_) => "storage_usage_update",
-            RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
-            RetireExecute { .. } => "retire_execute",
-            ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
-            PeekStageReady { .. } => "peek_stage_ready",
-            DrainStatementLog => "drain_statement_log",
+            Message::Command(msg) => match msg {
+                Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
+                Command::Startup { .. } => "command-startup",
+                Command::Execute { .. } => "command-execute",
+                Command::Commit { .. } => "command-commit",
+                Command::CancelRequest { .. } => "command-cancel_request",
+                Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
+                Command::AppendWebhook { .. } => "command-append_webhook",
+                Command::GetSystemVars { .. } => "command-get_system_vars",
+                Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::Terminate { .. } => "command-terminate",
+                Command::RetireExecute { .. } => "command-retire_execute",
+                Command::CheckConsistency { .. } => "command-check_consistency",
+            },
+            Message::ControllerReady => "controller_ready",
+            Message::PurifiedStatementReady(_) => "purified_statement_ready",
+            Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
+            Message::SinkConnectionReady(_) => "sink_connection_ready",
+            Message::WriteLockGrant(_) => "write_lock_grant",
+            Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitApply(..) => "group_commit_apply",
+            Message::AdvanceTimelines => "advance_timelines",
+            Message::ClusterEvent(_) => "cluster_event",
+            Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
+            Message::LinearizeReads(_) => "linearize_reads",
+            Message::StorageUsageFetch => "storage_usage_fetch",
+            Message::StorageUsageUpdate(_) => "storage_usage_update",
+            Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
+            Message::RetireExecute { .. } => "retire_execute",
+            Message::ExecuteSingleStatementTransaction { .. } => {
+                "execute_single_statement_transaction"
+            }
+            Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::DrainStatementLog => "drain_statement_log",
         }
     }
 }

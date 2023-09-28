@@ -19,10 +19,11 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::retry::Retry;
+use mz_ore::stats::histogram_seconds_buckets;
 use postgres_openssl::MakeTlsConnector;
-use prometheus::{IntCounter, IntCounterVec};
+use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec};
 use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
@@ -156,6 +157,7 @@ impl PreparedStatements {
 // Track statement execution counts.
 pub(crate) struct CountedStatements<'a> {
     stmts: &'a PreparedStatements,
+    metrics: &'a Arc<Metrics>,
     // Due to our use of try_join and futures, this needs to be an Arc Mutex.
     // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
     // allocating an Arc when unused.
@@ -163,9 +165,10 @@ pub(crate) struct CountedStatements<'a> {
 }
 
 impl<'a> CountedStatements<'a> {
-    fn from(stmts: &'a PreparedStatements) -> Self {
+    fn from(stmts: &'a PreparedStatements, metrics: &'a Arc<Metrics>) -> Self {
         Self {
             stmts,
+            metrics,
             counts: if tracing::enabled!(Level::DEBUG) {
                 Some(Arc::new(Mutex::new(BTreeMap::new())))
             } else {
@@ -182,37 +185,85 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    fn fetch_epoch(&self) -> &Statement {
-        self.inc("fetch_epoch");
-        &self.stmts.fetch_epoch
+    fn fetch_epoch(&self) -> (&Statement, Histogram) {
+        let name = "fetch_epoch";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.fetch_epoch, histogram)
     }
-    pub(crate) fn iter_key(&self) -> &Statement {
-        self.inc("iter_key");
-        &self.stmts.iter_key
+    pub(crate) fn iter_key(&self) -> (&Statement, Histogram) {
+        let name = "iter_key";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.iter_key, histogram)
     }
-    pub(crate) fn since(&self) -> &Statement {
-        self.inc("since");
-        &self.stmts.since
+    pub(crate) fn since(&self) -> (&Statement, Histogram) {
+        let name = "since";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.since, histogram)
     }
-    pub(crate) fn upper(&self) -> &Statement {
-        self.inc("upper");
-        &self.stmts.upper
+    pub(crate) fn upper(&self) -> (&Statement, Histogram) {
+        let name = "upper";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.upper, histogram)
     }
-    pub(crate) fn collection(&self) -> &Statement {
-        self.inc("collection");
-        &self.stmts.collection
+    pub(crate) fn collection(&self) -> (&Statement, Histogram) {
+        let name = "collection";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.collection, histogram)
     }
-    pub(crate) fn iter(&self) -> &Statement {
-        self.inc("iter");
-        &self.stmts.iter
+    pub(crate) fn iter(&self) -> (&Statement, Histogram) {
+        let name = "iter";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.iter, histogram)
     }
-    pub(crate) fn seal(&self) -> &Statement {
-        self.inc("seal");
-        &self.stmts.seal
+    pub(crate) fn seal(&self) -> (&Statement, Histogram) {
+        let name = "seal";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.seal, histogram)
     }
-    pub(crate) fn compact(&self) -> &Statement {
-        self.inc("compact");
-        &self.stmts.compact
+    pub(crate) fn compact(&self) -> (&Statement, Histogram) {
+        let name = "compact";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.compact, histogram)
     }
     /// Returns a ToStatement to INSERT a specified number of rows. First
     /// statement parameter is collection_id. Then key, value, time, diff as
@@ -382,9 +433,10 @@ impl StashFactory {
 }
 
 #[derive(Debug, Clone)]
-struct Metrics {
+pub(crate) struct Metrics {
     transactions: IntCounter,
     transaction_errors: IntCounterVec,
+    query_latency_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -398,6 +450,12 @@ impl Metrics {
                 name: "mz_stash_transaction_errors",
                 help: "Total number of transaction errors.",
                 var_labels: ["cause"],
+            )),
+            query_latency_seconds: registry.register(metric!(
+                name: "mz_query_latency",
+                help: "Latency for queries to CockroachDB",
+                var_labels: ["query_kind"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
         };
         // Initialize error codes to 0 so we can observe their increase.
@@ -767,7 +825,7 @@ impl Stash {
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
-        let stmts = CountedStatements::from(stmts);
+        let stmts = CountedStatements::from(stmts, &self.metrics);
         // Generate statements to execute depending on our mode.
         let (tx_start, tx_end) = match self.txn_mode {
             TransactionMode::Writeable => ("BEGIN", "COMMIT"),
@@ -778,9 +836,12 @@ impl Stash {
             .await
             .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
+        let (query, histogram) = stmts.fetch_epoch();
         let epoch_fut = client
-            .query_one(stmts.fetch_epoch(), &[])
-            .map_err(|err| err.into());
+            .query_one(query, &[])
+            .map_err(|err| err.into())
+            .wall_time()
+            .observe(histogram);
         let f_fut = f(&stmts, client, &self.collections);
         let (epoch_row, res) = future::try_join(epoch_fut, f_fut)
             .await

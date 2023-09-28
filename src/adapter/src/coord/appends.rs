@@ -16,6 +16,7 @@ use std::time::Duration;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -347,11 +348,20 @@ impl Coordinator {
             })
             .collect();
 
+        // Instrument our table writes since they can block the coordinator.
+        let label = should_block.then_some("true").unwrap_or("false");
+        let histogram = self
+            .metrics
+            .append_table_seconds
+            .with_label_values(&[label]);
         let append_fut = self
             .controller
             .storage
             .append_table(timestamp, advance_to, appends)
-            .expect("invalid updates");
+            .expect("invalid updates")
+            .wall_time()
+            .observe(histogram);
+
         if should_block {
             // We may panic here if the storage controller has shut down, because we cannot
             // correctly return control, nor can we simply hang here.
