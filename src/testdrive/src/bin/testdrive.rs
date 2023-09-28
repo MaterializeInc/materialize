@@ -170,7 +170,7 @@ struct Args {
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
     /// Whether or not we're benchmarking. When benchmarking, disable additional checks
-    #[clap(long, value_name = "N")]
+    #[clap(long)]
     benchmarking: bool,
     /// Which log messages to emit.
     ///
