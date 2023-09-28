@@ -15,7 +15,7 @@ If you have questions, please create a GitHub issue.
 ```bash
 git clone https://github.com/MaterializeInc/materialize.git
 ```
-1. Run the LSP:
+1. Test the LSP:
 ```bash
-cargo run -p lsp
+cargo test -p mz-lsp
 ```
