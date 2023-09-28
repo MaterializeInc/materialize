@@ -1,4 +1,4 @@
-# Contributing to the Materialize Language Server Provider (LSP)
+# Contributing to the Materialize Language Server Protocol (LSP)
 
 ## Developing the Extension
 
