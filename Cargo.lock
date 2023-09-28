@@ -4642,6 +4642,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
+ "mz-timely-util",
  "prost",
  "timely",
  "tokio",
