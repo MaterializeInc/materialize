@@ -3072,9 +3072,9 @@ dependencies = [
 
 [[package]]
 name = "linked-hash-map"
-version = "0.5.4"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fb9b38af92608140b86b693604b9ffcc5824240a484d1ecd4795bacb2fe88f3"
+checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "linked_hash_set"
@@ -4289,7 +4289,6 @@ name = "mz-lsp"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
- "dashmap",
  "httparse",
  "mz-ore",
  "mz-sql-lexer",
@@ -5807,9 +5806,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.18.0"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
+checksum = "86f0b0d4bf799edbc74508c1e8bf170ff5f41238e5f8225603ca7caaae2b7860"
 
 [[package]]
 name = "oorandom"
@@ -9264,6 +9263,7 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "ordered-float",
+ "parking_lot",
  "phf",
  "phf_shared",
  "postgres",

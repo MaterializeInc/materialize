@@ -78,7 +78,6 @@
 #[cfg(test)]
 mod tests {
 
-    use dashmap::DashMap;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::fmt::Debug;
@@ -282,13 +281,13 @@ mod tests {
         let (req_client, req_server) = tokio::io::duplex(1024);
         let (resp_server, resp_client) = tokio::io::duplex(1024);
 
-        let (service, socket) = LspService::new(|client| mz_lsp::backend::Backend {
-            client,
-            document_map: DashMap::new(),
-        });
+        let (service, socket) = LspService::new(|client| mz_lsp::backend::Backend { client });
 
         // start server as concurrent task
-        mz_ore::task::spawn(|| format!("taskname:{}", "lsp_server"), Server::new(req_server, resp_server, socket).serve(service));
+        mz_ore::task::spawn(
+            || format!("taskname:{}", "lsp_server"),
+            Server::new(req_server, resp_server, socket).serve(service),
+        );
 
         (req_client, resp_client)
     }

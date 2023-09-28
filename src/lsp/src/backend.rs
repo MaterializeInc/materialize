@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dashmap::DashMap;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,7 +21,6 @@ use crate::snippets::SNIPPETS;
 #[derive(Debug)]
 pub struct Backend {
     pub client: Client,
-    pub document_map: DashMap<String, Rope>,
 }
 
 #[tower_lsp::async_trait]
@@ -75,7 +73,7 @@ impl LanguageServer for Backend {
             text: params.text_document.text,
             version: params.text_document.version,
         })
-        .await
+        .await;
     }
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
@@ -184,10 +182,6 @@ impl Backend {
         self.client
             .log_message(MessageType::INFO, format!("on_change {:?}", params.uri))
             .await;
-        let rope = ropey::Rope::from_str(&params.text);
-        self.document_map
-            .insert(params.uri.to_string(), rope.clone());
-
         let rope = ropey::Rope::from_str(&params.text);
 
         // Parse the text
