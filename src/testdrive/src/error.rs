@@ -129,7 +129,7 @@ impl ErrorLocation {
                     &mut snippet,
                     "{:4} | {} ... [rest of line truncated for security]",
                     i + 1,
-                    l.get(0..20).unwrap()
+                    l.get(0..std::cmp::min(l.len(), 20)).unwrap()
                 )
                 .unwrap();
             } else if i + 2 >= line {
