@@ -468,7 +468,7 @@ where
 mod tests {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
-    use crate::tests::writer;
+    use crate::tests::{writer, CommitLog};
 
     use super::*;
 
@@ -480,12 +480,16 @@ mod tests {
         pub(crate) async fn expect_open_id(client: PersistClient, txns_id: ShardId) -> Self {
             Self::open(
                 0,
-                client.clone(),
+                client,
                 txns_id,
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
             )
             .await
+        }
+
+        pub(crate) fn new_log(&self) -> CommitLog {
+            CommitLog::new(self.datas.client.clone(), self.txns_id())
         }
 
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
@@ -501,16 +505,22 @@ mod tests {
             commit_ts: u64,
             data_id: ShardId,
             keys: &[&str],
+            log: &CommitLog,
         ) -> Tidy {
             let mut txn = self.begin();
             for key in keys {
                 txn.write(&data_id, (*key).into(), (), 1).await;
             }
-            txn.commit_at(self, commit_ts)
+            let tidy = txn
+                .commit_at(self, commit_ts)
                 .await
                 .unwrap()
                 .apply(self)
-                .await
+                .await;
+            for key in keys {
+                log.record((data_id, (*key).into(), commit_ts, 1));
+            }
+            tidy
         }
     }
 
@@ -519,6 +529,7 @@ mod tests {
     async fn register_at() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
         let d0 = txns.expect_register(2).await;
         txns.apply_le(&2).await;
 
@@ -535,7 +546,7 @@ mod tests {
         assert_eq!(txns.register(2, [writer(&client, d1).await]).await, Err(3));
 
         // Can still register after txns have been committed.
-        txns.expect_commit_at(3, d0, &["foo"]).await;
+        txns.expect_commit_at(3, d0, &["foo"], &log).await;
         assert_eq!(txns.register(4, [writer(&client, d1).await]).await, Ok(4));
 
         // Reregistration returns the latest original registration time.
@@ -555,6 +566,9 @@ mod tests {
                 .await,
             Ok(5)
         );
+
+        let () = log.assert_snapshot(d0, 5).await;
+        let () = log.assert_snapshot(d1, 5).await;
     }
 
     // Regression test for a bug encountered during initial development:
@@ -594,20 +608,19 @@ mod tests {
     async fn apply_many_ts() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
         let d0 = txns.expect_register(1).await;
 
         for ts in 2..10 {
             let mut txn = txns.begin();
             txn.write(&d0, ts.to_string(), (), 1).await;
             let _apply = txn.commit_at(&mut txns, ts).await.unwrap();
+            log.record((d0, ts.to_string(), ts, 1));
         }
         // This automatically runs the apply, which catches up all the previous
         // txns at once.
-        txns.expect_commit_at(10, d0, &[]).await;
+        txns.expect_commit_at(10, d0, &[], &log).await;
 
-        assert_eq!(
-            txns.txns_cache.expect_snapshot(&client, d0, 10).await.len(),
-            8
-        );
+        log.assert_snapshot(d0, 10).await;
     }
 }

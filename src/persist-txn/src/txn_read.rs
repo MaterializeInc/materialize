@@ -423,8 +423,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     async fn txns_cache_to_data_inclusive() {
         let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
+        let log = txns.new_log();
         let d0 = ShardId::new();
-        txns.expect_commit_at(3, d0, &[]).await;
+        txns.expect_commit_at(3, d0, &[], &log).await;
 
         let mut cache = TxnsCache::expect_open(3, &txns).await;
         assert_eq!(cache.progress_exclusive, 4);
