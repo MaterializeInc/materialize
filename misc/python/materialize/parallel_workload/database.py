@@ -28,7 +28,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 100
 MAX_ROWS = 1000
-MAX_COMPUTE_CLUSTERS = 10
+MAX_CLUSTERS = 10
 MAX_CLUSTER_REPLICAS = 4
 MAX_TABLES = 100
 MAX_VIEWS = 100
@@ -36,8 +36,7 @@ MAX_ROLES = 100
 MAX_SOURCES = 20
 MAX_INCLUDE_HEADERS = 5
 
-MAX_INITIAL_COMPUTE_CLUSTERS = 1
-MAX_INITIAL_STORAGE_CLUSTERS = 1
+MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 10
 MAX_INITIAL_VIEWS = 10
 MAX_INITIAL_ROLES = 3
@@ -311,13 +310,7 @@ class ClusterReplica:
         )
 
 
-class ClusterType(Enum):
-    COMPUTE = 1
-    STORAGE = 2
-
-
 class Cluster:
-    cluster_type: ClusterType
     cluster_id: int
     managed: bool
     size: str
@@ -327,14 +320,12 @@ class Cluster:
 
     def __init__(
         self,
-        cluster_type: ClusterType,
         cluster_id: int,
         managed: bool,
         size: str,
         replication_factor: int,
         introspection_interval: str,
     ):
-        self.cluster_type = cluster_type
         self.cluster_id = cluster_id
         self.managed = managed
         self.size = size
@@ -345,7 +336,7 @@ class Cluster:
         self.introspection_interval = introspection_interval
 
     def __str__(self) -> str:
-        return f"cluster_{self.cluster_type.name.lower()}_{self.cluster_id}"
+        return f"cluster_{self.cluster_id}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
@@ -374,10 +365,8 @@ class Database:
     view_id: int
     roles: list[Role]
     role_id: int
-    compute_clusters: list[Cluster]
-    compute_cluster_id: int
-    storage_clusters: list[Cluster]
-    storage_cluster_id: int
+    clusters: list[Cluster]
+    cluster_id: int
     indexes: set[str]
     sources: list[WebhookSource]
     source_id: int
@@ -417,34 +406,21 @@ class Database:
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
         self.role_id = len(self.roles)
-        self.compute_clusters = [
-            Cluster(
-                ClusterType.COMPUTE,
-                i,
-                managed=rng.choice([True, False]),
-                size=rng.choice(["1", "2", "4"]),
-                replication_factor=rng.choice([1, 2, 4, 5]),
-                introspection_interval=rng.choice(["0", "1s", "10s"]),
-            )
-            for i in range(rng.randint(0, MAX_INITIAL_COMPUTE_CLUSTERS))
-        ]
-        self.compute_cluster_id = len(self.compute_clusters)
         # At least one storage cluster required for WebhookSources
-        self.storage_clusters = [
+        self.clusters = [
             Cluster(
-                ClusterType.STORAGE,
                 i,
                 managed=rng.choice([True, False]),
                 size=rng.choice(["1", "2", "4"]),
-                replication_factor=1,  # cannot create source in cluster with more than one replica
+                replication_factor=1,
                 introspection_interval=rng.choice(["0", "1s", "10s"]),
             )
-            for i in range(rng.randint(1, MAX_INITIAL_STORAGE_CLUSTERS))
+            for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
         ]
-        self.storage_cluster_id = len(self.storage_clusters)
+        self.cluster_id = len(self.clusters)
         self.indexes = set()
         self.sources = [
-            WebhookSource(i, rng.choice(self.storage_clusters), rng)
+            WebhookSource(i, rng.choice(self.clusters), rng)
             for i in range(rng.randint(0, MAX_INITIAL_SOURCES))
         ]
         self.source_id = len(self.sources)
@@ -456,12 +432,7 @@ class Database:
     def __iter__(self):
         """Returns all relations"""
         return (
-            self.compute_clusters
-            + self.storage_clusters
-            + self.tables
-            + self.views
-            + self.roles
-            + self.sources
+            self.clusters + self.tables + self.views + self.roles + self.sources
         ).__iter__()
 
     def drop(self, exe: Executor) -> None:
