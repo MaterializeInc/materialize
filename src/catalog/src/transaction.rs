@@ -187,71 +187,6 @@ impl<'a> Transaction<'a> {
             system_privileges,
         }: Snapshot,
     ) -> Result<Transaction, Error> {
-        let databases = databases
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let schemas = schemas
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let roles = roles
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let items = items
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let comments = comments
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let clusters = clusters
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let cluster_replicas = cluster_replicas
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let introspection_sources = introspection_sources
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let id_allocator = id_allocator
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let configs = configs
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let settings = settings
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let timestamps = timestamps
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let system_gid_mapping = system_object_mappings
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let system_configurations = system_configurations
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let default_privileges = default_privileges
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-        let system_privileges = system_privileges
-            .into_iter()
-            .map(|(key, value)| (key.into_proto(), value.into_proto()))
-            .collect();
-
         Ok(Transaction {
             durable_catalog,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
@@ -273,7 +208,7 @@ impl<'a> Transaction<'a> {
             configs: TableTransaction::new(configs, |_a, _b| false)?,
             settings: TableTransaction::new(settings, |_a, _b| false)?,
             timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
-            system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
+            system_gid_mapping: TableTransaction::new(system_object_mappings, |_a, _b| false)?,
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,

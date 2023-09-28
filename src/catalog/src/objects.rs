@@ -398,23 +398,26 @@ pub struct SystemConfiguration {
 
 /// A snapshot of the current on-disk state.
 pub struct Snapshot {
-    pub databases: BTreeMap<DatabaseKey, DatabaseValue>,
-    pub schemas: BTreeMap<SchemaKey, SchemaValue>,
-    pub roles: BTreeMap<RoleKey, RoleValue>,
-    pub items: BTreeMap<ItemKey, ItemValue>,
-    pub comments: BTreeMap<CommentKey, CommentValue>,
-    pub clusters: BTreeMap<ClusterKey, ClusterValue>,
-    pub cluster_replicas: BTreeMap<ClusterReplicaKey, ClusterReplicaValue>,
-    pub introspection_sources:
-        BTreeMap<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
-    pub id_allocator: BTreeMap<IdAllocKey, IdAllocValue>,
-    pub configs: BTreeMap<ConfigKey, ConfigValue>,
-    pub settings: BTreeMap<SettingKey, SettingValue>,
-    pub timestamps: BTreeMap<TimestampKey, TimestampValue>,
-    pub system_object_mappings: BTreeMap<GidMappingKey, GidMappingValue>,
-    pub system_configurations: BTreeMap<ServerConfigurationKey, ServerConfigurationValue>,
-    pub default_privileges: BTreeMap<DefaultPrivilegesKey, DefaultPrivilegesValue>,
-    pub system_privileges: BTreeMap<SystemPrivilegesKey, SystemPrivilegesValue>,
+    pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+    pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+    pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+    pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+    pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
+    pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+    pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+    pub introspection_sources: BTreeMap<
+        proto::ClusterIntrospectionSourceIndexKey,
+        proto::ClusterIntrospectionSourceIndexValue,
+    >,
+    pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+    pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+    pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
+    pub timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+    pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+    pub system_configurations:
+        BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+    pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+    pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
