@@ -528,6 +528,11 @@ impl Stash {
                 tracing::error!("postgres stash connection error: {}", e);
             }
         });
+        // The Config is shared with the Consolidator, so we update the application name in the
+        // session instead of the Config.
+        client
+            .batch_execute("SET application_name = 'stash'")
+            .await?;
         client
             .batch_execute("SET default_transaction_isolation = serializable")
             .await?;
@@ -1278,6 +1283,11 @@ impl Consolidator {
                 }
             },
         );
+        // The Config is shared with the Stash, so we update the application name in the
+        // session instead of the Config.
+        client
+            .execute("SET application_name = 'stash-consolidator'", &[])
+            .await?;
         if let Some(schema) = &self.schema {
             client
                 .execute(format!("SET search_path TO {schema}").as_str(), &[])
