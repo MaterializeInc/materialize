@@ -531,6 +531,8 @@ pub struct CreateClusterReplicaV1 {
     pub replica_name: String,
     pub logical_size: String,
     pub disk: bool,
+    pub billed_as: Option<String>,
+    pub internal: bool,
 }
 
 impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClusterReplicaV1 {
@@ -544,6 +546,8 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClust
             replica_name: self.replica_name.to_string(),
             logical_size: self.logical_size.to_string(),
             disk: self.disk,
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
         }
     }
 
@@ -557,6 +561,8 @@ impl RustType<proto::audit_log_event_v1::CreateClusterReplicaV1> for CreateClust
             replica_name: proto.replica_name,
             logical_size: proto.logical_size,
             disk: proto.disk,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
         })
     }
 }

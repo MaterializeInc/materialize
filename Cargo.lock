@@ -3893,6 +3893,7 @@ name = "mz-controller"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytesize",
  "chrono",
  "differential-dataflow",
  "futures",

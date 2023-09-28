@@ -1733,6 +1733,8 @@ impl_display_t!(CreateClusterReplicaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ReplicaOptionName {
+    /// The `BILLED AS [=] <value>` option.
+    BilledAs,
     /// The `SIZE [[=] <size>]` option.
     Size,
     /// The `AVAILABILITY ZONE [[=] <id>]` option.
@@ -1745,8 +1747,10 @@ pub enum ReplicaOptionName {
     ComputectlAddresses,
     /// The `COMPUTE ADDRESSES` option.
     ComputeAddresses,
-    /// The `WORKERS` option
+    /// The `WORKERS` option.
     Workers,
+    /// The `INTERNAL` option.
+    Internal,
     /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
@@ -1760,6 +1764,7 @@ pub enum ReplicaOptionName {
 impl AstDisplay for ReplicaOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            ReplicaOptionName::BilledAs => f.write_str("BILLED AS"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
             ReplicaOptionName::StorageAddresses => f.write_str("STORAGE ADDRESSES"),
@@ -1767,6 +1772,7 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::ComputectlAddresses => f.write_str("COMPUTECTL ADDRESSES"),
             ReplicaOptionName::ComputeAddresses => f.write_str("COMPUTE ADDRESSES"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
+            ReplicaOptionName::Internal => f.write_str("INTERNAL"),
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ReplicaOptionName::IdleArrangementMergeEffort => {

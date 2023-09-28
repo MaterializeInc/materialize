@@ -642,3 +642,157 @@ DROP CLUSTER foo CASCADE
 
 # Restore pristine server state
 reset-server
+
+# Tests for BILLED AS replicas
+
+statement ok
+CREATE CLUSTER t1 SIZE '1'
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free'
+----
+db error: ERROR: cannot modify managed cluster t1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r1234 SIZE '2', INTERNAL, BILLED AS 'free'
+----
+db error: ERROR: r1234 is reserved for replicas of managed clusters
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.billed SIZE '2', INTERNAL
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', INTERNAL, BILLED AS 'free'
+----
+COMPLETE 0
+
+statement error db error: ERROR: cannot modify managed cluster t1
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', INTERNAL
+
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.invalid SIZE '2'
+----
+db error: ERROR: cannot modify managed cluster t1
+
+query TTTT
+SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
+----
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":false,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free"}  mz_system
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
+----
+db error: ERROR: cannot modify managed cluster t1
+
+query TTTTT
+SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
+----
+u1  r1  u1  1  s1
+u2  r1  u2  1  u1
+u4  free  u2  2  u1
+u3  billed  u2  2  u1
+
+query T
+SELECT id FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
+----
+u3
+u4
+
+statement error db error: ERROR: cannot modify managed cluster t1
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED false);
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED);
+
+statement ok
+DROP CLUSTER REPLICA t1.free;
+
+statement error db error: ERROR: cannot drop replica of managed cluster
+DROP CLUSTER REPLICA t1.r1;
+
+statement ok
+DROP CLUSTER t1
+
+statement ok
+CREATE CLUSTER t1 SIZE '1'
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', INTERNAL, BILLED AS 'free'
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER t1
+
+statement ok
+CREATE CLUSTER t1 REPLICAS (r1 (SIZE '1'))
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free', INTERNAL
+----
+COMPLETE 0
+
+query TTTT
+SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
+----
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":false,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free"}  mz_system
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER REPLICA t1.internal_r2
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r2 SIZE '2'
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER REPLICA t1.r2
+
+query TTTTT
+SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
+----
+u1  r1  u1  1  s1
+u7  r1  u4  1  u1
+u8  free  u4  2  u1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r3 SIZE '2', BILLED AS 'free'
+----
+db error: ERROR: must specify INTERNAL when specifying BILLED AS
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', INTERNAL
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED);
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED false);
+
+statement ok
+DROP CLUSTER REPLICA t1.free;
+
+statement ok
+DROP CLUSTER REPLICA t1.r1;
+
+statement ok
+DROP CLUSTER t1
+
+reset-server

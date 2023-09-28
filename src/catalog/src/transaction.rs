@@ -123,9 +123,11 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
 pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
     ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: None,
+            billed_as: None,
             disk: false,
+            internal: false,
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,

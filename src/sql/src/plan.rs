@@ -533,6 +533,8 @@ pub enum ReplicaConfig {
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
         disk: bool,
+        internal: bool,
+        billed_as: Option<String>,
     },
 }
 
