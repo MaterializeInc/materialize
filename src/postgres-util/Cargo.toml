@@ -13,6 +13,7 @@ mz-ore = { path = "../ore", features = ["async"], optional = true }
 mz-proto = { path = "../proto", optional = true }
 mz-repr = { path = "../repr", optional = true }
 mz-ssh-util = { path = "../ssh-util", optional = true }
+mz-tls-util = { path = "../tls-util"}
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssh = { version = "0.9.8", default-features = false, features = [
     "native-mux",

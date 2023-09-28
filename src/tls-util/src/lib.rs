@@ -75,51 +75,92 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! PostgreSQL utility library.
+//! A tiny utility library for making TLS connectors.
 
+use openssl::pkey::PKey;
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use openssl::x509::X509;
+use postgres_openssl::MakeTlsConnector;
+use tokio_postgres::config::SslMode;
 use tracing::warn;
 
 macro_rules! bail_generic {
     ($fmt:expr, $($arg:tt)*) => {
-        return Err(PostgresError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
+        return Err(TlsError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
     };
     ($err:expr $(,)?) => {
-        return Err(PostgresError::Generic(anyhow::anyhow!($err)))
+        return Err(TlsError::Generic(anyhow::anyhow!($err)))
     };
 }
 
-#[cfg(feature = "schemas")]
-pub mod desc;
-#[cfg(feature = "schemas")]
-pub mod schemas;
-#[cfg(feature = "schemas")]
-pub use schemas::{get_schemas, publication_info};
-#[cfg(feature = "tunnel")]
-pub mod tunnel;
-#[cfg(feature = "tunnel")]
-pub use tunnel::{
-    drop_replication_slots, Config, TcpTimeoutConfig, TunnelConfig, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_KEEPALIVE_IDLE, DEFAULT_KEEPALIVE_INTERVAL, DEFAULT_KEEPALIVE_RETRIES,
-    DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, DEFAULT_TCP_USER_TIMEOUT,
-};
-
-/// An error representing pg, ssh, ssl, and other failures.
+/// An error representing tls failures.
 #[derive(Debug, thiserror::Error)]
-pub enum PostgresError {
+pub enum TlsError {
     /// Any other error we bail on.
     #[error(transparent)]
     Generic(#[from] anyhow::Error),
-    /// Error using ssh.
-    #[cfg(feature = "tunnel")]
-    #[error(transparent)]
-    Ssh(#[from] openssh::Error),
-    /// Error doing io to setup an ssh connection.
-    #[error(transparent)]
-    SshIo(#[from] std::io::Error),
-    /// A postgres error.
-    #[error(transparent)]
-    Postgres(#[from] tokio_postgres::Error),
     /// Error setting up postgres ssl.
     #[error(transparent)]
-    PostgresSsl(#[from] openssl::error::ErrorStack),
+    OpenSsl(#[from] openssl::error::ErrorStack),
+}
+
+/// Creates a TLS connector for the given [`Config`](tokio_postgres::Config).
+pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, TlsError> {
+    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
+    // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
+    // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
+    //
+    // For more details, check out Table 33.1. SSL Mode Descriptions in
+    // https://postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-PROTECTION.
+    let (verify_mode, verify_hostname) = match config.get_ssl_mode() {
+        SslMode::Disable | SslMode::Prefer => (SslVerifyMode::NONE, false),
+        SslMode::Require => match config.get_ssl_root_cert() {
+            // If a root CA file exists, the behavior of sslmode=require will be the same as
+            // that of verify-ca, meaning the server certificate is validated against the CA.
+            //
+            // For more details, check out the note about backwards compatibility in
+            // https://postgresql.org/docs/current/libpq-ssl.html#LIBQ-SSL-CERTIFICATES.
+            Some(_) => (SslVerifyMode::PEER, false),
+            None => (SslVerifyMode::NONE, false),
+        },
+        SslMode::VerifyCa => (SslVerifyMode::PEER, false),
+        SslMode::VerifyFull => (SslVerifyMode::PEER, true),
+        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+    };
+
+    // Configure peer verification
+    builder.set_verify(verify_mode);
+
+    // Configure certificates
+    match (config.get_ssl_cert(), config.get_ssl_key()) {
+        (Some(ssl_cert), Some(ssl_key)) => {
+            builder.set_certificate(&*X509::from_pem(ssl_cert)?)?;
+            builder.set_private_key(&*PKey::private_key_from_pem(ssl_key)?)?;
+        }
+        (None, Some(_)) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslkey")
+        }
+        (Some(_), None) => {
+            bail_generic!("must provide both sslcert and sslkey, but only provided sslcert")
+        }
+        _ => {}
+    }
+    if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
+        builder
+            .cert_store_mut()
+            .add_cert(X509::from_pem(ssl_root_cert)?)?;
+    }
+
+    let mut tls_connector = MakeTlsConnector::new(builder.build());
+
+    // Configure hostname verification
+    match (verify_mode, verify_hostname) {
+        (SslVerifyMode::PEER, false) => tls_connector.set_callback(|connect, _| {
+            connect.set_verify_hostname(false);
+            Ok(())
+        }),
+        _ => {}
+    }
+
+    Ok(tls_connector)
 }

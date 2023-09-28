@@ -41,11 +41,11 @@ mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-pgrepr = { path = "../pgrepr" }
-mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
+mz-tls-util = { path = "../tls-util" }
 postgres_array = { version = "0.11.0" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", features = ["serde"] }
