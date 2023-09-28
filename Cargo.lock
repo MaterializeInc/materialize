@@ -1166,7 +1166,7 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/columnation.git#16e53d69878847979457f3d5ae867ebf4922f1ee"
+source = "git+https://github.com/MaterializeInc/columnation.git#2cd6d86e5ffabf98aef5cbef09a57f515eae7c55"
 dependencies = [
  "paste",
 ]

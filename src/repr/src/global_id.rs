@@ -11,7 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
-use columnation::{CloneRegion, Columnation};
+use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -121,5 +121,5 @@ impl RustType<ProtoGlobalId> for GlobalId {
 }
 
 impl Columnation for GlobalId {
-    type InnerRegion = CloneRegion<GlobalId>;
+    type InnerRegion = CopyRegion<GlobalId>;
 }
