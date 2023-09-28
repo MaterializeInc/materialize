@@ -537,12 +537,141 @@ async fn apply_caa<K, V, T, D>(
 #[cfg(test)]
 pub mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex;
 
+    use crossbeam_channel::{Receiver, Sender, TryRecvError};
+    use differential_dataflow::consolidation::consolidate_updates;
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
+    use crate::txn_read::TxnsCache;
+    use crate::txn_write::Txn;
+
     use super::*;
+
+    /// A test helper for collecting committed writes and later comparing them
+    /// to reads for correctness.
+    #[derive(Debug, Clone)]
+    pub struct CommitLog {
+        client: PersistClient,
+        txns_id: ShardId,
+        writes: Arc<Mutex<Vec<(ShardId, String, u64, i64)>>>,
+        tx: Sender<(ShardId, String, u64, i64)>,
+        rx: Receiver<(ShardId, String, u64, i64)>,
+    }
+
+    impl CommitLog {
+        pub fn new(client: PersistClient, txns_id: ShardId) -> Self {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            CommitLog {
+                client,
+                txns_id,
+                writes: Arc::new(Mutex::new(Vec::new())),
+                tx,
+                rx,
+            }
+        }
+
+        pub fn record(&self, update: (ShardId, String, u64, i64)) {
+            let () = self.tx.send(update).unwrap();
+        }
+
+        pub fn record_txn(&self, commit_ts: u64, txn: &Txn<String, (), i64>) {
+            for (data_id, writes) in txn.writes.iter() {
+                for (k, (), d) in writes.iter() {
+                    self.record((*data_id, k.clone(), commit_ts, *d));
+                }
+            }
+        }
+
+        #[track_caller]
+        pub fn assert_eq(
+            &self,
+            data_id: ShardId,
+            as_of: u64,
+            until: u64,
+            actual: impl IntoIterator<Item = (String, u64, i64)>,
+        ) {
+            // First read everything off the channel.
+            let mut expected = {
+                let mut writes = self.writes.lock().unwrap();
+                loop {
+                    match self.rx.try_recv() {
+                        Ok(x) => writes.push(x),
+                        Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                    }
+                }
+                writes
+                    .iter()
+                    .flat_map(|(id, key, ts, diff)| {
+                        if id != &data_id {
+                            return None;
+                        }
+                        let mut ts = *ts;
+                        if ts < as_of {
+                            ts = as_of;
+                        }
+                        if until <= ts {
+                            None
+                        } else {
+                            Some((key.clone(), ts, *diff))
+                        }
+                    })
+                    .collect()
+            };
+            consolidate_updates(&mut expected);
+            let mut actual = actual.into_iter().collect();
+            consolidate_updates(&mut actual);
+            // NB: Extra spaces after actual are so it lines up with expected.
+            tracing::debug!(
+                "{:.9} as_of={} until={} actual  ={:?}",
+                data_id,
+                as_of,
+                until,
+                actual
+            );
+            tracing::debug!(
+                "{:.9} as_of={} until={} expected={:?}",
+                data_id,
+                as_of,
+                until,
+                expected
+            );
+            assert_eq!(actual, expected)
+        }
+
+        #[allow(ungated_async_fn_track_caller)]
+        #[track_caller]
+        pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
+            let txns_read = self
+                .client
+                .open_leased_reader(
+                    self.txns_id,
+                    Arc::new(ShardIdSchema),
+                    Arc::new(VecU8Schema),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap();
+            let mut txns_cache = TxnsCache::<u64>::open(0, txns_read).await;
+            txns_cache.update_gt(&as_of).await;
+            let translated_as_of = txns_cache.to_data_inclusive(&data_id, as_of).unwrap();
+            let mut data_read = reader(&self.client, data_id).await;
+            let actual = data_read
+                .snapshot_and_fetch(Antichain::from_elem(translated_as_of))
+                .await
+                .unwrap();
+            let actual = actual.into_iter().map(|((k, v), mut t, d)| {
+                let (k, ()) = (k.unwrap(), v.unwrap());
+                if t < as_of {
+                    t = as_of;
+                }
+                (k, t, d)
+            });
+            self.assert_eq(data_id, as_of, as_of + 1, actual)
+        }
+    }
 
     pub(crate) async fn writer(
         client: &PersistClient,
@@ -572,5 +701,62 @@ pub mod tests {
             )
             .await
             .expect("codecs should not change")
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn commit_log() {
+        let (d0, d1) = (ShardId::new(), ShardId::new());
+        let log0 = CommitLog::new(PersistClient::new_for_tests().await, ShardId::new());
+
+        // Send before cloning into another handle.
+        log0.record((d0, "0".into(), 0, 1));
+
+        // Send after cloning into another handle. Also push duplicate (which
+        // gets consolidated).
+        let log1 = log0.clone();
+        log0.record((d0, "2".into(), 2, 1));
+        log1.record((d0, "2".into(), 2, 1));
+
+        // Send retraction.
+        log0.record((d0, "3".into(), 3, 1));
+        log1.record((d0, "3".into(), 4, -1));
+
+        // Send out of order.
+        log0.record((d0, "1".into(), 1, 1));
+
+        // Send to a different shard.
+        log1.record((d1, "5".into(), 5, 1));
+
+        // Assert_eq with no advancement or truncation.
+        log0.assert_eq(
+            d0,
+            0,
+            6,
+            vec![
+                ("0".into(), 0, 1),
+                ("1".into(), 1, 1),
+                ("2".into(), 2, 2),
+                ("3".into(), 3, 1),
+                ("3".into(), 4, -1),
+            ],
+        );
+        log0.assert_eq(d1, 0, 6, vec![("5".into(), 5, 1)]);
+
+        // Assert_eq with advancement.
+        log0.assert_eq(
+            d0,
+            4,
+            6,
+            vec![("0".into(), 4, 1), ("1".into(), 4, 1), ("2".into(), 4, 2)],
+        );
+
+        // Assert_eq with truncation.
+        log0.assert_eq(
+            d0,
+            0,
+            3,
+            vec![("0".into(), 0, 1), ("1".into(), 1, 1), ("2".into(), 2, 2)],
+        );
     }
 }

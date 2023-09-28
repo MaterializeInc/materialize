@@ -30,7 +30,7 @@ use crate::{TxnsCodec, TxnsEntry};
 /// An in-progress transaction.
 #[derive(Debug)]
 pub struct Txn<K, V, D> {
-    writes: BTreeMap<ShardId, Vec<(K, V, D)>>,
+    pub(crate) writes: BTreeMap<ShardId, Vec<(K, V, D)>>,
     tidy: Tidy,
 }
 
@@ -336,6 +336,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn apply_and_tidy() {
         let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
+        let log = txns.new_log();
         let mut cache = TxnsCache::expect_open(0, &txns).await;
         let d0 = txns.expect_register(1).await;
 
@@ -344,6 +345,7 @@ mod tests {
         let mut txn = txns.begin();
         txn.write(&d0, "2".into(), (), 1).await;
         let apply_2 = txn.commit_at(&mut txns, 2).await.unwrap();
+        log.record_txn(2, &txn);
         assert_eq!(apply_2.is_empty(), false);
         cache.update_gt(&2).await;
         assert_eq!(cache.min_unapplied_ts(), &2);
@@ -362,7 +364,7 @@ mod tests {
 
         // We can also sneak the tidy into a normal txn. Tidies copy across txn
         // merges.
-        let tidy_4 = txns.expect_commit_at(4, d0, &["4"]).await;
+        let tidy_4 = txns.expect_commit_at(4, d0, &["4"], &log).await;
         cache.update_gt(&4).await;
         assert_eq!(cache.min_unapplied_ts(), &4);
         let mut txn0 = txns.begin();
@@ -371,12 +373,13 @@ mod tests {
         let mut txn1 = txns.begin();
         txn1.merge(txn0);
         let apply_5 = txn1.commit_at(&mut txns, 5).await.unwrap();
+        log.record_txn(5, &txn1);
         cache.update_gt(&5).await;
         assert_eq!(cache.min_unapplied_ts(), &5);
         let tidy_5 = apply_5.apply(&mut txns).await;
 
         // It's fine to drop a tidy, someone else will do it eventually.
-        let tidy_6 = txns.expect_commit_at(6, d0, &["6"]).await;
+        let tidy_6 = txns.expect_commit_at(6, d0, &["6"], &log).await;
         txns.tidy_at(7, tidy_6).await.unwrap();
         cache.update_gt(&7).await;
         assert_eq!(cache.min_unapplied_ts(), &8);
@@ -388,8 +391,8 @@ mod tests {
         assert_eq!(cache.min_unapplied_ts(), &9);
 
         // Tidies can be merged and also can be stolen back out of a txn.
-        let tidy_9 = txns.expect_commit_at(9, d0, &["9"]).await;
-        let tidy_10 = txns.expect_commit_at(10, d0, &["10"]).await;
+        let tidy_9 = txns.expect_commit_at(9, d0, &["9"], &log).await;
+        let tidy_10 = txns.expect_commit_at(10, d0, &["10"], &log).await;
         let mut txn = txns.begin();
         txn.tidy(tidy_9);
         let mut tidy_9 = txn.take_tidy();
@@ -399,8 +402,10 @@ mod tests {
         assert_eq!(cache.min_unapplied_ts(), &12);
 
         // Can't tidy at an already committed ts.
-        let tidy_12 = txns.expect_commit_at(12, d0, &["12"]).await;
+        let tidy_12 = txns.expect_commit_at(12, d0, &["12"], &log).await;
         assert_eq!(txns.tidy_at(12, tidy_12).await, Err(13));
+
+        let () = log.assert_snapshot(d0, 12).await;
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
@@ -414,6 +419,7 @@ mod tests {
 
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
         let mut cache = TxnsCache::expect_open(0, &txns).await;
         let d0 = txns.expect_register(1).await;
 
@@ -422,7 +428,7 @@ mod tests {
         for idx in 0..NUM_WRITES {
             let mut txn = txns.begin();
             txn.write(&d0, format!("{:05}", idx), (), 1).await;
-            let (txns_id, client) = (txns.txns_id(), client.clone());
+            let (txns_id, client, log) = (txns.txns_id(), client.clone(), log.clone());
 
             let task = async move {
                 let data_write = writer(&client, d0).await;
@@ -442,6 +448,7 @@ mod tests {
                     }
                 };
                 debug!("{} committed at {}", idx, commit_ts);
+                log.record_txn(commit_ts, &txn);
 
                 // Ditto sleep before apply.
                 let () = tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
@@ -474,11 +481,14 @@ mod tests {
             .max()
             .unwrap_or_default();
 
+        // Also manually create expected as a failsafe in case we ever end up
+        // with a bug in CommitLog.
         let expected = (0..NUM_WRITES)
             .map(|x| format!("{:05}", x))
             .collect::<Vec<_>>();
         let actual = cache.expect_snapshot(&client, d0, max_commit_ts).await;
         assert_eq!(actual, expected);
+        log.assert_snapshot(d0, max_commit_ts).await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -486,15 +496,16 @@ mod tests {
     async fn tidy_race() {
         let client = PersistClient::new_for_tests().await;
         let mut txns0 = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns0.new_log();
         let d0 = txns0.expect_register(1).await;
 
         // Commit something and apply it, but don't tidy yet.
-        let tidy0 = txns0.expect_commit_at(2, d0, &["foo"]).await;
+        let tidy0 = txns0.expect_commit_at(2, d0, &["foo"], &log).await;
 
         // Now open an independent TxnsHandle, commit, apply, and tidy.
         let mut txns1 = TxnsHandle::expect_open_id(client.clone(), txns0.txns_id()).await;
         let d1 = txns1.expect_register(3).await;
-        let tidy1 = txns1.expect_commit_at(4, d1, &["foo"]).await;
+        let tidy1 = txns1.expect_commit_at(4, d1, &["foo"], &log).await;
         let () = txns1.tidy_at(5, tidy1).await.unwrap();
 
         // Now try the original tidy0. tidy1 has already done the retraction for
@@ -506,6 +517,9 @@ mod tests {
         let mut cache = TxnsCache::expect_open(0, &txns0).await;
         cache.update_gt(&6).await;
         assert_eq!(cache.validate(), Ok(()));
+
+        log.assert_snapshot(d0, 6).await;
+        log.assert_snapshot(d1, 6).await;
     }
 
     // Regression test for a bug caught during code review, where it was

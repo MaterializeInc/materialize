@@ -4636,6 +4636,7 @@ dependencies = [
 name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
+ "crossbeam-channel",
  "differential-dataflow",
  "futures",
  "mz-ore",
