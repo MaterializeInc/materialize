@@ -120,7 +120,7 @@ tracing_ = [
   "sentry-tracing",
   "yansi",
 ]
-tokio-console = ["console-subscriber", "tokio", "tokio/tracing"]
+tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]
