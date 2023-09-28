@@ -147,6 +147,26 @@ contains: invalid NULL DEFAULTS: cannot use value as boolean
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   (
+    NULL DEFAULTS = ""
+  )
+  ENVELOPE UPSERT
+contains: Expected option value, found identifier ""
+
+! CREATE SINK bad_sink FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
+    NULL DEFAULTS = NULL
+  )
+  ENVELOPE UPSERT
+contains: invalid NULL DEFAULTS: cannot use value as boolean
+
+! CREATE SINK bad_sink FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
     NULL DEFAULTS,
     NULL DEFAULTS = TRUE
   )
