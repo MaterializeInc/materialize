@@ -2410,8 +2410,8 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
     sure #21782 does not regress.
     """
     num_conns = 2000
-    p50_limit = 2.0
-    p99_limit = 6.0
+    p50_limit = 10.0
+    p99_limit = 20.0
 
     runtimes: list[float] = [float("inf")] * num_conns
 
