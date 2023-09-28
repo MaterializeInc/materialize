@@ -238,7 +238,7 @@ mod tests {
         let n = resp_client.read(buf).await.unwrap();
         let buf_as = std::str::from_utf8(&buf[..n]).unwrap();
 
-        let messages = parse_response::<T, R>(&buf_as.clone());
+        let messages = parse_response::<T, R>(buf_as.clone());
         assert_eq!(messages, expected_output_message)
     }
 
@@ -253,7 +253,7 @@ mod tests {
         while !slices.is_empty() {
             // parse headers to get headers length
             let mut dst = [httparse::EMPTY_HEADER; 2];
-            let (headers_len, _) = match httparse::parse_headers(&slices, &mut dst).unwrap() {
+            let (headers_len, _) = match httparse::parse_headers(slices, &mut dst).unwrap() {
                 httparse::Status::Complete(output) => output,
                 httparse::Status::Partial => panic!("Partial headers"),
             };
@@ -288,7 +288,7 @@ mod tests {
         });
 
         // start server as concurrent task
-        tokio::spawn(Server::new(req_server, resp_server, socket).serve(service));
+        mz_ore::task::spawn(|| format!("taskname:{}", "lsp_server"), Server::new(req_server, resp_server, socket).serve(service));
 
         (req_client, resp_client)
     }
