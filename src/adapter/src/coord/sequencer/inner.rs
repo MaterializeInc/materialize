@@ -3266,27 +3266,6 @@ impl Coordinator {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
         }
 
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
-        }
-
         let catalog = self.catalog();
         let target_cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
         // Set parameter values for optimizing one-shot SELECT queries.
@@ -3324,13 +3303,10 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(broken, "local", || {
-            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
-                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                if let Ok(ref optimized_plan) = optimized_plan {
-                    trace_plan(optimized_plan.as_inner());
-                }
-                optimized_plan.map_err(AdapterError::from)
-            })
+            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
+            let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+            trace_plan(optimized_plan.as_inner());
+            Ok::<_, AdapterError>(optimized_plan)
         })?;
 
         let mut dataflow = DataflowDesc::new("explanation".to_string());
@@ -3467,30 +3443,6 @@ impl Coordinator {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
         }
 
-        // Initialize helper context
-        // -------------------------
-
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
-        }
-
         let full_name = self.catalog().resolve_full_name(&name, None);
 
         // Initialize optimizer context
@@ -3536,13 +3488,10 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(broken, "local", || {
-            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
-                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                if let Ok(ref optimized_plan) = optimized_plan {
-                    trace_plan(optimized_plan.as_inner());
-                }
-                optimized_plan.map_err(AdapterError::from)
-            })
+            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
+            let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+            trace_plan(optimized_plan.as_inner());
+            Ok::<_, AdapterError>(optimized_plan)
         })?;
 
         // Execute the `optimize/global` stage.
@@ -3622,27 +3571,6 @@ impl Coordinator {
 
         if broken {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
-        }
-
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
         }
 
         // Initialize helper context
@@ -5725,6 +5653,31 @@ fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSink
         AlterOptionParameter::Set(size) => Some(SourceSinkClusterConfig::Linked { size }),
         AlterOptionParameter::Reset => Some(SourceSinkClusterConfig::Undefined),
         AlterOptionParameter::Unchanged => None,
+    }
+}
+
+/// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+/// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`]
+/// call.
+///
+/// Used to implement `EXPLAIN BROKEN <statement>` in the `~_optimizer_pipeline`
+/// methods above.
+fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+where
+    F: FnOnce() -> Result<R, E>,
+    E: Into<AdapterError>,
+{
+    if guard {
+        let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+        match r {
+            Ok(result) => result.map_err(Into::into),
+            Err(_) => {
+                let msg = format!("panic at the `{}` optimization stage", stage);
+                Err(AdapterError::Internal(msg))
+            }
+        }
+    } else {
+        f().map_err(Into::into)
     }
 }
 
