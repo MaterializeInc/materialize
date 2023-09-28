@@ -3272,9 +3272,6 @@ impl Coordinator {
 
         let catalog = self.catalog();
         let target_cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
-        // Set parameter values for optimizing one-shot SELECT queries.
-        let explainee_id = GlobalId::Explain;
-        let is_oneshot = true;
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
@@ -3313,24 +3310,8 @@ impl Coordinator {
             Ok::<_, AdapterError>(optimized_plan)
         })?;
 
-        let mut dataflow = DataflowDesc::new("explanation".to_string());
-        let mut builder = self.dataflow_builder(target_cluster_id);
-        builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
-
-        // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
-        // timestamp.
-        let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-        };
-        let state = self.catalog().state();
-        dataflow.visit_children(
-            |r| prep_relation_expr(state, r, style),
-            |s| prep_scalar_expr(state, s, style),
-        )?;
-
         // Acquire a timestamp (necessary for loading statistics).
-        let timestamp_context = self
+        let timestamp_ctx = self
             .sequence_peek_timestamp(
                 session,
                 &QueryWhen::Immediately,
@@ -3341,48 +3322,70 @@ impl Coordinator {
                 None, // no real-time recency
             )?
             .timestamp_context;
-        let query_as_of = timestamp_context.antichain();
 
         // Load cardinality statistics.
         let stats = self
-            .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
+            .statistics_oracle(session, &source_ids, timestamp_ctx.antichain(), true)
             .with_subscriber(root_dispatch)
             .await?;
 
+        let state = self.catalog().state();
+
         // Execute the `optimize/global` stage.
-        let dataflow_metainfo = catch_unwind(broken, "global", || {
-            mz_transform::optimize_dataflow(
-                &mut dataflow,
+        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
+            let mut df_builder = self.dataflow_builder(target_cluster_id);
+
+            let mut df = DataflowDesc::new("explanation".to_string());
+            df_builder.import_view_into_dataflow(&GlobalId::Explain, &optimized_plan, &mut df)?;
+
+            // Resolve all unmaterializable function calls except mz_now(),
+            // because in line with the `sequence_~` method we pretend that we
+            // don't have a timestamp yet.
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Deferred,
+                session,
+            };
+            df.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
+            )?;
+
+            // Optimize the dataflow across views, and any other ways that appeal.
+            let df_metainfo = mz_transform::optimize_dataflow(
+                &mut df,
                 &self.index_oracle(target_cluster_id),
                 stats.as_ref(),
-            )
+            )?;
+
+            Ok::<_, AdapterError>((df, df_metainfo))
         })?;
 
         // Collect the list of indexes used by the dataflow at this point
         let mut used_indexes = UsedIndexes::new(
-            dataflow
+            df
                 .index_imports
                 .iter()
                 .map(|(id, _index_import)| {
-                    (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
                 })
                 .collect(),
         );
 
         // Determine if fast path plan will be used for this explainee.
         let fast_path_plan = {
-            dataflow.set_as_of(query_as_of);
+            df.set_as_of(timestamp_ctx.antichain());
+
+            // Resolve all unmaterializable function including mz_now().
             let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                logical_time: EvalTime::Time(timestamp_ctx.timestamp_or_default()),
                 session,
             };
-            let state = self.catalog().state();
-            dataflow.visit_children(
+            df.visit_children(
                 |r| prep_relation_expr(state, r, style),
                 |s| prep_scalar_expr(state, s, style),
             )?;
             peek::create_fast_path_plan(
-                &mut dataflow,
+                &mut df,
                 GlobalId::Explain,
                 finishing.as_ref(),
                 self.catalog.system_config().persist_fast_path_limit(),
@@ -3395,30 +3398,25 @@ impl Coordinator {
 
         // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
         // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-        if let Some(as_of) = dataflow.as_of.as_ref() {
+        if let Some(as_of) = df.as_of.as_ref() {
             if !as_of.is_empty() {
                 if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
-                    dataflow.until = timely::progress::Antichain::from_elem(next);
+                    df.until = timely::progress::Antichain::from_elem(next);
                 }
             }
         }
 
         // Execute the `optimize/finalize_dataflow` stage.
-        let dataflow_plan = catch_unwind(broken, "finalize_dataflow", || {
-            self.finalize_dataflow(dataflow, target_cluster_id)
+        let df = catch_unwind(broken, "finalize_dataflow", || {
+            self.finalize_dataflow(df, target_cluster_id)
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&dataflow_plan);
+        trace_plan(&df);
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((
-            used_indexes,
-            fast_path_plan,
-            dataflow_metainfo,
-            BTreeMap::new(),
-        ))
+        Ok((used_indexes, fast_path_plan, df_metainfo, BTreeMap::new()))
     }
 
     /// WARNING, ENTERING SPOOKY ZONE 3.0
@@ -3505,9 +3503,8 @@ impl Coordinator {
 
         // Execute the `optimize/global` stage.
         let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
-            let mut dataflow_builder =
-                DataflowBuilder::new(self.catalog().state(), compute_instance);
-            dataflow_builder.build_materialized_view(
+            let mut df_builder = DataflowBuilder::new(self.catalog().state(), compute_instance);
+            df_builder.build_materialized_view(
                 exported_sink_id,
                 internal_view_id,
                 debug_name,
