@@ -142,8 +142,9 @@ pub struct ComputeController<T> {
     initialized: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// A response to handle on the next call to `ActiveComputeController::process`.
-    stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
+    /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
+    /// `ActiveComputeController::process`.
+    stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
     /// A number that increases on every `environmentd` restart.
@@ -164,7 +165,7 @@ impl<T> ComputeController<T> {
             build_info,
             initialized: false,
             config: Default::default(),
-            stashed_response: None,
+            stashed_replica_response: None,
             replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
@@ -324,7 +325,7 @@ where
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
-        if self.stashed_response.is_some() {
+        if self.stashed_replica_response.is_some() {
             // We still have a response stashed, which we are immediately ready to process.
             return;
         }
@@ -354,7 +355,7 @@ where
         match result {
             Ok((replica_id, resp)) => {
                 self.replica_heartbeats.insert(replica_id, Utc::now());
-                self.stashed_response = Some((instance_id, replica_id, resp));
+                self.stashed_replica_response = Some((instance_id, replica_id, resp));
             }
             Err(_) => {
                 // There is nothing to do here. `recv` has already added the failed replica to
@@ -575,7 +576,9 @@ where
         }
 
         // Process pending responses from replicas.
-        if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
+        if let Some((instance_id, replica_id, response)) =
+            self.compute.stashed_replica_response.take()
+        {
             if let Ok(mut instance) = self.instance(instance_id) {
                 return instance.handle_response(response, replica_id);
             } else {
