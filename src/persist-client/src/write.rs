@@ -175,9 +175,21 @@ where
 
     /// A cached version of the shard-global `upper` frontier.
     ///
-    /// This will always be less or equal to the shard-global `upper`.
+    /// This is the most recent upper discovered by this handle. It is
+    /// potentially more stale than [Self::shared_upper] but is lock-free and
+    /// allocation-free. This will always be less or equal to the shard-global
+    /// `upper`.
     pub fn upper(&self) -> &Antichain<T> {
         &self.upper
+    }
+
+    /// A less-stale cached version of the shard-global `upper` frontier.
+    ///
+    /// This is the most recently known upper for this shard process-wide, but
+    /// unlike [Self::upper] it requires a mutex and a clone. This will always be
+    /// less or equal to the shard-global `upper`.
+    pub fn shared_upper(&self) -> Antichain<T> {
+        self.machine.applier.clone_upper()
     }
 
     /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is not
