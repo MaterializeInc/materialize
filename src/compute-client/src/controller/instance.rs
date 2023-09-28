@@ -9,8 +9,9 @@
 
 //! A controller for a compute instance.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
+use std::sync::mpsc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
@@ -145,8 +146,8 @@ pub(super) struct Instance<T> {
     history: ComputeCommandHistory<UIntGauge, T>,
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
-    /// Ready compute controller responses to be delivered.
-    pub ready_responses: VecDeque<ComputeControllerResponse<T>>,
+    /// Sender for responses to be delivered.
+    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
@@ -183,6 +184,13 @@ impl<T> Instance<T> {
         self.collections.remove(&id);
     }
 
+    /// Enqueue the given response for delivery to the controller clients.
+    fn deliver_response(&mut self, response: ComputeControllerResponse<T>) {
+        self.response_tx
+            .send(response)
+            .expect("global controller never drops");
+    }
+
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
@@ -198,8 +206,6 @@ impl<T> Instance<T> {
     pub fn wants_processing(&self) -> bool {
         // Do we need to rehydrate failed replicas?
         !self.failed_replicas.is_empty()
-        // Do we have responses ready to deliver?
-        || !self.ready_responses.is_empty()
     }
 
     /// Returns whether the identified replica exists.
@@ -274,7 +280,7 @@ impl<T> Instance<T> {
             dependencies,
             diff,
         };
-        self.ready_responses.push_back(resp);
+        self.deliver_response(resp);
     }
 
     /// List compute collections that depend on the given collection.
@@ -299,6 +305,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
         variable_length_row_encoding: bool,
     ) -> Self {
         let collections = arranged_logs
@@ -320,7 +327,7 @@ where
             subscribes: Default::default(),
             history,
             failed_replicas: Default::default(),
-            ready_responses: Default::default(),
+            response_tx,
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
@@ -543,7 +550,7 @@ where
                     updates: Err("target replica failed or was dropped".into()),
                 }),
             );
-            self.compute.ready_responses.push_back(response);
+            self.compute.deliver_response(response);
         }
 
         // Peeks targeting this replica might not be served anymore (if the replica is dropped).
@@ -560,7 +567,9 @@ where
             ));
             to_drop.push(uuid);
         }
-        self.compute.ready_responses.extend(peek_responses);
+        for response in peek_responses {
+            self.compute.deliver_response(response);
+        }
         to_drop.into_iter().for_each(|uuid| self.remove_peek(uuid));
 
         Ok(())
@@ -843,12 +852,10 @@ where
             .observe_peek_response(&response, duration);
 
         // Enqueue the response to the cancellation.
+        let otel_ctx = peek.otel_ctx.clone();
         self.compute
-            .ready_responses
-            .push_back(ComputeControllerResponse::PeekResponse(
-                uuid,
-                response,
-                peek.otel_ctx.clone(),
+            .deliver_response(ComputeControllerResponse::PeekResponse(
+                uuid, response, otel_ctx,
             ));
 
         // Remove the peek.

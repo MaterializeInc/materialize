@@ -31,6 +31,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -151,6 +152,12 @@ pub struct ComputeController<T> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
     metrics: ComputeControllerMetrics,
+
+    /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
+    /// `ActiveComputeController::process`.
+    response_rx: mpsc::Receiver<ComputeControllerResponse<T>>,
+    /// Response sender that's passed to new `Instance`s.
+    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
 }
 
 impl<T> ComputeController<T> {
@@ -160,6 +167,8 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
+        let (response_tx, response_rx) = mpsc::channel();
+
         Self {
             instances: BTreeMap::new(),
             build_info,
@@ -169,6 +178,8 @@ impl<T> ComputeController<T> {
             replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            response_rx,
+            response_tx,
         }
     }
 
@@ -270,6 +281,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                self.response_tx.clone(),
                 variable_length_row_encoding,
             ),
         );
@@ -562,9 +574,13 @@ where
         }
 
         // Process pending ready responses.
-        for instance in self.compute.instances.values_mut() {
-            if let Some(response) = instance.ready_responses.pop_front() {
-                return Some(response);
+        match self.compute.response_rx.try_recv() {
+            Ok(response) => return Some(response),
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // This should never happen, since the `ComputeController` is always holding on to
+                // a copy of the `response_tx`.
+                panic!("response_tx has disconnected");
             }
         }
 
