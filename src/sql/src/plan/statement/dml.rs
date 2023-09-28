@@ -21,7 +21,9 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{ExplainTimestampStatement, Expr, OrderByExpr, SubscribeOutput};
+use mz_sql_parser::ast::{
+    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SubscribeOutput,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -35,7 +37,7 @@ use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
 use crate::plan::{
@@ -81,7 +83,7 @@ pub fn plan_insert(
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(params)?;
-    let expr = expr.optimize_and_lower(&scx.into())?;
+    let expr = expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
     let returning = returning
         .expr
         .into_iter()
@@ -109,7 +111,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -126,12 +128,11 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Update, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
     kind: MutationKind,
-    scx: &StatementContext,
     params: &Params,
     query::ReadThenWritePlan {
         id,
@@ -141,7 +142,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
-    let selection = selection.optimize_and_lower(&scx.into())?;
+    let selection = selection.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
@@ -233,7 +234,7 @@ pub fn describe_explain_plan(
                 describe_select(
                     scx,
                     SelectStatement {
-                        query: q,
+                        query: *q,
                         as_of: None,
                     },
                 )?
@@ -265,6 +266,8 @@ pub fn plan_explain_plan(
     }: ExplainPlanStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
+    use crate::plan::ExplaineeStatement;
+
     let format = match format {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
@@ -318,7 +321,7 @@ pub fn plan_explain_plan(
                 desc,
                 finishing,
                 scope: _,
-            } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+            } = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             raw_plan.bind_parameters(params)?;
 
             let row_set_finishing = if finishing.is_trivial(desc.arity()) {
@@ -331,11 +334,39 @@ pub fn plan_explain_plan(
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
             }
 
-            crate::plan::Explainee::Query {
+            crate::plan::Explainee::Statement(ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
                 broken,
-            }
+            })
+        }
+        Explainee::CreateMaterializedView(mut stmt, broken) => {
+            // If we don't force this parameter to Skip planning fails for names
+            // that already exist in the catalog.
+            stmt.if_exists = IfExistsBehavior::Skip;
+
+            let Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
+                name,
+                materialized_view:
+                    plan::MaterializedView {
+                        expr: raw_plan,
+                        column_names,
+                        cluster_id,
+                        ..
+                    },
+                ..
+            }) = ddl::plan_create_materialized_view(scx, *stmt, params)?
+            else {
+                sql_bail!("expected CreateMaterializedViewPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateMaterializedView {
+                name,
+                raw_plan,
+                column_names,
+                cluster_id,
+                broken,
+            })
         }
     };
 
@@ -392,7 +423,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
-        expr: expr.optimize_and_lower(&scx.into())?,
+        expr: expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?,
         desc,
         finishing,
         scope,

@@ -42,7 +42,10 @@ use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
-use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql::session::user::{
+    ExternalUserMetadata, User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER,
+    SYSTEM_USER_NAME,
+};
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
 use serde::{Deserialize, Serialize};
@@ -430,12 +433,16 @@ impl InternalHttpServer {
                 routing::get(catalog::handle_catalog_check),
             )
             .route(
+                "/api/coordinator/check",
+                routing::get(catalog::handle_coordinator_check),
+            )
+            .route(
                 "/api/internal-console",
                 routing::get(|| async move {
                     handle_internal_console_redirect(&internal_console_redirect_url).await
                 }),
             )
-            .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
+            .layer(middleware::from_fn(internal_http_auth))
             .layer(Extension(adapter_client_rx.shared()))
             .layer(Extension(active_connection_count));
 
@@ -451,6 +458,25 @@ impl InternalHttpServer {
 
         InternalHttpServer { router }
     }
+}
+
+async fn internal_http_auth<B>(mut req: Request<B>, next: Next<B>) -> impl IntoResponse {
+    let user_name = req
+        .headers()
+        .get("x-materialize-user")
+        .map(|h| h.to_str())
+        .unwrap_or_else(|| Ok(SYSTEM_USER_NAME));
+    let user = match user_name {
+        Ok(SUPPORT_USER_NAME) => AuthedUser(SUPPORT_USER.clone()),
+        Ok(SYSTEM_USER_NAME) => AuthedUser(SYSTEM_USER.clone()),
+        _ => {
+            return Err(AuthError::MismatchedUser(format!(
+            "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
+        )));
+        }
+    };
+    req.extensions_mut().insert(user);
+    Ok(next.run(req).await)
 }
 
 #[async_trait]
@@ -592,7 +618,7 @@ enum AuthError {
     #[error("missing authorization header")]
     MissingHttpAuthentication,
     #[error("{0}")]
-    MismatchedUser(&'static str),
+    MismatchedUser(String),
     #[error("unexpected credentials")]
     UnexpectedCredentials,
 }
@@ -639,7 +665,7 @@ async fn http_auth<B>(
                 if let Some(user) = cert_user {
                     if basic.username() != user {
                         return Err(AuthError::MismatchedUser(
-                        "user in client certificate did not match user specified in authorization header",
+                        "user in client certificate did not match user specified in authorization header".to_string(),
                     ));
                     }
                 }

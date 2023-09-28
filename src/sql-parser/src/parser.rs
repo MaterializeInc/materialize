@@ -32,7 +32,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
 use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, warn};
 use IsLateral::*;
 use IsOptional::*;
 
@@ -118,6 +118,7 @@ pub fn parse_statements_with_limit(
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
+    debug!("parsing statements: {sql}");
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,
@@ -6970,16 +6971,30 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        // VIEW name | MATERIALIZED VIEW name | INDEX name | query
         let explainee = if self.parse_keyword(VIEW) {
+            // Parse: `VIEW name`
             Explainee::View(self.parse_raw_name()?)
         } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            // Parse: `MATERIALIZED VIEW name`
             Explainee::MaterializedView(self.parse_raw_name()?)
         } else if self.parse_keyword(INDEX) {
+            // Parse: `INDEX name`
             Explainee::Index(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
-            Explainee::Query(self.parse_query()?, broken)
+            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW]) {
+                // Parse: `BROKEN? CREATE MATERIALIZED VIEW ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_materialized_view()? {
+                    Statement::CreateMaterializedView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::CreateMaterializedView(Box::new(stmt), broken)
+            } else {
+                // Parse: `BROKEN? query`
+                let query = self.parse_query()?;
+                Explainee::Query(Box::new(query), broken)
+            }
         };
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {

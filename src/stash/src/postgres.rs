@@ -1344,6 +1344,17 @@ impl DebugStashFactory {
                 tracing::error!("postgres stash connection error: {e}");
             }
         });
+        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
+        // been able to figure out. For some reason, uncommitted transactions are being left open
+        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
+        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
+        // issue somehow. This is a gross hack and we don't really understand what's going on, but
+        // for now it resolves issues in CI while we debug further.
+        client
+            .batch_execute(
+                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
+            )
+            .await?;
         client
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await?;

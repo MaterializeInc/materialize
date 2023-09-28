@@ -2056,6 +2056,76 @@ fn test_internal_console_redirect() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
+fn test_internal_http_auth() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let json = serde_json::json!({"query": "SELECT current_user;"});
+    let url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.internal_http_local_addr()
+    ))
+    .unwrap();
+
+    let res = Client::new().post(url.clone()).json(&json).send().unwrap();
+
+    tracing::info!("response: {res:?}");
+
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // defaults to mz_system
+    assert!(res.text().unwrap().to_string().contains("mz_system"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_system")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // can be explicitly set to mz_system
+    assert!(res.text().unwrap().to_string().contains("mz_system"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_support")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // can be explicitly set to mz_support
+    assert!(res.text().unwrap().to_string().contains("mz_support"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "invalid value")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    // invalid header returns an error
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{:?}", res.text());
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion() {
     let tmpdir = TempDir::new().unwrap();
     let config = util::Config::default()

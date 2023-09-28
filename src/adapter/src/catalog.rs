@@ -120,7 +120,7 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
-mod consistency;
+pub(crate) mod consistency;
 mod error;
 mod migrate;
 
@@ -6439,7 +6439,9 @@ impl Catalog {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let optimized_expr = optimizer.optimize(view.expr)?;
+                let raw_expr = view.expr;
+                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
@@ -6454,7 +6456,9 @@ impl Catalog {
             }) => {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let optimized_expr = optimizer.optimize(materialized_view.expr)?;
+                let raw_expr = materialized_view.expr;
+                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
