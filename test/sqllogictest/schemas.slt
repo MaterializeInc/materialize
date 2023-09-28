@@ -57,7 +57,7 @@ SELECT current_schemas(true)
 # cluster is invalid.
 
 statement ok
-SET cluster = noexist
+SET CLUSTER = default
 
 query T
 SELECT current_schema()
@@ -75,7 +75,7 @@ SELECT current_schemas(true)
 {mz_catalog,pg_catalog}
 
 statement ok
-SET cluster = default
+SET CLUSTER = default
 
 statement error no schema has been selected to create in
 CREATE TABLE t (i INT)

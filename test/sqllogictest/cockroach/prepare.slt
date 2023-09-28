@@ -373,7 +373,7 @@ PREPARE p6 AS RESUME JOB $1
 query error pq: job with ID 123 does not exist
 EXECUTE p6(123)
 
-# Ensure that SET / SET CLUSTER SETTING know about placeholders
+# Ensure that SET / SET CLUSTER default know about placeholders
 statement ok
 PREPARE setp(string) AS SET application_name = $1
 
@@ -387,11 +387,11 @@ EXECUTE setp('hello'); SHOW application_name
 ----
 hello
 
-# Note: we can't check the result of SET CLUSTER SETTING synchronously
+# Note: we can't check the result of SET CLUSTER default synchronously
 # because it doesn't propagate immediately.
 
 statement ok
-PREPARE sets(string) AS SET CLUSTER SETTING cluster.organization = $1
+PREPARE sets(string) AS SET CLUSTER default cluster.organization = $1
 
 statement ok
 EXECUTE sets('hello')

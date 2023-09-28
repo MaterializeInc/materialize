@@ -31,7 +31,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
       r4 (SIZE '4')
   )
 
-> SET cluster = test
+> SET CLUSTER = default
 
 > SET cluster_replica = r1
 

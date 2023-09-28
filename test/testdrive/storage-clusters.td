@@ -21,16 +21,16 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 > CREATE CLUSTER storage REPLICAS ()
 
 # Querying a cluster with no replicas does not succeed.
-> SET cluster = storage
+> SET CLUSTER = default
 ! SELECT generate_series(1, 1)
 contains:CLUSTER "storage" has no replicas available to service request
 
 # Specifying `IN CLUSTER` and `SIZE` simultaneously is banned.
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
-contains:only one of IN CLUSTER or SIZE can be set
+! CREATE SOURCE loadgen IN CLUSTER default FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
+contains:only one of IN CLUSTER default SIZE can be set
 
 # Creating a source in an empty, zero-replica cluster should work.
-> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE loadgen IN CLUSTER default FROM LOAD GENERATOR COUNTER
 
 ! ALTER SOURCE loadgen SET (SIZE = '1')
 contains:cannot change the size of a source or sink created with IN CLUSTER
@@ -39,9 +39,9 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_unified_clusters = false
 
 # Create indexes and materialized views in a storage cluster is banned.
-! CREATE INDEX bad IN CLUSTER storage ON t (a)
+! CREATE INDEX bad IN CLUSTER default ON t (a)
 contains:cannot create this kind of item in a cluster that contains sources or sinks
-! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
+! CREATE MATERIALIZED VIEW bad IN CLUSTER default AS SELECT 1
 contains:cannot create this kind of item in a cluster that contains sources or sinks
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -60,8 +60,8 @@ contains:cannot create more than one replica of a cluster containing sources or 
 # Creating indexes and materialized views in a cluster is permitted once the
 # source has been dropped.
 > DROP SOURCE loadgen;
-> CREATE INDEX idx IN CLUSTER storage ON t (a)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT generate_series(1, 1)
+> CREATE INDEX idx IN CLUSTER default ON t (a)
+> CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT generate_series(1, 1)
 
 # As is running queries.
 > SELECT generate_series(1, 1)
@@ -71,8 +71,8 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_unified_clusters = false
 
 # Recreating the source is banned.
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
-contains:cannot create source in cluster containing indexes or materialized views
+! CREATE SOURCE loadgen IN CLUSTER default FROM LOAD GENERATOR COUNTER
+contains:cannot create source IN CLUSTER default indexes or materialized views
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unified_clusters = true
@@ -84,19 +84,19 @@ ALTER SYSTEM SET enable_unified_clusters = true
 # are dropped because of the second replica.
 > DROP INDEX idx
 > DROP MATERIALIZED VIEW mv
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
-contains:cannot create source in cluster with more than one replica
+! CREATE SOURCE loadgen IN CLUSTER default FROM LOAD GENERATOR COUNTER
+contains:cannot create source IN CLUSTER default more than one replica
 
 # Creating the source is allowed after dropping the second replica
 > DROP CLUSTER REPLICA storage.r2
-> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE loadgen IN CLUSTER default FROM LOAD GENERATOR COUNTER
 
 # Test that `DROP CLUSTER` only succeeds with `CASCADE`.
 ! DROP CLUSTER storage
 contains:cannot drop cluster with active objects
 > DROP CLUSTER storage CASCADE
 
-> SET cluster = default
+> SET CLUSTER = default
 
 # Test that a cluster can contain multiple sources and sinks, and verify that
 # the sources and sinks produce the correct output.
@@ -119,12 +119,12 @@ bb
   TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE data1
-  IN CLUSTER storage
+  IN CLUSTER default
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data1-${testdrive.seed}')
   FORMAT TEXT
 
 > CREATE SOURCE data2
-  IN CLUSTER storage
+  IN CLUSTER default
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data2-${testdrive.seed}')
   FORMAT TEXT
 
@@ -141,7 +141,7 @@ bb
 > CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2
 
 > CREATE SINK sink1
-  IN CLUSTER storage
+  IN CLUSTER default
   FROM view1
   INTO KAFKA CONNECTION kafka (TOPIC 'sink1-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
@@ -150,7 +150,7 @@ bb
 contains:cannot change the size of a source or sink created with IN CLUSTER
 
 > CREATE SINK sink2
-  IN CLUSTER storage
+  IN CLUSTER default
   FROM view2
   INTO KAFKA CONNECTION kafka (TOPIC 'sink2-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM

@@ -13,7 +13,7 @@ $ kafka-create-topic topic=failpoint
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE failpoint
-  IN CLUSTER storage_cluster
+  IN CLUSTER default
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-failpoint-${testdrive.seed}'
   )

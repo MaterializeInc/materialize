@@ -112,7 +112,7 @@ def populate(c: Composition) -> None:
 
 > CREATE VIEW v1 AS SELECT COUNT(*) AS c1 FROM t1;
 
-> CREATE DEFAULT INDEX i1 IN CLUSTER cluster2 ON v1;
+> CREATE DEFAULT INDEX i1 IN CLUSTER default ON v1;
 """,
     )
 
@@ -156,7 +156,7 @@ t1
 
 > CREATE MATERIALIZED VIEW v1mat AS SELECT * FROM v1;
 
-> CREATE INDEX i2 IN CLUSTER cluster2 ON t1 (f1);
+> CREATE INDEX i2 IN CLUSTER default ON t1 (f1);
 
 > SELECT f1 FROM t1;
 1

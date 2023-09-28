@@ -32,7 +32,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
             > CREATE SOURCE source1
-              IN CLUSTER disk_cluster1
+              IN CLUSTER default
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-test-${testdrive.seed}')
               KEY FORMAT TEXT

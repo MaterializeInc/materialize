@@ -18,7 +18,7 @@
 > DROP CLUSTER IF EXISTS test
 
 > CREATE CLUSTER test REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '10ms'))
-> SET cluster = test
+> SET CLUSTER = default
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
 false
 

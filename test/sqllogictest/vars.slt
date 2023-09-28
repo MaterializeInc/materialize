@@ -441,7 +441,7 @@ statement ok
 CREATE ROLE parker;
 
 statement error setting default session variables for a role is not supported
-ALTER ROLE parker SET cluster TO foo;
+ALTER ROLE parker SET CLUSTER default foo;
 
 # Enable Role variable defaults.
 simple conn=mz_system,user=mz_system
@@ -450,7 +450,7 @@ ALTER SYSTEM SET enable_role_vars TO true;
 COMPLETE 0
 
 statement ok
-ALTER ROLE parker SET cluster TO foo;
+ALTER ROLE parker SET CLUSTER default foo;
 
 query T
 SHOW cluster;
@@ -485,7 +485,7 @@ COMPLETE 1
 
 # Roles can alter their own variables.
 simple conn=parker_2,user=parker
-ALTER ROLE parker SET cluster TO bar;
+ALTER ROLE parker SET CLUSTER default bar;
 ----
 COMPLETE 0
 
@@ -496,7 +496,7 @@ bar
 COMPLETE 1
 
 simple conn=parker_3,user=parker
-SET cluster TO session_var;
+SET CLUSTER default session_var;
 ----
 COMPLETE 0
 
@@ -523,7 +523,7 @@ bar
 COMPLETE 1
 
 simple conn=parker_3,user=parker
-SET cluster TO in_transaction;
+SET CLUSTER default in_transaction;
 ----
 COMPLETE 0
 
@@ -616,12 +616,12 @@ CREATE ROLE joe;
 # You can set variable values for yourself, but you need CREATEROLE privileges to set them for
 # other roles.
 simple conn=parker_3,user=parker
-ALTER ROLE joe SET cluster TO wont_work;
+ALTER ROLE joe SET CLUSTER default wont_work;
 ----
 db error: ERROR: permission denied for SYSTEM
 
 statement ok
-ALTER ROLE joe SET cluster TO will_work
+ALTER ROLE joe SET CLUSTER default will_work
 
 simple conn=joe,user=joe
 SHOW cluster;

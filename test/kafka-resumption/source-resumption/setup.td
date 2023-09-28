@@ -30,7 +30,7 @@ three
 > CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 > CREATE SOURCE topic
-  IN CLUSTER clusterd
+  IN CLUSTER default
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )

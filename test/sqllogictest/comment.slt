@@ -160,7 +160,7 @@ statement ok
 DROP CLUSTER REPLICA comment_cluster.r2;
 
 statement ok
-CREATE SOURCE my_webhook IN CLUSTER comment_cluster FROM WEBHOOK BODY FORMAT TEXT;
+CREATE SOURCE my_webhook IN CLUSTER default FROM WEBHOOK BODY FORMAT TEXT;
 
 statement ok
 COMMENT ON SOURCE my_webhook IS 'all_the_data';

@@ -34,11 +34,11 @@ one
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE SOURCE remote1
-  IN CLUSTER storage_cluster
+  IN CLUSTER default
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
   FORMAT TEXT
 > CREATE SOURCE remote2
-  IN CLUSTER storage_cluster
+  IN CLUSTER default
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
   FORMAT TEXT
 

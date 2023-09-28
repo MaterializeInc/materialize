@@ -13,7 +13,7 @@ mode cockroach
 reset-server
 
 statement ok
-SET CLUSTER TO mz_introspection
+SET CLUSTER default mz_introspection
 
 query T multiline
 EXPLAIN SHOW DATABASES
@@ -127,7 +127,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN SHOW INDEXES IN CLUSTER DEFAULT
+EXPLAIN SHOW INDEXES IN CLUSTER default
 ----
 Explained Query (fast path):
   Project (#1..=#4)
@@ -367,13 +367,13 @@ statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'));
 
 statement ok
-SET CLUSTER TO foo;
+SET CLUSTER default foo;
 
 statement ok
 CREATE TABLE bar ( key text, val bigint );
 
 statement ok
-SET CLUSTER TO mz_introspection;
+SET CLUSTER default mz_introspection;
 
 statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
 SELECT key FROM bar;
@@ -383,7 +383,7 @@ statement ok
 SHOW INDEXES on bar;
 
 statement ok
-SET CLUSTER TO mz_introspection;
+SET CLUSTER default mz_introspection;
 
 statement ok
 DROP CLUSTER foo CASCADE;

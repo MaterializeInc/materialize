@@ -24,7 +24,7 @@
     s1 (SIZE '1')
   )
 
-> SET cluster = test;
+> SET CLUSTER = default;
 
 > CREATE TABLE t1 (a int)
 > INSERT INTO t1 VALUES (1)
@@ -90,7 +90,7 @@ idx1
 # Test that frontiers of sources are reported.
 
 > CREATE SOURCE source1
-  IN CLUSTER test_source
+  IN CLUSTER default
   FROM LOAD GENERATOR COUNTER
 
 > SELECT
@@ -128,7 +128,7 @@ source1_progress
   )
 
 > CREATE SINK sink1
-  IN CLUSTER test_source
+  IN CLUSTER default
   FROM t1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

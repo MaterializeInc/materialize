@@ -134,7 +134,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
           CREATE PUBLICATION mz_source FOR TABLE t1;
 
           > CREATE SOURCE source_with_deleted_secret
-            IN CLUSTER to_be_killed
+            IN CLUSTER default
             FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
             (PUBLICATION 'mz_source')
             FOR ALL TABLES;

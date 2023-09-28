@@ -551,7 +551,7 @@ DistinctByErrorCheck
 > CREATE CLUSTER linear_join REPLICAS (r1 (SIZE '1'))
 > SET cluster=linear_join
 > CREATE TABLE t1 (a int)
-> CREATE MATERIALIZED VIEW v1 IN CLUSTER linear_join AS
+> CREATE MATERIALIZED VIEW v1 IN CLUSTER default AS
   SELECT SUM(a1.a + a2.a * 10000) FROM t1 AS a1, t1 AS a2
 > CREATE DEFAULT INDEX ON v1
 
@@ -691,7 +691,7 @@ ReduceMinsMaxes
 > DROP TABLE t CASCADE
 
 # Check mz_introspection
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER default mz_introspection
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "AccumulableErrorCheck"
@@ -822,7 +822,7 @@ ReduceMinsMaxes
 "Reduced TopK input"
 "Reduced TopK input"
 
-> SET CLUSTER TO default
+> SET CLUSTER default default
 
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

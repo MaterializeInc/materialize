@@ -22,7 +22,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
         input=dedent(
             f"""
             > CREATE CLUSTER shared_fate REPLICAS (shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
-            > SET cluster = shared_fate;
+            > SET CLUSTER = default;
 
             > CREATE TABLE t1 (f1 INTEGER);
 
@@ -63,7 +63,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            > SET cluster = shared_fate;
+            > SET CLUSTER = default;
 
             > INSERT INTO t1 SELECT 345000 + generate_series FROM generate_series(1, 1000);
 

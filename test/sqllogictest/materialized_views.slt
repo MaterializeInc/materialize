@@ -73,7 +73,7 @@ CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 # Test: Materialized view can be created in another cluster.
 
 statement ok
-CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
+CREATE MATERIALIZED VIEW other_mv IN CLUSTER default AS SELECT 1
 
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
@@ -89,7 +89,7 @@ DROP MATERIALIZED VIEW other_mv
 # Test: Materialized view can not be created in a non-existing cluster.
 
 statement error unknown cluster 'doesnotexist'
-CREATE MATERIALIZED VIEW error IN CLUSTER doesnotexist AS SELECT 1
+CREATE MATERIALIZED VIEW error IN CLUSTER default AS SELECT 1
 
 
 # Test: Materialized view data is accessible from the same cluster.
@@ -108,7 +108,7 @@ SELECT * FROM mv
 # Test: Materialized view data is accessible from other clusters.
 
 statement ok
-SET cluster = other
+SET CLUSTER = default
 
 query I rowsort
 SELECT * FROM mv
@@ -346,7 +346,7 @@ statement ok
 CREATE CLUSTER to_drop REPLICAS ()
 
 statement ok
-CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER to_drop AS SELECT 1
+CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER default AS SELECT 1
 
 statement error cannot drop cluster with active objects
 DROP CLUSTER to_drop
@@ -383,7 +383,7 @@ COMPLETE 1
 # Test: SHOW MATERIALIZED VIEWS
 
 statement ok
-CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
+CREATE MATERIALIZED VIEW other_mv IN CLUSTER default AS SELECT 1
 
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
@@ -393,7 +393,7 @@ mv        default
 other_mv  other
 
 query TT colnames,rowsort
-SHOW MATERIALIZED VIEWS IN CLUSTER other
+SHOW MATERIALIZED VIEWS IN CLUSTER default
 ----
 name      cluster
 other_mv  other

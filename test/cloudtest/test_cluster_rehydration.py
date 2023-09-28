@@ -20,7 +20,7 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
             """
             > CREATE CLUSTER c REPLICAS ( r1 (SIZE = '1', INTROSPECTION INTERVAL = 0));
 
-            > CREATE SOURCE counter IN CLUSTER c
+            > CREATE SOURCE counter IN CLUSTER default
                 FROM LOAD GENERATOR COUNTER
                 (TICK INTERVAL '500ms');
 

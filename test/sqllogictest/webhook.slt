@@ -18,7 +18,7 @@ CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
 # We shouldn't be able to create a webhook source unless the feature is enabled.
 statement error creating or pushing data to webhook sources is not supported
-CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_bytes IN CLUSTER default FROM WEBHOOK
     BODY FORMAT BYTES
 
 simple conn=mz_system,user=mz_system
@@ -31,7 +31,7 @@ COMPLETE 0
 #
 
 statement ok
-CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_bytes IN CLUSTER default FROM WEBHOOK
     BODY FORMAT BYTES
 
 query TTT
@@ -45,7 +45,7 @@ SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_
 webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
 
 statement ok
-CREATE SOURCE "weird-name-(]%/'" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
+CREATE SOURCE "weird-name-(]%/'" IN CLUSTER default FROM WEBHOOK BODY FORMAT BYTES
 
 query TT
 SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
@@ -62,7 +62,7 @@ SELECT id, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_so
 u1 {/api/webhook/materialize/public/webhook_bytes}
 
 statement ok
-CREATE SOURCE webhook_bytes_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_bytes_include_headers IN CLUSTER default FROM WEBHOOK
     BODY FORMAT BYTES
     INCLUDE HEADERS
 
@@ -73,7 +73,7 @@ body false bytea
 headers false map
 
 statement ok
-CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_json IN CLUSTER default FROM WEBHOOK
     BODY FORMAT JSON
 
 query TTT
@@ -82,7 +82,7 @@ SHOW COLUMNS FROM webhook_json
 body false jsonb
 
 statement ok
-CREATE SOURCE webhook_json_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_json_include_headers IN CLUSTER default FROM WEBHOOK
     BODY FORMAT JSON
     INCLUDE HEADERS
 
@@ -93,7 +93,7 @@ body false jsonb
 headers false map
 
 statement ok
-CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
 
 query TTT
@@ -102,7 +102,7 @@ SHOW COLUMNS FROM webhook_text
 body false text
 
 statement ok
-CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text_include_headers IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
@@ -120,7 +120,7 @@ ALTER SYSTEM SET enable_unified_clusters = false
 COMPLETE 0
 
 statement error cannot create this kind of item in a cluster that contains sources or sinks
-CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
+CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER default AS (
     SELECT body FROM webhook_text_include_headers
 );
 
@@ -130,25 +130,25 @@ ALTER SYSTEM SET enable_unified_clusters = true
 COMPLETE 0
 
 statement ok
-CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
+CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER default AS (
     SELECT body FROM webhook_text_include_headers
 );
 
 # Should fail because a source with this name already exists.
 statement error source "materialize.public.webhook_text_include_headers" already exists
-CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text_include_headers IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
 # Should succeed since we're specifying "if not exists".
 statement ok
-CREATE SOURCE IF NOT EXISTS webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE IF NOT EXISTS webhook_text_include_headers IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
     INCLUDE HEADERS
 
 # Make sure we can parse a relatively complex validation expression.
 statement ok
-CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_bad_validation_expr IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
     CHECK (
         WITH (HEADERS, BODY)
@@ -156,7 +156,7 @@ CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOO
     )
 
 statement ok
-CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_buildkite IN CLUSTER default FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
     WITH (HEADERS, BODY BYTES)
@@ -168,7 +168,7 @@ CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
   )
 
 statement error column "field_that_does_not_exist" does not exist
-CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_bad_validation_expr IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
     CHECK (
         WITH (HEADERS)
@@ -176,17 +176,17 @@ CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOO
     )
 
 statement error CHECK must have type boolean, not type text
-CREATE SOURCE webhook_validation_returns_non_bool IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_returns_non_bool IN CLUSTER default FROM WEBHOOK
     BODY FORMAT TEXT
     CHECK ( 'foo' || 'bar' )
 
 statement error expression provided in CHECK does not reference any columns
-CREATE SOURCE webhook_json_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_json_with_validation IN CLUSTER default FROM WEBHOOK
     BODY FORMAT JSON
     CHECK ( 'a' = 'test' )
 
 statement error CHECK does not allow subqueries
-CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_subquery IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
@@ -194,7 +194,7 @@ CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM W
   )
 
 statement error expression provided in CHECK is not deterministic
-CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_now IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
@@ -202,7 +202,7 @@ CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOO
   )
 
 statement error expression provided in CHECK is not deterministic
-CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_now IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
@@ -210,7 +210,7 @@ CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOO
   )
 
 statement error expression provided in CHECK is not deterministic
-CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_now IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
@@ -218,7 +218,7 @@ CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOO
   )
 
 statement error unknown cluster 'i_do_not_exist'
-CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBHOOK
+CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES;
 
 # Dropping without cascade should fail since there are sources using it.
@@ -231,7 +231,7 @@ statement ok
 CREATE SECRET webhook_shared_secret AS 'test_key';
 
 statement ok
-CREATE SOURCE webhook_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_secret IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH ( HEADERS, SECRET webhook_shared_secret )
@@ -239,7 +239,7 @@ CREATE SOURCE webhook_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
   )
 
 statement ok
-CREATE SOURCE webhook_buildkite2 IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_buildkite2 IN CLUSTER default FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
     WITH ( HEADERS, BODY, SECRET webhook_shared_secret )
@@ -263,7 +263,7 @@ statement ok
 CREATE SECRET other_secret AS 'another_one';
 
 statement ok
-CREATE SOURCE webhook_with_two_secrets IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_two_secrets IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (
@@ -275,7 +275,7 @@ CREATE SOURCE webhook_with_two_secrets IN CLUSTER webhook_cluster FROM WEBHOOK
   )
 
 statement error unknown catalog item 'non_existent_secret'
-CREATE SOURCE webhook_with_unknown_second_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_unknown_second_secret IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (
@@ -287,7 +287,7 @@ CREATE SOURCE webhook_with_unknown_second_secret IN CLUSTER webhook_cluster FROM
   )
 
 statement error column reference "other_secret" is ambiguous
-CREATE SOURCE webhook_with_duplicate_secret_names IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_duplicate_secret_names IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (
@@ -299,7 +299,7 @@ CREATE SOURCE webhook_with_duplicate_secret_names IN CLUSTER webhook_cluster FRO
   )
 
 statement ok
-CREATE SOURCE webhook_with_headers_and_body_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_headers_and_body_alias IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (
@@ -312,7 +312,7 @@ CREATE SOURCE webhook_with_headers_and_body_alias IN CLUSTER webhook_cluster FRO
   )
 
 statement error column reference "headers" is ambiguous
-CREATE SOURCE webhook_with_headers_duplicates IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_headers_duplicates IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (HEADERS, HEADERS)
@@ -320,7 +320,7 @@ CREATE SOURCE webhook_with_headers_duplicates IN CLUSTER webhook_cluster FROM WE
   )
 
 statement error column reference "body" is ambiguous
-CREATE SOURCE webhook_with_body_duplicates IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_body_duplicates IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (BODY, BODY)
@@ -328,7 +328,7 @@ CREATE SOURCE webhook_with_body_duplicates IN CLUSTER webhook_cluster FROM WEBHO
   )
 
 statement error column reference "x" is ambiguous
-CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (HEADERS as x, BODY as x)
@@ -336,7 +336,7 @@ CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER webhook_cluster FROM WEB
   )
 
 statement ok
-CREATE SOURCE webhook_text_with_mapped_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text_with_mapped_headers IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADER 'x-special-header' AS "specialHeader"
   INCLUDE HEADER 'x-hash' AS hash BYTES
@@ -351,7 +351,7 @@ hash true bytea
 content_type true text
 
 statement ok
-CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADER 'x-hash' as hash BYTES
   INCLUDE HEADER 'content-type' as content_type
@@ -366,13 +366,13 @@ hash true bytea
 content_type true text
 
 statement error column reference "header_a" is ambiguous
-CREATE SOURCE webhook_text_with_duplicate_header_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text_with_duplicate_header_alias IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADER 'x-first-header' as header_a
   INCLUDE HEADER 'x-second-header' as header_a
 
 statement error column reference "body" is ambiguous
-CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADER 'x-my-header' as body
 
@@ -382,15 +382,15 @@ statement ok
 CREATE CLUSTER compute_cluster REPLICAS (r1 (SIZE '1'));
 
 statement ok
-CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute_cluster AS SELECT name FROM mz_objects;
+CREATE MATERIALIZED VIEW mv1 IN CLUSTER default AS SELECT name FROM mz_objects;
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_unified_clusters = false
 ----
 COMPLETE 0
 
-statement error cannot create source in cluster containing indexes or materialized views
-CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK
+statement error cannot create source IN CLUSTER default indexes or materialized views
+CREATE SOURCE webhook_on_compute_cluster IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES;
 
 simple conn=mz_system,user=mz_system
@@ -399,7 +399,7 @@ ALTER SYSTEM SET enable_unified_clusters = true
 COMPLETE 0
 
 statement ok
-CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK
+CREATE SOURCE webhook_on_compute_cluster IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES;
 
 # Make sure we report webhook sources as running.

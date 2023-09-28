@@ -28,7 +28,7 @@ class SmallClusters(Scenario):
                 > CREATE CLUSTER cluster{i} REPLICAS (r (SIZE '4-1'));
 
                 > CREATE MATERIALIZED VIEW v{i}
-                  IN CLUSTER cluster{i}
+                  IN CLUSTER default{i}
                   AS SELECT COUNT(*) FROM t1;
 
                 > CREATE DEFAULT INDEX ON v{i}
@@ -40,7 +40,7 @@ class SmallClusters(Scenario):
         select = "\n".join(
             dedent(
                 f"""
-                > SET CLUSTER = cluster{i}
+                > SET CLUSTER = default{i}
                 > SELECT * FROM v{i}
                 100000
                 """

@@ -227,7 +227,7 @@ DROP CLUSTER mz_introspection CASCADE;
 db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
 simple conn=mz_system,user=mz_system
-SET CLUSTER TO mz_introspection
+SET CLUSTER default mz_introspection
 ----
 COMPLETE 0
 
@@ -237,7 +237,7 @@ CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
 simple conn=mz_system,user=mz_system
-SET CLUSTER TO mz_system
+SET CLUSTER default mz_system
 ----
 COMPLETE 0
 

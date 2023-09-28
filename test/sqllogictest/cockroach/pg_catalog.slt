@@ -23,7 +23,7 @@ mode cockroach
 halt
 
 statement ok
-SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false
+SET CLUSTER default sql.stats.automatic_collection.enabled = false
 
 # Verify pg_catalog database handles mutation statements correctly.
 

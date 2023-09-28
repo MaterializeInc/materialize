@@ -32,7 +32,7 @@ one
 
 # Create source with a faster metadata refresh interval so
 # errors are detected every second instead of every minute.
-> CREATE SOURCE mz_source IN CLUSTER sc
+> CREATE SOURCE mz_source IN CLUSTER default
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL MS 1000
@@ -77,7 +77,7 @@ $ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"f1": "fish", "f2": 1000}
 
 > CREATE SOURCE csr_source
-  IN CLUSTER sc
+  IN CLUSTER default
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE

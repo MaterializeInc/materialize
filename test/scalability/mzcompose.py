@@ -267,7 +267,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="append",
     )
 
-    parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER to")
+    parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER default")
 
     args = parser.parse_args()
 

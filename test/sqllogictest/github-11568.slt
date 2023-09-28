@@ -20,7 +20,7 @@ statement ok
 create cluster c replicas (r1 (STORAGECTL ADDRESSES ['s:1'], STORAGE ADDRESSES ['st:1'], COMPUTECTL ADDRESSES ['c:1'], COMPUTE ADDRESSES ['ct:1']))
 
 statement ok
-set cluster = c
+SET CLUSTER = default
 
 statement ok
 create table t1 (f1 integer, f2 integer)
@@ -29,7 +29,7 @@ statement ok
 create index i1 on t1 (f2)
 
 statement ok
-set cluster = default
+SET CLUSTER = default
 
 statement ok
 begin;

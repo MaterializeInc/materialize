@@ -14,7 +14,7 @@ ALTER SYSTEM SET enable_webhook_sources = true
 
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
-> CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_text IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT;
 
 > SHOW COLUMNS FROM webhook_text;
@@ -67,7 +67,7 @@ d
 98
 100
 
-> CREATE SOURCE webhook_json_with_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_json_with_headers IN CLUSTER default FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADERS;
 
@@ -132,7 +132,7 @@ x
 $ webhook-append database=materialize schema=public name=not_a_webhook status=404
 d
 
-> CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_bytes IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES;
 
 > SHOW COLUMNS FROM webhook_bytes;
@@ -154,7 +154,7 @@ $ webhook-append database=materialize schema=public name=webhook_bytes
 null
 123
 
-> CREATE SOURCE webhook_bytes_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_bytes_with_validation IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
@@ -167,7 +167,7 @@ $ webhook-append database=materialize schema=public name=webhook_bytes_with_vali
 $ webhook-append database=materialize schema=public name=webhook_bytes_with_validation signature=invalid status=400
 456
 
-> CREATE SOURCE webhook_bytes_with_hmac IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_bytes_with_hmac IN CLUSTER default FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS, BODY)
@@ -189,7 +189,7 @@ did_not_include_necessary_header
 
 > CREATE SECRET webhook_secret AS 'shared_key';
 
-> CREATE SOURCE webhook_bytes_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_bytes_with_secret IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH ( HEADERS, BODY BYTES, SECRET webhook_secret BYTES )
@@ -202,7 +202,7 @@ using an mz secret
 > SELECT * FROM webhook_bytes_with_secret;
 "using an mz secret"
 
-> CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_buildkite IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (HEADERS, BODY)
@@ -217,7 +217,7 @@ i hope this works
 > SELECT * FROM webhook_buildkite;
 "i hope this works"
 
-> CREATE SOURCE webhook_hex IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_hex IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK ( WITH (BODY) decode(body, 'hex') = '\x42' );
 
@@ -233,7 +233,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 # all of environmentd, we should catch the panic.
 #
 # Note: if you change the message in the panic, then you need to update ci_logged_errors_detect.py.
-> CREATE SOURCE webhook_validation_panic IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_validation_panic IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (HEADERS)
@@ -247,7 +247,7 @@ abc
 
 > CREATE SECRET webhook_secret_bytes AS 'this_key_is_bytes';
 
-> CREATE SOURCE webhook_double_validation IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_double_validation IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   CHECK (
     WITH (
@@ -269,7 +269,7 @@ materialize space monkey
 
 # Webhooks should support special characters like a /
 
-> CREATE SOURCE "webhook_with_/" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
+> CREATE SOURCE "webhook_with_/" IN CLUSTER default FROM WEBHOOK BODY FORMAT TEXT;
 
 $ webhook-append name=webhook_with_/ status=404
 wont_work
@@ -280,7 +280,7 @@ will_work
 > SELECT * FROM "webhook_with_/"
 "will_work"
 
-> CREATE SOURCE webhook_text_headers_block_list IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_text_headers_block_list IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADERS (NOT 'accept', NOT 'host')
 
@@ -290,7 +290,7 @@ foo
 > SELECT body, headers::text FROM webhook_text_headers_block_list
 foo "{content-length=>3}"
 
-> CREATE SOURCE webhook_text_headers_allow_list IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_text_headers_allow_list IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADERS ('x-random')
 
@@ -300,7 +300,7 @@ anotha_one
 > SELECT body, headers::text FROM webhook_text_headers_allow_list
 anotha_one "{x-random=>bar}"
 
-> CREATE SOURCE webhook_text_filtering_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE webhook_text_filtering_headers IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADER 'x-timestamp' as event_timestamp
   INCLUDE HEADER 'x-id' as event_id

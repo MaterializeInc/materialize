@@ -22,14 +22,14 @@ COMPLETE 0
 statement ok
 CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 2;
 
-statement error db error: ERROR: cannot create source in cluster with more than one replica
-CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
+statement error db error: ERROR: cannot create source IN CLUSTER default more than one replica
+CREATE SOURCE ldgen IN CLUSTER default FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
 
 statement ok
 ALTER CLUSTER c SET (REPLICATION FACTOR 1)
 
 statement ok
-CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
+CREATE SOURCE ldgen IN CLUSTER default FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
 
 statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
 ALTER CLUSTER c SET (REPLICATION FACTOR 2)
@@ -38,10 +38,10 @@ statement ok
 CREATE TABLE t(a int);
 
 statement ok
-CREATE INDEX t_idx IN CLUSTER c ON t(a);
+CREATE INDEX t_idx IN CLUSTER default ON t(a);
 
 statement ok
-SET CLUSTER = c;
+SET CLUSTER = default;
 
 query TT
 SELECT s.name, c.name FROM mz_sources s JOIN mz_clusters c ON s.cluster_id = c.id
@@ -83,13 +83,13 @@ statement ok
 CREATE CLUSTER c SIZE '1';
 
 statement ok
-CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT 1;
 
 statement ok
-CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
+CREATE SOURCE ldgen IN CLUSTER default FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
 
 statement ok
-SET CLUSTER = c;
+SET CLUSTER = default;
 
 query T
 SELECT * FROM mv;

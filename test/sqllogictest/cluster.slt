@@ -154,15 +154,15 @@ SELECT * FROM v
 1
 
 query TTTT
-SHOW INDEXES ON v IN CLUSTER bar;
+SHOW INDEXES ON v IN CLUSTER default;
 ----
 v_primary_idx v bar {?column?}
 
 statement ok
-CREATE DEFAULT INDEX foo_v_idx IN CLUSTER foo ON v
+CREATE DEFAULT INDEX foo_v_idx IN CLUSTER default ON v
 
 query TTTT
-SHOW INDEXES IN CLUSTER bar WHERE name NOT LIKE 'mz_%';
+SHOW INDEXES IN CLUSTER default WHERE name NOT LIKE 'mz_%';
 ----
 v_primary_idx v bar {?column?}
 
@@ -294,16 +294,16 @@ foo_v_idx
 v_primary_idx
 
 statement ok
-CREATE DEFAULT INDEX IN CLUSTER bar ON v
+CREATE DEFAULT INDEX IN CLUSTER default ON v
 
 query TTTT
-SHOW INDEXES ON v IN CLUSTER bar;
+SHOW INDEXES ON v IN CLUSTER default;
 ----
 v_primary_idx v bar {?column?}
 v_primary_idx1 v bar {?column?}
 
 statement error unknown cluster 'noexist'
-CREATE DEFAULT INDEX IN CLUSTER noexist ON v
+CREATE DEFAULT INDEX IN CLUSTER default ON v
 
 # Test invalid DROPs.
 
@@ -319,7 +319,7 @@ statement error cannot drop cluster with active objects
 DROP CLUSTER bar
 
 query TTTT
-SHOW INDEXES IN CLUSTER bar WHERE on = 'v';
+SHOW INDEXES IN CLUSTER default WHERE on = 'v';
 ----
 v_primary_idx v bar {?column?}
 v_primary_idx1 v bar {?column?}
@@ -342,7 +342,7 @@ statement ok
 CREATE CLUSTER baz REPLICAS (r1 (SIZE '1'))
 
 statement ok
-CREATE DEFAULT INDEX IN CLUSTER baz ON v
+CREATE DEFAULT INDEX IN CLUSTER default ON v
 
 statement error cannot drop cluster with active objects
 DROP CLUSTER baz
@@ -545,7 +545,7 @@ statement ok
 CREATE CLUSTER empty REPLICAS ()
 
 statement ok
-SET cluster = empty
+SET CLUSTER = default
 
 query error CLUSTER "empty" has no replicas available to service request
 SELECT generate_series(1, 1);

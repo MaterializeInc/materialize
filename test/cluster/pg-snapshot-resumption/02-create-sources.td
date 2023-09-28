@@ -33,7 +33,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
   )
 
 > CREATE SOURCE mz_source
-  IN CLUSTER storage
+  IN CLUSTER default
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')

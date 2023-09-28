@@ -64,7 +64,7 @@ class CreateSource(Action):
                   TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
                 > CREATE SOURCE {self.source.name}
-                  IN CLUSTER storaged
+                  IN CLUSTER default
                   FROM KAFKA CONNECTION {self.source.name}_kafka_conn
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn

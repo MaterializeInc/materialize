@@ -25,7 +25,7 @@ CREATE CLUSTER test
   )
 
 statement ok
-SET cluster = test
+SET CLUSTER = default
 
 statement ok
 SET cluster_replica = replica_a

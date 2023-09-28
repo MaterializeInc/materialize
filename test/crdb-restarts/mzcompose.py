@@ -139,7 +139,7 @@ def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     c.exec("cockroach0", "cockroach", "init", "--insecure", "--host=localhost:26257")
 
     for query in [
-        "SET CLUSTER SETTING sql.stats.forecasts.enabled = false",
+        "SET CLUSTER default sql.stats.forecasts.enabled = false",
         "CREATE SCHEMA IF NOT EXISTS consensus",
         "CREATE SCHEMA IF NOT EXISTS storage",
         "CREATE SCHEMA IF NOT EXISTS adapter",

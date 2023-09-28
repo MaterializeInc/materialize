@@ -24,7 +24,7 @@ $ kafka-create-topic topic=upsert
 > CREATE CLUSTER c1 REPLICAS (replica1 (SIZE '1'));
 
 > CREATE SOURCE dropped_upsert
-  IN CLUSTER c1
+  IN CLUSTER default
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )

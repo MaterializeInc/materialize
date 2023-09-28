@@ -127,7 +127,7 @@ class Materialized(Service):
         )
         command += [
             # Issue #15858 prevents the habitual use of large introspection
-            # clusters, so we leave the builtin cluster replica size as is.
+            # clusters, so we leave the builtIN CLUSTER default size as is.
             # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
             f"--default-storage-host-size={self.default_storage_size}",

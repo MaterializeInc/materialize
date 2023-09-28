@@ -67,7 +67,7 @@ class PgCdcScenario(Scenario):
     MZ_SETUP = dedent(
         """
         > CREATE SOURCE mz_source
-          IN CLUSTER clusterd
+          IN CLUSTER default
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES;
 
@@ -112,7 +112,7 @@ class KafkaScenario(Scenario):
     SOURCE = dedent(
         """
         > CREATE SOURCE s1
-          IN CLUSTER clusterd
+          IN CLUSTER default
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;

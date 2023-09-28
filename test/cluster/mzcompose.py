@@ -332,7 +332,7 @@ def workflow_test_github_15531(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 1
         ));
-        SET cluster = cluster1;
+        SET CLUSTER = default;
         -- table for fast-path peeks
         CREATE TABLE t (a int);
         CREATE DEFAULT INDEX ON t;
@@ -437,7 +437,7 @@ def workflow_test_github_15535(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
-        SET cluster = cluster1;
+        SET CLUSTER = default;
         CREATE TABLE t (a int);
         CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
         -- wait for the dataflow to be ready
@@ -508,7 +508,7 @@ def workflow_test_github_15799(c: Composition) -> None:
                 INTROSPECTION INTERVAL 0
             )
         );
-        SET cluster = cluster1;
+        SET CLUSTER = default;
 
         -- query the introspection sources on the replica with logging enabled
         SET cluster_replica = logging_on;
@@ -561,7 +561,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
             > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
@@ -576,7 +576,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
             > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
@@ -585,7 +585,7 @@ def workflow_test_github_15930(c: Composition) -> None:
 
         c.sql(
             """
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             -- now let's give it another go with user-defined objects
             CREATE TABLE t (a int);
             CREATE DEFAULT INDEX ON t;
@@ -594,7 +594,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         )
 
         cursor = c.sql_cursor()
-        cursor.execute("SET cluster = cluster1;")
+        cursor.execute("SET CLUSTER = default;")
         cursor.execute("BEGIN;")
         cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t;")
         cursor.execute("FETCH ALL c;")
@@ -609,7 +609,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
             > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
             > SELECT * FROM t;
@@ -666,7 +666,7 @@ def workflow_test_github_15496(c: Composition) -> None:
                 )
             );
             -- Set data for test up.
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             CREATE TABLE base (data bigint, diff bigint);
             CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 1);
@@ -683,7 +683,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
 
             # Run a query that would generate a panic before the fix.
             ! SELECT * FROM sum_and_max;
@@ -742,7 +742,7 @@ def workflow_test_github_17177(c: Composition) -> None:
             ALTER SYSTEM SET enable_repeat_row  = true;
 
             # Set data for test up
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
 
             > CREATE TABLE base (data float, diff bigint);
 
@@ -818,7 +818,7 @@ def workflow_test_github_17510(c: Composition) -> None:
                 )
             );
             -- Set data for test up
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             CREATE TABLE base (data2 uint2, data4 uint4, data8 uint8, diff bigint);
             CREATE MATERIALIZED VIEW data AS
               SELECT data2, data4, data8
@@ -854,7 +854,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
 
             # Run a queries that would generate panics before the fix.
             ! SELECT SUM(data2) FROM data;
@@ -992,7 +992,7 @@ def workflow_test_github_17509(c: Composition) -> None:
                 )
             );
             -- Set data for test up.
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             CREATE TABLE base (data bigint, diff bigint);
             CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 1);
@@ -1008,7 +1008,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
 
             # The query below would return a null previously, but now fails cleanly.
             ! SELECT * FROM max_data;
@@ -1086,7 +1086,7 @@ def workflow_test_github_19610(c: Composition) -> None:
                 )
             );
             -- Set data for test up.
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             CREATE TABLE base (data bigint, diff bigint);
             CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 6);
@@ -1104,7 +1104,7 @@ def workflow_test_github_19610(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
 
             # Computing min/max with a monotonic one-shot SELECT requires
             # consolidation. We test here that consolidation works correctly,
@@ -1194,7 +1194,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
                 )
             );
             -- Set data for test up.
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             CREATE TABLE base (data bigint, diff bigint);
             CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 6);
@@ -1212,7 +1212,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            > SET cluster = cluster1;
+            > SET CLUSTER = default;
 
             # Check TopK as an enforcer
             > BEGIN
@@ -1445,7 +1445,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
             input=dedent(
                 """
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-        SET CLUSTER TO DEFAULT;
+        SET CLUSTER default DEFAULT;
         CREATE DEFAULT INDEX ON mz_views;
 
         > SELECT id FROM mz_indexes WHERE id like 'u%';
@@ -1521,7 +1521,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     try:
         c.sql(
             """
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             SET cluster_replica = replica1;
             BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t;
@@ -1545,7 +1545,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     try:
         c.sql(
             """
-            SET cluster = cluster1;
+            SET CLUSTER = default;
             SET cluster_replica = replica2;
             BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t;
@@ -1637,7 +1637,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 1
         ));
-        SET cluster = cluster1;
+        SET CLUSTER = default;
 
         -- index on table
         CREATE TABLE t1 (a int);
@@ -1667,7 +1667,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     # Perform a query to ensure reconciliation has finished.
     c.sql(
         """
-        SET cluster = cluster1;
+        SET CLUSTER = default;
         SELECT * FROM v;
         """
     )
@@ -1709,7 +1709,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 1
         ));
-        SET cluster = cluster1;
+        SET CLUSTER = default;
 
         -- index on table
         CREATE TABLE t1 (a int);
@@ -1730,7 +1730,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
 
     # Set up a subscribe dataflow that will be dropped during reconciliation.
     cursor = c.sql_cursor()
-    cursor.execute("SET cluster = cluster1")
+    cursor.execute("SET CLUSTER = default")
     cursor.execute("INSERT INTO t1 VALUES (1)")
     cursor.execute("BEGIN")
     cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t1")
@@ -1739,7 +1739,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     # Perform a query to ensure dataflows have been installed.
     c.sql(
         """
-        SET cluster = cluster1;
+        SET CLUSTER = default;
         SELECT * FROM t1, v, mv1, mv2;
         """
     )
@@ -1756,7 +1756,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     # Perform a query to ensure reconciliation has finished.
     c.sql(
         """
-        SET cluster = cluster1;
+        SET CLUSTER = default;
         SELECT * FROM v;
         """
     )
@@ -1892,7 +1892,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
-        SET cluster = cluster1;
+        SET CLUSTER = default;
         """
     )
 
@@ -2147,7 +2147,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 1
         ));
-        SET cluster = cluster1;
+        SET CLUSTER = default;
 
         CREATE TABLE t (a int);
         INSERT INTO t SELECT generate_series(1, 10);
@@ -2203,7 +2203,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER test MANAGED, SIZE '1';
-        SET cluster = test;
+        SET CLUSTER = default;
 
         CREATE TABLE t (a int);
         INSERT INTO t SELECT generate_series(1, 10);
@@ -2351,13 +2351,13 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     # collect the `since` frontiers we want.
     def collect_sinces() -> tuple[int, int]:
         explain = c.sql_query(
-            "SET cluster = default;"
+            "SET CLUSTER = default;"
             "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
         )[0][0]
         table_since = parse_since_from_explain(explain)
 
         explain = c.sql_query(
-            "SET cluster = mz_introspection;"
+            "SET CLUSTER = default;"
             "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
         )[0][0]
         index_since = parse_since_from_explain(explain)

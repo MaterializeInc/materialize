@@ -451,7 +451,7 @@ class DropClusterAction(Action):
 class SetClusterAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
-            "SET cluster cannot be called in an active transaction",
+            "SET CLUSTER default be called in an active transaction",
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
@@ -650,7 +650,7 @@ class CreateWebhookSourceAction(Action):
             self.db.source_id += 1
             cluster = self.rng.choice(self.db.clusters)
             if len(cluster.replicas) > 1:
-                # cannot create source in cluster with more than one replica
+                # cannot create source IN CLUSTER default more than one replica
                 return
             source = WebhookSource(source_id, cluster, self.rng)
             source.create(exe)

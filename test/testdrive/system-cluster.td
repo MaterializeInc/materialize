@@ -46,7 +46,7 @@ ALTER SYSTEM SET enable_rbac_checks TO true
 
 > CREATE MATERIALIZED VIEW mv AS SELECT AVG(50)
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER default mz_introspection
 
 > SHOW MATERIALIZED VIEWS
 mv default
@@ -54,7 +54,7 @@ mv default
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_introspection' cannot be modified
 
-> SET CLUSTER TO mz_system
+> SET CLUSTER default mz_system
 
 # Query gets automatically run on mz_introspection, despite mz_system being set
 > SHOW MATERIALIZED VIEWS
@@ -63,14 +63,14 @@ mv default
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_system' cannot be modified
 
-> SET CLUSTER TO default
+> SET CLUSTER default default
 
 > CREATE TABLE temp (a INT)
 
 > INSERT INTO temp VALUES (1), (2)
 
 $ postgres-execute connection=mz_system
-SET CLUSTER TO mz_system
+SET CLUSTER default mz_system
 INSERT INTO temp SELECT * FROM temp
 
 > SELECT * FROM temp

@@ -51,7 +51,7 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
 > CREATE CLUSTER storage_cluster SIZE '2-2', REPLICATION FACTOR 1, DISK = true
 
 > CREATE SOURCE upsert
-  IN CLUSTER storage_cluster
+  IN CLUSTER default
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )

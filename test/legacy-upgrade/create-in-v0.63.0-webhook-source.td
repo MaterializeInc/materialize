@@ -12,7 +12,7 @@ ALTER SYSTEM SET enable_webhook_sources = true
 
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
-> CREATE SOURCE my_webhook_source IN CLUSTER webhook_cluster FROM WEBHOOK
+> CREATE SOURCE my_webhook_source IN CLUSTER default FROM WEBHOOK
   BODY FORMAT TEXT
   INCLUDE HEADERS
   CHECK (

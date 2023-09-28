@@ -105,7 +105,7 @@ class CreateSink(Action):
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
-                  IN CLUSTER storaged
+                  IN CLUSTER default
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE

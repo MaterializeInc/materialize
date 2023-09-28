@@ -33,11 +33,11 @@ class Webhook(Check):
 
                 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
-                > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
+                > CREATE SOURCE webhook_text IN CLUSTER default FROM WEBHOOK BODY FORMAT TEXT;
 
-                > CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;
+                > CREATE SOURCE webhook_json IN CLUSTER default FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;
 
-                > CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;
+                > CREATE SOURCE webhook_bytes IN CLUSTER default FROM WEBHOOK BODY FORMAT BYTES;
 
                 $ webhook-append database=materialize schema=public name=webhook_text
                 fooä

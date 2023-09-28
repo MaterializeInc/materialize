@@ -32,7 +32,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
   WITH (SIZE = '2')
 
 > CREATE SINK sink_cluster
-  IN CLUSTER cluster1
+  IN CLUSTER default
   FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic-${testdrive.seed}')
   KEY (a)
@@ -53,7 +53,7 @@ one:two
   WITH (SIZE = '2')
 
 > CREATE SOURCE upsert_cluster
-  IN CLUSTER cluster1
+  IN CLUSTER default
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
@@ -64,7 +64,7 @@ one:two
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
 > CREATE SOURCE subsources_size.s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE = '2');
-> CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+> CREATE SOURCE subsources_cluster.s IN CLUSTER default FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds. Here we are just ensuring metrics were populated.

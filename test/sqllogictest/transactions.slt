@@ -843,8 +843,8 @@ BEGIN
 statement ok
 SELECT * FROM t
 
-statement error SET cluster cannot be called in an active transaction
-SET CLUSTER TO c
+statement error SET CLUSTER default be called in an active transaction
+SET CLUSTER default c
 
 statement ok
 ROLLBACK
@@ -855,7 +855,7 @@ BEGIN
 statement ok
 SELECT * FROM t
 
-statement error SET cluster cannot be called in an active transaction
+statement error SET CLUSTER default be called in an active transaction
 SET LOCAL CLUSTER TO c
 
 statement ok
@@ -867,7 +867,7 @@ statement ok
 BEGIN
 
 statement ok
-SET CLUSTER TO c
+SET CLUSTER default c
 
 statement ok
 SELECT * FROM t
@@ -876,7 +876,7 @@ statement ok
 COMMIT
 
 statement ok
-SET CLUSTER TO default
+SET CLUSTER default default
 
 statement ok
 BEGIN
@@ -891,7 +891,7 @@ statement ok
 COMMIT
 
 statement ok
-SET CLUSTER TO default
+SET CLUSTER default default
 
 # Test that the cluster is selected at the start of a transaction and doesn't change.
 

@@ -34,7 +34,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
   SELECT 1 as col
 
 > CREATE SINK snk
-  IN CLUSTER storage
+  IN CLUSTER default
   FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

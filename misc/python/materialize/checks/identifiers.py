@@ -215,7 +215,7 @@ class Identifiers(Check):
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["kafka_conn"])} FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["csr_conn"])} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             > CREATE SOURCE {dq(self.ident["source"])}
-              IN CLUSTER identifiers
+              IN CLUSTER default
               FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE UPSERT;

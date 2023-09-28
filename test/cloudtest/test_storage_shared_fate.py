@@ -22,7 +22,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
     create_sources_sinks = "\n".join(
         f"""
             > CREATE SOURCE source{i}
-              IN CLUSTER storage_shared_fate
+              IN CLUSTER default
               FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-${{testdrive.seed}}')
               FORMAT BYTES
               ENVELOPE NONE;
@@ -36,13 +36,13 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             $ kafka-create-topic topic=storage-shared-fate-sink{i} partitions={CLUSTER_SIZE*4}
 
             > CREATE SINK sink{i}
-              IN CLUSTER storage_shared_fate FROM t{i}
+              IN CLUSTER default FROM t{i}
               INTO KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM;
 
             > CREATE SOURCE sink{i}_check
-              IN CLUSTER storage_shared_fate
+              IN CLUSTER default
               FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;

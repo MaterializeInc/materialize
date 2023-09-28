@@ -98,9 +98,9 @@ contains:cannot modify linked cluster "materialize_public_lg2"
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE CLUSTER REPLICA materialize_public_lg2.new SIZE 'small'
 contains:cannot create more than one replica of a cluster containing sources or sinks
-! CREATE MATERIALIZED VIEW w IN CLUSTER materialize_public_lg2 AS SELECT 1
+! CREATE MATERIALIZED VIEW w IN CLUSTER default AS SELECT 1
 contains:cannot modify linked cluster "materialize_public_lg2"
-! CREATE INDEX IN CLUSTER materialize_public_lg2 ON v (a)
+! CREATE INDEX IN CLUSTER default ON v (a)
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE SOURCE lg_bad IN CLUSTER "materialize_public_lg1" FROM LOAD GENERATOR COUNTER
 contains:cannot modify linked cluster "materialize_public_lg1"
@@ -108,7 +108,7 @@ contains:cannot modify linked cluster "materialize_public_lg1"
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-bad-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 contains:cannot modify linked cluster "materialize_public_lg1"
-> SET cluster = materialize_public_lg2
+> SET CLUSTER = default
 
 > SELECT generate_series(0, 10)
 0
@@ -139,7 +139,7 @@ contains:cannot execute queries on cluster containing sources or sinks
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unified_clusters = true
 
-> SET cluster = default
+> SET CLUSTER = default
 
 # Test that only the default clusters and replicas remain after dropping
 # the sources.
