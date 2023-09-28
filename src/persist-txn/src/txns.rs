@@ -15,12 +15,14 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::txn_read::TxnsCache;
 use crate::txn_write::Txn;
@@ -180,6 +182,7 @@ where
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
+    #[instrument(level = "debug", skip_all, fields(ts = ?register_ts))]
     pub async fn register(
         &mut self,
         mut register_ts: T,
@@ -287,36 +290,66 @@ where
     /// for an unbounded amount of time.
     ///
     /// This method is idempotent.
+    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
     pub async fn apply_le(&mut self, ts: &T) -> Tidy {
         debug!("apply_le {:?}", ts);
         self.txns_cache.update_gt(ts).await;
 
         // TODO(txn): Oof, figure out a protocol where we don't have to do this
         // every time.
+        let inits = FuturesUnordered::new();
         for (data_id, times) in self.txns_cache.datas.iter() {
             let register_ts = times.first().expect("data shard has register ts").clone();
-            let data_write = self.datas.get_write(data_id).await;
-            let () = crate::empty_caa(
-                || format!("data init {:.9}", data_id.to_string()),
-                data_write,
-                register_ts,
-            )
-            .await;
+            let mut data_write = self.datas.take_write(data_id).await;
+            inits.push(async move {
+                let () = crate::empty_caa(
+                    || format!("data init {:.9}", data_id.to_string()),
+                    &mut data_write,
+                    register_ts,
+                )
+                .await;
+                data_write
+            });
+        }
+        let data_writes = inits.collect::<Vec<_>>().await;
+        for data_write in data_writes {
+            self.datas.put_write(data_write);
         }
 
-        let mut retractions = BTreeMap::new();
+        let mut unapplied_batches_by_data = BTreeMap::<_, Vec<_>>::new();
         for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
             if ts < commit_ts {
                 break;
             }
-
-            let write = self.datas.get_write(data_id).await;
-            crate::apply_caa(write, batch_raw, commit_ts.clone()).await;
-            // NB: Protos are not guaranteed to exactly roundtrip the
-            // encoded bytes, so we intentionally use the raw batch so that
-            // it definitely retracts.
-            retractions.insert(batch_raw.clone(), *data_id);
+            unapplied_batches_by_data
+                .entry(*data_id)
+                .or_default()
+                .push((batch_raw, commit_ts));
         }
+
+        let retractions = FuturesUnordered::new();
+        for (data_id, batches) in unapplied_batches_by_data {
+            let mut data_write = self.datas.take_write(&data_id).await;
+            retractions.push(async move {
+                let mut ret = Vec::new();
+                for (batch_raw, commit_ts) in batches {
+                    crate::apply_caa(&mut data_write, batch_raw, commit_ts.clone()).await;
+                    // NB: Protos are not guaranteed to exactly roundtrip the
+                    // encoded bytes, so we intentionally use the raw batch so that
+                    // it definitely retracts.
+                    ret.push((batch_raw.clone(), data_id));
+                }
+                (data_write, ret)
+            });
+        }
+        let retractions = retractions.collect::<Vec<_>>().await;
+        let retractions = retractions
+            .into_iter()
+            .flat_map(|(data_write, retractions)| {
+                self.datas.put_write(data_write);
+                retractions
+            })
+            .collect();
 
         debug!("apply_le {:?} success", ts);
         Tidy { retractions }
@@ -391,24 +424,39 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    async fn open_data_write(&self, data_id: ShardId) -> WriteHandle<K, V, T, D> {
+        self.client
+            .open_writer(
+                data_id,
+                Arc::clone(&self.key_schema),
+                Arc::clone(&self.val_schema),
+                Diagnostics::from_purpose("txn data"),
+            )
+            .await
+            .expect("schema shouldn't change")
+    }
+
+    #[allow(dead_code)]
     pub(crate) async fn get_write<'a>(
         &'a mut self,
         data_id: &ShardId,
     ) -> &'a mut WriteHandle<K, V, T, D> {
         if self.data_write.get(data_id).is_none() {
-            let data = self
-                .client
-                .open_writer(
-                    *data_id,
-                    Arc::clone(&self.key_schema),
-                    Arc::clone(&self.val_schema),
-                    Diagnostics::from_purpose("txn data"),
-                )
-                .await
-                .expect("schema shouldn't change");
-            assert!(self.data_write.insert(*data_id, data).is_none());
+            let data_write = self.open_data_write(*data_id).await;
+            assert!(self.data_write.insert(*data_id, data_write).is_none());
         }
         self.data_write.get_mut(data_id).expect("inserted above")
+    }
+
+    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
+        if let Some(data_write) = self.data_write.remove(data_id) {
+            return data_write;
+        }
+        self.open_data_write(*data_id).await
+    }
+
+    pub(crate) fn put_write(&mut self, data_write: WriteHandle<K, V, T, D>) {
+        self.data_write.insert(data_write.shard_id(), data_write);
     }
 }
 
@@ -550,5 +598,28 @@ mod tests {
         commit_apply.apply(&mut txns).await;
         let actual = txns.txns_cache.expect_snapshot(&client, d0, 2).await;
         assert_eq!(actual, vec!["foo".to_owned()]);
+    }
+
+    // A test that applies a batch of writes all at once.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn apply_many_ts() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let d0 = txns.expect_register(1).await;
+
+        for ts in 2..10 {
+            let mut txn = txns.begin();
+            txn.write(&d0, ts.to_string(), (), 1).await;
+            let _apply = txn.commit_at(&mut txns, ts).await.unwrap();
+        }
+        // This automatically runs the apply, which catches up all the previous
+        // txns at once.
+        txns.expect_commit_at(10, d0, &[]).await;
+
+        assert_eq!(
+            txns.txns_cache.expect_snapshot(&client, d0, 10).await.len(),
+            8
+        );
     }
 }

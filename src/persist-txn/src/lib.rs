@@ -430,10 +430,9 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
     let mut upper = txns_or_data_write
-        .upper()
-        .as_option()
-        .expect("shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("shard should not be closed");
     loop {
         if init_ts < upper {
             return;
@@ -476,10 +475,9 @@ async fn apply_caa<K, V, T, D>(
     let batch = ProtoBatch::decode(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let mut upper = data_write
-        .upper()
-        .as_option()
-        .expect("data shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("data shard should not be closed");
     loop {
         if commit_ts < upper {
             debug!(
