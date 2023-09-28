@@ -179,25 +179,26 @@
 //!
 //! ```
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+//! # use mz_persist_txn::operator::DataSubscribe;
 //! # use mz_persist_txn::txns::TxnsHandle;
-//! # use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
+//! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
-//! # let c = PersistClient::new_for_tests().await;
+//! # let client = PersistClient::new_for_tests().await;
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
-//! # let client = c.clone();
-//! let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64>::open(
-//!     0u64, client, ShardId::new(), VecU8Schema.into(), UnitSchema.into()
+//! let txns_id = ShardId::new();
+//! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
+//!     0u64, client.clone(), txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
 //!
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
-//! # let d0_write = c.open_writer(
-//! #    d0, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # let d0_write = client.open_writer(
+//! #    d0, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! # let d1_write = c.open_writer(
-//! #    d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # let d1_write = client.open_writer(
+//! #    d1, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
 //! txns.register(1u64, [d0_write]).await.expect("not previously initialized");
 //! txns.register(2u64, [d1_write]).await.expect("not previously initialized");
@@ -209,8 +210,8 @@
 //! // but in the event of a crash, neither correctness nor liveness depend on
 //! // it.
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![0], (), 1);
-//! txn.write(&d1, vec![1], (), -1);
+//! txn.write(&d0, "0".into(), (), 1);
+//! txn.write(&d1, "1".into(), (), -1);
 //! let tidy = txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
 //!     // Make it available to reads by applying it.
 //!     .apply(&mut txns).await;
@@ -219,21 +220,19 @@
 //! // is also advanced by this. At the same time clean up after our last commit
 //! // (the tidy).
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![2], (), 1);
+//! txn.write(&d0, "2".into(), (), 1);
 //! txn.tidy(tidy);
 //! txn.commit_at(&mut txns, 3).await.expect_err("ts 3 not available");
 //! let _tidy = txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
-//! //
-//! // TODO(txn): Replace this with the timely operator once it's added.
-//! # let mut d1_read = c.open_leased_reader::<Vec<u8>, (), u64, i64>(
-//! #     d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests(),
-//! # ).await.unwrap();
-//! let updates = d1_read.snapshot_and_fetch(
-//!     vec![txns.read_cache().to_data_inclusive(&d1, 4).unwrap()].into()
-//! ).await.unwrap();
+//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4);
+//! while subscribe.progress() <= 4 {
+//!     subscribe.step();
+//! #   tokio::task::yield_now().await;
+//! }
+//! let updates = subscribe.output();
 //! # })
 //! ```
 //!
@@ -279,15 +278,15 @@ use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 pub mod error;
+pub mod operator;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
 
 // TODO(txn):
-// - Add frontier advancement operator.
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?
 // - Figure out the compaction story for both txn and data shard.
@@ -350,6 +349,7 @@ impl TxnsCodec for TxnsCodecDefault {
 }
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.
+#[instrument(level = "debug", skip_all, fields(shard=%txns_or_data_write.shard_id()))]
 pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
     txns_or_data_write: &mut WriteHandle<K, V, T, D>,
@@ -461,6 +461,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// the work must have already been done by someone else. (Think how our compute
 /// replicas race to compute some MATERIALIZED VIEW, but they're all guaranteed
 /// to get the same answer.)
+#[instrument(level = "debug", skip_all, fields(shard=%data_write.shard_id()))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
     batch_raw: &[u8],
@@ -545,7 +546,7 @@ pub mod tests {
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
-    use crate::txn_read::TxnsCache;
+    use crate::operator::DataSubscribe;
     use crate::txn_write::Txn;
 
     use super::*;
@@ -643,32 +644,10 @@ pub mod tests {
         #[allow(ungated_async_fn_track_caller)]
         #[track_caller]
         pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
-            let txns_read = self
-                .client
-                .open_leased_reader(
-                    self.txns_id,
-                    Arc::new(ShardIdSchema),
-                    Arc::new(VecU8Schema),
-                    Diagnostics::for_tests(),
-                )
-                .await
-                .unwrap();
-            let mut txns_cache = TxnsCache::<u64>::open(0, txns_read).await;
-            txns_cache.update_gt(&as_of).await;
-            let translated_as_of = txns_cache.to_data_inclusive(&data_id, as_of).unwrap();
-            let mut data_read = reader(&self.client, data_id).await;
-            let actual = data_read
-                .snapshot_and_fetch(Antichain::from_elem(translated_as_of))
-                .await
-                .unwrap();
-            let actual = actual.into_iter().map(|((k, v), mut t, d)| {
-                let (k, ()) = (k.unwrap(), v.unwrap());
-                if t < as_of {
-                    t = as_of;
-                }
-                (k, t, d)
-            });
-            self.assert_eq(data_id, as_of, as_of + 1, actual)
+            let mut data_subscribe =
+                DataSubscribe::new("test", self.client.clone(), self.txns_id, data_id, as_of);
+            data_subscribe.step_past(as_of).await;
+            self.assert_eq(data_id, as_of, as_of + 1, data_subscribe.output().clone())
         }
     }
 
