@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import time
 from typing import Any
 
 import confluent_kafka  # type: ignore
@@ -19,6 +20,7 @@ from confluent_kafka.serialization import (  # type: ignore
     MessageField,
     SerializationContext,
 )
+from pg8000.exceptions import InterfaceError
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
@@ -28,16 +30,22 @@ from materialize.data_ingest.transaction import Transaction
 
 class Executor:
     num_transactions: int
+    ports: dict[str, int]
     mz_conn: pg8000.Connection
 
     def __init__(self, ports: dict[str, int]) -> None:
         self.num_transactions = 0
+        self.ports = ports
+        self.reconnect()
+
+    def reconnect(self) -> None:
         self.mz_conn = pg8000.connect(
             host="localhost",
-            port=ports["materialized"],
+            port=self.ports["materialized"],
             user="materialize",
             database="materialize",
         )
+        self.mz_conn.autocommit = True
 
     def run(self, transaction: Transaction) -> None:
         raise NotImplementedError
@@ -45,6 +53,13 @@ class Executor:
     def execute(self, cur: pg8000.Cursor, query: str) -> None:
         try:
             cur.execute(query)
+        except InterfaceError:
+            # Can happen after Mz disruptions if we running queries against Mz
+            print("Network error, retrying")
+            time.sleep(0.01)
+            self.reconnect()
+            with self.mz_conn.cursor() as cur:
+                self.execute(cur, query)
         except:
             print(f"Query failed: {query}")
             raise
@@ -279,9 +294,6 @@ class PgExecutor(Executor):
                         values_str = ", ".join(
                             str(formatted_value(value)) for value in row.values
                         )
-                        keys_str = ", ".join(
-                            field.name for field in row.fields if field.is_key
-                        )
                         self.execute(
                             cur,
                             f"""INSERT INTO {self.table}
@@ -322,3 +334,133 @@ class PgExecutor(Executor):
                     else:
                         raise ValueError(f"Unexpected operation {row.operation}")
         self.pg_conn.commit()
+
+
+class KafkaRoundtripExecutor(Executor):
+    table: str
+    table_original: str
+    topic: str
+    known_keys: set[tuple[str]]
+
+    def __init__(
+        self,
+        num: int,
+        ports: dict[str, int],
+        fields: list[Field],
+    ):
+        super().__init__(ports)
+        self.table_original = f"table_rt_source{num}"
+        self.table = f"table_rt{num}"
+        self.topic = f"data-ingest-rt-{num}"
+        self.known_keys = set()
+
+        values = [
+            f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
+            for field in fields
+        ]
+        keys = [field.name for field in fields if field.is_key]
+
+        self.mz_conn.autocommit = True
+        with self.mz_conn.cursor() as cur:
+            self.execute(cur, f"DROP TABLE IF EXISTS {self.table_original}")
+            self.execute(
+                cur,
+                f"""CREATE TABLE {self.table_original} (
+                        {", ".join(values)},
+                        PRIMARY KEY ({", ".join(keys)}));""",
+            )
+            self.execute(
+                cur,
+                f"""CREATE SINK sink{num} FROM {self.table_original}
+                    INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
+                    KEY ({", ".join(keys)})
+                    FORMAT AVRO
+                    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                    ENVELOPE DEBEZIUM""",
+            )
+            self.execute(
+                cur,
+                f"""CREATE SOURCE {self.table}
+                    FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
+                    FORMAT AVRO
+                    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                    ENVELOPE DEBEZIUM""",
+            )
+        self.mz_conn.autocommit = False
+
+    def run(self, transaction: Transaction) -> None:
+        with self.mz_conn.cursor() as cur:
+            for row_list in transaction.row_lists:
+                for row in row_list.rows:
+                    key_values = tuple(
+                        value
+                        for field, value in zip(row.fields, row.values)
+                        if field.is_key
+                    )
+                    if row.operation == Operation.INSERT:
+                        values_str = ", ".join(
+                            str(formatted_value(value)) for value in row.values
+                        )
+                        self.execute(
+                            cur,
+                            f"""INSERT INTO {self.table_original}
+                                VALUES ({values_str})
+                            """,
+                        )
+                        self.known_keys.add(key_values)
+                    elif row.operation == Operation.UPSERT:
+                        if key_values in self.known_keys:
+                            non_key_values = tuple(
+                                (field, value)
+                                for field, value in zip(row.fields, row.values)
+                                if not field.is_key
+                            )
+                            # Can't update anything if there are no values, only a key, and the key is already in the table
+                            if non_key_values:
+                                cond_str = " AND ".join(
+                                    f"{field.name} = {formatted_value(value)}"
+                                    for field, value in zip(row.fields, row.values)
+                                    if field.is_key
+                                )
+                                set_str = ", ".join(
+                                    f"{field.name} = {formatted_value(value)}"
+                                    for field, value in non_key_values
+                                )
+                                self.mz_conn.autocommit = True
+                                self.execute(
+                                    cur,
+                                    f"""UPDATE {self.table_original}
+                                        SET {set_str}
+                                        WHERE {cond_str}
+                                    """,
+                                )
+                                self.mz_conn.autocommit = False
+                        else:
+                            values_str = ", ".join(
+                                str(formatted_value(value)) for value in row.values
+                            )
+                            self.execute(
+                                cur,
+                                f"""INSERT INTO {self.table_original}
+                                    VALUES ({values_str})
+                                """,
+                            )
+                            self.known_keys.add(key_values)
+                    elif row.operation == Operation.DELETE:
+                        cond_str = " AND ".join(
+                            f"{field.name} = {formatted_value(value)}"
+                            for field, value in zip(row.fields, row.values)
+                            if field.is_key
+                        )
+                        self.mz_conn.autocommit = True
+                        self.execute(
+                            cur,
+                            f"""DELETE FROM {self.table_original}
+                                WHERE {cond_str}
+                            """,
+                        )
+                        self.mz_conn.autocommit = False
+                        self.known_keys.discard(key_values)
+                    else:
+                        raise ValueError(f"Unexpected operation {row.operation}")
+        self.mz_conn.commit()
