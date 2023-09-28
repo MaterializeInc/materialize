@@ -25,6 +25,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing_subscriber::fmt::writer::MakeWriter;
 
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
@@ -40,7 +41,7 @@ use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{warn, Event, Level, Subscriber};
+use tracing::{warn, Event, Level, Metadata, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -219,6 +220,46 @@ impl std::fmt::Debug for TracingGuard {
     }
 }
 
+/// Ignore unimportant tracing for testing
+#[derive(Debug)]
+pub struct EmptyWriter {}
+
+impl io::Write for EmptyWriter {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Ignore unimportant tracing for testing
+#[derive(Debug)]
+pub struct MyMakeWriter {}
+
+impl<'a> MakeWriter<'a> for MyMakeWriter {
+    type Writer = Box<dyn io::Write>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        Box::new(io::stderr())
+    }
+
+    fn make_writer_for(&'a self, meta: &Metadata<'_>) -> Self::Writer {
+        // Here's where we can implement our special behavior. We'll
+        // check if the metadata's verbosity level is WARN or ERROR,
+        // and return stderr in that case.
+        if meta.level() <= &Level::WARN {
+            Box::new(io::stderr())
+        } else {
+            // Otherwise, we'll return dummy.
+            Box::new(EmptyWriter {})
+        }
+    }
+}
+
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
 ///
@@ -252,7 +293,7 @@ where
             let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
             Box::new(
                 fmt::layer()
-                    .with_writer(io::stderr)
+                    .with_writer(MyMakeWriter {})
                     .event_format(PrefixFormat {
                         inner: format(),
                         prefix,
